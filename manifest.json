@@ -1,0 +1,53 @@
+{
+  "manifest_version": 3,
+  "name": "NotebookLM Takeout",
+  "version": "1.0.0",
+  "description": "Export audio, slides, infographics, notes, and sources from NotebookLM",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "downloads",
+    "scripting",
+    "notifications",
+    "cookies",
+    "sidePanel",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://notebooklm.google.com/*",
+    "https://*.googleusercontent.com/*",
+    "https://*.google.com/*"
+  ],
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "sidebar.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://notebooklm.google.com/*"],
+      "js": ["content.js"],
+      "css": ["content-styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js"],
+      "matches": ["https://notebooklm.google.com/*"]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

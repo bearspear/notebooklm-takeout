@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NotebookLM Takeout</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="sidebar-mode">
+  <div class="container">
+    <header>
+      <h1>NotebookLM Takeout</h1>
+      <p class="subtitle">Export audio, slides, notes & sources</p>
+    </header>
+
+    <div id="status" class="status">
+      <span class="status-dot"></span>
+      <span id="status-text">Checking...</span>
+    </div>
+
+    <div class="controls-bar">
+      <button id="rescan-btn" class="btn btn-secondary btn-small">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+        </svg>
+        Refresh
+      </button>
+      <label class="auto-refresh-toggle">
+        <input type="checkbox" id="auto-refresh-checkbox">
+        <span>Auto</span>
+      </label>
+    </div>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="sources">Sources</button>
+      <button class="tab-btn" data-tab="notes">Notes</button>
+      <button class="tab-btn" data-tab="artifacts">Artifacts</button>
+    </div>
+
+    <div class="tab-content" data-tab-content="artifacts">
+      <section id="artifacts-section" class="section">
+      <div class="section-header">
+        <h2>Artifacts</h2>
+        <span id="artifact-count" class="count-badge">0</span>
+      </div>
+      <div id="scan-results" class="scan-results">
+        <p class="scanning">Scanning...</p>
+      </div>
+    </section>
+    </div>
+
+    <div class="tab-content" data-tab-content="notes">
+      <section id="notes-section" class="section">
+        <div class="section-header">
+          <h2>Notes</h2>
+          <span id="note-count" class="count-badge">0</span>
+        </div>
+        <div id="notes-results" class="scan-results">
+          <p class="scanning">Scanning...</p>
+        </div>
+      </section>
+    </div>
+
+    <div class="tab-content active" data-tab-content="sources">
+      <section id="sources-section" class="section">
+        <div class="section-header">
+          <h2>Sources</h2>
+          <span id="sources-count" class="count-badge">0</span>
+        </div>
+
+        <div class="sources-info">
+          <p class="info-text">Download your uploaded source documents (markdown, PDFs, etc.) with full content.</p>
+        </div>
+
+        <div id="sources-scan-results" class="scan-results">
+          <p class="empty-message">Click "Scan Sources" to find all uploaded source documents.</p>
+        </div>
+
+        <div class="export-controls">
+          <button id="scan-sources-btn" class="btn btn-secondary">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16a6.5 6.5 0 1 1 0-13zm0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5z"/>
+            </svg>
+            Scan Sources
+          </button>
+
+          <button id="export-sources-btn" class="btn btn-primary" style="display: none;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+            </svg>
+            Export Selected Sources
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <div id="download-progress" class="download-progress" style="display: none;">
+      <div class="progress-header">
+        <h3>Download Progress</h3>
+        <button id="cancel-download-btn" class="btn-icon-small" title="Cancel">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+          </svg>
+        </button>
+      </div>
+      <div class="progress-bar">
+        <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+      </div>
+      <p id="progress-text" class="progress-text">Starting...</p>
+    </div>
+
+    <footer>
+      <a href="https://notebooklm.google.com" target="_blank" class="btn-link">Open NotebookLM</a>
+      <span class="separator">•</span>
+      <button id="settings-btn" class="btn-link">Settings</button>
+    </footer>
+  </div>
+
+  <div id="settings-panel" class="settings-panel" style="display: none;">
+    <div class="settings-header">
+      <h2>Settings</h2>
+      <button id="close-settings-btn" class="btn-icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
+        </svg>
+      </button>
+    </div>
+    <div class="settings-content">
+      <div class="setting-group">
+        <label>
+          <input type="checkbox" id="auto-zip-checkbox">
+          <span>Always use ZIP for batch downloads</span>
+        </label>
+      </div>
+      <div class="setting-group">
+        <label>
+          <input type="checkbox" id="show-notifications-checkbox" checked>
+          <span>Show download notifications</span>
+        </label>
+      </div>
+      <div class="setting-group">
+        <label>Auto-refresh interval (seconds)</label>
+        <input type="number" id="refresh-interval-input" min="5" max="60" value="10" class="number-input">
+      </div>
+    </div>
+  </div>
+
+  <script src="jszip.min.js"></script>
+  <script src="turndown.min.js"></script>
+  <script src="sidebar.js"></script>
+</body>
+</html>

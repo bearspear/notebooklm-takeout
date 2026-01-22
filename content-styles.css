@@ -1,0 +1,57 @@
+/* NotebookLM Takeout - Content Script Styles */
+
+/* Notification */
+.nlme-notification {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 12px 24px;
+  background: #323232;
+  color: #fff;
+  border-radius: 8px;
+  font-family: 'Google Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 999999;
+  animation: nlme-slide-up 0.3s ease;
+}
+
+.nlme-notification-success {
+  background: #1e8e3e;
+}
+
+.nlme-notification-error {
+  background: #d93025;
+}
+
+.nlme-notification-info {
+  background: #1a73e8;
+}
+
+.nlme-notification-hide {
+  animation: nlme-slide-down 0.3s ease forwards;
+}
+
+@keyframes nlme-slide-up {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+@keyframes nlme-slide-down {
+  from {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-50%) translateY(20px);
+  }
+}
