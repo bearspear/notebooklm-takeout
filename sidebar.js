@@ -22,7 +22,8 @@ let autoRefreshInterval = null;
 let settings = {
   autoZip: false,
   showNotifications: true,
-  refreshInterval: 10
+  refreshInterval: 10,
+  citationsCodeBlock: true // Wrap citations in code blocks by default
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -51,12 +52,14 @@ async function loadSettings() {
   document.getElementById('auto-zip-checkbox').checked = settings.autoZip;
   document.getElementById('show-notifications-checkbox').checked = settings.showNotifications;
   document.getElementById('refresh-interval-input').value = settings.refreshInterval;
+  document.getElementById('citations-code-block-checkbox').checked = settings.citationsCodeBlock;
 }
 
 async function saveSettings() {
   settings.autoZip = document.getElementById('auto-zip-checkbox').checked;
   settings.showNotifications = document.getElementById('show-notifications-checkbox').checked;
   settings.refreshInterval = parseInt(document.getElementById('refresh-interval-input').value) || 10;
+  settings.citationsCodeBlock = document.getElementById('citations-code-block-checkbox').checked;
 
   await chrome.storage.local.set({ settings });
 }
@@ -318,7 +321,7 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
         let markdownContent;
         if (response.format === 'html') {
           logger.info('Download', `Converting HTML to markdown for: "${filename}"`);
-          markdownContent = convertToMarkdown(response.data, [], filename);
+          markdownContent = convertToMarkdown(response.data, [], filename, settings.citationsCodeBlock);
         } else {
           // Already markdown
           markdownContent = response.data;
@@ -935,11 +938,12 @@ function convertTableToCSV(htmlContent) {
 
 // ==================== MARKDOWN CONVERSION ====================
 
-function convertToMarkdown(htmlContent, sources, noteTitle) {
+function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock = true) {
   // Debug: Log what we're converting
   logger.info('Markdown', `Converting note: "${noteTitle}"`);
   logger.info('Markdown', `  - HTML content length: ${htmlContent.length} chars`);
   logger.info('Markdown', `  - Number of sources: ${sources?.length || 0}`);
+  logger.info('Markdown', `  - Citations code block: ${citationsCodeBlock}`);
   if (sources && sources.length > 0) {
     logger.info('Markdown', `  - Source indices: [${sources.map(s => s.sourceIndex).join(', ')}]`);
   }
@@ -1146,7 +1150,13 @@ function convertToMarkdown(htmlContent, sources, noteTitle) {
 
       // Include the quote if available
       if (source.quote && source.quote.length > 0) {
-        markdown += `> ${source.quote}\n\n`;
+        if (citationsCodeBlock) {
+          // Wrap in markdown code block for data separation
+          markdown += `\`\`\`markdown\n${source.quote}\n\`\`\`\n\n`;
+        } else {
+          // Insert markdown directly (rendered)
+          markdown += `${source.quote}\n\n`;
+        }
       }
     });
   }
@@ -1184,6 +1194,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
   progressFill.style.width = '0%';
 
   const exportedNotes = [];
+  const allErrors = [];
   let cancelled = false;
 
   // Listen for cancellation
@@ -1236,6 +1247,13 @@ async function exportNotesAsMarkdown(selectedNotes) {
         console.log('[NotebookLM Takeout] Note data received:', noteData);
 
         if (noteData && !noteData.error) {
+          // Collect errors from this note
+          if (noteData.errors && noteData.errors.length > 0) {
+            noteData.errors.forEach(err => {
+              allErrors.push(`[${note.title}] ${err}`);
+            });
+          }
+
           // Check if it's a mindmap
           if (noteData.isMindmap) {
             console.log('[NotebookLM Takeout] Processing mindmap SVG...');
@@ -1247,7 +1265,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
             });
           } else {
             // Convert to markdown
-            const markdown = convertToMarkdown(noteData.html, noteData.sources, note.title);
+            const markdown = convertToMarkdown(noteData.html, noteData.sources, note.title, settings.citationsCodeBlock);
 
             exportedNotes.push({
               title: note.title,
@@ -1257,11 +1275,15 @@ async function exportNotesAsMarkdown(selectedNotes) {
 
           console.log(`[NotebookLM Takeout] ✓ Successfully extracted note ${i + 1}/${selectedNotes.length}`);
         } else {
+          const errorMsg = `[${note.title}] Failed to extract: ${noteData?.error || 'unknown error'}`;
+          allErrors.push(errorMsg);
           console.error(`Failed to extract note: ${note.title}`, noteData?.error);
           showToast(`Skipped: ${note.title} (${noteData?.error || 'unknown error'})`, 'warning');
         }
 
       } catch (error) {
+        const errorMsg = `[${note.title}] Exception during extraction: ${error.message || error.toString()}`;
+        allErrors.push(errorMsg);
         console.error(`Failed to process note: ${note.title}`, error);
         showToast(`Error processing: ${note.title}`, 'error');
       } finally {
@@ -1291,6 +1313,18 @@ async function exportNotesAsMarkdown(selectedNotes) {
         const zip = new JSZip();
         const baseName = sanitizeFilename(mindmap.title);
 
+        // Add errors.txt if there are any errors
+        if (allErrors.length > 0) {
+          let errorsContent = '# NotebookLM Export Errors\n\n';
+          errorsContent += `Total Errors: ${allErrors.length}\n`;
+          errorsContent += `Generated: ${new Date().toLocaleString()}\n\n`;
+          errorsContent += '---\n\n';
+          allErrors.forEach((err, idx) => {
+            errorsContent += `${idx + 1}. ${err}\n`;
+          });
+          zip.file('errors.txt', errorsContent);
+        }
+
         zip.file(`${baseName}.svg`, mindmap.svgContent);
         zip.file(`${baseName}.json`, JSON.stringify(mindmap.treeData, null, 2));
 
@@ -1307,11 +1341,17 @@ async function exportNotesAsMarkdown(selectedNotes) {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
 
-        showToast(`Successfully exported mindmap`, 'success');
+        const successMsg = allErrors.length > 0
+          ? `Exported mindmap with ${allErrors.length} errors (see errors.txt)`
+          : `Successfully exported mindmap`;
+        showToast(successMsg, allErrors.length > 0 ? 'warning' : 'success');
       } else {
         // Multiple items or markdown notes - create ZIP
-        await createNotesZip(exportedNotes);
-        showToast(`Successfully exported ${exportedNotes.length} notes`, 'success');
+        await createNotesZip(exportedNotes, allErrors);
+        const successMsg = allErrors.length > 0
+          ? `Exported ${exportedNotes.length} notes with ${allErrors.length} errors (see errors.txt)`
+          : `Successfully exported ${exportedNotes.length} notes`;
+        showToast(successMsg, allErrors.length > 0 ? 'warning' : 'success');
       }
     } else {
       showToast('No notes were exported', 'error');
@@ -1338,8 +1378,20 @@ async function exportNotesAsMarkdown(selectedNotes) {
   }
 }
 
-async function createNotesZip(notes) {
+async function createNotesZip(notes, errors = []) {
   const zip = new JSZip();
+
+  // Add errors.txt if there are any errors
+  if (errors.length > 0) {
+    let errorsContent = '# NotebookLM Export Errors\n\n';
+    errorsContent += `Total Errors: ${errors.length}\n`;
+    errorsContent += `Generated: ${new Date().toLocaleString()}\n\n`;
+    errorsContent += '---\n\n';
+    errors.forEach((err, idx) => {
+      errorsContent += `${idx + 1}. ${err}\n`;
+    });
+    zip.file('errors.txt', errorsContent);
+  }
 
   // Separate notes and mindmaps
   const markdownNotes = notes.filter(n => !n.isMindmap);
@@ -1659,7 +1711,7 @@ async function exportSources(selectedSources) {
 
         // Add the main content
         markdown += `## Content\n\n`;
-        markdown += convertToMarkdown(sourceData.html, sourceData.sources || [], source.title);
+        markdown += convertToMarkdown(sourceData.html, sourceData.sources || [], source.title, settings.citationsCodeBlock);
 
         exportedSources.push({
           title: source.title,

@@ -1322,11 +1322,252 @@
     }
   }
 
+  // Convert HTML element to markdown (preserves formatting)
+  function htmlToMarkdown(element) {
+    if (!element) return '';
+
+    let markdown = '';
+
+    // Helper function to process table elements
+    const processTable = (tableNode, context) => {
+      const rows = [];
+      let isFirstRowHeader = false;
+
+      // Find all rows (in thead and tbody, or directly in table)
+      const thead = tableNode.querySelector('thead');
+      const tbody = tableNode.querySelector('tbody');
+
+      if (thead) {
+        const headerRows = thead.querySelectorAll('tr');
+        headerRows.forEach((tr, idx) => {
+          const cells = Array.from(tr.querySelectorAll('th, td'));
+          const cellContents = cells.map(cell => processNode(cell, context).trim());
+          rows.push(cellContents);
+          if (idx === 0) isFirstRowHeader = true;
+        });
+      }
+
+      if (tbody) {
+        const bodyRows = tbody.querySelectorAll('tr');
+        bodyRows.forEach(tr => {
+          const cells = Array.from(tr.querySelectorAll('td, th'));
+          const cellContents = cells.map(cell => processNode(cell, context).trim());
+          rows.push(cellContents);
+        });
+      }
+
+      // If no thead/tbody, get rows directly from table
+      if (!thead && !tbody) {
+        const allRows = tableNode.querySelectorAll('tr');
+        allRows.forEach((tr, idx) => {
+          const cells = Array.from(tr.querySelectorAll('th, td'));
+          const cellContents = cells.map(cell => processNode(cell, context).trim());
+
+          // Check if first row has <th> elements
+          if (idx === 0 && tr.querySelector('th')) {
+            isFirstRowHeader = true;
+          }
+
+          rows.push(cellContents);
+        });
+      }
+
+      if (rows.length === 0) return '';
+
+      // Determine number of columns
+      const numCols = Math.max(...rows.map(row => row.length));
+
+      // Build markdown table
+      let tableMarkdown = '\n';
+
+      rows.forEach((row, rowIdx) => {
+        // Pad row to match column count
+        while (row.length < numCols) {
+          row.push('');
+        }
+
+        // Add row
+        tableMarkdown += '| ' + row.join(' | ') + ' |\n';
+
+        // Add separator after first row if it's a header
+        if (rowIdx === 0 && (isFirstRowHeader || thead)) {
+          tableMarkdown += '| ' + Array(numCols).fill('---').join(' | ') + ' |\n';
+        }
+      });
+
+      tableMarkdown += '\n';
+      return tableMarkdown;
+    };
+
+    // Helper function to process list elements
+    const processList = (listNode, context) => {
+      const isOrdered = listNode.tagName.toLowerCase() === 'ol';
+      const items = Array.from(listNode.children).filter(child => child.tagName.toLowerCase() === 'li');
+      let listMarkdown = '\n';
+
+      items.forEach((li, idx) => {
+        const indent = '  '.repeat(context.listDepth);
+        const marker = isOrdered ? `${idx + 1}.` : '-';
+
+        // Process the list item content
+        const itemContext = { ...context, listDepth: context.listDepth + 1 };
+        const itemContent = Array.from(li.childNodes)
+          .map(child => processNode(child, itemContext))
+          .join('')
+          .trim();
+
+        // Split multi-line content and indent continuation lines
+        const lines = itemContent.split('\n');
+        listMarkdown += `${indent}${marker} ${lines[0]}\n`;
+        for (let i = 1; i < lines.length; i++) {
+          if (lines[i].trim()) {
+            listMarkdown += `${indent}  ${lines[i]}\n`;
+          }
+        }
+      });
+
+      listMarkdown += '\n';
+      return listMarkdown;
+    };
+
+    // Helper function to process blockquote elements
+    const processBlockquote = (blockquoteNode, context) => {
+      const content = Array.from(blockquoteNode.childNodes)
+        .map(child => processNode(child, context))
+        .join('')
+        .trim();
+
+      // For citations, blockquotes are just semantic wrappers - extract content without markdown syntax
+      // (the citation itself is already clearly a quote in the footnote)
+      return '\n' + content + '\n\n';
+    };
+
+    const processNode = (node, context = { listDepth: 0 }) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        return node.textContent;
+      }
+
+      if (node.nodeType !== Node.ELEMENT_NODE) {
+        return '';
+      }
+
+      const tag = node.tagName.toLowerCase();
+
+      // Special handling for tables
+      if (tag === 'table') {
+        return processTable(node, context);
+      }
+
+      // Special handling for lists
+      if (tag === 'ul' || tag === 'ol') {
+        return processList(node, context);
+      }
+
+      // Special handling for blockquotes
+      if (tag === 'blockquote') {
+        return processBlockquote(node, context);
+      }
+
+      // Special handling for ARIA headings (e.g., <div role="heading" aria-level="4">)
+      if (node.getAttribute('role') === 'heading') {
+        const ariaLevel = parseInt(node.getAttribute('aria-level') || '1', 10);
+        const level = Math.min(Math.max(ariaLevel, 1), 6); // Clamp between 1-6
+        const content = Array.from(node.childNodes).map(child => processNode(child, context)).join('');
+        const hashes = '#'.repeat(level);
+        return `\n${hashes} ${content}\n\n`;
+      }
+
+      // For table sub-elements, process children normally
+      // (they're handled by processTable when it encounters a table)
+      if (['thead', 'tbody', 'tr', 'th', 'td'].includes(tag)) {
+        return Array.from(node.childNodes).map(child => processNode(child, context)).join('');
+      }
+
+      // For list items within the list processor, just process children
+      if (tag === 'li' && context.listDepth > 0) {
+        return Array.from(node.childNodes).map(child => processNode(child, context)).join('');
+      }
+
+      const content = Array.from(node.childNodes).map(child => processNode(child, context)).join('');
+
+      switch (tag) {
+        // Headings
+        case 'h1':
+          return `\n# ${content}\n\n`;
+        case 'h2':
+          return `\n## ${content}\n\n`;
+        case 'h3':
+          return `\n### ${content}\n\n`;
+        case 'h4':
+          return `\n#### ${content}\n\n`;
+        case 'h5':
+          return `\n##### ${content}\n\n`;
+        case 'h6':
+          return `\n###### ${content}\n\n`;
+
+        // Text formatting
+        case 'b':
+        case 'strong':
+          return `**${content}**`;
+        case 'i':
+        case 'em':
+          return `*${content}*`;
+        case 's':
+        case 'del':
+        case 'strike':
+          return `~~${content}~~`;
+
+        // Links and images
+        case 'a':
+          const href = node.getAttribute('href') || '';
+          return href ? `[${content}](${href})` : content;
+        case 'img':
+          const src = node.getAttribute('src') || '';
+          const alt = node.getAttribute('alt') || '';
+          return src ? `![${alt}](${src})` : '';
+
+        // Code
+        case 'code':
+          // Check if this is inside a <pre> tag (already handled as code block)
+          if (node.parentElement && node.parentElement.tagName.toLowerCase() === 'pre') {
+            return content;
+          }
+          return `\`${content}\``;
+        case 'pre':
+          // Code block
+          const codeElement = node.querySelector('code');
+          const codeContent = codeElement ? codeElement.textContent : node.textContent;
+          const language = codeElement ? (codeElement.className.match(/language-(\w+)/) || [])[1] || '' : '';
+          return `\n\`\`\`${language}\n${codeContent}\n\`\`\`\n\n`;
+
+        // Horizontal rule
+        case 'hr':
+          return '\n---\n\n';
+
+        // Line breaks and blocks
+        case 'br':
+          return '\n';
+        case 'p':
+        case 'div':
+          return content + '\n';
+        case 'span':
+          return content;
+
+        default:
+          return content;
+      }
+    };
+
+    markdown = processNode(element);
+    return markdown.trim();
+  }
+
   // Extract content from Tailwind viewer format
   async function extractTailwindNoteContent(viewer) {
     console.log('[NotebookLM Takeout] Extracting Tailwind format note...');
 
     const sources = [];
+    const errors = [];
 
     // Hide overlay if present
     const overlay = document.querySelector('.cdk-overlay-container');
@@ -1335,6 +1576,44 @@
       overlay.style.pointerEvents = 'none';
     }
 
+    // Step 1: Expand all collapsed citation groups
+    console.log('[NotebookLM Takeout] Checking for collapsed citation groups...');
+
+    // Find all "show more" buttons (contain "..." text or "Show additional citations" aria-label)
+    const showMoreButtons = Array.from(viewer.querySelectorAll('button.citation-marker'))
+      .filter(btn => {
+        const span = btn.querySelector('span[aria-label="Show additional citations"], span');
+        return span && (
+          span.textContent?.trim() === '...' ||
+          span.getAttribute('aria-label') === 'Show additional citations'
+        );
+      });
+
+    console.log('[NotebookLM Takeout] Found', showMoreButtons.length, 'collapsed citation groups');
+
+    // Click each "show more" button to expand
+    for (const button of showMoreButtons) {
+      console.log('[NotebookLM Takeout] Expanding citation group...');
+
+      // Scroll button into view
+      button.scrollIntoView({ behavior: 'instant', block: 'center' });
+      await sleep(100);
+
+      // Click to expand
+      button.click();
+
+      // Wait for DOM to update
+      await sleep(300);
+    }
+
+    if (showMoreButtons.length > 0) {
+      console.log('[NotebookLM Takeout] ✓ Expanded', showMoreButtons.length, 'citation groups');
+      // Extra wait to ensure DOM is fully updated
+      await sleep(200);
+    }
+
+    // Step 2: Now find all citation buttons
+    console.log('[NotebookLM Takeout] Discovering citation buttons...');
     // Find all citation buttons
     const nodes = viewer.querySelectorAll('labs-tailwind-structural-element-view-v2');
     console.log('[NotebookLM Takeout] Found', nodes.length, 'content nodes');
@@ -1370,80 +1649,241 @@
         continue;
       }
 
-      console.log(`[NotebookLM Takeout] Extracting citation ${i + 1}/${allCitationButtons.length}:`, spanIndex);
+      console.log(`[NotebookLM Takeout] Hovering citation button ${i + 1}/${allCitationButtons.length}:`, spanIndex);
 
       try {
         // Scroll button into view
         button.scrollIntoView({ behavior: 'instant', block: 'center' });
-        await sleep(200);
+        await sleep(100);
 
-        // Click citation button
-        button.click();
-        await sleep(500); // Increased wait time
+        // Simulate hover (mouseenter)
+        const mouseenterEvent = new MouseEvent('mouseenter', {
+          view: window,
+          bubbles: true,
+          cancelable: true
+        });
+        button.dispatchEvent(mouseenterEvent);
 
-        // Wait for side panel to appear
-        const sidePanel = await waitForElement('div.scroll-area.ng-star-inserted', 3000).catch(() => null);
+        // Wait for tooltip popup to appear
+        console.log('[NotebookLM Takeout] Waiting for tooltip to appear...');
+        let tooltip = await waitForElement('xap-inline-dialog-container[role="dialog"][aria-label="Citation Details"]', 2000).catch(() => null);
 
-        if (!sidePanel) {
-          console.warn('[NotebookLM Takeout] Side panel did not appear for citation:', spanIndex);
+        // Fallback: try simpler selector
+        if (!tooltip) {
+          console.log('[NotebookLM Takeout] Trying fallback selector...');
+          tooltip = await waitForElement('xap-inline-dialog-container[role="dialog"]', 1000).catch(() => null);
+        }
+
+        // Fallback 2: try without role
+        if (!tooltip) {
+          console.log('[NotebookLM Takeout] Trying fallback selector without role...');
+          tooltip = await waitForElement('xap-inline-dialog-container', 1000).catch(() => null);
+        }
+
+        if (!tooltip) {
+          const errorMsg = `Citation ${spanIndex}: Tooltip container did not appear after mouseenter`;
+          console.warn('[NotebookLM Takeout]', errorMsg);
+          errors.push(errorMsg);
+
+          // Debug: Check if any tooltip appeared with different attributes
+          const anyTooltip = document.querySelector('xap-inline-dialog-container');
+          if (anyTooltip) {
+            console.log('[NotebookLM Takeout] Found tooltip but with different attributes:');
+            console.log('  - role:', anyTooltip.getAttribute('role'));
+            console.log('  - aria-label:', anyTooltip.getAttribute('aria-label'));
+            console.log('  - outerHTML preview:', anyTooltip.outerHTML.substring(0, 300));
+          } else {
+            console.log('[NotebookLM Takeout] No tooltip found at all. Hover might not be working.');
+          }
+
+          // Simulate mouseleave to clean up
+          const mouseleaveEvent = new MouseEvent('mouseleave', {
+            view: window,
+            bubbles: true,
+            cancelable: true
+          });
+          button.dispatchEvent(mouseleaveEvent);
+
           continue;
         }
 
-        // Wait a bit longer for content to load
-        await sleep(300);
+        // Wait for tooltip to become visible and content to load
+        console.log('[NotebookLM Takeout] Tooltip container found, waiting for content to load...');
 
-        // Get source title with longer timeout
-        const sourceTitleEl = await waitForElement('.fixed-container .source-title', 2000).catch(() => null);
-        const sourceTitle = sourceTitleEl?.textContent?.trim() || '';
+        // Give NotebookLM time to populate the tooltip after container appears
+        await sleep(150);
 
-        // Find highlighted text
-        const highlightedSpans = sidePanel.querySelectorAll('.highlighted.ng-star-inserted');
+        let footerEl = null;
+        let attempts = 0;
+        const maxAttempts = 12; // 12 x 50ms = 600ms max per tooltip
+
+        while (attempts < maxAttempts) {
+          // Check if tooltip is visible (opacity > 0.5) AND has content (either footer or text)
+          const opacity = parseFloat(tooltip.style.opacity || '0');
+          footerEl = tooltip.querySelector('.citation-tooltip-footer');
+          const tooltipTextEl = tooltip.querySelector('.citation-tooltip-text');
+
+          // Accept if opacity is high and we have either footer content OR tooltip text content
+          const hasFooterContent = footerEl && footerEl.textContent?.trim().length > 0;
+          const hasTooltipTextContent = tooltipTextEl && tooltipTextEl.textContent?.trim().length > 0;
+
+          if (opacity > 0.5 && (hasFooterContent || hasTooltipTextContent)) {
+            console.log('[NotebookLM Takeout] Tooltip content loaded after', attempts * 50, 'ms');
+            break;
+          }
+          await sleep(50);
+          attempts++;
+        }
+
+        // Check if we have any usable content (footer or tooltip text)
+        const tooltipTextEl = tooltip.querySelector('.citation-tooltip-text');
+        const hasFooterContent = footerEl && footerEl.textContent?.trim().length > 0;
+        const hasTooltipTextContent = tooltipTextEl && tooltipTextEl.textContent?.trim().length > 0;
+
+        if (!hasFooterContent && !hasTooltipTextContent) {
+          const errorMsg = `Citation ${spanIndex}: Tooltip has no content (timeout after ${maxAttempts * 50}ms)`;
+          console.warn('[NotebookLM Takeout]', errorMsg);
+          console.warn('  - tooltip HTML:', tooltip.outerHTML.substring(0, 300));
+          errors.push(errorMsg);
+
+          // Simulate mouseleave to clean up
+          const mouseleaveEvent = new MouseEvent('mouseleave', {
+            view: window,
+            bubbles: true,
+            cancelable: true
+          });
+          button.dispatchEvent(mouseleaveEvent);
+
+          continue;
+        }
+
+        console.log('[NotebookLM Takeout] Tooltip appeared! Extracting data...');
+        console.log('  - tooltip HTML preview:', tooltip.outerHTML.substring(0, 500));
+
+        // Extract source filename from footer (may be empty for some citations)
+        const sourceTitle = footerEl?.textContent?.trim() || '';
+        console.log('  - footer element found:', !!footerEl, 'content:', sourceTitle || '(empty)');
+
+        // Extract quote text from citation-tooltip-text
+        const tooltipText = tooltip.querySelector('.citation-tooltip-text');
+        console.log('  - tooltip text element found:', !!tooltipText);
         let highlightedText = '';
 
-        highlightedSpans.forEach(span => {
-          highlightedText += span.innerText.trim() + ' ';
-        });
+        if (tooltipText) {
+          // Convert HTML to markdown to preserve formatting (bold, italic, links, etc.)
+          // Use direct child selector to avoid processing nested elements inside table cells
+          const textElements = tooltipText.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
+          console.log('  - found', textElements.length, 'top-level structural elements');
 
-        if (highlightedText) {
-          const sourceData = {
-            index: uniqueSources.size + 1,
-            text: sourceTitle,
-            quote: highlightedText.trim(),
-            href: '',
-            sourceIndex: spanIndex
-          };
-
-          console.log('[NotebookLM Takeout] ✓ Extracted citation:', spanIndex);
-          console.log('  - sourceTitle:', sourceTitle.substring(0, 50));
-          console.log('  - sourceIndex stored:', spanIndex);
-          console.log('  - source data:', JSON.stringify(sourceData, null, 2));
-
-          uniqueSources.set(spanIndex, sourceData);
+          if (textElements.length > 0) {
+            // Strategy 1: Convert each structural element to markdown
+            textElements.forEach(el => {
+              const markdown = htmlToMarkdown(el);
+              if (markdown && markdown.length > 0) {
+                highlightedText += markdown + '\n\n';
+              }
+            });
+          } else {
+            // Strategy 2: Try converting the whole tooltipText element
+            console.log('  - using full tooltip text content');
+            highlightedText = htmlToMarkdown(tooltipText);
+          }
         } else {
-          console.warn('[NotebookLM Takeout] No highlighted text found for citation:', spanIndex);
+          // No .citation-tooltip-text found, try to extract from entire tooltip
+          console.log('  - no citation-tooltip-text found, using tooltip content');
+          const allText = tooltip.textContent?.trim() || '';
+          // Remove the footer text (source filename)
+          highlightedText = allText.replace(sourceTitle, '').trim();
         }
 
-        // Close the side panel before moving to next citation
-        // Try ESC key first
-        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
-        await sleep(200);
+        // Store the citation data (even if text is empty, for debugging)
+        const sourceData = {
+          index: uniqueSources.size + 1,
+          text: sourceTitle,
+          quote: highlightedText.trim(),
+          href: '',
+          sourceIndex: spanIndex
+        };
 
-        // If ESC didn't work, try clicking close button
-        const closeButton = document.querySelector('.source-citation-panel button[aria-label*="Close"], .panel-header button');
-        if (closeButton) {
-          closeButton.click();
-          await sleep(200);
+        // Validate extracted data
+        if (!sourceTitle || sourceTitle.trim().length === 0) {
+          const errorMsg = `Citation ${spanIndex}: Empty source filename`;
+          console.warn('[NotebookLM Takeout]', errorMsg);
+          errors.push(errorMsg);
         }
 
-        // Wait before next citation
-        await sleep(300);
+        if (!highlightedText || highlightedText.trim().length === 0) {
+          const errorMsg = `Citation ${spanIndex}: Empty quote text (source: ${sourceTitle || 'unknown'})`;
+          console.warn('[NotebookLM Takeout]', errorMsg);
+          errors.push(errorMsg);
+        } else {
+          console.log('[NotebookLM Takeout] ✓ Extracted from hover tooltip:', spanIndex);
+          console.log('  - source:', sourceTitle.substring(0, 50));
+          console.log('  - quote length:', highlightedText.trim().length);
+          console.log('  - sourceIndex stored:', spanIndex);
+        }
+
+        uniqueSources.set(spanIndex, sourceData);
+
+        // Close tooltip (simulate mouseleave)
+        const mouseleaveEvent = new MouseEvent('mouseleave', {
+          view: window,
+          bubbles: true,
+          cancelable: true
+        });
+        button.dispatchEvent(mouseleaveEvent);
+
+        // Wait for tooltip to fully close and disappear (critical for next citation)
+        console.log('[NotebookLM Takeout] Waiting for tooltip to close...');
+        let closedAttempts = 0;
+        while (closedAttempts < 15) {
+          const existingTooltip = document.querySelector('xap-inline-dialog-container[role="dialog"]');
+
+          // Wait for tooltip to either be removed OR have opacity 0 AND empty content
+          if (!existingTooltip) {
+            console.log('[NotebookLM Takeout] Tooltip removed after', closedAttempts * 100, 'ms');
+            break;
+          }
+
+          const opacity = parseFloat(existingTooltip.style.opacity || '1');
+          const hasContent = existingTooltip.querySelector('.citation-tooltip-footer');
+
+          if (opacity < 0.1 && !hasContent) {
+            console.log('[NotebookLM Takeout] Tooltip closed (empty) after', closedAttempts * 100, 'ms');
+            // Extra wait to ensure it's fully gone
+            await sleep(300);
+            break;
+          }
+
+          await sleep(100);
+          closedAttempts++;
+        }
+
+        // Extra safety wait
+        await sleep(100);
 
       } catch (error) {
+        const errorMsg = `Citation ${spanIndex}: ${error.message || error.toString()}`;
         console.error('[NotebookLM Takeout] Error extracting citation:', spanIndex, error);
+        errors.push(errorMsg);
       }
     }
 
-    console.log('[NotebookLM Takeout] Extraction complete. Total citations:', uniqueSources.size);
+    const totalAttempted = allCitationButtons.length;
+    const totalSuccessful = uniqueSources.size;
+    const totalFailed = totalAttempted - totalSuccessful;
+
+    console.log('[NotebookLM Takeout] ========== Citation Extraction Summary ==========');
+    console.log('[NotebookLM Takeout] Collapsed groups expanded:', showMoreButtons.length);
+    console.log('[NotebookLM Takeout] Total citation buttons found:', allCitationButtons.length);
+    console.log('[NotebookLM Takeout] Unique citations extracted:', totalSuccessful);
+    console.log('[NotebookLM Takeout] Failed to extract:', totalFailed);
+    console.log('[NotebookLM Takeout] Errors/warnings:', errors.length);
+
+    if (errors.length > 0) {
+      console.warn('[NotebookLM Takeout] Errors and warnings:');
+      errors.forEach((err, i) => console.warn(`  ${i + 1}. ${err}`));
+    }
 
     // Restore overlay
     if (overlay) {
@@ -1461,7 +1901,8 @@
 
     return {
       html: viewer.innerHTML,
-      sources: sourcesArray
+      sources: sourcesArray,
+      errors: errors
     };
   }
 
