@@ -1348,6 +1348,12 @@
       for (const button of citationButtons) {
         const span = button.querySelector('span');
         const spanIndex = span?.innerText.trim();
+
+        // Debug: Log citation button details
+        console.log('[NotebookLM Takeout] Citation button found:');
+        console.log('  - span text:', spanIndex);
+        console.log('  - button outerHTML preview:', button.outerHTML.substring(0, 300));
+
         if (spanIndex && !uniqueSources.has(spanIndex)) {
           allCitationButtons.push({ button, spanIndex });
         }
@@ -1399,15 +1405,20 @@
         });
 
         if (highlightedText) {
-          uniqueSources.set(spanIndex, {
+          const sourceData = {
             index: uniqueSources.size + 1,
             text: sourceTitle,
             quote: highlightedText.trim(),
             href: '',
             sourceIndex: spanIndex
-          });
+          };
 
-          console.log('[NotebookLM Takeout] ✓ Extracted citation:', spanIndex, sourceTitle.substring(0, 50));
+          console.log('[NotebookLM Takeout] ✓ Extracted citation:', spanIndex);
+          console.log('  - sourceTitle:', sourceTitle.substring(0, 50));
+          console.log('  - sourceIndex stored:', spanIndex);
+          console.log('  - source data:', JSON.stringify(sourceData, null, 2));
+
+          uniqueSources.set(spanIndex, sourceData);
         } else {
           console.warn('[NotebookLM Takeout] No highlighted text found for citation:', spanIndex);
         }
@@ -1440,9 +1451,17 @@
       overlay.style.pointerEvents = '';
     }
 
+    const sourcesArray = Array.from(uniqueSources.values());
+
+    // Debug: Show final sources array
+    console.log('[NotebookLM Takeout] Final sources array:');
+    console.log('  - count:', sourcesArray.length);
+    console.log('  - sourceIndices:', sourcesArray.map(s => s.sourceIndex).join(', '));
+    console.log('  - full array:', JSON.stringify(sourcesArray, null, 2));
+
     return {
       html: viewer.innerHTML,
-      sources: Array.from(uniqueSources.values())
+      sources: sourcesArray
     };
   }
 
@@ -1839,6 +1858,108 @@
     }
   }
 
+  /**
+   * Extract Data Table content by clicking to open and reading the table
+   * Data Tables open in a <table-viewer> element
+   */
+  async function extractDataTableContent(tableTitle) {
+    console.log(`[NotebookLM Takeout] Extracting Data Table: "${tableTitle}"`);
+
+    try {
+      // Find the artifact by title
+      const allTitles = document.querySelectorAll('.artifact-title');
+      const titleElement = Array.from(allTitles).find(
+        (el) => el.textContent.trim() === tableTitle
+      );
+
+      if (!titleElement) {
+        throw new Error(`Could not find Data Table with title: "${tableTitle}"`);
+      }
+
+      // Get the parent button and click it to open table-viewer
+      const tableButton = titleElement.closest('button');
+      if (!tableButton) {
+        throw new Error('Could not find Data Table button');
+      }
+
+      console.log('[NotebookLM Takeout] Clicking Data Table button to open table-viewer...');
+      tableButton.click();
+
+      // Wait for table-viewer to appear in the DOM
+      console.log('[NotebookLM Takeout] Waiting for table-viewer...');
+      const tableViewer = await waitForElement('table-viewer', 5000);
+
+      if (!tableViewer) {
+        throw new Error('table-viewer did not appear');
+      }
+
+      // Wait a bit for content to fully load inside table-viewer
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Log table-viewer structure for debugging
+      console.log('[NotebookLM Takeout] table-viewer structure:');
+      console.log(`  - children count: ${tableViewer.children.length}`);
+      const childTags = Array.from(tableViewer.children).map(c => c.tagName.toLowerCase()).join(', ');
+      console.log(`  - child tags: ${childTags}`);
+      console.log(`  - innerHTML preview: ${tableViewer.innerHTML.substring(0, 300)}...`);
+
+      // Extract content from within table-viewer
+      // Try multiple selectors for the actual table
+      let contentElement = null;
+      const contentSelectors = [
+        'table',
+        '.table-container table',
+        '[role="table"]',
+        '.data-table',
+        '.table-container',
+        '[class*="table"]'
+      ];
+
+      for (const selector of contentSelectors) {
+        contentElement = tableViewer.querySelector(selector);
+        if (contentElement) {
+          console.log(`[NotebookLM Takeout] Found table with selector: ${selector}`);
+          break;
+        }
+      }
+
+      if (!contentElement) {
+        // Fallback: use entire table-viewer innerHTML
+        console.log('[NotebookLM Takeout] No specific table element found, using table-viewer innerHTML');
+        contentElement = tableViewer;
+      }
+
+      // Extract HTML content
+      const htmlContent = contentElement.innerHTML;
+      console.log(`[NotebookLM Takeout] Extracted ${htmlContent.length} chars of HTML from table-viewer`);
+      console.log(`[NotebookLM Takeout] HTML preview: ${htmlContent.substring(0, 500)}...`);
+
+      // Close the table-viewer
+      await navigateBackToNotesList();
+
+      // Return raw HTML - sidebar.js will convert to markdown
+      return {
+        success: true,
+        html: htmlContent,
+        title: tableTitle
+      };
+    } catch (error) {
+      console.error('[NotebookLM Takeout] Data Table extraction failed:', error);
+
+      // Try to close viewer even if extraction failed
+      try {
+        await navigateBackToNotesList();
+      } catch (closeError) {
+        console.error('[NotebookLM Takeout] Failed to close table-viewer:', closeError);
+      }
+
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
   // Navigate back to notes list / close source panel
   async function navigateBackToNotesList() {
     console.log('[NotebookLM Takeout] Attempting to close panel/navigate back...');
@@ -1854,7 +1975,7 @@
       await new Promise(resolve => setTimeout(resolve, 800));
 
       // Check if note viewer is gone
-      let noteViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer');
+      let noteViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer, table-viewer');
       if (!noteViewer) {
         console.log('[NotebookLM Takeout] ✓ Panel closed via ESC key');
         return;
@@ -1936,14 +2057,17 @@
       let artifactItem = null;
       let artifactTitle = artifactName || '';
 
-      // For Reports with skipMoreButton, go directly to extraction
-      if (artifactType === 'Report' && skipMoreButton) {
-        console.log('[NotebookLM Takeout] [Download] Report with skipMoreButton - extracting directly...');
-        const extractResult = await extractReportContent(artifactTitle);
+      // For Reports and Data Tables with skipMoreButton, go directly to extraction
+      if ((artifactType === 'Report' || artifactType === 'Data Table') && skipMoreButton) {
+        console.log(`[NotebookLM Takeout] [Download] ${artifactType} with skipMoreButton - extracting directly...`);
+
+        const extractResult = artifactType === 'Report'
+          ? await extractReportContent(artifactTitle)
+          : await extractDataTableContent(artifactTitle);
 
         if (extractResult.success) {
           const duration = Date.now() - startTime;
-          console.log(`[NotebookLM Takeout] [Download] ✓ Report extracted (${duration}ms)`);
+          console.log(`[NotebookLM Takeout] [Download] ✓ ${artifactType} extracted (${duration}ms)`);
           return {
             success: true,
             method: 'content_extraction',
@@ -1955,7 +2079,7 @@
         }
 
         // If extraction failed, throw error
-        throw new Error(extractResult.error || 'Report extraction failed');
+        throw new Error(extractResult.error || `${artifactType} extraction failed`);
       }
 
       // For other artifacts, find by index (original logic)
@@ -2010,14 +2134,17 @@
       }
 
 
-      // Try Report extraction first (Reports need to be opened and extracted like Notes)
-      if (artifactType === 'Report') {
-        console.log('[NotebookLM Takeout] [Download] Attempting Report extraction...');
-        const extractResult = await extractReportContent(artifactTitle);
+      // Try Report or Data Table extraction first
+      if (artifactType === 'Report' || artifactType === 'Data Table') {
+        console.log(`[NotebookLM Takeout] [Download] Attempting ${artifactType} extraction...`);
+
+        const extractResult = artifactType === 'Report'
+          ? await extractReportContent(artifactTitle)
+          : await extractDataTableContent(artifactTitle);
 
         if (extractResult.success) {
           const duration = Date.now() - startTime;
-          console.log(`[NotebookLM Takeout] [Download] ✓ Report extracted (${duration}ms)`);
+          console.log(`[NotebookLM Takeout] [Download] ✓ ${artifactType} extracted (${duration}ms)`);
           return {
             success: true,
             method: 'content_extraction',
@@ -2029,7 +2156,7 @@
         }
 
         // Fall through to button click if extraction failed
-        console.log('[NotebookLM Takeout] [Download] Report extraction failed, falling back to button click');
+        console.log(`[NotebookLM Takeout] [Download] ${artifactType} extraction failed, falling back to button click`);
       }
 
       // Try infographic extraction first (tiered fallback: SVG → Canvas → Button)

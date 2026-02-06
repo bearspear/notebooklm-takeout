@@ -219,10 +219,10 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
     // Ensure content script is loaded
     await ensureContentScriptLoaded(tabId);
 
-    // For Reports, skip More button entirely - content script will click artifact directly
+    // For Reports and Data Tables, skip More button entirely - content script will click artifact directly
     let response;
-    if (artifactType === 'Report') {
-      logger.info('Download', `Report detected - skipping More button, extracting content directly`);
+    if (artifactType === 'Report' || artifactType === 'Data Table') {
+      logger.info('Download', `${artifactType} detected - skipping More button, extracting content directly`);
 
       response = await chrome.tabs.sendMessage(tabId, {
         type: 'DOWNLOAD_ARTIFACT',
@@ -279,35 +279,67 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
 
     // Handle different download methods
     if (response.method === 'content_extraction') {
-      // Content extraction (Reports) - download markdown directly
+      // Content extraction (Reports and Data Tables)
       const filename = response.title || artifactName || 'report';
-      logger.info('Download', `Downloading extracted content as markdown: "${filename}"`);
 
-      // Convert HTML to markdown (content.js returns HTML, we convert it here)
-      let markdownContent;
-      if (response.format === 'html') {
-        logger.info('Download', `Converting HTML to markdown for: "${filename}"`);
-        markdownContent = convertToMarkdown(response.data, [], filename);
+      // For Data Tables, convert to CSV
+      if (artifactType === 'Data Table') {
+        logger.info('Download', `Downloading extracted content as CSV: "${filename}"`);
+
+        // Convert HTML table to CSV
+        let csvContent;
+        if (response.format === 'html') {
+          logger.info('Download', `Converting HTML table to CSV for: "${filename}"`);
+          csvContent = convertTableToCSV(response.data);
+        } else {
+          csvContent = response.data;
+        }
+
+        // Create CSV blob and download
+        const blob = new Blob([csvContent], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = sanitizeFilename(filename) + '.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        // Cancel intercept mode (wasn't needed)
+        chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
+
+        logger.download(filename, 'success', `Downloaded as CSV (${csvContent.length} chars)`);
       } else {
-        // Already markdown
-        markdownContent = response.data;
+        // For Reports and other content, convert to markdown
+        logger.info('Download', `Downloading extracted content as markdown: "${filename}"`);
+
+        // Convert HTML to markdown (content.js returns HTML, we convert it here)
+        let markdownContent;
+        if (response.format === 'html') {
+          logger.info('Download', `Converting HTML to markdown for: "${filename}"`);
+          markdownContent = convertToMarkdown(response.data, [], filename);
+        } else {
+          // Already markdown
+          markdownContent = response.data;
+        }
+
+        // Create markdown blob and download
+        const blob = new Blob([markdownContent], { type: 'text/markdown' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = sanitizeFilename(filename) + '.md';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        // Cancel intercept mode (wasn't needed)
+        chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
+
+        logger.download(filename, 'success', `Downloaded as markdown (${markdownContent.length} chars)`);
       }
-
-      // Create markdown blob and download
-      const blob = new Blob([markdownContent], { type: 'text/markdown' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = sanitizeFilename(filename) + '.md';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      // Cancel intercept mode (wasn't needed)
-      chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
-
-      logger.download(filename, 'success', `Downloaded as markdown (${markdownContent.length} chars)`);
     } else if (response.method === 'svg_extract' || response.method === 'canvas_export') {
       // Direct extraction - download the data URL
       // Use title from response (extracted from page) or fall back to artifactName parameter
@@ -788,9 +820,144 @@ function renderNotesList(notes) {
   });
 }
 
+// ==================== CSV CONVERSION ====================
+
+function convertTableToCSV(htmlContent) {
+  // Log HTML structure for debugging
+  logger.info('CSV', `HTML content length: ${htmlContent.length} chars`);
+  logger.info('CSV', `HTML preview: ${htmlContent.substring(0, 500)}...`);
+
+  // Parse HTML content
+  const parser = new DOMParser();
+
+  // Check if HTML starts with <tr> (table rows without table wrapper)
+  // If so, wrap in a table element before parsing to prevent browser auto-correction
+  let htmlToParse = htmlContent;
+  const startsWithTr = htmlContent.trim().startsWith('<tr');
+
+  if (startsWithTr) {
+    logger.info('CSV', 'HTML starts with <tr>, wrapping in <table> for proper parsing');
+    htmlToParse = `<table>${htmlContent}</table>`;
+  }
+
+  const doc = parser.parseFromString(htmlToParse, 'text/html');
+
+  // Try multiple selectors to find the table
+  let table = null;
+  const tableSelectors = [
+    'table',
+    '[role="table"]',
+    '.table',
+    '[class*="table"]'
+  ];
+
+  for (const selector of tableSelectors) {
+    table = doc.querySelector(selector);
+    if (table) {
+      logger.info('CSV', `Found table using selector: ${selector}`);
+      break;
+    }
+  }
+
+  if (!table) {
+    const bodyContent = doc.body ? doc.body.innerHTML.substring(0, 1000) : 'No body';
+    logger.error('CSV', `No table element found. Body content: ${bodyContent}`);
+    throw new Error('No table found in HTML content');
+  }
+
+  // Find all rows within the table
+  let allRows = table.querySelectorAll('tr');
+
+  // If no tr elements, try role="row"
+  if (allRows.length === 0) {
+    logger.info('CSV', 'No <tr> elements found, trying role="row"');
+    allRows = table.querySelectorAll('[role="row"]');
+  }
+
+  // If still no rows, try common div-based table structures
+  if (allRows.length === 0) {
+    logger.info('CSV', 'No role="row" elements found, trying .table-row');
+    allRows = table.querySelectorAll('.table-row, [class*="row"]');
+  }
+
+  logger.info('CSV', `Found ${allRows.length} rows`);
+
+  const rows = [];
+
+  allRows.forEach((row, rowIndex) => {
+    const cells = [];
+
+    // Try multiple approaches to find cells
+    let cellElements = row.querySelectorAll('th, td');
+
+    // If no th/td, try role="cell"
+    if (cellElements.length === 0) {
+      cellElements = row.querySelectorAll('[role="cell"], [role="columnheader"], [role="rowheader"]');
+    }
+
+    // If still no cells, try common div-based structures
+    if (cellElements.length === 0) {
+      cellElements = row.querySelectorAll('.table-cell, [class*="cell"]');
+    }
+
+    if (cellElements.length === 0) {
+      logger.info('CSV', `Row ${rowIndex}: No cells found`);
+    }
+
+    cellElements.forEach(cell => {
+      // Get cell text content
+      let cellText = cell.textContent.trim();
+
+      // Escape quotes by doubling them
+      cellText = cellText.replace(/"/g, '""');
+
+      // If cell contains comma, newline, or quote, wrap in quotes
+      if (cellText.includes(',') || cellText.includes('\n') || cellText.includes('"')) {
+        cellText = `"${cellText}"`;
+      }
+
+      cells.push(cellText);
+    });
+
+    if (cells.length > 0) {
+      rows.push(cells.join(','));
+    }
+  });
+
+  logger.info('CSV', `Converted ${rows.length} rows to CSV`);
+
+  if (rows.length === 0) {
+    throw new Error('No table rows found to convert to CSV');
+  }
+
+  return rows.join('\n');
+}
+
 // ==================== MARKDOWN CONVERSION ====================
 
 function convertToMarkdown(htmlContent, sources, noteTitle) {
+  // Debug: Log what we're converting
+  logger.info('Markdown', `Converting note: "${noteTitle}"`);
+  logger.info('Markdown', `  - HTML content length: ${htmlContent.length} chars`);
+  logger.info('Markdown', `  - Number of sources: ${sources?.length || 0}`);
+  if (sources && sources.length > 0) {
+    logger.info('Markdown', `  - Source indices: [${sources.map(s => s.sourceIndex).join(', ')}]`);
+  }
+
+  // Create a mapping from original sourceIndex to sequential display number
+  // The HTML buttons show sequential numbers, but sources have original IDs
+  const sourceIndexToDisplayNumber = new Map();
+  const displayNumberToSource = new Map();
+
+  if (sources && sources.length > 0) {
+    sources.forEach((source, idx) => {
+      const displayNumber = (idx + 1).toString();
+      sourceIndexToDisplayNumber.set(source.sourceIndex, displayNumber);
+      displayNumberToSource.set(source.sourceIndex, source);
+      logger.info('Markdown', `  - Mapping: original ID ${source.sourceIndex} -> display #${displayNumber}`);
+    });
+  }
+
   // Initialize TurndownService (simple setup like working extension)
   const turndownService = new TurndownService({ headingStyle: 'atx' });
 
@@ -887,27 +1054,52 @@ function convertToMarkdown(htmlContent, sources, noteTitle) {
       return false;
     },
     replacement: (content, node) => {
-      let sourceIndex = node.getAttribute('data-source-index') ||
-                       node.getAttribute('href')?.replace('#cite-', '');
+      // Debug: Log what we're processing
+      logger.info('Citation', `Processing citation node: ${node.nodeName}`);
+      logger.info('Citation', `  - content: "${content}"`);
+      logger.info('Citation', `  - data-source-index: ${node.getAttribute('data-source-index')}`);
+      logger.info('Citation', `  - href: ${node.getAttribute('href')}`);
+      logger.info('Citation', `  - outerHTML preview: ${node.outerHTML?.substring(0, 200)}`);
 
-      if (!sourceIndex && node.nodeName === 'BUTTON') {
+      let originalSourceIndex = node.getAttribute('data-source-index') ||
+                                node.getAttribute('href')?.replace('#cite-', '');
+
+      if (!originalSourceIndex && node.nodeName === 'BUTTON') {
         const span = node.querySelector('span');
         if (span) {
-          sourceIndex = span.textContent.trim();
+          originalSourceIndex = span.textContent.trim();
+          logger.info('Citation', `  - extracted from BUTTON span: "${originalSourceIndex}"`);
         }
       }
 
-      if (!sourceIndex) {
-        sourceIndex = content.trim();
+      if (!originalSourceIndex) {
+        originalSourceIndex = content.trim();
+        logger.info('Citation', `  - using content as originalSourceIndex: "${originalSourceIndex}"`);
       }
 
-      if (!citationOccurrences.has(sourceIndex)) {
-        citationOccurrences.set(sourceIndex, 0);
-      }
-      const occurrenceCount = citationOccurrences.get(sourceIndex) + 1;
-      citationOccurrences.set(sourceIndex, occurrenceCount);
+      logger.info('Citation', `  - original sourceIndex: "${originalSourceIndex}"`);
 
-      return `<sup><a id="cite-ref-${sourceIndex}-${occurrenceCount}" href="#src-${sourceIndex}">[${sourceIndex}]</a></sup>`;
+      // Map original source ID to sequential display number
+      let displayNumber = sourceIndexToDisplayNumber.get(originalSourceIndex);
+
+      if (!displayNumber) {
+        // Source not found in our extracted sources - use original number
+        logger.info('Citation', `  - WARNING: Source ID ${originalSourceIndex} not found in sources, using original`);
+        displayNumber = originalSourceIndex;
+      } else {
+        logger.info('Citation', `  - mapped to display number: ${displayNumber}`);
+      }
+
+      if (!citationOccurrences.has(displayNumber)) {
+        citationOccurrences.set(displayNumber, 0);
+      }
+      const occurrenceCount = citationOccurrences.get(displayNumber) + 1;
+      citationOccurrences.set(displayNumber, occurrenceCount);
+
+      const output = `<sup><a id="cite-ref-${displayNumber}-${occurrenceCount}" href="#src-${displayNumber}">[${displayNumber}]</a></sup>`;
+      logger.info('Citation', `  - generated: ${output}`);
+
+      return output;
     }
   });
 
@@ -930,18 +1122,27 @@ function convertToMarkdown(htmlContent, sources, noteTitle) {
       }
     });
 
-    // Sort by source number and output
+    logger.info('Markdown', `  - Unique sources after dedup: ${uniqueSources.size}`);
+
+    // Sort by source number
     const sortedSources = Array.from(uniqueSources.values()).sort((a, b) => {
       const numA = parseInt(a.sourceIndex) || 0;
       const numB = parseInt(b.sourceIndex) || 0;
       return numA - numB;
     });
 
+    logger.info('Markdown', `  - Sorted source indices: [${sortedSources.map(s => s.sourceIndex).join(', ')}]`);
+
+    // Write sources with display numbers (1, 2, 3...) instead of original IDs
     sortedSources.forEach((source, idx) => {
-      markdown += `<a id="src-${source.sourceIndex}"></a>\n`;
+      const displayNumber = (idx + 1).toString(); // Sequential: 1, 2, 3...
+      const originalId = source.sourceIndex;
+
+      logger.info('Markdown', `  - Writing source: #${displayNumber} (original ID: ${originalId})`);
+      markdown += `<a id="src-${displayNumber}"></a>\n`;
 
       // Make source number clickable to jump back to first citation
-      markdown += `**[[${source.sourceIndex}]](#cite-ref-${source.sourceIndex}-1)** ${source.text}\n\n`;
+      markdown += `**[[${displayNumber}]](#cite-ref-${displayNumber}-1)** ${source.text}\n\n`;
 
       // Include the quote if available
       if (source.quote && source.quote.length > 0) {
@@ -1572,6 +1773,9 @@ function getIconForType(type) {
     </svg>`,
     'Report': `<svg width="20" height="20" viewBox="0 0 24 24" fill="#ea4335">
       <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
+    </svg>`,
+    'Data Table': `<svg width="20" height="20" viewBox="0 0 24 24" fill="#34a853">
+      <path d="M3 3h18v18H3V3zm16 16V5H5v14h14zM7 7h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"/>
     </svg>`
   };
 
