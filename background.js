@@ -238,37 +238,42 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
     pendingDownloadName = null;
     pendingDownloadType = null;
 
-    // Immediately cancel the download SYNCHRONOUSLY to prevent tab opening
-    chrome.downloads.cancel(downloadItem.id).then(() => {
-      console.log('[Background] Cancelled original download:', downloadItem.id);
-    }).catch((e) => {
-      console.error('[Background] Failed to cancel download:', e);
-    });
-
-    // Wrap re-download in IIFE
+    // Wrap entire intercept flow in IIFE with proper error handling
     (async () => {
+      try {
+        // CRITICAL: Wait for cancel to complete before re-downloading
+        await chrome.downloads.cancel(downloadItem.id);
+        console.log('[Background] Cancelled original download:', downloadItem.id);
 
-      // Re-download directly (this won't open a tab)
-      const newDownloadId = await chrome.downloads.download({
-        url: downloadItem.url,
-        saveAs: false
-        // Don't set filename here - let onDeterminingFilename handle it
-      });
+        // Re-download directly (this won't open a tab)
+        const newDownloadId = await chrome.downloads.download({
+          url: downloadItem.url,
+          saveAs: false
+          // Don't set filename here - let onDeterminingFilename handle it
+        });
 
-      console.log('[Background] Re-download started:', newDownloadId);
+        console.log('[Background] Re-download started:', newDownloadId);
 
-      // Store info for retrieval
-      interceptedDownload = {
-        originalId: downloadItem.id,
-        newId: newDownloadId,
-        filename: newFilename,
-        url: downloadItem.url
-      };
+        // Store info for retrieval
+        interceptedDownload = {
+          originalId: downloadItem.id,
+          newId: newDownloadId,
+          filename: newFilename,
+          url: downloadItem.url
+        };
 
-      // Erase the cancelled download from history
-      setTimeout(() => {
-        chrome.downloads.erase({ id: downloadItem.id }).catch(() => {});
-      }, 1000);
+        // Erase the cancelled download from history
+        setTimeout(() => {
+          chrome.downloads.erase({ id: downloadItem.id }).catch(() => {});
+        }, 1000);
+
+      } catch (error) {
+        console.error('[Background] Intercept mode failed:', error);
+        // Reset intercept mode on error
+        interceptMode = false;
+        interceptedDownload = null;
+        redownloadInfo = null;
+      }
     })();
 
     return;
@@ -504,6 +509,8 @@ async function runBatchDownload(tabId, items) {
   // We'll collect files as base64 and create zip at the end
   const fileContents = [];
 
+  try {
+
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     batchStatus = `Downloading ${i + 1}/${items.length}: ${item.label}`;
@@ -575,12 +582,11 @@ async function runBatchDownload(tabId, items) {
     }
   }
 
-  batchDownloadMode = false;
-  batchStatus = 'Creating ZIP...';
-  console.log('[Background] Creating ZIP with', fileContents.length, 'files');
+    batchStatus = 'Creating ZIP...';
+    console.log('[Background] Creating ZIP with', fileContents.length, 'files');
 
-  // Create ZIP and download
-  if (fileContents.length > 0) {
+    // Create ZIP and download
+    if (fileContents.length > 0) {
     try {
       const zipBase64 = await createZipFromFiles(fileContents);
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -596,12 +602,77 @@ async function runBatchDownload(tabId, items) {
       return { success: true, count: downloadedFiles.length };
     } catch (zipError) {
       console.error('[Background] ZIP creation failed:', zipError);
-      batchStatus = 'ZIP creation failed';
-      return { success: false, error: zipError.message };
+      console.log('[Background] Falling back to individual file downloads...');
+
+      // FALLBACK: Download files individually to prevent data loss
+      batchStatus = 'Downloading files individually...';
+      let successCount = 0;
+      const fallbackErrors = [];
+
+      for (let i = 0; i < fileContents.length; i++) {
+        const file = fileContents[i];
+        try {
+          // Determine MIME type from filename extension
+          const ext = file.filename.split('.').pop().toLowerCase();
+          const mimeTypes = {
+            'pdf': 'application/pdf',
+            'png': 'image/png',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'wav': 'audio/wav',
+            'mp3': 'audio/mpeg',
+            'm4a': 'audio/mp4',
+            'mp4': 'video/mp4',
+            'csv': 'text/csv',
+            'md': 'text/markdown',
+            'txt': 'text/plain'
+          };
+          const mimeType = mimeTypes[ext] || 'application/octet-stream';
+
+          await chrome.downloads.download({
+            url: `data:${mimeType};base64,${file.data}`,
+            filename: file.filename,
+            saveAs: false
+          });
+          successCount++;
+          console.log(`[Background] Downloaded ${i + 1}/${fileContents.length}: ${file.filename}`);
+
+          // Small delay between downloads to avoid overwhelming the system
+          if (i < fileContents.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
+        } catch (downloadError) {
+          console.error(`[Background] Failed to download ${file.filename}:`, downloadError);
+          fallbackErrors.push(`${file.filename}: ${downloadError.message}`);
+        }
+      }
+
+      batchStatus = `Complete: ${successCount}/${fileContents.length} files (individual downloads)`;
+
+      if (successCount > 0) {
+        return {
+          success: true,
+          count: successCount,
+          warning: `ZIP creation failed. Downloaded ${successCount} files individually.`,
+          errors: fallbackErrors
+        };
+      } else {
+        return {
+          success: false,
+          error: 'ZIP creation failed and all individual downloads failed',
+          errors: [...errors, ...fallbackErrors]
+        };
+      }
     }
   } else {
     batchStatus = 'No files downloaded';
     return { success: false, error: 'No files downloaded', errors };
+  }
+
+  } finally {
+    // CRITICAL: Always reset batchDownloadMode, even on error
+    batchDownloadMode = false;
+    console.log('[Background] Batch download mode reset');
   }
 }
 

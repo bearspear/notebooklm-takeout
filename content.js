@@ -1010,17 +1010,21 @@
 
   // Helper function to wait for an element
   function waitForElement(selector, timeout = 5000, parent = document) {
-    return new Promise((resolve, reject) => {
+    let observer = null;
+    let timeoutId = null;
+
+    const promise = new Promise((resolve, reject) => {
       const existingEl = parent.querySelector(selector);
       if (existingEl) {
         resolve(existingEl);
         return;
       }
 
-      const observer = new MutationObserver((mutations, obs) => {
+      observer = new MutationObserver((mutations, obs) => {
         const el = parent.querySelector(selector);
         if (el) {
           obs.disconnect();
+          if (timeoutId) clearTimeout(timeoutId);
           resolve(el);
         }
       });
@@ -1030,10 +1034,36 @@
         subtree: true
       });
 
-      setTimeout(() => {
-        observer.disconnect();
+      timeoutId = setTimeout(() => {
+        if (observer) observer.disconnect();
         reject(new Error(`Timeout waiting for ${selector}`));
       }, timeout);
+    });
+
+    // Attach cleanup function to promise for Promise.race
+    promise._cleanup = () => {
+      if (observer) {
+        observer.disconnect();
+        observer = null;
+      }
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+    };
+
+    return promise;
+  }
+
+  // Helper function to race promises with proper cleanup of losers
+  function raceWithCleanup(promises) {
+    return Promise.race(promises).finally(() => {
+      // Clean up all promises (both winners and losers)
+      promises.forEach(p => {
+        if (p && typeof p._cleanup === 'function') {
+          p._cleanup();
+        }
+      });
     });
   }
 
@@ -1180,7 +1210,7 @@
 
       // Wait for content to load (editor or mindmap viewer)
       console.log('[NotebookLM Takeout] Waiting for content...');
-      const content = await Promise.race([
+      const content = await raceWithCleanup([
         waitForElement('rich-text-editor .ql-editor', 5000),
         waitForElement('markdown-editor-legacy .ql-editor', 5000),
         waitForElement('labs-tailwind-doc-viewer', 5000),
@@ -3314,7 +3344,7 @@
           await sleep(200);
 
           // Wait for tooltip
-          const tooltip = await Promise.race([
+          const tooltip = await raceWithCleanup([
             waitForElement('xap-inline-dialog-container[role="dialog"]', 3000),
             waitForElement('.citation-tooltip', 3000),
             waitForElement('[role="dialog"].ng-star-inserted', 3000)
@@ -3551,7 +3581,7 @@
           await sleep(150);
 
           // Wait for tooltip with multiple possible selectors
-          const tooltip = await Promise.race([
+          const tooltip = await raceWithCleanup([
             waitForElement('xap-inline-dialog-container[role="dialog"]', 2500),
             waitForElement('.citation-tooltip', 2500),
             waitForElement('[role="dialog"].ng-star-inserted', 2500)
@@ -3768,7 +3798,7 @@
           await sleep(200);
 
           // Wait for tooltip
-          const tooltip = await Promise.race([
+          const tooltip = await raceWithCleanup([
             waitForElement('xap-inline-dialog-container[role="dialog"]', 3000),
             waitForElement('.citation-tooltip', 3000),
             waitForElement('[role="dialog"].ng-star-inserted', 3000)
@@ -3934,7 +3964,7 @@
           await sleep(100);
 
           // Wait for tooltip with multiple possible selectors
-          const tooltip = await Promise.race([
+          const tooltip = await raceWithCleanup([
             waitForElement('xap-inline-dialog-container[role="dialog"]', 2000),
             waitForElement('.citation-tooltip', 2000),
             waitForElement('[role="dialog"].ng-star-inserted', 2000)

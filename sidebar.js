@@ -308,18 +308,21 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
         // Create CSV blob and download
         const blob = new Blob([csvContent], { type: 'text/csv' });
         const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = sanitizeFilename(filename) + '.csv';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        try {
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = sanitizeFilename(filename) + '.csv';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
 
-        // Cancel intercept mode (wasn't needed)
-        chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
+          // Cancel intercept mode (wasn't needed)
+          chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
 
-        logger.download(filename, 'success', `Downloaded as CSV (${csvContent.length} chars)`);
+          logger.download(filename, 'success', `Downloaded as CSV (${csvContent.length} chars)`);
+        } finally {
+          URL.revokeObjectURL(url);
+        }
       } else {
         // For Reports and other content, convert to markdown
         logger.info('Download', `Downloading extracted content as markdown: "${filename}"`);
@@ -339,18 +342,21 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
         // Create markdown blob and download
         const blob = new Blob([markdownContent], { type: 'text/markdown' });
         const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = sanitizeFilename(filename) + '.md';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        try {
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = sanitizeFilename(filename) + '.md';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
 
-        // Cancel intercept mode (wasn't needed)
-        chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
+          // Cancel intercept mode (wasn't needed)
+          chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
 
-        logger.download(filename, 'success', `Downloaded as markdown (${markdownContent.length} chars)`);
+          logger.download(filename, 'success', `Downloaded as markdown (${markdownContent.length} chars)`);
+        } finally {
+          URL.revokeObjectURL(url);
+        }
       }
     } else if (response.method === 'svg_extract' || response.method === 'canvas_export') {
       // Direct extraction - download the data URL
@@ -411,22 +417,28 @@ async function handleSVGDownload(dataUrl, filename, format) {
     // Create download URL
     const url = URL.createObjectURL(blob);
 
-    // Trigger download
-    const extension = format === 'svg' ? 'svg' : 'png';
-    const sanitizedFilename = sanitizeFilename(filename) + '.' + extension;
+    try {
+      // Trigger download
+      const extension = format === 'svg' ? 'svg' : 'png';
+      const sanitizedFilename = sanitizeFilename(filename) + '.' + extension;
 
-    logger.info('Download', `Sanitized filename: "${sanitizedFilename}"`);
+      logger.info('Download', `Sanitized filename: "${sanitizedFilename}"`);
 
-    await chrome.downloads.download({
-      url: url,
-      filename: sanitizedFilename,
-      saveAs: false
-    });
+      await chrome.downloads.download({
+        url: url,
+        filename: sanitizedFilename,
+        saveAs: false
+      });
 
-    // Clean up
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+      logger.download(filename, 'success', `${format.toUpperCase()} downloaded as ${sanitizedFilename}`);
 
-    logger.download(filename, 'success', `${format.toUpperCase()} downloaded as ${sanitizedFilename}`);
+      // Give download time to start before revoking URL
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+    } finally {
+      // Always clean up blob URL
+      URL.revokeObjectURL(url);
+    }
 
   } catch (error) {
     logger.error('Download', `Failed to handle ${format} download`, error);
@@ -1375,21 +1387,24 @@ async function exportNotesAsMarkdown(selectedNotes) {
 
         const blob = await zip.generateAsync({ type: 'blob' });
         const url = URL.createObjectURL(blob);
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-        const filename = `${baseName}-${timestamp}.zip`;
+        try {
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+          const filename = `${baseName}-${timestamp}.zip`;
 
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
 
-        const successMsg = allErrors.length > 0
-          ? `Exported mindmap with ${allErrors.length} errors (see errors.txt)`
-          : `Successfully exported mindmap`;
-        showToast(successMsg, allErrors.length > 0 ? 'warning' : 'success');
+          const successMsg = allErrors.length > 0
+            ? `Exported mindmap with ${allErrors.length} errors (see errors.txt)`
+            : `Successfully exported mindmap`;
+          showToast(successMsg, allErrors.length > 0 ? 'warning' : 'success');
+        } finally {
+          URL.revokeObjectURL(url);
+        }
       } else {
         // Multiple items or markdown notes - create ZIP
         await createNotesZip(exportedNotes, allErrors);
@@ -1491,17 +1506,19 @@ async function createNotesZip(notes, errors = []) {
   const blob = await zip.generateAsync({ type: 'blob' });
   const url = URL.createObjectURL(blob);
 
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-  const filename = `notebooklm-notes-${timestamp}.zip`;
+  try {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    const filename = `notebooklm-notes-${timestamp}.zip`;
 
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-
-  URL.revokeObjectURL(url);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 // ========== SOURCES EXPORT FUNCTIONS ==========
@@ -1804,17 +1821,20 @@ async function exportSources(selectedSources) {
       const source = exportedSources[0];
       const blob = new Blob([source.markdown], { type: 'text/markdown' });
       const url = URL.createObjectURL(blob);
-      const filename = sanitizeFilename(source.title) + '.md';
+      try {
+        const filename = sanitizeFilename(source.title) + '.md';
 
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
 
-      showToast(`Downloaded: ${source.title}`, 'success');
+        showToast(`Downloaded: ${source.title}`, 'success');
+      } finally {
+        URL.revokeObjectURL(url);
+      }
 
     } else if (exportedSources.length > 1) {
       // Multiple sources - create ZIP
@@ -1829,18 +1849,21 @@ async function exportSources(selectedSources) {
       // Generate ZIP
       const blob = await zip.generateAsync({ type: 'blob' });
       const url = URL.createObjectURL(blob);
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-      const filename = `notebooklm-sources-${timestamp}.zip`;
+      try {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+        const filename = `notebooklm-sources-${timestamp}.zip`;
 
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
 
-      showToast(`Exported ${exportedSources.length} sources`, 'success');
+        showToast(`Exported ${exportedSources.length} sources`, 'success');
+      } finally {
+        URL.revokeObjectURL(url);
+      }
     } else {
       showToast('No sources were exported', 'warning');
     }
@@ -2327,35 +2350,40 @@ async function exportChat(chatData, extractFullCitations = false) {
 
       const blob = await zip.generateAsync({ type: 'blob' });
       const url = URL.createObjectURL(blob);
-      const zipFilename = `${sanitizeFilename(chatData.notebookTitle)}-chat-${timestamp}.zip`;
+      try {
+        const zipFilename = `${sanitizeFilename(chatData.notebookTitle)}-chat-${timestamp}.zip`;
 
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = zipFilename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = zipFilename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
 
-      const errorMsg = stats.extractFullCitations
-        ? `Exported chat: ${stats.successfulExtractions}/${stats.totalCitationsFound} citations extracted successfully. ${allErrors.length} errors (see errors.txt for details)`
-        : `Exported chat with ${allErrors.length} errors (see errors.txt for details)`;
-      showToast(errorMsg, 'warning');
+        const errorMsg = stats.extractFullCitations
+          ? `Exported chat: ${stats.successfulExtractions}/${stats.totalCitationsFound} citations extracted successfully. ${allErrors.length} errors (see errors.txt for details)`
+          : `Exported chat with ${allErrors.length} errors (see errors.txt for details)`;
+        showToast(errorMsg, 'warning');
+      } finally {
+        URL.revokeObjectURL(url);
+      }
 
     } else {
       // Single markdown file
       const blob = new Blob([markdown], { type: 'text/markdown' });
       const url = URL.createObjectURL(blob);
+      try {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
 
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      showToast('Successfully exported chat', 'success');
+        showToast('Successfully exported chat', 'success');
+      } finally {
+        URL.revokeObjectURL(url);
+      }
     }
 
   } catch (error) {
