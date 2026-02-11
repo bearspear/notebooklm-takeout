@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NotebookLM Exporter</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>NotebookLM Exporter</h1>
+      <p class="subtitle">Export audio, slides & infographics</p>
+    </header>
+
+    <div id="status" class="status">
+      <span class="status-dot"></span>
+      <span id="status-text">Checking...</span>
+    </div>
+
+    <section id="artifacts-section" class="section">
+      <div class="section-header">
+        <h2>Artifacts</h2>
+        <button id="rescan-btn" class="btn btn-secondary btn-small">Re-scan</button>
+      </div>
+      <div id="scan-results" class="scan-results">
+        <p class="scanning">Scanning...</p>
+      </div>
+    </section>
+
+    <footer>
+      <a href="https://notebooklm.google.com" target="_blank" class="btn-link">Open NotebookLM</a>
+    </footer>
+  </div>
+
+  <script src="jszip.min.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

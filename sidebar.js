@@ -23,7 +23,7 @@ let settings = {
   autoZip: false,
   showNotifications: true,
   refreshInterval: 10,
-  citationsCodeBlock: true // Wrap citations in code blocks by default
+  citationsCodeBlock: false // Don't wrap citations in code blocks by default
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -94,6 +94,12 @@ function setupEventListeners() {
   if (scanSourcesBtn) {
     scanSourcesBtn.addEventListener('click', scanSourcesPage);
   }
+
+  // Chat scan button
+  const scanChatBtn = document.getElementById('scan-chat-btn');
+  if (scanChatBtn) {
+    scanChatBtn.addEventListener('click', scanChatPage);
+  }
 }
 
 function setupTabSwitching() {
@@ -125,6 +131,7 @@ function setupTabSwitching() {
       } else if (targetTab === 'sources') {
         await scanSourcesPage();
       }
+      // Chat tab: no auto-scan, user must click "Scan Chat" button manually
     });
   });
 }
@@ -321,7 +328,9 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
         let markdownContent;
         if (response.format === 'html') {
           logger.info('Download', `Converting HTML to markdown for: "${filename}"`);
-          markdownContent = convertToMarkdown(response.data, [], filename, settings.citationsCodeBlock);
+          // For Reports, skip adding title if it's already in the content (prevents duplicate H1)
+          const skipTitle = (artifactType === 'Report');
+          markdownContent = convertToMarkdown(response.data, [], filename, settings.citationsCodeBlock, skipTitle);
         } else {
           // Already markdown
           markdownContent = response.data;
@@ -938,15 +947,19 @@ function convertTableToCSV(htmlContent) {
 
 // ==================== MARKDOWN CONVERSION ====================
 
-function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock = true, skipTitleIfPresent = false) {
+function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock = true, skipTitleIfPresent = false, noteId = null) {
   // Debug: Log what we're converting
   logger.info('Markdown', `Converting note: "${noteTitle}"`);
   logger.info('Markdown', `  - HTML content length: ${htmlContent.length} chars`);
   logger.info('Markdown', `  - Number of sources: ${sources?.length || 0}`);
   logger.info('Markdown', `  - Citations code block: ${citationsCodeBlock}`);
+  logger.info('Markdown', `  - Note ID for anchors: ${noteId || 'none (standalone)'}`);
   if (sources && sources.length > 0) {
     logger.info('Markdown', `  - Source indices: [${sources.map(s => s.sourceIndex).join(', ')}]`);
   }
+
+  // Create anchor prefix for combined notes (prevents ID collisions)
+  const anchorPrefix = noteId ? `note-${noteId}-` : '';
 
   // Create a mapping from original sourceIndex to sequential display number
   // The HTML buttons show sequential numbers, but sources have original IDs
@@ -1100,7 +1113,7 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
       const occurrenceCount = citationOccurrences.get(displayNumber) + 1;
       citationOccurrences.set(displayNumber, occurrenceCount);
 
-      const output = `<sup><a id="cite-ref-${displayNumber}-${occurrenceCount}" href="#src-${displayNumber}">[${displayNumber}]</a></sup>`;
+      const output = `<sup><a id="${anchorPrefix}cite-ref-${displayNumber}-${occurrenceCount}" href="#${anchorPrefix}src-${displayNumber}">[${displayNumber}]</a></sup>`;
       logger.info('Citation', `  - generated: ${output}`);
 
       return output;
@@ -1108,8 +1121,24 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
   });
 
   // Convert main content
-  let markdown = `# ${noteTitle}\n\n`;
-  markdown += turndownService.turndown(htmlContent);
+  const bodyMarkdown = turndownService.turndown(htmlContent);
+
+  // Check if content already starts with the title as H1
+  let markdown = '';
+  if (skipTitleIfPresent) {
+    const titlePattern = new RegExp(`^#\\s+${noteTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\n`, 'i');
+    if (titlePattern.test(bodyMarkdown)) {
+      // Content already has title - don't add duplicate
+      logger.info('Markdown', `  - Skipping duplicate title (already present in content)`);
+      markdown = bodyMarkdown;
+    } else {
+      // Content doesn't have title - add it
+      markdown = `# ${noteTitle}\n\n${bodyMarkdown}`;
+    }
+  } else {
+    // Always add title (default behavior)
+    markdown = `# ${noteTitle}\n\n${bodyMarkdown}`;
+  }
 
   // Clean up excessive newlines (more than 2 consecutive)
   markdown = markdown.replace(/\n{3,}/g, '\n\n');
@@ -1143,10 +1172,10 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
       const originalId = source.sourceIndex;
 
       logger.info('Markdown', `  - Writing source: #${displayNumber} (original ID: ${originalId})`);
-      markdown += `<a id="src-${displayNumber}"></a>\n`;
+      markdown += `<a id="${anchorPrefix}src-${displayNumber}"></a>\n`;
 
       // Make source number clickable to jump back to first citation
-      markdown += `**[[${displayNumber}]](#cite-ref-${displayNumber}-1)** ${source.text}\n\n`;
+      markdown += `**[[${displayNumber}]](#${anchorPrefix}cite-ref-${displayNumber}-1)** ${source.text}\n\n`;
 
       // Include the quote if available
       if (source.quote && source.quote.length > 0) {
@@ -1277,12 +1306,15 @@ async function exportNotesAsMarkdown(selectedNotes) {
               treeData: noteData.treeData
             });
           } else {
-            // Convert to markdown
+            // Convert to markdown (without noteId for individual files)
             const markdown = convertToMarkdown(noteData.html, noteData.sources, note.title, settings.citationsCodeBlock);
 
             exportedNotes.push({
               title: note.title,
-              markdown: markdown
+              markdown: markdown,
+              // Store raw data for combined-notes.md (which needs unique noteIds)
+              html: noteData.html,
+              sources: noteData.sources
             });
           }
 
@@ -1418,14 +1450,25 @@ async function createNotesZip(notes, errors = []) {
       notesFolder.file(filename, note.markdown);
     });
 
-    // Create combined markdown file
+    // Create combined markdown file with unique citation anchors per note
     let combinedMarkdown = '# NotebookLM Notes Export\n\n';
     combinedMarkdown += `Exported: ${new Date().toLocaleString()}\n\n`;
     combinedMarkdown += `Total Notes: ${markdownNotes.length}\n\n`;
     combinedMarkdown += '---\n\n';
 
     markdownNotes.forEach((note, idx) => {
-      combinedMarkdown += note.markdown + '\n\n';
+      // Re-convert with unique noteId to prevent citation anchor collisions
+      const noteId = idx + 1;
+      const noteMarkdown = convertToMarkdown(
+        note.html,
+        note.sources,
+        note.title,
+        settings.citationsCodeBlock,
+        false, // skipTitleIfPresent
+        noteId // unique ID for this note's anchors
+      );
+
+      combinedMarkdown += noteMarkdown + '\n\n';
       if (idx < markdownNotes.length - 1) {
         combinedMarkdown += '---\n\n';
       }
@@ -1708,9 +1751,9 @@ async function exportSources(selectedSources) {
         // Build markdown with source guide info
         let markdown = `# ${source.title}\n\n`;
 
-        // Add source guide summary if available (preserve HTML tags like <strong>)
-        if (sourceData.guideHTML) {
-          markdown += `## Summary\n\n${sourceData.guideHTML}\n\n`;
+        // Add source guide summary if available (already converted to markdown)
+        if (sourceData.guideMarkdown && sourceData.guideMarkdown.trim().length > 0) {
+          markdown += `## Summary\n\n${sourceData.guideMarkdown}\n\n`;
         }
 
         // Add key topics if available
@@ -1824,6 +1867,716 @@ async function exportSources(selectedSources) {
 }
 
 // ========== END SOURCES EXPORT FUNCTIONS ==========
+
+// ========== CHAT EXPORT FUNCTIONS ==========
+
+/**
+ * Scan chat panel and initiate auto-scroll
+ */
+async function scanChatPage() {
+  console.log('[NotebookLM Takeout] Scanning chat page...');
+
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+  if (!tab || !tab.url?.includes('notebooklm.google.com')) {
+    showToast('Please open NotebookLM first', 'error');
+    return;
+  }
+
+  // Update UI to show scanning state
+  const chatResults = document.getElementById('chat-scan-results');
+  const chatCount = document.getElementById('chat-count');
+  chatResults.innerHTML = '<p class="scanning">Scanning chat and loading messages...</p>';
+  chatCount.textContent = '0';
+
+  // Ensure content script is loaded
+  await ensureContentScriptLoaded(tab.id);
+
+  try {
+    // Show overlay on page
+    await chrome.tabs.sendMessage(tab.id, {
+      type: 'SHOW_EXPORT_OVERLAY',
+      message: 'Scanning chat history...'
+    });
+
+    // Trigger auto-scroll and scan
+    const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_CHAT' });
+
+    // Hide overlay
+    await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
+
+    if (response.error) {
+      showToast(`Scan failed: ${response.error}`, 'error');
+      chatResults.innerHTML = `<p class="error-message">${escapeHtml(response.error)}</p>`;
+      return;
+    }
+
+    const chatData = response.chatData;
+    console.log(`[NotebookLM Takeout] Found ${chatData.messagePairs.length} message pairs`);
+
+    // Store chat data globally
+    window._currentChatData = chatData;
+
+    renderChatSummary(chatData);
+
+  } catch (error) {
+    console.error('[NotebookLM Takeout] Scan error:', error);
+    showToast('Failed to scan chat', 'error');
+    chatResults.innerHTML = '<p class="error-message">Scan failed. Please try again.</p>';
+
+    // Hide overlay on error
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
+    } catch (e) {}
+  }
+}
+
+/**
+ * Render chat scan results summary
+ */
+function renderChatSummary(chatData) {
+  const chatResults = document.getElementById('chat-scan-results');
+  const chatCount = document.getElementById('chat-count');
+  const exportBtn = document.getElementById('export-chat-btn');
+
+  if (chatData.messagePairs.length === 0) {
+    chatResults.innerHTML = '<p class="empty-message">No chat messages found. Start a conversation with NotebookLM.</p>';
+    chatCount.textContent = '0';
+    exportBtn.style.display = 'none';
+    return;
+  }
+
+  chatCount.textContent = chatData.messagePairs.length;
+
+  // Build summary HTML
+  let html = '<div class="chat-summary">';
+  html += `<div class="summary-stat"><strong>${chatData.messagePairs.length}</strong> message pairs</div>`;
+  html += `<div class="summary-stat"><strong>${chatData.notebookTitle}</strong></div>`;
+
+  if (chatData.dateRange) {
+    html += `<div class="summary-stat">From <strong>${chatData.dateRange.first}</strong> to <strong>${chatData.dateRange.last}</strong></div>`;
+  }
+
+  html += '</div>';
+
+  // Show preview of first few messages
+  html += '<div class="chat-preview">';
+  html += '<h4>Preview:</h4>';
+
+  const previewCount = Math.min(3, chatData.messagePairs.length);
+  for (let i = 0; i < previewCount; i++) {
+    const pair = chatData.messagePairs[i];
+    html += `<div class="message-preview">`;
+    html += `<strong>Q:</strong> ${escapeHtml(pair.userMessage.substring(0, 80))}${pair.userMessage.length > 80 ? '...' : ''}`;
+    html += `</div>`;
+  }
+
+  if (chatData.messagePairs.length > previewCount) {
+    html += `<p class="preview-more">...and ${chatData.messagePairs.length - previewCount} more</p>`;
+  }
+
+  html += '</div>';
+
+  chatResults.innerHTML = html;
+  exportBtn.style.display = 'block';
+
+  // Setup export button handler
+  const newExportBtn = exportBtn.cloneNode(true);
+  exportBtn.parentNode.replaceChild(newExportBtn, exportBtn);
+
+  newExportBtn.addEventListener('click', async () => {
+    const extractFullCitations = document.getElementById('extract-full-citations-checkbox')?.checked || false;
+    await exportChat(chatData, extractFullCitations);
+  });
+}
+
+/**
+ * Export chat as markdown file
+ */
+async function exportChat(chatData, extractFullCitations = false) {
+  console.log('[NotebookLM Takeout] Starting chat export...');
+
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+  // Show overlay on the page
+  await chrome.tabs.sendMessage(tab.id, {
+    type: 'SHOW_EXPORT_OVERLAY',
+    message: 'Preparing to export chat...'
+  });
+
+  // Show progress panel in sidebar
+  const progressPanel = document.getElementById('download-progress');
+  const progressFill = document.getElementById('progress-fill');
+  const progressText = document.getElementById('progress-text');
+
+  progressPanel.style.display = 'block';
+  progressText.textContent = 'Exporting chat...';
+  progressFill.style.width = '0%';
+
+  let cancelled = false;
+
+  // Listen for cancellation
+  const cancelListener = (message) => {
+    if (message.type === 'CANCEL_EXPORT') {
+      cancelled = true;
+    }
+  };
+  chrome.runtime.onMessage.addListener(cancelListener);
+
+  try {
+    const messagePairs = chatData.messagePairs;
+    const processedMessages = [];
+    const allErrors = [];
+
+    // Track statistics for detailed error reporting
+    const stats = {
+      totalMessages: messagePairs.length,
+      messagesWithCitations: 0,
+      totalCitationsFound: 0,
+      totalCitationsExtracted: 0,
+      successfulExtractions: 0,
+      failedExtractions: 0,
+      extractFullCitations: extractFullCitations
+    };
+
+    // Process each message and extract per-message citations
+    console.log('[NotebookLM Takeout] Processing messages and extracting citations...');
+
+    for (let i = 0; i < messagePairs.length; i++) {
+      if (cancelled) {
+        console.log('[NotebookLM Takeout] Export cancelled by user');
+        showToast('Export cancelled', 'warning');
+        break;
+      }
+
+      const pair = messagePairs[i];
+      const progress = ((i + 1) / messagePairs.length) * 100;
+
+      // Update progress
+      progressFill.style.width = `${progress}%`;
+      progressText.textContent = `Processing message ${i + 1}/${messagePairs.length}`;
+
+      await chrome.tabs.sendMessage(tab.id, {
+        type: 'UPDATE_EXPORT_OVERLAY',
+        message: `Processing message ${i + 1}/${messagePairs.length}`,
+        progress: progress
+      });
+
+      console.log(`[NotebookLM Takeout] Message ${i + 1}: Processing...`);
+
+      try {
+        // Extract citation buttons from HTML
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = pair.aiResponseHTML;
+        const citationButtons = tempDiv.querySelectorAll('button.citation-marker');
+
+        console.log(`[NotebookLM Takeout] Message ${i + 1}: Found ${citationButtons.length} citation buttons`);
+
+        // Build sources map for this message
+        const messageSources = new Map(); // sourceIndex -> {text, quote}
+
+        if (citationButtons.length > 0) {
+          stats.messagesWithCitations++;
+          stats.totalCitationsFound += citationButtons.length;
+          citationButtons.forEach((button) => {
+            const span = button.querySelector('span');
+            const sourceIndex = span?.textContent?.trim();
+            const ariaLabel = span?.getAttribute('aria-label');
+
+            // Skip invalid source indices
+            if (!sourceIndex ||
+                sourceIndex === '...' ||
+                messageSources.has(sourceIndex) ||
+                sourceIndex.includes('<') ||
+                sourceIndex.includes('>') ||
+                !/^[0-9]+$/.test(sourceIndex)) {
+              if (sourceIndex && sourceIndex !== '...') {
+                console.warn(`[NotebookLM Takeout] Message ${i + 1}: Skipping invalid sourceIndex "${sourceIndex}"`);
+              }
+              return;
+            }
+
+            // Parse aria-label to extract source title
+            let sourceTitle = `Source ${sourceIndex}`;
+            if (ariaLabel && ariaLabel.includes(':')) {
+              const parts = ariaLabel.split(':');
+              if (parts.length >= 2) {
+                sourceTitle = parts.slice(1).join(':').trim();
+              }
+            }
+
+            messageSources.set(sourceIndex, {
+              text: sourceTitle,
+              quote: ''
+            });
+
+            console.log(`[NotebookLM Takeout] Message ${i + 1}, source ${sourceIndex}: "${sourceTitle}"`);
+          });
+        }
+
+        // Extract full citation details if enabled
+        if (extractFullCitations && messageSources.size > 0) {
+          console.log(`[NotebookLM Takeout] Message ${i + 1}: Extracting full citation details for ${messageSources.size} sources...`);
+
+          // Update progress to show we're extracting quotes
+          const extractProgress = ((i + 1) / messagePairs.length) * 100;
+          progressFill.style.width = `${extractProgress}%`;
+          progressText.textContent = `Message ${i + 1}/${messagePairs.length}: Extracting ${messageSources.size} quotes...`;
+
+          await chrome.tabs.sendMessage(tab.id, {
+            type: 'UPDATE_EXPORT_OVERLAY',
+            message: `Message ${i + 1}/${messagePairs.length}: Extracting ${messageSources.size} quotes (this may take a minute)...`,
+            progress: extractProgress
+          });
+
+          try {
+            // Get source indices to extract
+            const sourceIndices = Array.from(messageSources.keys());
+            console.log(`[NotebookLM Takeout] Message ${i + 1}: Extracting sourceIndices:`, sourceIndices);
+
+            // Call content script to extract citations by temporarily inserting HTML
+            const fullCitationData = await chrome.tabs.sendMessage(tab.id, {
+              type: 'EXTRACT_MESSAGE_CITATIONS',
+              data: {
+                messageIndex: i,
+                messageHTML: pair.aiResponseHTML,
+                sourceIndices: sourceIndices
+              }
+            });
+
+            console.log(`[NotebookLM Takeout] Message ${i + 1}: Received citation data:`, fullCitationData);
+
+            // Merge quotes into messageSources
+            if (fullCitationData && fullCitationData.sourcesByIndex) {
+              messageSources.forEach((source, sourceIndex) => {
+                const fullData = fullCitationData.sourcesByIndex[sourceIndex];
+                if (fullData) {
+                  source.text = fullData.text || source.text;
+                  source.quote = fullData.quote || '';
+                  stats.successfulExtractions++;
+                  console.log(`[NotebookLM Takeout] Message ${i + 1}, source ${sourceIndex}: Updated with quote (${source.quote.length} chars)`);
+                } else {
+                  stats.failedExtractions++;
+                }
+              });
+            }
+
+            // Track any errors
+            if (fullCitationData && fullCitationData.errors && fullCitationData.errors.length > 0) {
+              stats.failedExtractions += fullCitationData.errors.length;
+              fullCitationData.errors.forEach(err => {
+                allErrors.push({
+                  message: err,
+                  messageIndex: i + 1,
+                  userQuestion: pair.userMessage.substring(0, 100),
+                  type: 'citation_extraction'
+                });
+              });
+            }
+          } catch (error) {
+            console.error(`[NotebookLM Takeout] Message ${i + 1}: Error extracting full citations:`, error);
+            stats.failedExtractions += messageSources.size;
+            allErrors.push({
+              message: `Failed to extract full citations: ${error.message}`,
+              messageIndex: i + 1,
+              userQuestion: pair.userMessage.substring(0, 100),
+              type: 'extraction_error',
+              stack: error.stack
+            });
+          }
+        }
+
+        // Convert sources map to array, sorted by sourceIndex
+        const sourcesArray = Array.from(messageSources.entries())
+          .sort((a, b) => {
+            const aNum = parseInt(a[0]) || 0;
+            const bNum = parseInt(b[0]) || 0;
+            return aNum - bNum;
+          })
+          .map(([sourceIndex, source]) => ({
+            sourceIndex: sourceIndex,
+            text: source.text,
+            quote: source.quote
+          }));
+
+        stats.totalCitationsExtracted += sourcesArray.length;
+
+        // Store processed message WITH its sources
+        processedMessages.push({
+          date: pair.date,
+          userMessage: pair.userMessage,
+          aiResponseHTML: pair.aiResponseHTML,
+          sources: sourcesArray // Include sources for this message
+        });
+
+      } catch (error) {
+        console.error(`[NotebookLM Takeout] Error processing message ${i + 1}:`, error);
+        allErrors.push({
+          message: error.message,
+          messageIndex: i + 1,
+          userQuestion: pair.userMessage.substring(0, 100),
+          type: 'message_processing_error',
+          stack: error.stack
+        });
+
+        // Include message without citations
+        processedMessages.push({
+          date: pair.date,
+          userMessage: pair.userMessage,
+          aiResponseHTML: pair.aiResponseHTML,
+          sources: []
+        });
+      }
+
+      // Rate limiting between messages
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    console.log(`[NotebookLM Takeout] Processing complete: ${processedMessages.length} messages`);
+
+    // Convert to markdown with per-message sources
+    const markdown = convertChatToMarkdown(
+      chatData.notebookTitle,
+      chatData.notebookSummary,
+      processedMessages,
+      settings.citationsCodeBlock
+    );
+
+    // Create filename
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    const filename = `${sanitizeFilename(chatData.notebookTitle)}-chat-${timestamp}.md`;
+
+    // Determine if we need ZIP (for chats with errors)
+    const shouldZip = allErrors.length > 0;
+
+    if (shouldZip) {
+      // Create ZIP with markdown + errors.txt
+      const zip = new JSZip();
+      zip.file(filename, markdown);
+
+      // Add detailed errors file
+      let errorsContent = '# Chat Export Error Report\n\n';
+      errorsContent += `Chat: ${chatData.notebookTitle}\n`;
+      errorsContent += `Generated: ${new Date().toLocaleString()}\n\n`;
+      errorsContent += '---\n\n';
+
+      // Summary Statistics
+      errorsContent += '## Summary Statistics\n\n';
+      errorsContent += `- **Total Messages:** ${stats.totalMessages}\n`;
+      errorsContent += `- **Messages with Citations:** ${stats.messagesWithCitations}\n`;
+      errorsContent += `- **Total Citations Found:** ${stats.totalCitationsFound}\n`;
+      errorsContent += `- **Unique Citations Extracted:** ${stats.totalCitationsExtracted}\n`;
+      if (stats.extractFullCitations) {
+        errorsContent += `- **Successful Extractions:** ${stats.successfulExtractions}\n`;
+        errorsContent += `- **Failed Extractions:** ${stats.failedExtractions}\n`;
+        const successRate = stats.totalCitationsFound > 0
+          ? ((stats.successfulExtractions / stats.totalCitationsFound) * 100).toFixed(1)
+          : '0';
+        errorsContent += `- **Success Rate:** ${successRate}%\n`;
+      }
+      errorsContent += `- **Total Errors:** ${allErrors.length}\n\n`;
+
+      errorsContent += '---\n\n';
+
+      // Error Details
+      errorsContent += '## Error Details\n\n';
+
+      // Group errors by type
+      const errorsByType = {};
+      allErrors.forEach(err => {
+        const type = err.type || 'unknown';
+        if (!errorsByType[type]) {
+          errorsByType[type] = [];
+        }
+        errorsByType[type].push(err);
+      });
+
+      Object.keys(errorsByType).forEach(type => {
+        const errors = errorsByType[type];
+        errorsContent += `### ${type.replace(/_/g, ' ').toUpperCase()} (${errors.length})\n\n`;
+
+        errors.forEach((err, idx) => {
+          errorsContent += `**${idx + 1}. Message ${err.messageIndex}**\n`;
+          errorsContent += `- Question: "${err.userQuestion}${err.userQuestion.length >= 100 ? '...' : ''}"\n`;
+          errorsContent += `- Error: ${err.message}\n`;
+          if (err.stack) {
+            errorsContent += `- Stack: ${err.stack.split('\n')[0]}\n`;
+          }
+          errorsContent += `\n`;
+        });
+
+        errorsContent += '\n';
+      });
+
+      // Recommendations
+      errorsContent += '---\n\n';
+      errorsContent += '## Recommendations\n\n';
+      if (stats.failedExtractions > 0) {
+        errorsContent += '- Some citations failed to extract. This is often due to:\n';
+        errorsContent += '  - Tooltips not appearing (try exporting again)\n';
+        errorsContent += '  - Citations being too close together (timing issue)\n';
+        errorsContent += '  - Network connectivity issues\n\n';
+      }
+      if (allErrors.some(e => e.type === 'message_processing_error')) {
+        errorsContent += '- Message processing errors occurred. Check the browser console for details.\n\n';
+      }
+      errorsContent += '- If you continue to experience issues, please report them at:\n';
+      errorsContent += '  https://github.com/anthropics/claude-code/issues\n\n';
+
+      zip.file('errors.txt', errorsContent);
+
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(blob);
+      const zipFilename = `${sanitizeFilename(chatData.notebookTitle)}-chat-${timestamp}.zip`;
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = zipFilename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      const errorMsg = stats.extractFullCitations
+        ? `Exported chat: ${stats.successfulExtractions}/${stats.totalCitationsFound} citations extracted successfully. ${allErrors.length} errors (see errors.txt for details)`
+        : `Exported chat with ${allErrors.length} errors (see errors.txt for details)`;
+      showToast(errorMsg, 'warning');
+
+    } else {
+      // Single markdown file
+      const blob = new Blob([markdown], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      showToast('Successfully exported chat', 'success');
+    }
+
+  } catch (error) {
+    console.error('[NotebookLM Takeout] Export failed:', error);
+    showToast(`Export failed: ${error.message}`, 'error');
+
+  } finally {
+    // Remove cancellation listener
+    chrome.runtime.onMessage.removeListener(cancelListener);
+
+    // Hide page overlay
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
+    } catch (error) {
+      console.error('[NotebookLM Takeout] Failed to hide overlay:', error);
+    }
+
+    // Hide sidebar progress panel
+    progressPanel.style.display = 'none';
+  }
+}
+
+/**
+ * Convert chat data to markdown format
+ */
+function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citationsCodeBlock = true) {
+  logger.info('Markdown', `Converting chat to markdown: "${notebookTitle}"`);
+  logger.info('Markdown', `  - Message count: ${messages.length}`);
+
+  // Initialize markdown with title
+  let markdown = `# ${notebookTitle}\n\n`;
+
+  // Add notebook summary if available
+  if (notebookSummary && notebookSummary.trim().length > 0) {
+    markdown += `**Notebook Summary**\n\n`;
+    markdown += `${notebookSummary}\n\n`;
+    markdown += '---\n\n';
+  }
+
+  markdown += `**Chat Export**\n\n`;
+  markdown += `Exported: ${new Date().toLocaleString()}\n\n`;
+  markdown += `Total Messages: ${messages.length}\n\n`;
+  markdown += '---\n\n';
+
+  // Initialize TurndownService with same config as notes
+  const turndownService = new TurndownService({
+    headingStyle: 'atx',
+    codeBlockStyle: 'fenced',
+    emDelimiter: '_',
+    strongDelimiter: '**',
+    linkStyle: 'inlined'
+  });
+
+  // Use closure to track current message index
+  let currentMessageIndex = 0;
+
+  // Add custom rules with message index tracking
+  console.log('[NotebookLM Takeout] Adding turndown rules for per-message citations');
+  addChatTurndownRules(turndownService, citationsCodeBlock, () => currentMessageIndex);
+
+  let currentDate = null;
+
+  // Process each message pair
+  messages.forEach((msg, idx) => {
+    // Update current message index for turndown rules
+    currentMessageIndex = idx;
+
+    // Add date separator if date changed
+    if (msg.date && msg.date !== currentDate) {
+      markdown += `## ${msg.date}\n\n`;
+      currentDate = msg.date;
+    }
+
+    // Add user question as H2 heading
+    markdown += `## Q: ${msg.userMessage}\n\n`;
+
+    // Convert AI response HTML to markdown
+    const aiResponseMarkdown = turndownService.turndown(msg.aiResponseHTML);
+    console.log(`[Chat Export] Message ${idx + 1} markdown length:`, aiResponseMarkdown.length);
+    markdown += `**A:** ${aiResponseMarkdown}\n\n`;
+
+    // Add sources for this message
+    if (msg.sources && msg.sources.length > 0) {
+      markdown += '**Sources:**\n\n';
+      msg.sources.forEach(source => {
+        // Add anchor for source with message-specific ID
+        markdown += `<a id="msg-${idx}-src-${source.sourceIndex}"></a>\n`;
+        markdown += `**[[${source.sourceIndex}]](#msg-${idx}-cite-ref-${source.sourceIndex}-1)** ${source.text}\n`;
+
+        // Add quote if available
+        if (source.quote && source.quote.trim().length > 0) {
+          if (citationsCodeBlock) {
+            // Wrap in markdown code block for data separation (same as note export)
+            markdown += `\`\`\`markdown\n${source.quote}\n\`\`\`\n\n`;
+          } else {
+            // Add blank line separator before quote content
+            markdown += `\n${source.quote}\n\n`;
+          }
+        }
+        markdown += '\n';
+      });
+    }
+
+    // Add separator between message pairs (except last)
+    if (idx < messages.length - 1) {
+      markdown += '---\n\n';
+    }
+  });
+
+  // Clean up excessive newlines
+  markdown = markdown.replace(/\n{3,}/g, '\n\n');
+
+  console.log('[Chat Export] Final markdown length:', markdown.length);
+
+  return markdown;
+}
+
+/**
+ * Add TurndownService rules for chat conversion
+ */
+function addChatTurndownRules(turndownService, citationsCodeBlock, getCurrentMessageIndex) {
+  // Track citation occurrences within each message
+  const citationOccurrences = new Map(); // "messageIdx:sourceIdx" -> count
+
+  // Rule: Strip Angular component wrappers
+  turndownService.addRule('stripAngularComponents', {
+    filter: (node) => {
+      const nodeName = node.nodeName.toLowerCase();
+      return nodeName === 'labs-tailwind-structural-element-view-v2';
+    },
+    replacement: (content) => content
+  });
+
+  // Rule: Convert div headings with role="heading"
+  turndownService.addRule('reportHeadings', {
+    filter: (node) => {
+      return node.nodeName === 'DIV' &&
+             node.getAttribute('role') === 'heading' &&
+             node.hasAttribute('aria-level');
+    },
+    replacement: (content, node) => {
+      const level = parseInt(node.getAttribute('aria-level')) || 1;
+      const prefix = '#'.repeat(level);
+      return `\n${prefix} ${content.trim()}\n\n`;
+    }
+  });
+
+  // Rule: Convert tables to markdown table format
+  turndownService.addRule('tables', {
+    filter: 'table',
+    replacement: (content, node) => {
+      const rows = Array.from(node.querySelectorAll('tr'));
+      if (rows.length === 0) return '';
+
+      let markdown = '\n\n';
+
+      // Process each row
+      rows.forEach((row, rowIndex) => {
+        const cells = Array.from(row.querySelectorAll('th, td'));
+        const cellContents = cells.map(cell => {
+          // Get text content and clean it up
+          let text = cell.textContent.trim();
+          // Escape pipe characters
+          text = text.replace(/\|/g, '\\|');
+          // Replace newlines with spaces
+          text = text.replace(/\n/g, ' ');
+          return text;
+        });
+
+        // Add row
+        markdown += '| ' + cellContents.join(' | ') + ' |\n';
+
+        // Add separator after header row
+        if (rowIndex === 0) {
+          const separators = cells.map(() => '---');
+          markdown += '| ' + separators.join(' | ') + ' |\n';
+        }
+      });
+
+      markdown += '\n';
+      return markdown;
+    }
+  });
+
+  // Rule: Citation buttons - with message-specific anchors
+  turndownService.addRule('citationButtons', {
+    filter: (node) => {
+      return node.nodeName === 'BUTTON' && node.classList.contains('citation-marker');
+    },
+    replacement: (content, node) => {
+      const span = node.querySelector('span');
+      const sourceIndex = span?.textContent?.trim();
+
+      // Skip invalid source indices
+      if (!sourceIndex ||
+          sourceIndex === '...' ||
+          sourceIndex.includes('<') ||
+          sourceIndex.includes('>') ||
+          !/^[0-9]+$/.test(sourceIndex)) {
+        console.warn('[Chat Export] Skipping invalid citation with sourceIndex:', sourceIndex);
+        return '';
+      }
+
+      // Get current message index
+      const messageIndex = getCurrentMessageIndex();
+      const key = `${messageIndex}:${sourceIndex}`;
+
+      // Track occurrences for this source within this message
+      if (!citationOccurrences.has(key)) {
+        citationOccurrences.set(key, 0);
+      }
+      const occurrenceCount = citationOccurrences.get(key) + 1;
+      citationOccurrences.set(key, occurrenceCount);
+
+      // Return citation with message-specific anchor and link to source
+      return `<sup><a id="msg-${messageIndex}-cite-ref-${sourceIndex}-${occurrenceCount}" href="#msg-${messageIndex}-src-${sourceIndex}">[${sourceIndex}]</a></sup>`;
+    }
+  });
+}
+
+// ========== END CHAT EXPORT FUNCTIONS ==========
 
 function getIconForType(type) {
   const icons = {

@@ -35,6 +35,7 @@
       <button class="tab-btn active" data-tab="sources">Sources</button>
       <button class="tab-btn" data-tab="notes">Notes</button>
       <button class="tab-btn" data-tab="artifacts">Artifacts</button>
+      <button class="tab-btn" data-tab="chat">Chat</button>
     </div>
 
     <div class="tab-content" data-tab-content="artifacts">
@@ -89,6 +90,49 @@
               <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
             </svg>
             Export Selected Sources
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <div class="tab-content" data-tab-content="chat">
+      <section id="chat-section" class="section">
+        <div class="section-header">
+          <h2>Chat History</h2>
+          <span id="chat-count" class="count-badge">0</span>
+        </div>
+
+        <div class="chat-info">
+          <p class="info-text">Export your conversation with NotebookLM, including questions, answers, and citations.</p>
+        </div>
+
+        <div class="chat-options" style="margin: 12px 0;">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+            <input type="checkbox" id="extract-full-citations-checkbox" style="cursor: pointer;">
+            <span>Extract Full Citations (slower, includes quotes)</span>
+          </label>
+          <p class="info-text" style="margin: 4px 0 0 28px; font-size: 12px; color: #666;">
+            When enabled, extracts full citation details with quotes. This takes longer for chats with many citations.
+          </p>
+        </div>
+
+        <div id="chat-scan-results" class="scan-results">
+          <p class="empty-message">Click "Scan Chat" to load your conversation history.</p>
+        </div>
+
+        <div class="export-controls">
+          <button id="scan-chat-btn" class="btn btn-secondary">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16a6.5 6.5 0 1 1 0-13zm0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5z"/>
+            </svg>
+            Scan Chat
+          </button>
+
+          <button id="export-chat-btn" class="btn btn-primary" style="display: none;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+            </svg>
+            Export Chat
           </button>
         </div>
       </section>

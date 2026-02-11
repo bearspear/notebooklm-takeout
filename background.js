@@ -204,6 +204,8 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
           'application/pdf': '.pdf',
           'audio/wav': '.wav',
           'audio/mpeg': '.mp3',
+          'audio/mp4': '.m4a',
+          'audio/x-m4a': '.m4a',
           'video/mp4': '.mp4'
         };
         extension = mimeExtensions[downloadItem.mime] || '';
@@ -215,7 +217,7 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
       } else if (!extension && pendingDownloadType === 'Slides') {
         extension = '.pdf';
       } else if (!extension && pendingDownloadType === 'Audio Overview') {
-        extension = '.wav';
+        extension = '.m4a';
       }
     }
 
@@ -748,7 +750,7 @@ function getExtensionFromType(type) {
   const typeMap = {
     'Slides': '.pdf',
     'Infographic': '.png',
-    'Audio Overview': '.wav'
+    'Audio Overview': '.m4a'
   };
   return typeMap[type] || '.bin';
 }

@@ -301,6 +301,59 @@
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ success: false, error: error.message || 'Download failed' }));
       return true; // Keep channel open for async
+    } else if (message.type === 'SCAN_CHAT') {
+      // Scan chat messages
+      scanChat()
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ error: error.message }));
+      return true;
+    } else if (message.type === 'EXTRACT_ALL_CHAT_CITATIONS') {
+      // Extract ALL citations from chat at once (much more efficient)
+      console.log('[NotebookLM Takeout] ====== EXTRACT_ALL_CHAT_CITATIONS message received ======');
+
+      try {
+        extractAllChatCitations()
+          .then(result => {
+            console.log('[NotebookLM Takeout] ====== All citations extracted ======');
+            console.log('[NotebookLM Takeout] Result:', result);
+            sendResponse(result);
+          })
+          .catch(error => {
+            console.error('[NotebookLM Takeout] ====== All citations extraction error ======', error);
+            console.error('[NotebookLM Takeout] Error stack:', error.stack);
+            sendResponse({ sourcesByIndex: {}, errors: [error.message] });
+          });
+      } catch (error) {
+        console.error('[NotebookLM Takeout] ====== All citations extraction SYNC error ======', error);
+        console.error('[NotebookLM Takeout] Error stack:', error.stack);
+        sendResponse({ sourcesByIndex: {}, errors: [error.message] });
+      }
+      return true;
+    } else if (message.type === 'EXTRACT_MESSAGE_CITATIONS') {
+      // Extract citations for a specific message
+      console.log('[NotebookLM Takeout] ====== EXTRACT_MESSAGE_CITATIONS message received ======');
+      console.log('[NotebookLM Takeout] Message index:', message.data.messageIndex);
+      console.log('[NotebookLM Takeout] Source indices:', message.data.sourceIndices);
+      console.log('[NotebookLM Takeout] Message HTML length:', message.data.messageHTML?.length || 0);
+
+      try {
+        extractMessageCitations(message.data.messageIndex, message.data.messageHTML, message.data.sourceIndices)
+          .then(result => {
+            console.log('[NotebookLM Takeout] ====== Message citations extracted ======');
+            console.log('[NotebookLM Takeout] Result:', result);
+            sendResponse(result);
+          })
+          .catch(error => {
+            console.error('[NotebookLM Takeout] ====== Message citations extraction error ======', error);
+            console.error('[NotebookLM Takeout] Error stack:', error.stack);
+            sendResponse({ sourcesByIndex: {}, errors: [error.message] });
+          });
+      } catch (error) {
+        console.error('[NotebookLM Takeout] ====== Message citations extraction SYNC error ======', error);
+        console.error('[NotebookLM Takeout] Error stack:', error.stack);
+        sendResponse({ sourcesByIndex: {}, errors: [error.message] });
+      }
+      return true;
     }
 
     return true;
@@ -1242,6 +1295,17 @@
       // Wait a bit for content to load
       await new Promise(resolve => setTimeout(resolve, 500));
 
+      // Try to wait for source-guide-container to load (optional, timeout after 3 seconds)
+      console.log(`[NotebookLM Takeout] Waiting for source-guide-container to load...`);
+      try {
+        await waitForElement('.source-guide-container', 3000);
+        console.log(`[NotebookLM Takeout] source-guide-container found`);
+        // Give it a moment to fully render
+        await new Promise(resolve => setTimeout(resolve, 300));
+      } catch (e) {
+        console.log(`[NotebookLM Takeout] source-guide-container not found (optional, continuing anyway)`);
+      }
+
       // Try to find content container within source-viewer
       let contentElement = null;
       const contentSelectors = [
@@ -1277,7 +1341,7 @@
       console.log(`[NotebookLM Takeout] Extracted ${htmlContent.length} chars of HTML content`);
 
       // Extract source guide information (summary and key topics)
-      let sourceGuideHTML = '';
+      let sourceGuideMarkdown = '';
       let keyTopics = [];
 
       try {
@@ -1285,11 +1349,11 @@
         if (sourceGuideContainer) {
           console.log(`[NotebookLM Takeout] Found source guide container`);
 
-          // Extract summary (preserve HTML including <strong> tags)
+          // Extract summary and convert to markdown
           const summaryElement = sourceGuideContainer.querySelector('.summary');
           if (summaryElement) {
-            sourceGuideHTML = summaryElement.innerHTML.trim();
-            console.log(`[NotebookLM Takeout] Extracted source guide summary (${sourceGuideHTML.length} chars)`);
+            sourceGuideMarkdown = htmlToMarkdown(summaryElement);
+            console.log(`[NotebookLM Takeout] Extracted source guide summary (${sourceGuideMarkdown.length} chars)`);
           }
 
           // Extract key topics (preserve text)
@@ -1298,6 +1362,8 @@
             keyTopics = Array.from(keyTopicElements).map(el => el.textContent.trim());
             console.log(`[NotebookLM Takeout] Extracted ${keyTopics.length} key topics`);
           }
+        } else {
+          console.log(`[NotebookLM Takeout] No source guide container found`);
         }
       } catch (guideError) {
         console.warn(`[NotebookLM Takeout] Could not extract source guide:`, guideError);
@@ -1311,7 +1377,7 @@
         html: htmlContent,
         sources: [],
         title: sourceTitle,
-        guideHTML: sourceGuideHTML,
+        guideMarkdown: sourceGuideMarkdown,
         keyTopics: keyTopics
       };
 
@@ -2908,6 +2974,1073 @@
     } catch (error) {
       return { success: false, error: error.message };
     }
+  }
+
+  // ==================== CHAT EXPORT FUNCTIONS ====================
+
+  /**
+   * Auto-scroll chat panel to load all lazy-loaded messages
+   * Returns when message count stabilizes (no new messages after multiple scrolls)
+   */
+  async function autoScrollChatToTop() {
+    console.log('[NotebookLM Takeout] Starting auto-scroll to load all chat messages...');
+
+    // Find chat panel container
+    const chatPanel = document.querySelector('chat-panel .chat-panel-content');
+    if (!chatPanel) {
+      throw new Error('Chat panel not found. Make sure you have the chat open.');
+    }
+
+    let previousMessageCount = 0;
+    let stableScrollCount = 0;
+    const maxStableScrolls = 3; // Number of consecutive scrolls with no new messages
+    const scrollStepDelay = 800; // Delay between scroll steps (ms)
+    const stabilizationDelay = 1500; // Extra delay to ensure DOM fully loads
+
+    let scrollAttempts = 0;
+    const maxScrollAttempts = 100; // Safety limit
+
+    while (scrollAttempts < maxScrollAttempts) {
+      scrollAttempts++;
+
+      // Count current messages
+      const messagePairs = chatPanel.querySelectorAll('.chat-message-pair');
+      const currentMessageCount = messagePairs.length;
+
+      console.log(`[NotebookLM Takeout] Scroll attempt ${scrollAttempts}: ${currentMessageCount} message pairs loaded`);
+
+      // Check if message count has stabilized
+      if (currentMessageCount === previousMessageCount) {
+        stableScrollCount++;
+        console.log(`[NotebookLM Takeout] Message count stable (${stableScrollCount}/${maxStableScrolls})`);
+
+        if (stableScrollCount >= maxStableScrolls) {
+          console.log(`[NotebookLM Takeout] ✓ All messages loaded (${currentMessageCount} message pairs)`);
+          break;
+        }
+      } else {
+        // New messages loaded, reset stability counter
+        stableScrollCount = 0;
+        console.log(`[NotebookLM Takeout] New messages loaded (${currentMessageCount - previousMessageCount} new pairs)`);
+      }
+
+      previousMessageCount = currentMessageCount;
+
+      // Scroll to top to trigger lazy load
+      chatPanel.scrollTo({
+        top: 0,
+        behavior: 'instant' // Use instant to avoid animation delays
+      });
+
+      // Wait for new messages to load
+      await sleep(scrollStepDelay);
+
+      // Extra stabilization wait after first few scrolls
+      if (scrollAttempts <= 3) {
+        await sleep(stabilizationDelay);
+      }
+    }
+
+    if (scrollAttempts >= maxScrollAttempts) {
+      console.warn('[NotebookLM Takeout] WARNING: Reached max scroll attempts. Some messages may not be loaded.');
+    }
+
+    // Final wait for DOM to fully stabilize
+    await sleep(1000);
+
+    return {
+      success: true,
+      messageCount: previousMessageCount,
+      scrollAttempts: scrollAttempts
+    };
+  }
+
+  /**
+   * Expand all collapsed citations (...) in chat
+   */
+  async function expandCollapsedCitations() {
+    console.log('[NotebookLM Takeout] Looking for collapsed citations (...)...');
+
+    const chatPanel = document.querySelector('chat-panel .chat-panel-content');
+    if (!chatPanel) {
+      console.warn('[NotebookLM Takeout] Chat panel not found for citation expansion');
+      return;
+    }
+
+    // Find all citation buttons with "..." text
+    const allCitationButtons = chatPanel.querySelectorAll('button.citation-marker');
+    const collapsedButtons = Array.from(allCitationButtons).filter(button => {
+      const span = button.querySelector('span');
+      const text = span?.textContent?.trim();
+      const ariaLabel = span?.getAttribute('aria-label');
+      // Check for "..." text or "Show additional citations" aria-label
+      return text === '...' || ariaLabel?.includes('additional citations');
+    });
+
+    console.log(`[NotebookLM Takeout] Found ${collapsedButtons.length} collapsed citation indicators`);
+
+    if (collapsedButtons.length === 0) {
+      console.log('[NotebookLM Takeout] No collapsed citations to expand');
+      return;
+    }
+
+    // Click each collapsed button to expand
+    for (let i = 0; i < collapsedButtons.length; i++) {
+      const button = collapsedButtons[i];
+
+      try {
+        console.log(`[NotebookLM Takeout] Expanding collapsed citation ${i + 1}/${collapsedButtons.length}...`);
+
+        // Scroll into view
+        button.scrollIntoView({ behavior: 'instant', block: 'center' });
+        await sleep(100);
+
+        // Click to expand
+        button.click();
+        await sleep(300); // Wait for expansion animation
+
+        console.log(`[NotebookLM Takeout] ✓ Expanded citation ${i + 1}/${collapsedButtons.length}`);
+      } catch (error) {
+        console.error(`[NotebookLM Takeout] Error expanding collapsed citation ${i + 1}:`, error);
+      }
+    }
+
+    // Final wait for all expansions to complete
+    await sleep(500);
+    console.log('[NotebookLM Takeout] All collapsed citations expanded');
+  }
+
+  /**
+   * Scan chat panel for all messages
+   * Message handler: responds to 'SCAN_CHAT'
+   */
+  async function scanChat() {
+    console.log('[NotebookLM Takeout] Starting chat scan...');
+
+    try {
+      // Step 1: Auto-scroll to load all messages
+      console.log('[NotebookLM Takeout] Step 1: Auto-scrolling to load all messages...');
+      const scrollResult = await autoScrollChatToTop();
+      console.log('[NotebookLM Takeout] ✓ Auto-scroll complete:', scrollResult);
+
+      // Step 2: Expand all collapsed citations (...)
+      console.log('[NotebookLM Takeout] Step 2: Expanding collapsed citations...');
+      await expandCollapsedCitations();
+      console.log('[NotebookLM Takeout] ✓ Collapsed citations expanded');
+
+      // Step 3: Extract all messages
+      console.log('[NotebookLM Takeout] Step 3: Extracting messages...');
+      const chatData = extractChatMessages();
+
+      return {
+        success: true,
+        chatData: chatData
+      };
+
+    } catch (error) {
+      console.error('[NotebookLM Takeout] Chat scan failed:', error);
+      return {
+        error: error.message || 'Failed to scan chat'
+      };
+    }
+  }
+
+  /**
+   * Extract all chat messages from the DOM
+   */
+  function extractChatMessages() {
+    const chatPanel = document.querySelector('chat-panel .chat-panel-content');
+    if (!chatPanel) {
+      throw new Error('Chat panel not found');
+    }
+
+    // Get notebook title
+    const notebookTitle = document.querySelector('.notebook-title')?.textContent?.trim() || 'NotebookLM Chat';
+
+    // Get notebook summary (if present)
+    let notebookSummary = null;
+    const summaryEl = document.querySelector('.notebook-summary .summary-content');
+    if (summaryEl) {
+      // Convert summary HTML to markdown using the same converter as citations
+      notebookSummary = htmlToMarkdown(summaryEl);
+      console.log('[NotebookLM Takeout] Found notebook summary:', notebookSummary.substring(0, 100) + '...');
+    }
+
+    // Extract date separators and message pairs
+    const messagePairs = [];
+    const elements = Array.from(chatPanel.children);
+
+    let currentDate = null;
+
+    for (const el of elements) {
+      // Check for date separator
+      if (el.classList.contains('date-separator')) {
+        currentDate = el.textContent.trim();
+        console.log('[NotebookLM Takeout] Found date:', currentDate);
+        continue;
+      }
+
+      // Check for message pair
+      if (el.classList.contains('chat-message-pair')) {
+        const pair = extractMessagePair(el, currentDate);
+        if (pair) {
+          messagePairs.push(pair);
+        }
+      }
+    }
+
+    console.log(`[NotebookLM Takeout] Extracted ${messagePairs.length} message pairs`);
+
+    // Get date range
+    const dates = messagePairs.filter(p => p.date).map(p => p.date);
+    const dateRange = dates.length > 0 ? {
+      first: dates[0],
+      last: dates[dates.length - 1]
+    } : null;
+
+    return {
+      notebookTitle: notebookTitle,
+      notebookSummary: notebookSummary,
+      messagePairs: messagePairs,
+      dateRange: dateRange,
+      extractedAt: new Date().toISOString()
+    };
+  }
+
+  /**
+   * Extract a single message pair (user question + AI response)
+   */
+  function extractMessagePair(pairElement, currentDate) {
+    console.log('[NotebookLM Takeout] Extracting message pair...');
+
+    try {
+      // Find user message
+      const userMessageEl = pairElement.querySelector('.from-user-container .message-text-content');
+      if (!userMessageEl) {
+        console.warn('[NotebookLM Takeout] No user message found in pair');
+        return null;
+      }
+
+      // Find AI response
+      const aiMessageEl = pairElement.querySelector('.to-user-container .message-text-content');
+      if (!aiMessageEl) {
+        console.warn('[NotebookLM Takeout] No AI message found in pair');
+        return null;
+      }
+
+      // Extract user message text (simple text extraction)
+      const userMessage = userMessageEl.textContent.trim();
+
+      // Extract AI response HTML (includes structural elements and citations)
+      const aiResponseHTML = aiMessageEl.innerHTML;
+
+      // Count citations
+      const citationButtons = aiMessageEl.querySelectorAll('button.citation-marker');
+      console.log(`[NotebookLM Takeout] Found ${citationButtons.length} citations in AI response`);
+
+      return {
+        date: currentDate,
+        userMessage: userMessage,
+        aiResponseHTML: aiResponseHTML,
+        citationCount: citationButtons.length
+      };
+
+    } catch (error) {
+      console.error('[NotebookLM Takeout] Error extracting message pair:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Extract ALL unique citations from the entire chat at once
+   * Much more efficient than extracting per-message
+   * @returns {Promise<{sourcesByIndex: Object, errors: Array}>}
+   */
+  async function extractAllChatCitations() {
+    console.log('[NotebookLM Takeout] Extracting ALL citations from chat...');
+
+    const sourcesByIndex = {}; // Map of sourceIndex -> {text, quote}
+    const errors = [];
+
+    try {
+      // Find ALL citation buttons in the page
+      console.log('[NotebookLM Takeout] Finding all citation buttons in page...');
+      const allButtons = document.querySelectorAll('button.citation-marker');
+      console.log(`[NotebookLM Takeout] Found ${allButtons.length} total citation buttons`);
+
+      if (allButtons.length === 0) {
+        errors.push('No citation buttons found in page');
+        return { sourcesByIndex, errors };
+      }
+
+      // Get unique source indices
+      const uniqueSourceIndices = new Set();
+      const buttonsBySourceIndex = new Map();
+
+      allButtons.forEach(button => {
+        const span = button.querySelector('span');
+        const sourceIndex = span?.innerText?.trim();
+
+        if (sourceIndex && sourceIndex !== '...') {
+          uniqueSourceIndices.add(sourceIndex);
+          if (!buttonsBySourceIndex.has(sourceIndex)) {
+            buttonsBySourceIndex.set(sourceIndex, button);
+          }
+        }
+      });
+
+      console.log(`[NotebookLM Takeout] Found ${uniqueSourceIndices.size} unique source indices`);
+
+      // Extract each unique source
+      let extractedCount = 0;
+      for (const sourceIndex of uniqueSourceIndices) {
+        const button = buttonsBySourceIndex.get(sourceIndex);
+        if (!button) continue;
+
+        console.log(`[NotebookLM Takeout] Extracting source ${sourceIndex} (${extractedCount + 1}/${uniqueSourceIndices.size})...`);
+
+        try {
+          // Scroll into view
+          button.scrollIntoView({ behavior: 'instant', block: 'center' });
+          await sleep(100);
+
+          // Hover over button
+          button.dispatchEvent(new MouseEvent('mouseenter', {
+            view: window,
+            bubbles: true,
+            cancelable: true
+          }));
+
+          await sleep(200);
+
+          // Wait for tooltip
+          const tooltip = await Promise.race([
+            waitForElement('xap-inline-dialog-container[role="dialog"]', 3000),
+            waitForElement('.citation-tooltip', 3000),
+            waitForElement('[role="dialog"].ng-star-inserted', 3000)
+          ]).catch(() => null);
+
+          if (!tooltip) {
+            console.warn(`[NotebookLM Takeout] Source ${sourceIndex}: Tooltip did not appear`);
+            errors.push(`Source ${sourceIndex}: Tooltip did not appear`);
+            button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+            continue;
+          }
+
+          console.log(`[NotebookLM Takeout] Source ${sourceIndex}: Tooltip appeared`);
+
+          // Wait for content to load
+          let contentLoaded = false;
+          for (let attempt = 0; attempt < 20; attempt++) {
+            const opacity = parseFloat(window.getComputedStyle(tooltip).opacity);
+            if (opacity > 0.5 && tooltip.textContent.trim().length > 0) {
+              contentLoaded = true;
+              break;
+            }
+            await sleep(50);
+          }
+
+          if (!contentLoaded) {
+            console.warn(`[NotebookLM Takeout] Source ${sourceIndex}: Tooltip content did not load`);
+            errors.push(`Source ${sourceIndex}: Tooltip content did not load`);
+            button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+            continue;
+          }
+
+          // Extract citation data
+          const footerEl = tooltip.querySelector('.citation-tooltip-footer');
+          const textEl = tooltip.querySelector('.citation-tooltip-text');
+
+          const sourceTitle = footerEl?.textContent?.trim() || '';
+
+          // Convert HTML to markdown using the same function as note exports
+          let quoteMarkdown = '';
+          if (textEl) {
+            // Try to process structural elements first
+            const textElements = textEl.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
+            if (textElements.length > 0) {
+              textElements.forEach(element => {
+                const markdown = htmlToMarkdown(element);
+                if (markdown && markdown.length > 0) {
+                  quoteMarkdown += markdown + '\n\n';
+                }
+              });
+            } else {
+              // Fallback: convert the whole textEl
+              quoteMarkdown = htmlToMarkdown(textEl);
+            }
+          }
+          quoteMarkdown = quoteMarkdown.trim();
+
+          sourcesByIndex[sourceIndex] = {
+            text: sourceTitle,
+            quote: quoteMarkdown
+          };
+
+          console.log(`[NotebookLM Takeout] ✓ Extracted source ${sourceIndex}: "${sourceTitle?.substring(0, 40)}..." (quote: ${quoteMarkdown.length} chars)`);
+          extractedCount++;
+
+          // Close tooltip
+          button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+          await sleep(250);
+
+          // Wait for tooltip to close
+          for (let attempt = 0; attempt < 20; attempt++) {
+            if (!document.querySelector('xap-inline-dialog-container[role="dialog"]')) {
+              break;
+            }
+            await sleep(100);
+          }
+
+        } catch (error) {
+          console.error(`[NotebookLM Takeout] Error extracting source ${sourceIndex}:`, error);
+          errors.push(`Source ${sourceIndex}: ${error.message}`);
+        }
+      }
+
+      console.log(`[NotebookLM Takeout] Extraction complete: ${extractedCount}/${uniqueSourceIndices.size} sources extracted`);
+
+    } catch (error) {
+      console.error('[NotebookLM Takeout] Fatal error in extractAllChatCitations:', error);
+      errors.push(`Fatal error: ${error.message}`);
+    }
+
+    return { sourcesByIndex, errors };
+  }
+
+  /**
+   * Extract citations from a LIVE chat message in the DOM (hover-based approach)
+   * This finds the actual message element on the page and hovers over real citation buttons
+   * @param {number} messageIndex - The index of the message (0-based)
+   * @returns {Promise<{sources: Array, errors: Array}>}
+   */
+  async function extractChatCitationsFromLiveDOM(messageIndex) {
+    console.log(`[NotebookLM Takeout] Extracting citations from live DOM message ${messageIndex}...`);
+
+    const sources = [];
+    const errors = [];
+
+    try {
+      // Find all AI response messages in the live DOM
+      console.log('[NotebookLM Takeout] Searching for chat panel...');
+      console.log('[NotebookLM Takeout] All elements with "chat":', document.querySelectorAll('[class*="chat"]').length);
+      console.log('[NotebookLM Takeout] All elements with "conversation":', document.querySelectorAll('[class*="conversation"]').length);
+      console.log('[NotebookLM Takeout] All elements with "message":', document.querySelectorAll('[class*="message"]').length);
+
+      let chatPanel = document.querySelector('.chat-history-panel, [role="log"], .conversation-container');
+
+      // Try alternative selectors
+      if (!chatPanel) {
+        chatPanel = document.querySelector('main, [role="main"]');
+        console.log('[NotebookLM Takeout] Trying main element:', !!chatPanel);
+      }
+
+      if (!chatPanel) {
+        chatPanel = document.body;
+        console.log('[NotebookLM Takeout] Falling back to document.body');
+      }
+
+      if (!chatPanel) {
+        console.error('[NotebookLM Takeout] Could not find chat panel');
+        errors.push('Chat panel not found in DOM');
+        return { sources, errors };
+      }
+
+      console.log('[NotebookLM Takeout] Using chat panel:', chatPanel.tagName, chatPanel.className);
+
+      // Find all message pairs - each pair has user question + AI response
+      console.log('[NotebookLM Takeout] Looking for message pairs...');
+      console.log('[NotebookLM Takeout] Chat panel is:', chatPanel ? chatPanel.tagName : 'null');
+
+      // Try to find all citation buttons - use a Promise.race to timeout if it takes too long
+      console.log('[NotebookLM Takeout] About to query for all citation buttons...');
+      let allCitationButtons = [];
+
+      try {
+        // Query for buttons - this might hang if chatPanel is too large
+        const buttons = chatPanel.querySelectorAll('button.citation-marker');
+        console.log('[NotebookLM Takeout] Query returned, converting to array...');
+        allCitationButtons = Array.from(buttons);
+        console.log(`[NotebookLM Takeout] Found ${allCitationButtons.length} total citation buttons`);
+      } catch (e) {
+        console.error('[NotebookLM Takeout] Error querying citation buttons:', e);
+        console.error('[NotebookLM Takeout] Error stack:', e.stack);
+        errors.push(`Error finding citation buttons: ${e.message}`);
+        return { sources, errors };
+      }
+
+      if (allCitationButtons.length === 0) {
+        console.error('[NotebookLM Takeout] No citation buttons found in chat panel');
+        errors.push('No citation buttons found');
+        return { sources, errors };
+      }
+
+      // Find the parent containers of citation buttons
+      const messageContainers = new Set();
+      allCitationButtons.forEach(btn => {
+        // Walk up the DOM tree to find a substantial parent container
+        let parent = btn.parentElement;
+        let depth = 0;
+        while (parent && depth < 15) {
+          // Look for a parent that seems like a message container
+          const classList = Array.from(parent.classList || []);
+          const className = parent.className;
+          if (classList.some(c => c.includes('response') || c.includes('answer') || c.includes('message')) ||
+              parent.tagName === 'ARTICLE' ||
+              (parent.children.length > 3 && parent.textContent.length > 200)) {
+            messageContainers.add(parent);
+            console.log('[NotebookLM Takeout] Found message container:', parent.tagName, parent.className);
+            break;
+          }
+          parent = parent.parentElement;
+          depth++;
+        }
+      });
+
+      const messagePairs = Array.from(messageContainers);
+      console.log(`[NotebookLM Takeout] Found ${messagePairs.length} unique message containers`);
+
+      if (messageIndex >= messagePairs.length) {
+        console.error(`[NotebookLM Takeout] Message index ${messageIndex} out of range (total: ${messagePairs.length})`);
+        errors.push(`Message index ${messageIndex} out of range`);
+        return { sources, errors };
+      }
+
+      const messageElement = messagePairs[messageIndex];
+      if (!messageElement) {
+        console.error('[NotebookLM Takeout] Could not find message element at index', messageIndex);
+        errors.push('Message element not found');
+        return { sources, errors };
+      }
+
+      console.log(`[NotebookLM Takeout] Found live message element at index ${messageIndex}`);
+
+      // Find all citation buttons in THIS specific message
+      const citationButtons = messageElement.querySelectorAll('button.citation-marker');
+      console.log(`[NotebookLM Takeout] Found ${citationButtons.length} citation buttons in live message`);
+
+      const uniqueSources = new Map();
+
+      for (let i = 0; i < citationButtons.length; i++) {
+        const button = citationButtons[i];
+        const span = button.querySelector('span');
+        const spanIndex = span?.innerText?.trim();
+
+        // Skip if no index, already processed, or is a collapsed indicator (...)
+        if (!spanIndex || uniqueSources.has(spanIndex) || spanIndex === '...') {
+          if (spanIndex === '...') {
+            console.log(`[NotebookLM Takeout] Skipping collapsed citation indicator`);
+          }
+          continue;
+        }
+
+        console.log(`[NotebookLM Takeout] Extracting citation ${i + 1}/${citationButtons.length}: ${spanIndex}`);
+
+        try {
+          // Scroll button into view to ensure it's visible
+          button.scrollIntoView({ behavior: 'instant', block: 'center' });
+          await sleep(100);
+
+          // Simulate hover on the REAL button
+          button.dispatchEvent(new MouseEvent('mouseenter', {
+            view: window,
+            bubbles: true,
+            cancelable: true
+          }));
+
+          await sleep(150);
+
+          // Wait for tooltip with multiple possible selectors
+          const tooltip = await Promise.race([
+            waitForElement('xap-inline-dialog-container[role="dialog"]', 2500),
+            waitForElement('.citation-tooltip', 2500),
+            waitForElement('[role="dialog"].ng-star-inserted', 2500)
+          ]).catch(() => null);
+
+          if (!tooltip) {
+            console.warn(`[NotebookLM Takeout] Citation ${spanIndex}: Tooltip did not appear`);
+            errors.push(`Citation ${spanIndex}: Tooltip did not appear`);
+            button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+            continue;
+          }
+
+          console.log(`[NotebookLM Takeout] Citation ${spanIndex}: Tooltip appeared!`);
+
+          // Wait for content to load (check opacity)
+          let contentLoaded = false;
+          for (let attempt = 0; attempt < 15; attempt++) {
+            const opacity = parseFloat(window.getComputedStyle(tooltip).opacity);
+            if (opacity > 0.5 && tooltip.textContent.trim().length > 0) {
+              contentLoaded = true;
+              break;
+            }
+            await sleep(50);
+          }
+
+          if (!contentLoaded) {
+            console.warn(`[NotebookLM Takeout] Citation ${spanIndex}: Tooltip content did not load`);
+            errors.push(`Citation ${spanIndex}: Tooltip content did not load`);
+            button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+            continue;
+          }
+
+          // Extract citation data
+          const footerEl = tooltip.querySelector('.citation-tooltip-footer');
+          const textEl = tooltip.querySelector('.citation-tooltip-text');
+
+          const sourceTitle = footerEl?.textContent?.trim() || '';
+
+          // Convert HTML to markdown using the same function as note exports
+          let quoteMarkdown = '';
+          if (textEl) {
+            // Try to process structural elements first
+            const textElements = textEl.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
+            if (textElements.length > 0) {
+              textElements.forEach(element => {
+                const markdown = htmlToMarkdown(element);
+                if (markdown && markdown.length > 0) {
+                  quoteMarkdown += markdown + '\n\n';
+                }
+              });
+            } else {
+              // Fallback: convert the whole textEl
+              quoteMarkdown = htmlToMarkdown(textEl);
+            }
+          }
+          quoteMarkdown = quoteMarkdown.trim();
+
+          console.log(`[NotebookLM Takeout] Citation ${spanIndex}: Title="${sourceTitle?.substring(0, 50)}", Quote length=${quoteMarkdown.length}`);
+
+          uniqueSources.set(spanIndex, {
+            index: uniqueSources.size + 1,
+            text: sourceTitle,
+            quote: quoteMarkdown,
+            sourceIndex: spanIndex
+          });
+
+          sources.push({
+            index: uniqueSources.size,
+            text: sourceTitle,
+            quote: quoteMarkdown,
+            sourceIndex: spanIndex
+          });
+
+          console.log(`[NotebookLM Takeout] ✓ Extracted citation ${spanIndex}: ${sourceTitle}`);
+
+          // Close tooltip
+          button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+          await sleep(200);
+
+          // Wait for tooltip to fully close
+          for (let attempt = 0; attempt < 20; attempt++) {
+            if (!document.querySelector('xap-inline-dialog-container[role="dialog"]')) {
+              break;
+            }
+            await sleep(100);
+          }
+
+        } catch (error) {
+          console.error(`[NotebookLM Takeout] Error extracting citation ${spanIndex}:`, error);
+          errors.push(`Citation ${spanIndex}: ${error.message}`);
+        }
+      }
+
+    } catch (error) {
+      console.error('[NotebookLM Takeout] Error in extractChatCitationsFromLiveDOM:', error);
+      errors.push(`Fatal error: ${error.message}`);
+    }
+
+    console.log('[NotebookLM Takeout] Live DOM citation extraction complete:', {
+      sourcesExtracted: sources.length,
+      errorsCount: errors.length
+    });
+
+    return {
+      sources: sources,
+      errors: errors
+    };
+  }
+
+  /**
+   * Extract citations for a specific message by finding matching buttons in live DOM
+   * @param {number} messageIndex - Index of the message (for logging only)
+   * @param {string} messageHTML - The HTML content of the AI response (for extracting aria-labels)
+   * @param {Array<string>} sourceIndices - Array of source indices to extract
+   * @returns {Promise<{sourcesByIndex: Object, errors: Array}>}
+   */
+  async function extractMessageCitations(messageIndex, messageHTML, sourceIndices) {
+    console.log(`[NotebookLM Takeout] extractMessageCitations called for message ${messageIndex}`);
+    console.log(`[NotebookLM Takeout] Source indices:`, sourceIndices);
+    console.log(`[NotebookLM Takeout] Message HTML length:`, messageHTML?.length || 0);
+
+    const sourcesByIndex = {};
+    const errors = [];
+
+    try {
+      // Parse message HTML to get aria-labels for the sources we need
+      const tempDiv = document.createElement('div');
+      tempDiv.innerHTML = messageHTML;
+      const parsedButtons = tempDiv.querySelectorAll('button.citation-marker');
+
+      const sourceAriaLabels = new Map(); // sourceIndex -> aria-label
+      parsedButtons.forEach(btn => {
+        const span = btn.querySelector('span');
+        const idx = span?.textContent?.trim();
+        const ariaLabel = span?.getAttribute('aria-label');
+
+        // Validate sourceIndex before processing
+        const isValid = idx &&
+                       ariaLabel &&
+                       sourceIndices.includes(idx) &&
+                       !idx.includes('<') &&
+                       !idx.includes('>') &&
+                       /^[0-9]+$/.test(idx);
+
+        if (isValid) {
+          sourceAriaLabels.set(idx, ariaLabel);
+        } else if (idx && sourceIndices.includes(idx)) {
+          console.warn(`[NotebookLM Takeout] Skipping invalid sourceIndex in HTML: "${idx}"`);
+          errors.push(`Source ${idx}: Invalid source index format`);
+        }
+      });
+
+      console.log(`[NotebookLM Takeout] Extracted ${sourceAriaLabels.size} valid aria-labels from message HTML`);
+
+      // Find the specific message pair element in the live DOM
+      const chatPanel = document.querySelector('chat-panel .chat-panel-content');
+      if (!chatPanel) {
+        throw new Error('Chat panel not found');
+      }
+
+      const messagePairs = chatPanel.querySelectorAll('.chat-message-pair');
+      const targetMessagePair = messagePairs[messageIndex];
+
+      if (!targetMessagePair) {
+        console.error(`[NotebookLM Takeout] Could not find message pair at index ${messageIndex}`);
+        errors.push(`Message ${messageIndex}: Could not find message pair in DOM`);
+        return { sourcesByIndex, errors };
+      }
+
+      // Only search for citation buttons WITHIN this specific message pair
+      const messageLiveButtons = targetMessagePair.querySelectorAll('.to-user-container button.citation-marker');
+      console.log(`[NotebookLM Takeout] Found ${messageLiveButtons.length} citation buttons in message ${messageIndex}`);
+
+      // Match buttons by aria-label (only within this message)
+      const buttonsToExtract = new Map(); // sourceIndex -> button element
+
+      messageLiveButtons.forEach(btn => {
+        const span = btn.querySelector('span');
+        const spanText = span?.textContent?.trim();
+        const ariaLabel = span?.getAttribute('aria-label');
+
+        // Skip buttons with invalid sourceIndex
+        if (spanText && (spanText.includes('<') || spanText.includes('>') || !/^[0-9]+$/.test(spanText))) {
+          return;
+        }
+
+        // Check if this button matches any of our target sources
+        sourceAriaLabels.forEach((targetAriaLabel, sourceIndex) => {
+          if (ariaLabel === targetAriaLabel && !buttonsToExtract.has(sourceIndex)) {
+            buttonsToExtract.set(sourceIndex, btn);
+            console.log(`[NotebookLM Takeout] Matched source ${sourceIndex} by aria-label: "${ariaLabel}"`);
+          }
+        });
+      });
+
+      console.log(`[NotebookLM Takeout] Matched ${buttonsToExtract.size} buttons in message ${messageIndex}`);
+
+      // Extract from matched live buttons
+      for (const [sourceIndex, button] of buttonsToExtract.entries()) {
+        console.log(`[NotebookLM Takeout] Extracting source ${sourceIndex} from live button...`);
+
+        try {
+          // Scroll button into view
+          button.scrollIntoView({ behavior: 'instant', block: 'center' });
+          await sleep(150);
+
+          // Hover over button
+          button.dispatchEvent(new MouseEvent('mouseenter', {
+            view: window,
+            bubbles: true,
+            cancelable: true
+          }));
+
+          await sleep(200);
+
+          // Wait for tooltip
+          const tooltip = await Promise.race([
+            waitForElement('xap-inline-dialog-container[role="dialog"]', 3000),
+            waitForElement('.citation-tooltip', 3000),
+            waitForElement('[role="dialog"].ng-star-inserted', 3000)
+          ]).catch(() => null);
+
+          if (!tooltip) {
+            console.warn(`[NotebookLM Takeout] Source ${sourceIndex}: Tooltip did not appear`);
+            errors.push(`Source ${sourceIndex}: Tooltip did not appear`);
+            button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+            continue;
+          }
+
+          console.log(`[NotebookLM Takeout] Source ${sourceIndex}: Tooltip appeared`);
+
+          // Wait for content to load
+          let contentLoaded = false;
+          for (let attempt = 0; attempt < 20; attempt++) {
+            const opacity = parseFloat(window.getComputedStyle(tooltip).opacity);
+            if (opacity > 0.5 && tooltip.textContent.trim().length > 0) {
+              contentLoaded = true;
+              break;
+            }
+            await sleep(50);
+          }
+
+          if (!contentLoaded) {
+            console.warn(`[NotebookLM Takeout] Source ${sourceIndex}: Content did not load`);
+            errors.push(`Source ${sourceIndex}: Content did not load`);
+            button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+            continue;
+          }
+
+          // Extract citation data
+          const footerEl = tooltip.querySelector('.citation-tooltip-footer');
+          const textEl = tooltip.querySelector('.citation-tooltip-text');
+
+          const sourceTitle = footerEl?.textContent?.trim() || '';
+
+          // Convert HTML to markdown using the same function as note exports
+          let quoteMarkdown = '';
+          if (textEl) {
+            // Try to process structural elements first
+            const textElements = textEl.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
+            if (textElements.length > 0) {
+              textElements.forEach(element => {
+                const markdown = htmlToMarkdown(element);
+                if (markdown && markdown.length > 0) {
+                  quoteMarkdown += markdown + '\n\n';
+                }
+              });
+            } else {
+              // Fallback: convert the whole textEl
+              quoteMarkdown = htmlToMarkdown(textEl);
+            }
+          }
+          quoteMarkdown = quoteMarkdown.trim();
+
+          sourcesByIndex[sourceIndex] = {
+            text: sourceTitle,
+            quote: quoteMarkdown
+          };
+
+          console.log(`[NotebookLM Takeout] ✓ Source ${sourceIndex}: "${sourceTitle}" (${quoteMarkdown.length} chars)`);
+
+          // Close tooltip
+          button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+          await sleep(200);
+
+          // Wait for tooltip to close
+          for (let attempt = 0; attempt < 20; attempt++) {
+            if (!document.querySelector('xap-inline-dialog-container[role="dialog"]')) {
+              break;
+            }
+            await sleep(100);
+          }
+
+        } catch (error) {
+          console.error(`[NotebookLM Takeout] Error extracting source ${sourceIndex}:`, error);
+          errors.push(`Source ${sourceIndex}: ${error.message}`);
+        }
+      }
+
+    } catch (error) {
+      console.error(`[NotebookLM Takeout] Fatal error in extractMessageCitations:`, error);
+      errors.push(`Fatal error: ${error.message}`);
+    }
+
+    console.log(`[NotebookLM Takeout] Extracted ${Object.keys(sourcesByIndex).length} sources for message ${messageIndex}`);
+
+    return {
+      sourcesByIndex: sourcesByIndex,
+      errors: errors
+    };
+  }
+
+  /**
+   * Extract citations from chat AI response HTML
+   * Reuses hover-based citation extraction pattern from notes
+   */
+  async function extractChatCitations(messageHTML) {
+    console.log('[NotebookLM Takeout] Extracting citations from chat message...');
+    console.log('[NotebookLM Takeout] Message HTML length:', messageHTML?.length || 0);
+
+    console.log('[NotebookLM Takeout] Step 1: Creating temp container...');
+    // Create temporary container to work with
+    const tempContainer = document.createElement('div');
+    console.log('[NotebookLM Takeout] Step 2: Setting innerHTML...');
+    tempContainer.innerHTML = messageHTML;
+    console.log('[NotebookLM Takeout] Step 3: Setting CSS...');
+    tempContainer.style.cssText = 'position: absolute; left: -9999px; top: -9999px; visibility: hidden;';
+    console.log('[NotebookLM Takeout] Step 4: Appending to body...');
+    document.body.appendChild(tempContainer);
+    console.log('[NotebookLM Takeout] Step 5: Temp container appended successfully');
+
+    const sources = [];
+    const errors = [];
+
+    try {
+      console.log('[NotebookLM Takeout] Step 6: Querying for citation buttons...');
+      // Find all citation buttons
+      const citationButtons = tempContainer.querySelectorAll('button.citation-marker');
+      console.log(`[NotebookLM Takeout] Step 7: Found ${citationButtons.length} citation buttons to extract`);
+      console.log('[NotebookLM Takeout] Temp container children:', tempContainer.children.length);
+      console.log('[NotebookLM Takeout] Temp container innerHTML length:', tempContainer.innerHTML.length);
+
+      if (citationButtons.length === 0) {
+        console.warn('[NotebookLM Takeout] No citation buttons found in HTML!');
+        console.log('[NotebookLM Takeout] HTML sample:', messageHTML.substring(0, 500));
+        console.log('[NotebookLM Takeout] Trying alternate selectors...');
+        console.log('[NotebookLM Takeout] button elements:', tempContainer.querySelectorAll('button').length);
+        console.log('[NotebookLM Takeout] .citation elements:', tempContainer.querySelectorAll('.citation').length);
+        console.log('[NotebookLM Takeout] [class*=citation]:', tempContainer.querySelectorAll('[class*="citation"]').length);
+      }
+
+      const uniqueSources = new Map();
+
+      for (let i = 0; i < citationButtons.length; i++) {
+        const button = citationButtons[i];
+        const span = button.querySelector('span');
+        const spanIndex = span?.innerText?.trim();
+
+        // Skip if no index, already processed, or is a collapsed indicator (...)
+        if (!spanIndex || uniqueSources.has(spanIndex) || spanIndex === '...') {
+          if (spanIndex === '...') {
+            console.log(`[NotebookLM Takeout] Skipping collapsed citation indicator: ${spanIndex}`);
+          }
+          continue;
+        }
+
+        console.log(`[NotebookLM Takeout] Extracting citation ${i + 1}/${citationButtons.length}: ${spanIndex}`);
+
+        try {
+          // Make button visible temporarily for event handling
+          button.style.cssText = 'position: fixed; left: 50%; top: 50%; z-index: 10000;';
+
+          // Simulate hover
+          button.dispatchEvent(new MouseEvent('mouseenter', {
+            view: window,
+            bubbles: true,
+            cancelable: true
+          }));
+
+          await sleep(100);
+
+          // Wait for tooltip with multiple possible selectors
+          const tooltip = await Promise.race([
+            waitForElement('xap-inline-dialog-container[role="dialog"]', 2000),
+            waitForElement('.citation-tooltip', 2000),
+            waitForElement('[role="dialog"].ng-star-inserted', 2000)
+          ]).catch(() => null);
+
+          if (!tooltip) {
+            console.warn(`[NotebookLM Takeout] Citation ${spanIndex}: Tooltip did not appear`);
+            errors.push(`Citation ${spanIndex}: Tooltip did not appear`);
+            button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+            continue;
+          }
+
+          console.log(`[NotebookLM Takeout] Citation ${spanIndex}: Tooltip appeared!`);
+
+          // Wait for content to load (check opacity)
+          let contentLoaded = false;
+          for (let attempt = 0; attempt < 12; attempt++) {
+            const opacity = parseFloat(window.getComputedStyle(tooltip).opacity);
+            if (opacity > 0.5 && tooltip.textContent.trim().length > 0) {
+              contentLoaded = true;
+              break;
+            }
+            await sleep(50);
+          }
+
+          if (!contentLoaded) {
+            errors.push(`Citation ${spanIndex}: Tooltip content did not load`);
+            button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+            continue;
+          }
+
+          // Extract citation data
+          const footerEl = tooltip.querySelector('.citation-tooltip-footer');
+          const textEl = tooltip.querySelector('.citation-tooltip-text');
+
+          const sourceTitle = footerEl?.textContent?.trim() || '';
+
+          // Convert HTML to markdown using the same function as note exports
+          let quoteMarkdown = '';
+          if (textEl) {
+            // Try to process structural elements first
+            const textElements = textEl.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
+            if (textElements.length > 0) {
+              textElements.forEach(element => {
+                const markdown = htmlToMarkdown(element);
+                if (markdown && markdown.length > 0) {
+                  quoteMarkdown += markdown + '\n\n';
+                }
+              });
+            } else {
+              // Fallback: convert the whole textEl
+              quoteMarkdown = htmlToMarkdown(textEl);
+            }
+          }
+          quoteMarkdown = quoteMarkdown.trim();
+
+          uniqueSources.set(spanIndex, {
+            index: uniqueSources.size + 1,
+            text: sourceTitle,
+            quote: quoteMarkdown,
+            sourceIndex: spanIndex
+          });
+
+          sources.push({
+            index: uniqueSources.size,
+            text: sourceTitle,
+            quote: quoteMarkdown,
+            sourceIndex: spanIndex
+          });
+
+          console.log(`[NotebookLM Takeout] ✓ Extracted citation ${spanIndex}: ${sourceTitle}`);
+
+          // Close tooltip
+          button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+          await sleep(150);
+
+          // Wait for tooltip to fully close
+          for (let attempt = 0; attempt < 15; attempt++) {
+            if (!document.querySelector('xap-inline-dialog-container[role="dialog"]')) {
+              break;
+            }
+            await sleep(100);
+          }
+
+        } catch (error) {
+          console.error(`[NotebookLM Takeout] Error extracting citation ${spanIndex}:`, error);
+          errors.push(`Citation ${spanIndex}: ${error.message}`);
+        }
+      }
+
+    } finally {
+      // Clean up temporary container
+      document.body.removeChild(tempContainer);
+    }
+
+    console.log('[NotebookLM Takeout] Citation extraction complete:', {
+      sourcesExtracted: sources.length,
+      errorsCount: errors.length
+    });
+    console.log('[NotebookLM Takeout] Extracted sources:', sources);
+    console.log('[NotebookLM Takeout] Errors:', errors);
+
+    return {
+      sources: sources,
+      errors: errors
+    };
   }
 
   // Start when DOM is ready
