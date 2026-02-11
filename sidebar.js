@@ -938,7 +938,7 @@ function convertTableToCSV(htmlContent) {
 
 // ==================== MARKDOWN CONVERSION ====================
 
-function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock = true) {
+function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock = true, skipTitleIfPresent = false) {
   // Debug: Log what we're converting
   logger.info('Markdown', `Converting note: "${noteTitle}"`);
   logger.info('Markdown', `  - HTML content length: ${htmlContent.length} chars`);
@@ -1166,9 +1166,22 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
 
 function sanitizeFilename(filename) {
   return filename
+    // Replace OS-restricted characters with underscore
     .replace(/[<>:"/\\|?*]/g, '_')
+    // Replace quotes and apostrophes (straight and curly) with nothing
+    // U+0027 ' straight apostrophe, U+0060 ` backtick, U+00B4 ´ acute accent
+    // U+2018 ' left single quote, U+2019 ' right single quote (curly apostrophe)
+    // U+201C " left double quote, U+201D " right double quote
+    .replace(/[\u0027\u0060\u00B4\u2018\u2019\u0022\u201C\u201D]/g, '')
+    // Replace other problematic characters
+    .replace(/[#%&{}$!@+]/g, '_')
+    // Replace whitespace with hyphens
     .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
+    // Collapse multiple hyphens/underscores
+    .replace(/[-_]+/g, '-')
+    // Remove leading/trailing hyphens
+    .replace(/^-+|-+$/g, '')
+    // Limit length (leave room for extension)
     .substring(0, 100);
 }
 

@@ -203,7 +203,8 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
           'image/jpeg': '.jpg',
           'application/pdf': '.pdf',
           'audio/wav': '.wav',
-          'audio/mpeg': '.mp3'
+          'audio/mpeg': '.mp3',
+          'video/mp4': '.mp4'
         };
         extension = mimeExtensions[downloadItem.mime] || '';
       }
