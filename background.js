@@ -26,18 +26,21 @@ const capturedArtifacts = {
 };
 
 // Store pending download name for renaming
-let pendingDownloadName = null;
-let pendingDownloadType = null;
+// ==== DOWNLOAD STATE MANAGEMENT (Prevents race conditions) ====
+// Use Maps to track state per download instead of global variables
+
+// Queue of pending downloads (FIFO) - prevents race conditions
+const pendingDownloads = []; // Array of {name, type, timestamp, requestId}
+let nextRequestId = 1;
 
 // Batch download mode - capture URLs instead of downloading
 let batchDownloadMode = false;
 let capturedDownload = null;
 let batchStatus = '';
 
-// Single download intercept mode - capture and re-download without opening tab
-let interceptMode = false;
-let interceptedDownload = null;
-let redownloadInfo = null; // Track re-download to handle in onDeterminingFilename
+// Track intercepted downloads by ID instead of global state
+const interceptedDownloads = new Map(); // downloadId -> {originalId, newId, filename, url}
+const redownloadRequests = new Map(); // downloadId -> {filename, originalId}
 
 // Listen for messages from content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -62,40 +65,65 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
 
     case 'SET_PENDING_DOWNLOAD':
-      // Store the name for the next download from NotebookLM
-      pendingDownloadName = message.name;
-      pendingDownloadType = message.artifactType;
-      console.log('[Background] Pending download set:', pendingDownloadName, pendingDownloadType);
-      // Clear after 30 seconds if not used
+      // Add to pending downloads queue instead of global variable
+      const requestId = nextRequestId++;
+      const pendingDownload = {
+        name: message.name,
+        type: message.artifactType,
+        timestamp: Date.now(),
+        requestId: requestId
+      };
+      pendingDownloads.push(pendingDownload);
+      console.log('[Background] Pending download queued:', pendingDownload.name, 'ID:', requestId);
+
+      // Clean up old pending downloads (older than 45 seconds)
       setTimeout(() => {
-        pendingDownloadName = null;
-        pendingDownloadType = null;
-      }, 30000);
-      sendResponse({ success: true });
+        const index = pendingDownloads.findIndex(d => d.requestId === requestId);
+        if (index !== -1) {
+          console.log('[Background] Cleaning up expired pending download:', pendingDownloads[index].name);
+          pendingDownloads.splice(index, 1);
+        }
+      }, 45000);
+
+      sendResponse({ success: true, requestId });
       break;
 
     case 'START_INTERCEPT_DOWNLOAD':
-      // Enable intercept mode - capture next download and re-download without tab
-      interceptMode = true;
-      interceptedDownload = null;
-      pendingDownloadName = message.name;
-      pendingDownloadType = message.artifactType;
-      console.log('[Background] Intercept mode enabled for:', pendingDownloadName);
-      // Clear after 15 seconds if not used
+      // Add to pending downloads queue with intercept flag
+      const interceptRequestId = nextRequestId++;
+      const interceptDownload = {
+        name: message.name,
+        type: message.artifactType,
+        timestamp: Date.now(),
+        requestId: interceptRequestId,
+        intercept: true  // Flag to intercept and re-download
+      };
+      pendingDownloads.push(interceptDownload);
+      console.log('[Background] Intercept download queued:', interceptDownload.name, 'ID:', interceptRequestId);
+
+      // Clean up after 20 seconds if not used
       setTimeout(() => {
-        if (interceptMode) {
-          interceptMode = false;
-          console.log('[Background] Intercept mode timeout');
+        const index = pendingDownloads.findIndex(d => d.requestId === interceptRequestId);
+        if (index !== -1) {
+          console.log('[Background] Cleaning up expired intercept request:', pendingDownloads[index].name);
+          pendingDownloads.splice(index, 1);
         }
-      }, 15000);
-      sendResponse({ success: true });
+      }, 20000);
+
+      sendResponse({ success: true, requestId: interceptRequestId });
       break;
 
     case 'GET_INTERCEPTED_DOWNLOAD':
-      // Check if download was intercepted
-      if (interceptedDownload) {
-        const result = { ...interceptedDownload };
-        interceptedDownload = null;
+      // Check if any downloads were intercepted (return most recent)
+      if (interceptedDownloads.size > 0) {
+        // Get the most recent intercepted download
+        const downloadIds = Array.from(interceptedDownloads.keys());
+        const latestId = downloadIds[downloadIds.length - 1];
+        const result = { ...interceptedDownloads.get(latestId) };
+
+        // Clean up - remove from map after retrieval
+        interceptedDownloads.delete(latestId);
+
         sendResponse({ success: true, ...result });
       } else {
         sendResponse({ success: false });
@@ -103,10 +131,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
 
     case 'CANCEL_INTERCEPT':
-      // Cancel intercept mode (wasn't needed)
-      if (interceptMode) {
-        interceptMode = false;
-        console.log('[Background] Intercept mode cancelled');
+      // Remove all intercept requests from queue
+      const cancelledCount = pendingDownloads.filter(d => d.intercept).length;
+      if (cancelledCount > 0) {
+        // Remove intercept downloads from queue
+        for (let i = pendingDownloads.length - 1; i >= 0; i--) {
+          if (pendingDownloads[i].intercept) {
+            console.log('[Background] Removing intercept request:', pendingDownloads[i].name);
+            pendingDownloads.splice(i, 1);
+          }
+        }
+        console.log('[Background] Cancelled', cancelledCount, 'intercept requests');
       }
       sendResponse({ success: true });
       break;
@@ -180,11 +215,22 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
                            downloadItem.url?.includes('googleusercontent') ||
                            downloadItem.referrer?.includes('notebooklm');
 
-  console.log('[Background] Download created:', downloadItem.id, 'URL:', downloadItem.url?.substring(0, 100), 'batchMode:', batchDownloadMode, 'interceptMode:', interceptMode);
+  // Check if this download matches a pending intercept request
+  const hasInterceptRequest = pendingDownloads.some(d => d.intercept);
+  console.log('[Background] Download created:', downloadItem.id, 'URL:', downloadItem.url?.substring(0, 100), 'batchMode:', batchDownloadMode, 'hasInterceptRequest:', hasInterceptRequest);
 
   // INTERCEPT MODE - Capture, cancel, and re-download without opening tab
-  if (interceptMode && isFromNotebookLM && downloadItem.url) {
-    console.log('[Background] Intercepting download in intercept mode');
+  if (hasInterceptRequest && isFromNotebookLM && downloadItem.url) {
+    // Find and remove the intercept request from queue (FIFO - take first intercept request)
+    const interceptIndex = pendingDownloads.findIndex(d => d.intercept);
+    if (interceptIndex === -1) {
+      console.warn('[Background] Intercept request not found in queue (race condition)');
+      return;
+    }
+
+    const pendingRequest = pendingDownloads[interceptIndex];
+    pendingDownloads.splice(interceptIndex, 1); // Remove from queue immediately
+    console.log('[Background] Intercepting download for:', pendingRequest.name, 'requestId:', pendingRequest.requestId);
 
     // Determine file extension BEFORE async operations
     let extension = '';
@@ -211,32 +257,26 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
         extension = mimeExtensions[downloadItem.mime] || '';
       }
 
-      // Last resort: use artifact type
-      if (!extension && pendingDownloadType === 'Infographic') {
+      // Last resort: use artifact type from pending request
+      if (!extension && pendingRequest.type === 'Infographic') {
         extension = '.png';
-      } else if (!extension && pendingDownloadType === 'Slides') {
+      } else if (!extension && pendingRequest.type === 'Slides') {
         extension = '.pdf';
-      } else if (!extension && pendingDownloadType === 'Audio Overview') {
+      } else if (!extension && pendingRequest.type === 'Audio Overview') {
         extension = '.m4a';
       }
     }
 
     // Create new filename
-    const newFilename = sanitizeFilename(pendingDownloadName || 'download') + extension;
+    const newFilename = sanitizeFilename(pendingRequest.name || 'download') + extension;
     console.log('[Background] Re-downloading as:', newFilename, '(extension from:', downloadItem.filename ? 'filename' : downloadItem.mime ? 'mime' : 'type', ')');
 
-    // CRITICAL: Disable intercept mode BEFORE re-downloading to prevent loop
-    interceptMode = false;
-
-    // Store re-download info for onDeterminingFilename handler
-    redownloadInfo = {
+    // Store re-download info for onDeterminingFilename handler (use download ID as key)
+    redownloadRequests.set(downloadItem.id, {
       filename: newFilename,
-      originalId: downloadItem.id
-    };
-
-    // Clear pending download variables (no longer needed)
-    pendingDownloadName = null;
-    pendingDownloadType = null;
+      originalId: downloadItem.id,
+      requestId: pendingRequest.requestId
+    });
 
     // Wrap entire intercept flow in IIFE with proper error handling
     (async () => {
@@ -254,13 +294,14 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
 
         console.log('[Background] Re-download started:', newDownloadId);
 
-        // Store info for retrieval
-        interceptedDownload = {
+        // Store intercepted download info in Map (use newDownloadId as key)
+        interceptedDownloads.set(newDownloadId, {
           originalId: downloadItem.id,
           newId: newDownloadId,
           filename: newFilename,
-          url: downloadItem.url
-        };
+          url: downloadItem.url,
+          requestId: pendingRequest.requestId
+        });
 
         // Erase the cancelled download from history
         setTimeout(() => {
@@ -269,10 +310,8 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
 
       } catch (error) {
         console.error('[Background] Intercept mode failed:', error);
-        // Reset intercept mode on error
-        interceptMode = false;
-        interceptedDownload = null;
-        redownloadInfo = null;
+        // Clean up on error
+        redownloadRequests.delete(downloadItem.id);
       }
     })();
 
@@ -281,14 +320,24 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
 
   // BATCH MODE - Existing batch download logic
   if (batchDownloadMode && isFromNotebookLM && downloadItem.url) {
+    // Find and consume the next pending download from queue (FIFO)
+    const pendingIndex = pendingDownloads.findIndex(d => !d.intercept);
+    let pendingInfo = null;
+    if (pendingIndex !== -1) {
+      pendingInfo = pendingDownloads[pendingIndex];
+      pendingDownloads.splice(pendingIndex, 1); // Remove from queue
+      console.log('[Background] Using pending download from queue:', pendingInfo.name, 'requestId:', pendingInfo.requestId);
+    }
+
     // Capture the URL and download ID - don't cancel yet, we need to fetch first
     if (!capturedDownload) {
       capturedDownload = {
         url: downloadItem.url,
         downloadId: downloadItem.id,
         mime: downloadItem.mime,
-        name: pendingDownloadName,
-        type: pendingDownloadType
+        name: pendingInfo?.name || 'download',
+        type: pendingInfo?.type || 'unknown',
+        requestId: pendingInfo?.requestId
       };
       console.log('[Background] Captured download via onCreated:', capturedDownload.url?.substring(0, 100));
       // Don't cancel here - let the fetch happen first
@@ -303,7 +352,9 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
                            downloadItem.referrer?.includes('notebooklm') ||
                            downloadItem.finalUrl?.includes('googleusercontent');
 
-  console.log('[Background] Download intercepted:', downloadItem.id, downloadItem.filename, 'from NotebookLM:', isFromNotebookLM, 'batchMode:', batchDownloadMode, 'pendingName:', pendingDownloadName, 'redownloadInfo:', redownloadInfo?.filename);
+  // Check if this download has redownload info in the Map
+  const redownloadInfo = redownloadRequests.get(downloadItem.id);
+  console.log('[Background] Download intercepted:', downloadItem.id, downloadItem.filename, 'from NotebookLM:', isFromNotebookLM, 'batchMode:', batchDownloadMode, 'hasRedownloadInfo:', !!redownloadInfo);
 
   // Check if this is the ORIGINAL download being cancelled (skip it)
   if (redownloadInfo && downloadItem.id === redownloadInfo.originalId) {
@@ -311,22 +362,34 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
     return false; // Let it use default name, we'll cancel it anyway
   }
 
-  // Check if this is a re-download from intercept mode
-  if (redownloadInfo && isFromNotebookLM) {
-    const filename = redownloadInfo.filename;
-    redownloadInfo = null; // Clear after use
-    console.log('[Background] Renaming re-download to:', filename);
+  // Check if this download is an intercepted download in our Map
+  const interceptInfo = interceptedDownloads.get(downloadItem.id);
+  if (interceptInfo && isFromNotebookLM) {
+    const filename = interceptInfo.filename;
+    console.log('[Background] Renaming intercepted download to:', filename);
     suggest({ filename: filename });
     return true;
   }
 
-  // Skip if no pending download name (not ours)
-  if (!pendingDownloadName) {
-    console.log('[Background] Skipping rename - no pending download name');
+  // Check for non-intercepted downloads - look in pending queue
+  const hasPendingDownload = pendingDownloads.length > 0 && pendingDownloads.some(d => !d.intercept);
+  if (!hasPendingDownload) {
+    console.log('[Background] Skipping rename - no pending download in queue');
     return false;
   }
 
-  if (isFromNotebookLM && pendingDownloadName) {
+  if (isFromNotebookLM && hasPendingDownload) {
+    // Find and consume the next non-intercept pending download (FIFO)
+    const pendingIndex = pendingDownloads.findIndex(d => !d.intercept);
+    if (pendingIndex === -1) {
+      console.log('[Background] No non-intercept pending download found');
+      return false;
+    }
+
+    const pendingRequest = pendingDownloads[pendingIndex];
+    pendingDownloads.splice(pendingIndex, 1); // Remove from queue
+    console.log('[Background] Processing pending download:', pendingRequest.name, 'requestId:', pendingRequest.requestId);
+
     // Determine file extension
     let extension = '';
     const originalFilename = downloadItem.filename || '';
@@ -342,13 +405,15 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
         'application/pdf': '.pdf',
         'audio/wav': '.wav',
         'audio/mpeg': '.mp3',
+        'audio/mp4': '.m4a',
+        'audio/x-m4a': '.m4a',
         'video/mp4': '.mp4'
       };
       extension = mimeExtensions[downloadItem.mime] || '';
     }
 
     // Create new filename
-    const newFilename = sanitizeFilename(pendingDownloadName) + extension;
+    const newFilename = sanitizeFilename(pendingRequest.name) + extension;
     console.log('[Background] Renaming download to:', newFilename);
 
     // In batch mode, onCreated already handled this - just prevent the download
@@ -359,17 +424,9 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
       }
       console.log('[Background] Batch mode - skipping rename, download will be cancelled');
 
-      // Clear pending name
-      pendingDownloadName = null;
-      pendingDownloadType = null;
-
       // Don't suggest anything - let onCreated handle the cancel
       return false;
     }
-
-    // Clear pending name
-    pendingDownloadName = null;
-    pendingDownloadType = null;
 
     suggest({ filename: newFilename });
     return true; // We handled this
@@ -517,9 +574,18 @@ async function runBatchDownload(tabId, items) {
     console.log('[Background]', batchStatus);
 
     try {
-      // Set pending name
-      pendingDownloadName = item.label;
-      pendingDownloadType = item.type;
+      // Add to pending downloads queue
+      const batchRequestId = nextRequestId++;
+      const batchPending = {
+        name: item.label,
+        type: item.type,
+        timestamp: Date.now(),
+        requestId: batchRequestId,
+        intercept: false
+      };
+      pendingDownloads.push(batchPending);
+      console.log('[Background] Batch download queued:', item.label, 'requestId:', batchRequestId);
+
       capturedDownload = null;
 
       // Trigger the download via content script
