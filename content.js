@@ -3786,7 +3786,7 @@
         try {
           // Scroll button into view
           button.scrollIntoView({ behavior: 'instant', block: 'center' });
-          await sleep(150);
+          await sleep(200);  // Increased from 150ms
 
           // Hover over button
           button.dispatchEvent(new MouseEvent('mouseenter', {
@@ -3795,7 +3795,7 @@
             cancelable: true
           }));
 
-          await sleep(200);
+          await sleep(300);  // Increased from 200ms
 
           // Wait for tooltip
           const tooltip = await raceWithCleanup([
@@ -3813,9 +3813,9 @@
 
           console.log(`[NotebookLM Takeout] Source ${sourceIndex}: Tooltip appeared`);
 
-          // Wait for content to load
+          // Wait for content to load (increased timeout for slow API responses)
           let contentLoaded = false;
-          for (let attempt = 0; attempt < 20; attempt++) {
+          for (let attempt = 0; attempt < 50; attempt++) {  // Increased from 20 to 50 attempts (2.5 seconds)
             const opacity = parseFloat(window.getComputedStyle(tooltip).opacity);
             if (opacity > 0.5 && tooltip.textContent.trim().length > 0) {
               contentLoaded = true;
@@ -3825,7 +3825,7 @@
           }
 
           if (!contentLoaded) {
-            console.warn(`[NotebookLM Takeout] Source ${sourceIndex}: Content did not load`);
+            console.warn(`[NotebookLM Takeout] Source ${sourceIndex}: Content did not load after 2.5 seconds`);
             errors.push(`Source ${sourceIndex}: Content did not load`);
             button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
             continue;
@@ -3865,7 +3865,7 @@
 
           // Close tooltip
           button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-          await sleep(200);
+          await sleep(250);  // Increased from 200ms
 
           // Wait for tooltip to close
           for (let attempt = 0; attempt < 20; attempt++) {
@@ -3874,6 +3874,9 @@
             }
             await sleep(100);
           }
+
+          // Add delay between citations to avoid overwhelming API (especially with many citations)
+          await sleep(150);
 
         } catch (error) {
           console.error(`[NotebookLM Takeout] Error extracting source ${sourceIndex}:`, error);

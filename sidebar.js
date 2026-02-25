@@ -1226,6 +1226,99 @@ function sanitizeFilename(filename) {
     .substring(0, 100);
 }
 
+/**
+ * Download an image from a URL and convert to base64 data URI
+ */
+async function downloadImageAsBase64(url) {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const blob = await response.blob();
+
+    // Get MIME type from response or blob
+    const mimeType = blob.type || 'image/jpeg';
+
+    // Convert blob to base64
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        // reader.result is already a data URI (data:image/jpeg;base64,...)
+        resolve(reader.result);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch (error) {
+    console.error(`[NotebookLM Takeout] Failed to download image: ${url}`, error);
+    throw error;
+  }
+}
+
+/**
+ * Scan markdown for Googleusercontent image URLs and replace with base64 data URIs
+ */
+async function embedImagesInMarkdown(markdown, sourceTitle) {
+  // Match markdown image syntax: ![alt](url)
+  const imageRegex = /!\[([^\]]*)\]\((https:\/\/lh3\.googleusercontent\.com\/[^\)]+)\)/g;
+
+  const matches = [...markdown.matchAll(imageRegex)];
+
+  if (matches.length === 0) {
+    return { markdown, errors: [], imagesFound: 0, imagesEmbedded: 0 };
+  }
+
+  console.log(`[NotebookLM Takeout] Found ${matches.length} images in "${sourceTitle}"`);
+
+  const errors = [];
+  let updatedMarkdown = markdown;
+  let successCount = 0;
+
+  for (const match of matches) {
+    const fullMatch = match[0];
+    const altText = match[1];
+    const imageUrl = match[2];
+
+    try {
+      console.log(`[NotebookLM Takeout] Downloading image: ${imageUrl.substring(0, 100)}...`);
+      const dataUri = await downloadImageAsBase64(imageUrl);
+
+      // Replace the URL with the data URI
+      const replacement = `![${altText}](${dataUri})`;
+      updatedMarkdown = updatedMarkdown.replace(fullMatch, replacement);
+
+      successCount++;
+      console.log(`[NotebookLM Takeout] Successfully embedded image (${(dataUri.length / 1024).toFixed(1)} KB)`);
+    } catch (error) {
+      console.error(`[NotebookLM Takeout] Failed to embed image:`, error);
+      errors.push({
+        source: sourceTitle,
+        type: 'image_download_failed',
+        message: `Failed to download image: ${error.message}`,
+        url: imageUrl.substring(0, 100) + '...'
+      });
+    }
+  }
+
+  return {
+    markdown: updatedMarkdown,
+    errors,
+    imagesFound: matches.length,
+    imagesEmbedded: successCount
+  };
+}
+
+/**
+ * Remove all images from markdown
+ */
+function stripImagesFromMarkdown(markdown) {
+  // Remove markdown image syntax: ![alt](url)
+  // This matches both embedded base64 and external URLs
+  return markdown.replace(/!\[([^\]]*)\]\([^\)]+\)/g, '');
+}
+
 // ==================== EXPORT ORCHESTRATION ====================
 
 async function exportNotesAsMarkdown(selectedNotes) {
@@ -1460,8 +1553,20 @@ async function createNotesZip(notes, errors = []) {
   // Create individual markdown files
   if (markdownNotes.length > 0) {
     const notesFolder = zip.folder('notes');
+    const usedFilenames = new Set();
+
     markdownNotes.forEach(note => {
-      const filename = sanitizeFilename(note.title) + '.md';
+      let baseFilename = sanitizeFilename(note.title);
+      let filename = baseFilename + '.md';
+      let counter = 2;
+
+      // If duplicate, append counter
+      while (usedFilenames.has(filename)) {
+        filename = `${baseFilename}-${counter}.md`;
+        counter++;
+      }
+
+      usedFilenames.add(filename);
       notesFolder.file(filename, note.markdown);
     });
 
@@ -1495,10 +1600,22 @@ async function createNotesZip(notes, errors = []) {
   // Create mindmap SVG and JSON files
   if (mindmaps.length > 0) {
     const mindmapsFolder = zip.folder('mindmaps');
+    const usedMindmapNames = new Set();
+
     mindmaps.forEach(mindmap => {
-      const baseName = sanitizeFilename(mindmap.title);
-      mindmapsFolder.file(`${baseName}.svg`, mindmap.svgContent);
-      mindmapsFolder.file(`${baseName}.json`, JSON.stringify(mindmap.treeData, null, 2));
+      let baseName = sanitizeFilename(mindmap.title);
+      let uniqueName = baseName;
+      let counter = 2;
+
+      // If duplicate, append counter
+      while (usedMindmapNames.has(uniqueName)) {
+        uniqueName = `${baseName}-${counter}`;
+        counter++;
+      }
+
+      usedMindmapNames.add(uniqueName);
+      mindmapsFolder.file(`${uniqueName}.svg`, mindmap.svgContent);
+      mindmapsFolder.file(`${uniqueName}.json`, JSON.stringify(mindmap.treeData, null, 2));
     });
   }
 
@@ -1707,7 +1824,20 @@ async function exportSources(selectedSources) {
   progressFill.style.width = '0%';
 
   const exportedSources = [];
+  const allErrors = [];
   let cancelled = false;
+
+  // Track statistics for error reporting
+  const stats = {
+    totalSources: selectedSources.length,
+    successfulExtractions: 0,
+    failedExtractions: 0,
+    missingSummaries: 0,
+    missingKeyTopics: 0,
+    imagesFound: 0,
+    imagesEmbedded: 0,
+    imagesFailed: 0
+  };
 
   // Listen for cancellation
   const cancelListener = (message) => {
@@ -1754,6 +1884,13 @@ async function exportSources(selectedSources) {
           console.error(`[NotebookLM Takeout] Failed to extract "${source.title}":`, sourceData.error);
           showToast(`Skipped: ${source.title}`, 'warning');
 
+          stats.failedExtractions++;
+          allErrors.push({
+            source: source.title,
+            type: 'extraction_failed',
+            message: sourceData.error
+          });
+
           // Try to close panel before continuing
           try {
             await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_BACK' });
@@ -1771,6 +1908,15 @@ async function exportSources(selectedSources) {
         // Add source guide summary if available (already converted to markdown)
         if (sourceData.guideMarkdown && sourceData.guideMarkdown.trim().length > 0) {
           markdown += `## Summary\n\n${sourceData.guideMarkdown}\n\n`;
+        } else {
+          // Track missing summary
+          stats.missingSummaries++;
+          allErrors.push({
+            source: source.title,
+            type: 'missing_summary',
+            message: 'Source guide/summary not found or empty'
+          });
+          console.warn(`[NotebookLM Takeout] "${source.title}": Summary/guide is missing`);
         }
 
         // Add key topics if available
@@ -1780,17 +1926,60 @@ async function exportSources(selectedSources) {
             markdown += `- ${topic}\n`;
           });
           markdown += `\n`;
+        } else {
+          // Track missing key topics
+          stats.missingKeyTopics++;
+          allErrors.push({
+            source: source.title,
+            type: 'missing_key_topics',
+            message: 'Key topics not found or empty'
+          });
+          console.warn(`[NotebookLM Takeout] "${source.title}": Key topics are missing`);
         }
 
         // Add the main content
         markdown += `## Content\n\n`;
         markdown += convertToMarkdown(sourceData.html, sourceData.sources || [], source.title, settings.citationsCodeBlock);
 
+        // Embed any googleusercontent images as base64
+        try {
+          const {
+            markdown: embeddedMarkdown,
+            errors: imageErrors,
+            imagesFound,
+            imagesEmbedded
+          } = await embedImagesInMarkdown(markdown, source.title);
+
+          markdown = embeddedMarkdown;
+
+          // Track image statistics
+          stats.imagesFound += imagesFound;
+          stats.imagesEmbedded += imagesEmbedded;
+          stats.imagesFailed += (imagesFound - imagesEmbedded);
+
+          // Track image download errors
+          if (imageErrors.length > 0) {
+            allErrors.push(...imageErrors);
+          }
+        } catch (error) {
+          console.error(`[NotebookLM Takeout] Error embedding images for "${source.title}":`, error);
+          allErrors.push({
+            source: source.title,
+            type: 'image_embedding_error',
+            message: `Failed to embed images: ${error.message}`
+          });
+        }
+
+        // Create image-stripped version
+        const markdownNoImages = stripImagesFromMarkdown(markdown);
+
         exportedSources.push({
           title: source.title,
-          markdown: markdown
+          markdown: markdown,
+          markdownNoImages: markdownNoImages
         });
 
+        stats.successfulExtractions++;
         console.log(`[NotebookLM Takeout] Successfully extracted "${source.title}", now closing panel...`);
 
         // Navigate back to sources list
@@ -1804,6 +1993,14 @@ async function exportSources(selectedSources) {
         console.error(`[NotebookLM Takeout] Error extracting source "${source.title}":`, error);
         showToast(`Error: ${source.title}`, 'error');
 
+        stats.failedExtractions++;
+        allErrors.push({
+          source: source.title,
+          type: 'extraction_error',
+          message: error.message,
+          stack: error.stack
+        });
+
         // Try to close panel even if extraction failed
         try {
           console.log('[NotebookLM Takeout] Attempting to close panel after error...');
@@ -1815,36 +2012,179 @@ async function exportSources(selectedSources) {
       }
     }
 
-    // Create ZIP with all sources
-    if (exportedSources.length === 1) {
-      // Single source - download as single file
-      const source = exportedSources[0];
-      const blob = new Blob([source.markdown], { type: 'text/markdown' });
-      const url = URL.createObjectURL(blob);
-      try {
-        const filename = sanitizeFilename(source.title) + '.md';
-
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-
-        showToast(`Downloaded: ${source.title}`, 'success');
-      } finally {
-        URL.revokeObjectURL(url);
-      }
-
-    } else if (exportedSources.length > 1) {
-      // Multiple sources - create ZIP
+    // Always create ZIP (includes both image-embedded and image-stripped versions)
+    if (exportedSources.length > 0) {
       const zip = new JSZip();
       const sourcesFolder = zip.folder('sources');
+      const usedSourceFilenames = new Set();
 
       exportedSources.forEach(source => {
-        const filename = sanitizeFilename(source.title) + '.md';
-        sourcesFolder.file(filename, source.markdown);
+        let baseFilename = sanitizeFilename(source.title);
+
+        // Add text-only version (standard filename)
+        let filenameNoImages = baseFilename + '.md';
+        let counterNoImages = 2;
+
+        while (usedSourceFilenames.has(filenameNoImages)) {
+          filenameNoImages = `${baseFilename}-${counterNoImages}.md`;
+          counterNoImages++;
+        }
+
+        usedSourceFilenames.add(filenameNoImages);
+        sourcesFolder.file(filenameNoImages, source.markdownNoImages);
+
+        // Add version with embedded images (append -with-images)
+        const baseWithImages = baseFilename + '-with-images';
+        let filenameWithImages = baseWithImages + '.md';
+        let counterWithImages = 2;
+
+        while (usedSourceFilenames.has(filenameWithImages)) {
+          filenameWithImages = `${baseWithImages}-${counterWithImages}.md`;
+          counterWithImages++;
+        }
+
+        usedSourceFilenames.add(filenameWithImages);
+        sourcesFolder.file(filenameWithImages, source.markdown);
       });
+
+      // Add README explaining the file naming
+      let readmeContent = '# NotebookLM Sources Export\n\n';
+      readmeContent += `Generated: ${new Date().toLocaleString()}\n\n`;
+      readmeContent += '---\n\n';
+      readmeContent += '## File Naming Convention\n\n';
+      readmeContent += 'Each source is exported in two versions:\n\n';
+      readmeContent += '### 1. Standard files (e.g., `Document-1.md`)\n\n';
+      readmeContent += '- **Text-only version** with all images removed\n';
+      readmeContent += '- Smaller file sizes, faster to load\n';
+      readmeContent += '- Best for AI processing, search indexing, or text analysis\n';
+      readmeContent += '- Perfect for feeding into Claude, ChatGPT, or other LLMs\n\n';
+      readmeContent += '### 2. `-with-images` files (e.g., `Document-1-with-images.md`)\n\n';
+      readmeContent += '- **Full version** with images embedded as base64 data URIs\n';
+      readmeContent += '- Self-contained markdown files that work offline\n';
+      readmeContent += '- Larger file sizes due to embedded images\n';
+      readmeContent += '- Best for archival, offline viewing, and complete backups\n';
+      if (stats.imagesFound > 0) {
+        readmeContent += `\n**Note:** ${stats.imagesFound} image(s) were found across all sources. `;
+        readmeContent += `${stats.imagesEmbedded} were successfully embedded as base64.\n`;
+      }
+      readmeContent += '\n---\n\n';
+      readmeContent += '## Source Contents\n\n';
+      readmeContent += 'Each source file includes:\n';
+      readmeContent += '- **Summary** - AI-generated source guide (if available)\n';
+      readmeContent += '- **Key Topics** - Important themes (if available)\n';
+      readmeContent += '- **Content** - Full document content with citations\n';
+      readmeContent += '\n';
+
+      zip.file('README.txt', readmeContent);
+
+      // Add detailed error report if there are any issues
+      if (allErrors.length > 0) {
+        let errorsContent = '# Source Export Error Report\n\n';
+        errorsContent += `Generated: ${new Date().toLocaleString()}\n\n`;
+        errorsContent += '---\n\n';
+
+        // Summary Statistics
+        errorsContent += '## Summary Statistics\n\n';
+        errorsContent += `- **Total Sources Selected:** ${stats.totalSources}\n`;
+        errorsContent += `- **Successfully Extracted:** ${stats.successfulExtractions}\n`;
+        errorsContent += `- **Failed Extractions:** ${stats.failedExtractions}\n`;
+        errorsContent += `- **Missing Summaries:** ${stats.missingSummaries}\n`;
+        errorsContent += `- **Missing Key Topics:** ${stats.missingKeyTopics}\n`;
+        if (stats.imagesFound > 0) {
+          errorsContent += `- **Images Found:** ${stats.imagesFound}\n`;
+          errorsContent += `- **Images Embedded:** ${stats.imagesEmbedded}\n`;
+          errorsContent += `- **Images Failed:** ${stats.imagesFailed}\n`;
+        }
+        const successRate = stats.totalSources > 0
+          ? ((stats.successfulExtractions / stats.totalSources) * 100).toFixed(1)
+          : '0';
+        errorsContent += `- **Success Rate:** ${successRate}%\n`;
+        errorsContent += `\n---\n\n`;
+
+        // Group errors by type
+        const errorsByType = {};
+        allErrors.forEach(err => {
+          if (!errorsByType[err.type]) {
+            errorsByType[err.type] = [];
+          }
+          errorsByType[err.type].push(err);
+        });
+
+        // Error Details
+        errorsContent += '## Error Details\n\n';
+
+        if (errorsByType.extraction_failed || errorsByType.extraction_error) {
+          errorsContent += '### EXTRACTION FAILURES\n\n';
+          const failures = [
+            ...(errorsByType.extraction_failed || []),
+            ...(errorsByType.extraction_error || [])
+          ];
+          failures.forEach((err, idx) => {
+            errorsContent += `**${idx + 1}. ${err.source}**\n`;
+            errorsContent += `- Error: ${err.message}\n`;
+            if (err.stack) {
+              errorsContent += `- Stack: ${err.stack}\n`;
+            }
+            errorsContent += `\n`;
+          });
+          errorsContent += `\n`;
+        }
+
+        if (errorsByType.missing_summary) {
+          errorsContent += '### MISSING SUMMARIES\n\n';
+          errorsContent += 'The following sources were exported but their source guide/summary was not found:\n\n';
+          errorsByType.missing_summary.forEach((err, idx) => {
+            errorsContent += `${idx + 1}. ${err.source}\n`;
+          });
+          errorsContent += `\n`;
+        }
+
+        if (errorsByType.missing_key_topics) {
+          errorsContent += '### MISSING KEY TOPICS\n\n';
+          errorsContent += 'The following sources were exported but their key topics were not found:\n\n';
+          errorsByType.missing_key_topics.forEach((err, idx) => {
+            errorsContent += `${idx + 1}. ${err.source}\n`;
+          });
+          errorsContent += `\n`;
+        }
+
+        if (errorsByType.image_download_failed || errorsByType.image_embedding_error) {
+          errorsContent += '### IMAGE DOWNLOAD FAILURES\n\n';
+          errorsContent += 'The following images could not be embedded as base64:\n\n';
+          const imageErrors = [
+            ...(errorsByType.image_download_failed || []),
+            ...(errorsByType.image_embedding_error || [])
+          ];
+          imageErrors.forEach((err, idx) => {
+            errorsContent += `**${idx + 1}. ${err.source}**\n`;
+            errorsContent += `- Error: ${err.message}\n`;
+            if (err.url) {
+              errorsContent += `- URL: ${err.url}\n`;
+            }
+            errorsContent += `\n`;
+          });
+          errorsContent += `Note: Images remain as external links in the markdown.\n\n`;
+        }
+
+        errorsContent += '---\n\n';
+        errorsContent += '## Recommendations\n\n';
+        if (stats.failedExtractions > 0) {
+          errorsContent += '- Some sources failed to extract completely. Try exporting them individually.\n';
+        }
+        if (stats.missingSummaries > 0) {
+          errorsContent += '- Some sources are missing summaries. This may happen if NotebookLM hasn\'t generated the source guide yet.\n';
+        }
+        if (stats.missingKeyTopics > 0) {
+          errorsContent += '- Some sources are missing key topics. This is usually included in the source guide.\n';
+        }
+        if (errorsByType.image_download_failed || errorsByType.image_embedding_error) {
+          errorsContent += '- Some images could not be embedded as base64. They remain as external links but may require authentication to view.\n';
+        }
+        errorsContent += '\n- If issues persist, please report them at:\n';
+        errorsContent += '  https://github.com/anthropics/claude-code/issues\n';
+
+        zip.file('errors.txt', errorsContent);
+      }
 
       // Generate ZIP
       const blob = await zip.generateAsync({ type: 'blob' });
@@ -1860,7 +2200,11 @@ async function exportSources(selectedSources) {
         a.click();
         document.body.removeChild(a);
 
-        showToast(`Exported ${exportedSources.length} sources`, 'success');
+        if (allErrors.length > 0) {
+          showToast(`Exported ${exportedSources.length} source(s) with warnings (see errors.txt)`, 'warning');
+        } else {
+          showToast(`Exported ${exportedSources.length} source(s) - see README.txt`, 'success');
+        }
       } finally {
         URL.revokeObjectURL(url);
       }
