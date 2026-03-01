@@ -1330,8 +1330,35 @@
       try {
         await waitForElement('.source-guide-container', 3000);
         console.log(`[NotebookLM Takeout] source-guide-container found`);
-        // Give it a moment to fully render
-        await new Promise(resolve => setTimeout(resolve, 300));
+
+        // NEW: Wait for summary content to be generated (10 second timeout)
+        console.log(`[NotebookLM Takeout] Waiting for summary content to generate...`);
+
+        const summaryTimeout = 10000; // 10 seconds
+        const pollInterval = 200; // Check every 200ms
+        const maxAttempts = summaryTimeout / pollInterval; // 50 attempts
+
+        let summaryAppeared = false;
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          const sourceGuideContainer = sourceViewer.querySelector('.source-guide-container');
+          if (sourceGuideContainer) {
+            const summaryElement = sourceGuideContainer.querySelector('.summary');
+
+            // Check if summary exists AND has actual content (not empty/whitespace)
+            if (summaryElement && summaryElement.textContent.trim().length > 0) {
+              console.log(`[NotebookLM Takeout] Summary content appeared after ${attempt * pollInterval}ms`);
+              summaryAppeared = true;
+              break;
+            }
+          }
+
+          await new Promise(resolve => setTimeout(resolve, pollInterval));
+        }
+
+        if (!summaryAppeared) {
+          console.warn(`[NotebookLM Takeout] Summary content did not appear after ${summaryTimeout}ms - proceeding anyway`);
+        }
+
       } catch (e) {
         console.log(`[NotebookLM Takeout] source-guide-container not found (optional, continuing anyway)`);
       }
@@ -1384,6 +1411,8 @@
           if (summaryElement) {
             sourceGuideMarkdown = htmlToMarkdown(summaryElement);
             console.log(`[NotebookLM Takeout] Extracted source guide summary (${sourceGuideMarkdown.length} chars)`);
+          } else {
+            console.log(`[NotebookLM Takeout] No summary element found in container`);
           }
 
           // Extract key topics (preserve text)
@@ -2441,33 +2470,12 @@
       console.log(`  - innerHTML preview: ${tableViewer.innerHTML.substring(0, 300)}...`);
 
       // Extract content from within table-viewer
-      // Try multiple selectors for the actual table
-      let contentElement = null;
-      const contentSelectors = [
-        'table',
-        '.table-container table',
-        '[role="table"]',
-        '.data-table',
-        '.table-container',
-        '[class*="table"]'
-      ];
+      // IMPORTANT: Use entire table-viewer innerHTML to capture both table AND footnotes
+      // Footnotes appear as sibling elements AFTER the </table> tag, not inside it
+      console.log('[NotebookLM Takeout] Extracting entire table-viewer innerHTML (includes table + footnotes)');
 
-      for (const selector of contentSelectors) {
-        contentElement = tableViewer.querySelector(selector);
-        if (contentElement) {
-          console.log(`[NotebookLM Takeout] Found table with selector: ${selector}`);
-          break;
-        }
-      }
-
-      if (!contentElement) {
-        // Fallback: use entire table-viewer innerHTML
-        console.log('[NotebookLM Takeout] No specific table element found, using table-viewer innerHTML');
-        contentElement = tableViewer;
-      }
-
-      // Extract HTML content
-      const htmlContent = contentElement.innerHTML;
+      // Extract HTML content from entire table-viewer
+      const htmlContent = tableViewer.innerHTML;
       console.log(`[NotebookLM Takeout] Extracted ${htmlContent.length} chars of HTML from table-viewer`);
       console.log(`[NotebookLM Takeout] HTML preview: ${htmlContent.substring(0, 500)}...`);
 
@@ -3205,8 +3213,10 @@
     for (const el of elements) {
       // Check for date separator
       if (el.classList.contains('date-separator')) {
-        currentDate = el.textContent.trim();
-        console.log('[NotebookLM Takeout] Found date:', currentDate);
+        const rawDate = el.textContent.trim();
+        // Normalize relative dates like "Today • 11:28 AM" to actual dates
+        currentDate = normalizeChatDate(rawDate);
+        console.log('[NotebookLM Takeout] Found date:', rawDate, '→', currentDate);
         continue;
       }
 
@@ -3235,6 +3245,60 @@
       dateRange: dateRange,
       extractedAt: new Date().toISOString()
     };
+  }
+
+  /**
+   * Normalize chat date strings from relative dates to absolute dates
+   * Converts "Today • 11:28 AM" → "2026-03-01 • 11:28 AM" (actual date + time)
+   * Converts "Yesterday • 2:30 PM" → "2026-02-28 • 2:30 PM" (actual date + time)
+   */
+  function normalizeChatDate(rawDate) {
+    if (!rawDate) return null;
+
+    const now = new Date();
+
+    // Split into date part and time part (separated by bullet •)
+    const parts = rawDate.split('•');
+    const datePart = parts[0].trim();
+    const timePart = parts.length > 1 ? '• ' + parts[1].trim() : '';
+
+    // Check for "Today"
+    if (datePart.toLowerCase() === 'today') {
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day} ${timePart}`.trim();
+    }
+
+    // Check for "Yesterday"
+    if (datePart.toLowerCase() === 'yesterday') {
+      const yesterday = new Date(now);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const year = yesterday.getFullYear();
+      const month = String(yesterday.getMonth() + 1).padStart(2, '0');
+      const day = String(yesterday.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day} ${timePart}`.trim();
+    }
+
+    // For other dates (e.g., "March 1 • 3:00 PM"), try to parse and format
+    try {
+      // Try parsing as a date (will handle formats like "March 1", "Mar 1", etc.)
+      const parsed = new Date(datePart + ', ' + now.getFullYear());
+
+      // Check if parsing was successful
+      if (!isNaN(parsed.getTime())) {
+        const year = parsed.getFullYear();
+        const month = String(parsed.getMonth() + 1).padStart(2, '0');
+        const day = String(parsed.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day} ${timePart}`.trim();
+      }
+    } catch (e) {
+      // If parsing fails, just return the original
+      console.warn('[NotebookLM Takeout] Could not parse date:', rawDate);
+    }
+
+    // Fallback: return original if we can't parse it
+    return rawDate;
   }
 
   /**

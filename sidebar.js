@@ -296,33 +296,81 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
       if (artifactType === 'Data Table') {
         logger.info('Download', `Downloading extracted content as CSV: "${filename}"`);
 
-        // Convert HTML table to CSV
+        // Convert HTML table to CSV and JSON
         let csvContent;
+        let tableData = null;
+        let footnotes = '';
         if (response.format === 'html') {
           logger.info('Download', `Converting HTML table to CSV for: "${filename}"`);
           csvContent = convertTableToCSV(response.data);
+
+          // Extract structured table data for JSON
+          tableData = extractTableDataAsJSON(response.data);
+
+          // Extract footnotes from HTML
+          footnotes = extractFootnotesFromHTML(response.data);
         } else {
           csvContent = response.data;
         }
 
-        // Create CSV blob and download
-        const blob = new Blob([csvContent], { type: 'text/csv' });
-        const url = URL.createObjectURL(blob);
-        try {
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = sanitizeFilename(filename) + '.csv';
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
+        // If there are footnotes or structured data, create a ZIP with CSV, JSON, and references
+        if ((footnotes && footnotes.trim().length > 0) || tableData) {
+          logger.info('Download', `Creating ZIP with CSV, JSON, and references for: "${filename}"`);
 
-          // Cancel intercept mode (wasn't needed)
-          chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
+          const zip = new JSZip();
+          zip.file(sanitizeFilename(filename) + '.csv', csvContent);
 
-          logger.download(filename, 'success', `Downloaded as CSV (${csvContent.length} chars)`);
-        } finally {
-          URL.revokeObjectURL(url);
+          // Add JSON version with table data and footnotes
+          if (tableData) {
+            const jsonData = {
+              title: filename,
+              exported: new Date().toISOString(),
+              table: tableData,
+              footnotes: footnotes ? footnotes.split('\n\n').filter(line => /^\[\d+\]/.test(line.trim())) : []
+            };
+            zip.file(sanitizeFilename(filename) + '.json', JSON.stringify(jsonData, null, 2));
+          }
+
+          // Add references text file
+          if (footnotes && footnotes.trim().length > 0) {
+            zip.file('references.txt', footnotes);
+          }
+
+          zip.generateAsync({ type: 'blob' }).then(zipBlob => {
+            const url = URL.createObjectURL(zipBlob);
+            try {
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = sanitizeFilename(filename) + '.zip';
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+
+              logger.download(filename, 'success', `Downloaded as ZIP with CSV, JSON, and references`);
+            } finally {
+              URL.revokeObjectURL(url);
+            }
+          });
+        } else {
+          // No footnotes or structured data - just download CSV
+          const blob = new Blob([csvContent], { type: 'text/csv' });
+          const url = URL.createObjectURL(blob);
+          try {
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = sanitizeFilename(filename) + '.csv';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            logger.download(filename, 'success', `Downloaded as CSV (${csvContent.length} chars)`);
+          } finally {
+            URL.revokeObjectURL(url);
+          }
         }
+
+        // Cancel intercept mode (wasn't needed)
+        chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
       } else {
         // For Reports and other content, convert to markdown
         logger.info('Download', `Downloading extracted content as markdown: "${filename}"`);
@@ -957,6 +1005,164 @@ function convertTableToCSV(htmlContent) {
   return rows.join('\n');
 }
 
+/**
+ * Extract footnotes from HTML table artifacts
+ * Looks for elements after the table with pattern [1] Text, [2] Text, etc.
+ */
+function extractFootnotesFromHTML(htmlContent) {
+  logger.info('Footnotes', `Extracting footnotes from HTML (${htmlContent.length} chars)`);
+  logger.info('Footnotes', `HTML preview: ${htmlContent.substring(0, 500)}...`);
+
+  // Parse HTML content
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(htmlContent, 'text/html');
+
+  // Look for specific elements that typically contain footnotes
+  // Target span, p, div elements (most likely to contain footnote text)
+  const candidateElements = doc.querySelectorAll('span, p, div, .paragraph');
+  logger.info('Footnotes', `Found ${candidateElements.length} candidate elements (span/p/div)`);
+
+  const footnotes = [];
+  const seenTexts = new Set(); // Track unique footnote texts
+
+  candidateElements.forEach((el) => {
+    const text = el.textContent.trim();
+
+    // Only process if starts with [number]
+    if (/^\[\d+\]/.test(text)) {
+      // Skip if this is ONLY a number like "[1]" without any actual content
+      // Valid footnotes should match: [number] followed by space and text
+      // E.g., "[1] Some text here" NOT just "[1]"
+      if (/^\[\d+\]\s*$/.test(text)) {
+        logger.info('Footnotes', `Skipping bare citation marker: ${text}`);
+        return;
+      }
+
+      // Skip if this is a parent container of another footnote element
+      // (Check if any child also starts with [number])
+      const childrenTexts = Array.from(el.children).map(child => child.textContent.trim());
+      const hasFootnoteChild = childrenTexts.some(childText => /^\[\d+\]/.test(childText));
+
+      if (hasFootnoteChild) {
+        // This is a parent container, skip it (we'll get the child directly)
+        logger.info('Footnotes', `Skipping parent container element`);
+        return;
+      }
+
+      // Check if we've already seen this exact text (avoid duplicates from nested elements)
+      if (seenTexts.has(text)) {
+        return;
+      }
+
+      // Valid footnote - extract it
+      footnotes.push(text);
+      seenTexts.add(text);
+      logger.info('Footnotes', `Found footnote #${footnotes.length}: ${text.substring(0, 100)}...`);
+    }
+  });
+
+  logger.info('Footnotes', `Extracted ${footnotes.length} unique footnotes`);
+
+  if (footnotes.length === 0) {
+    logger.warn('Footnotes', 'No footnotes found in HTML');
+    return '';
+  }
+
+  // Format footnotes as plain text
+  let output = 'REFERENCES\n';
+  output += '='.repeat(50) + '\n\n';
+  footnotes.forEach(footnote => {
+    output += footnote + '\n\n';
+  });
+
+  return output;
+}
+
+/**
+ * Extract table data as structured JSON
+ * Returns an object with headers and rows arrays
+ */
+function extractTableDataAsJSON(htmlContent) {
+  logger.info('JSON', `Extracting table data as JSON (${htmlContent.length} chars)`);
+
+  try {
+    // Parse HTML content
+    const parser = new DOMParser();
+    let htmlToParse = htmlContent;
+
+    // If HTML starts with <tr>, wrap in table tags
+    if (htmlContent.trim().startsWith('<tr')) {
+      htmlToParse = `<table>${htmlContent}</table>`;
+    }
+
+    const doc = parser.parseFromString(htmlToParse, 'text/html');
+
+    // Try multiple selectors to find the table
+    const tableSelectors = ['table', '[role="table"]', '.table'];
+    let table = null;
+    for (const selector of tableSelectors) {
+      table = doc.querySelector(selector);
+      if (table) {
+        logger.info('JSON', `Found table using selector: ${selector}`);
+        break;
+      }
+    }
+
+    if (!table) {
+      logger.warn('JSON', 'No table element found');
+      return null;
+    }
+
+    // Get all rows
+    let allRows = table.querySelectorAll('tr');
+    if (allRows.length === 0) {
+      allRows = table.querySelectorAll('[role="row"]');
+    }
+
+    logger.info('JSON', `Found ${allRows.length} rows`);
+
+    if (allRows.length === 0) {
+      return null;
+    }
+
+    const headers = [];
+    const rows = [];
+
+    allRows.forEach((row, rowIndex) => {
+      // Get cells for this row
+      let cellElements = row.querySelectorAll('th, td');
+      if (cellElements.length === 0) {
+        cellElements = row.querySelectorAll('[role="cell"], [role="columnheader"]');
+      }
+
+      const cells = Array.from(cellElements).map(cell => cell.textContent.trim());
+
+      // First row is typically headers
+      if (rowIndex === 0) {
+        headers.push(...cells);
+      } else {
+        // Create row object with header keys
+        const rowObj = {};
+        cells.forEach((cell, cellIndex) => {
+          const header = headers[cellIndex] || `Column ${cellIndex + 1}`;
+          rowObj[header] = cell;
+        });
+        rows.push(rowObj);
+      }
+    });
+
+    logger.info('JSON', `Extracted ${headers.length} headers and ${rows.length} data rows`);
+
+    return {
+      headers: headers,
+      rows: rows
+    };
+  } catch (error) {
+    logger.error('JSON', `Error extracting table data: ${error.message}`);
+    return null;
+  }
+}
+
 // ==================== MARKDOWN CONVERSION ====================
 
 function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock = true, skipTitleIfPresent = false, noteId = null) {
@@ -1137,7 +1343,11 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
 
   // Check if content already starts with the title as H1
   let markdown = '';
-  if (skipTitleIfPresent) {
+  // Skip title if empty string (used when title is added externally)
+  if (!noteTitle || noteTitle.trim() === '') {
+    logger.info('Markdown', `  - Skipping title (empty/not provided)`);
+    markdown = bodyMarkdown;
+  } else if (skipTitleIfPresent) {
     const titlePattern = new RegExp(`^#\\s+${noteTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\n`, 'i');
     if (titlePattern.test(bodyMarkdown)) {
       // Content already has title - don't add duplicate
@@ -1939,7 +2149,8 @@ async function exportSources(selectedSources) {
 
         // Add the main content
         markdown += `## Content\n\n`;
-        markdown += convertToMarkdown(sourceData.html, sourceData.sources || [], source.title, settings.citationsCodeBlock);
+        // Pass empty string as title since we already added it manually at the top
+        markdown += convertToMarkdown(sourceData.html, sourceData.sources || [], '', settings.citationsCodeBlock);
 
         // Embed any googleusercontent images as base64
         try {
@@ -2908,6 +3119,37 @@ function addChatTurndownRules(turndownService, citationsCodeBlock, getCurrentMes
       });
 
       markdown += '\n';
+
+      // Try to capture footnotes that follow the table
+      // Look for sibling elements after the table that contain footnote references
+      let currentElement = node.parentElement;
+      while (currentElement && currentElement.nodeName.toLowerCase() !== 'element-list-renderer') {
+        currentElement = currentElement.parentElement;
+      }
+
+      if (currentElement) {
+        // Find all structural elements that might contain footnotes
+        const structuralElements = currentElement.querySelectorAll('labs-tailwind-structural-element-view-v2');
+        const footnotes = [];
+
+        // Look for elements with footnote pattern [number] at start
+        structuralElements.forEach(el => {
+          const text = el.textContent.trim();
+          // Match footnotes like "[1] Some text" or "[86] Some text"
+          if (/^\[\d+\]/.test(text)) {
+            footnotes.push(text);
+          }
+        });
+
+        // Add footnotes if found
+        if (footnotes.length > 0) {
+          markdown += '\n**References:**\n\n';
+          footnotes.forEach(footnote => {
+            markdown += footnote + '\n\n';
+          });
+        }
+      }
+
       return markdown;
     }
   });
