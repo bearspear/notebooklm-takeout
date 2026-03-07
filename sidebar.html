@@ -190,6 +190,27 @@
         <p class="setting-help">When checked, citations are wrapped in ```markdown code blocks. When unchecked, markdown is rendered directly.</p>
       </div>
       <div class="setting-group">
+        <label>
+          <input type="checkbox" id="include-citation-images-checkbox">
+          <span>Include images in citations as base64</span>
+        </label>
+        <p class="setting-help">When checked, images within citation tooltips are embedded as base64 data URLs in exported footnotes.</p>
+      </div>
+      <div class="setting-group">
+        <label>
+          <input type="checkbox" id="include-source-summary-checkbox" checked>
+          <span>Include source guide summary in exports</span>
+        </label>
+        <p class="setting-help">When checked, AI-generated source summaries are included in source exports.</p>
+      </div>
+      <div class="setting-group">
+        <label>
+          <input type="checkbox" id="include-source-keywords-checkbox" checked>
+          <span>Include key topics in source exports</span>
+        </label>
+        <p class="setting-help">When checked, key topics extracted from sources are included in exports.</p>
+      </div>
+      <div class="setting-group">
         <label>Auto-refresh interval (seconds)</label>
         <input type="number" id="refresh-interval-input" min="5" max="60" value="10" class="number-input">
       </div>

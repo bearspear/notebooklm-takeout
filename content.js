@@ -67,6 +67,7 @@
 
   let exportOverlay = null;
   let exportCancelled = false;
+  let includeCitationImages = false; // Global setting for including images in citations
 
   function createExportOverlay() {
     if (exportOverlay) return exportOverlay;
@@ -236,7 +237,7 @@
       return true; // Keep channel open for async
     } else if (message.type === 'EXTRACT_NOTE') {
       // Extract note content
-      extractNoteContent(message.data.noteIndex, message.data.noteTitle)
+      extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages)
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ error: error.message || 'Extraction failed' }));
       return true; // Keep channel open for async
@@ -1073,8 +1074,12 @@
   }
 
   // Extract note content
-  async function extractNoteContent(noteIndex, noteTitle) {
+  async function extractNoteContent(noteIndex, noteTitle, includeImages = false) {
     console.log('[NotebookLM Takeout] Extracting note:', noteTitle, 'at index:', noteIndex);
+    console.log('[NotebookLM Takeout] Include citation images:', includeImages);
+
+    // Set global setting for citation extraction
+    includeCitationImages = includeImages;
 
     try {
       // First, verify no note viewer is open from a previous extraction
@@ -1397,6 +1402,22 @@
 
       console.log(`[NotebookLM Takeout] Extracted ${htmlContent.length} chars of HTML content`);
 
+      // Check for YouTube iframe
+      let youtubeUrl = null;
+      const youtubeIframe = sourceViewer.querySelector('.youtube-container iframe');
+      if (youtubeIframe) {
+        const src = youtubeIframe.getAttribute('src');
+        if (src) {
+          // Extract video ID from embed URL (e.g., https://www.youtube-nocookie.com/embed/VIDEO_ID)
+          const videoIdMatch = src.match(/\/embed\/([^?]+)/);
+          if (videoIdMatch) {
+            const videoId = videoIdMatch[1];
+            youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
+            console.log(`[NotebookLM Takeout] Found YouTube video: ${youtubeUrl}`);
+          }
+        }
+      }
+
       // Extract source guide information (summary and key topics)
       let sourceGuideMarkdown = '';
       let keyTopics = [];
@@ -1437,7 +1458,8 @@
         sources: [],
         title: sourceTitle,
         guideMarkdown: sourceGuideMarkdown,
-        keyTopics: keyTopics
+        keyTopics: keyTopics,
+        youtubeUrl: youtubeUrl
       };
 
     } catch (error) {
@@ -1447,11 +1469,88 @@
     }
   }
 
+  /**
+   * Convert image URL to base64 data URL
+   * @param {string} url - Image URL to convert
+   * @returns {Promise<string>} Base64 data URL or original URL if conversion fails
+   */
+  async function imageToBase64(url) {
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    } catch (error) {
+      console.warn('[NotebookLM Takeout] Failed to convert image to base64:', url, error);
+      return url; // Return original URL if conversion fails
+    }
+  }
+
+  /**
+   * Convert HTML element to markdown with optional base64 image embedding
+   * @param {Element} element - HTML element to convert
+   * @param {boolean} includeImages - Whether to embed images as base64
+   * @returns {Promise<string>} Markdown string
+   */
+  async function htmlToMarkdownWithImages(element, includeImages = false) {
+    if (!element) return '';
+
+    // If images should be included, find and convert them to base64
+    if (includeImages) {
+      const images = element.querySelectorAll('img');
+      if (images.length > 0) {
+        console.log(`[NotebookLM Takeout] Found ${images.length} images in citation, converting to base64...`);
+
+        // Convert all images to base64
+        const conversions = [];
+        images.forEach(img => {
+          const originalSrc = img.src;
+          const conversion = imageToBase64(originalSrc).then(base64 => {
+            img.setAttribute('src', base64);
+            img.setAttribute('data-original-src', originalSrc);
+          });
+          conversions.push(conversion);
+        });
+
+        await Promise.all(conversions);
+        console.log(`[NotebookLM Takeout] Converted ${images.length} images to base64`);
+      }
+    }
+
+    // Now convert to markdown
+    return htmlToMarkdown(element);
+  }
+
   // Convert HTML element to markdown (preserves formatting)
   function htmlToMarkdown(element) {
     if (!element) return '';
 
     let markdown = '';
+
+    // Helper function to process table cells with proper escaping
+    const processTableCell = (cell, context) => {
+      let text = processNode(cell, context).trim();
+
+      // Escape pipe characters (Markdown table delimiter)
+      text = text.replace(/\|/g, '\\|');
+
+      // Replace newlines with spaces (tables must be single-line)
+      text = text.replace(/\n+/g, ' ');
+
+      // Warn about colspan/rowspan if present (cannot be represented in Markdown)
+      const colspan = parseInt(cell.getAttribute('colspan') || '1');
+      const rowspan = parseInt(cell.getAttribute('rowspan') || '1');
+      if (colspan > 1 || rowspan > 1) {
+        console.warn('[NotebookLM Takeout] Table cell spans multiple columns/rows - this cannot be represented in Markdown');
+      }
+
+      return text;
+    };
 
     // Helper function to process table elements
     const processTable = (tableNode, context) => {
@@ -1466,7 +1565,7 @@
         const headerRows = thead.querySelectorAll('tr');
         headerRows.forEach((tr, idx) => {
           const cells = Array.from(tr.querySelectorAll('th, td'));
-          const cellContents = cells.map(cell => processNode(cell, context).trim());
+          const cellContents = cells.map(cell => processTableCell(cell, context));
           rows.push(cellContents);
           if (idx === 0) isFirstRowHeader = true;
         });
@@ -1476,7 +1575,7 @@
         const bodyRows = tbody.querySelectorAll('tr');
         bodyRows.forEach(tr => {
           const cells = Array.from(tr.querySelectorAll('td, th'));
-          const cellContents = cells.map(cell => processNode(cell, context).trim());
+          const cellContents = cells.map(cell => processTableCell(cell, context));
           rows.push(cellContents);
         });
       }
@@ -1486,7 +1585,7 @@
         const allRows = tableNode.querySelectorAll('tr');
         allRows.forEach((tr, idx) => {
           const cells = Array.from(tr.querySelectorAll('th, td'));
-          const cellContents = cells.map(cell => processNode(cell, context).trim());
+          const cellContents = cells.map(cell => processTableCell(cell, context));
 
           // Check if first row has <th> elements
           if (idx === 0 && tr.querySelector('th')) {
@@ -1527,12 +1626,25 @@
     // Helper function to process list elements
     const processList = (listNode, context) => {
       const isOrdered = listNode.tagName.toLowerCase() === 'ol';
-      const items = Array.from(listNode.children).filter(child => child.tagName.toLowerCase() === 'li');
+      // Find all <li> elements, but filter out those that belong to nested lists
+      // (handles Angular wrapper components like <labs-tailwind-structural-element-view-v2>)
+      const allLis = Array.from(listNode.querySelectorAll('li'));
+      const items = allLis.filter(li => {
+        // Check if this <li> has a list ancestor between it and listNode
+        let parent = li.parentElement;
+        while (parent && parent !== listNode) {
+          if (parent.tagName && (parent.tagName.toLowerCase() === 'ul' || parent.tagName.toLowerCase() === 'ol')) {
+            return false; // This <li> belongs to a nested list
+          }
+          parent = parent.parentElement;
+        }
+        return true; // This <li> belongs directly to this list
+      });
       let listMarkdown = '\n';
 
       items.forEach((li, idx) => {
         const indent = '  '.repeat(context.listDepth);
-        const marker = isOrdered ? `${idx + 1}.` : '-';
+        const marker = isOrdered ? `${idx + 1}.` : '*';
 
         // Process the list item content
         const itemContext = { ...context, listDepth: context.listDepth + 1 };
@@ -1902,16 +2014,16 @@
 
           if (textElements.length > 0) {
             // Strategy 1: Convert each structural element to markdown
-            textElements.forEach(el => {
-              const markdown = htmlToMarkdown(el);
+            for (const el of textElements) {
+              const markdown = await htmlToMarkdownWithImages(el, includeCitationImages);
               if (markdown && markdown.length > 0) {
                 highlightedText += markdown + '\n\n';
               }
-            });
+            }
           } else {
             // Strategy 2: Try converting the whole tooltipText element
             console.log('  - using full tooltip text content');
-            highlightedText = htmlToMarkdown(tooltipText);
+            highlightedText = await htmlToMarkdownWithImages(tooltipText, includeCitationImages);
           }
         } else {
           // No .citation-tooltip-text found, try to extract from entire tooltip

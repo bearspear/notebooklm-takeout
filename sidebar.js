@@ -23,7 +23,10 @@ let settings = {
   autoZip: false,
   showNotifications: true,
   refreshInterval: 10,
-  citationsCodeBlock: false // Don't wrap citations in code blocks by default
+  citationsCodeBlock: false, // Don't wrap citations in code blocks by default
+  includeCitationImages: false, // Include images in citations as base64
+  includeSourceSummary: true, // Include source guide summary in exports
+  includeSourceKeywords: true // Include key topics in source exports
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -53,6 +56,9 @@ async function loadSettings() {
   document.getElementById('show-notifications-checkbox').checked = settings.showNotifications;
   document.getElementById('refresh-interval-input').value = settings.refreshInterval;
   document.getElementById('citations-code-block-checkbox').checked = settings.citationsCodeBlock;
+  document.getElementById('include-citation-images-checkbox').checked = settings.includeCitationImages;
+  document.getElementById('include-source-summary-checkbox').checked = settings.includeSourceSummary;
+  document.getElementById('include-source-keywords-checkbox').checked = settings.includeSourceKeywords;
 }
 
 async function saveSettings() {
@@ -60,6 +66,9 @@ async function saveSettings() {
   settings.showNotifications = document.getElementById('show-notifications-checkbox').checked;
   settings.refreshInterval = parseInt(document.getElementById('refresh-interval-input').value) || 10;
   settings.citationsCodeBlock = document.getElementById('citations-code-block-checkbox').checked;
+  settings.includeCitationImages = document.getElementById('include-citation-images-checkbox').checked;
+  settings.includeSourceSummary = document.getElementById('include-source-summary-checkbox').checked;
+  settings.includeSourceKeywords = document.getElementById('include-source-keywords-checkbox').checked;
 
   await chrome.storage.local.set({ settings });
 }
@@ -1597,7 +1606,8 @@ async function exportNotesAsMarkdown(selectedNotes) {
           type: 'EXTRACT_NOTE',
           data: {
             noteIndex: note.index,
-            noteTitle: note.title
+            noteTitle: note.title,
+            includeCitationImages: settings.includeCitationImages
           }
         });
 
@@ -2115,36 +2125,46 @@ async function exportSources(selectedSources) {
         // Build markdown with source guide info
         let markdown = `# ${source.title}\n\n`;
 
-        // Add source guide summary if available (already converted to markdown)
-        if (sourceData.guideMarkdown && sourceData.guideMarkdown.trim().length > 0) {
-          markdown += `## Summary\n\n${sourceData.guideMarkdown}\n\n`;
-        } else {
-          // Track missing summary
-          stats.missingSummaries++;
-          allErrors.push({
-            source: source.title,
-            type: 'missing_summary',
-            message: 'Source guide/summary not found or empty'
-          });
-          console.warn(`[NotebookLM Takeout] "${source.title}": Summary/guide is missing`);
+        // Add YouTube URL if this is a YouTube source
+        if (sourceData.youtubeUrl) {
+          markdown += `**YouTube Video:** ${sourceData.youtubeUrl}\n\n`;
+          console.log(`[NotebookLM Takeout] Added YouTube URL to export: ${sourceData.youtubeUrl}`);
         }
 
-        // Add key topics if available
-        if (sourceData.keyTopics && sourceData.keyTopics.length > 0) {
-          markdown += `## Key Topics\n\n`;
-          sourceData.keyTopics.forEach(topic => {
-            markdown += `- ${topic}\n`;
-          });
-          markdown += `\n`;
-        } else {
-          // Track missing key topics
-          stats.missingKeyTopics++;
-          allErrors.push({
-            source: source.title,
-            type: 'missing_key_topics',
-            message: 'Key topics not found or empty'
-          });
-          console.warn(`[NotebookLM Takeout] "${source.title}": Key topics are missing`);
+        // Add source guide summary if enabled in settings and available
+        if (settings.includeSourceSummary) {
+          if (sourceData.guideMarkdown && sourceData.guideMarkdown.trim().length > 0) {
+            markdown += `## Summary\n\n${sourceData.guideMarkdown}\n\n`;
+          } else {
+            // Track missing summary
+            stats.missingSummaries++;
+            allErrors.push({
+              source: source.title,
+              type: 'missing_summary',
+              message: 'Source guide/summary not found or empty'
+            });
+            console.warn(`[NotebookLM Takeout] "${source.title}": Summary/guide is missing`);
+          }
+        }
+
+        // Add key topics if enabled in settings and available
+        if (settings.includeSourceKeywords) {
+          if (sourceData.keyTopics && sourceData.keyTopics.length > 0) {
+            markdown += `## Key Topics\n\n`;
+            sourceData.keyTopics.forEach(topic => {
+              markdown += `- ${topic}\n`;
+            });
+            markdown += `\n`;
+          } else {
+            // Track missing key topics
+            stats.missingKeyTopics++;
+            allErrors.push({
+              source: source.title,
+              type: 'missing_key_topics',
+              message: 'Key topics not found or empty'
+            });
+            console.warn(`[NotebookLM Takeout] "${source.title}": Key topics are missing`);
+          }
         }
 
         // Add the main content
@@ -2281,8 +2301,12 @@ async function exportSources(selectedSources) {
       readmeContent += '\n---\n\n';
       readmeContent += '## Source Contents\n\n';
       readmeContent += 'Each source file includes:\n';
-      readmeContent += '- **Summary** - AI-generated source guide (if available)\n';
-      readmeContent += '- **Key Topics** - Important themes (if available)\n';
+      if (settings.includeSourceSummary) {
+        readmeContent += '- **Summary** - AI-generated source guide (if available)\n';
+      }
+      if (settings.includeSourceKeywords) {
+        readmeContent += '- **Key Topics** - Important themes (if available)\n';
+      }
       readmeContent += '- **Content** - Full document content with citations\n';
       readmeContent += '\n';
 
@@ -2299,8 +2323,12 @@ async function exportSources(selectedSources) {
         errorsContent += `- **Total Sources Selected:** ${stats.totalSources}\n`;
         errorsContent += `- **Successfully Extracted:** ${stats.successfulExtractions}\n`;
         errorsContent += `- **Failed Extractions:** ${stats.failedExtractions}\n`;
-        errorsContent += `- **Missing Summaries:** ${stats.missingSummaries}\n`;
-        errorsContent += `- **Missing Key Topics:** ${stats.missingKeyTopics}\n`;
+        if (settings.includeSourceSummary) {
+          errorsContent += `- **Missing Summaries:** ${stats.missingSummaries}\n`;
+        }
+        if (settings.includeSourceKeywords) {
+          errorsContent += `- **Missing Key Topics:** ${stats.missingKeyTopics}\n`;
+        }
         if (stats.imagesFound > 0) {
           errorsContent += `- **Images Found:** ${stats.imagesFound}\n`;
           errorsContent += `- **Images Embedded:** ${stats.imagesEmbedded}\n`;
@@ -2341,7 +2369,7 @@ async function exportSources(selectedSources) {
           errorsContent += `\n`;
         }
 
-        if (errorsByType.missing_summary) {
+        if (settings.includeSourceSummary && errorsByType.missing_summary) {
           errorsContent += '### MISSING SUMMARIES\n\n';
           errorsContent += 'The following sources were exported but their source guide/summary was not found:\n\n';
           errorsByType.missing_summary.forEach((err, idx) => {
@@ -2350,7 +2378,7 @@ async function exportSources(selectedSources) {
           errorsContent += `\n`;
         }
 
-        if (errorsByType.missing_key_topics) {
+        if (settings.includeSourceKeywords && errorsByType.missing_key_topics) {
           errorsContent += '### MISSING KEY TOPICS\n\n';
           errorsContent += 'The following sources were exported but their key topics were not found:\n\n';
           errorsByType.missing_key_topics.forEach((err, idx) => {
@@ -2382,10 +2410,10 @@ async function exportSources(selectedSources) {
         if (stats.failedExtractions > 0) {
           errorsContent += '- Some sources failed to extract completely. Try exporting them individually.\n';
         }
-        if (stats.missingSummaries > 0) {
+        if (settings.includeSourceSummary && stats.missingSummaries > 0) {
           errorsContent += '- Some sources are missing summaries. This may happen if NotebookLM hasn\'t generated the source guide yet.\n';
         }
-        if (stats.missingKeyTopics > 0) {
+        if (settings.includeSourceKeywords && stats.missingKeyTopics > 0) {
           errorsContent += '- Some sources are missing key topics. This is usually included in the source guide.\n';
         }
         if (errorsByType.image_download_failed || errorsByType.image_embedding_error) {
