@@ -1073,6 +1073,40 @@
     return new Promise(resolve => setTimeout(resolve, ms));
   }
 
+  /**
+   * Retry an async operation with exponential backoff
+   * @param {Function} operation - Async function to retry
+   * @param {number} maxRetries - Maximum number of retry attempts (default: 3)
+   * @param {number} baseDelay - Base delay in ms for exponential backoff (default: 1000)
+   * @param {string} operationName - Name for logging purposes
+   * @returns {Promise<any>} Result of the operation
+   */
+  async function retryOperation(operation, maxRetries = 3, baseDelay = 1000, operationName = 'operation') {
+    let lastError;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`[NotebookLM Takeout] ${operationName}: Attempt ${attempt}/${maxRetries}`);
+        return await operation();
+      } catch (error) {
+        lastError = error;
+        console.warn(`[NotebookLM Takeout] ${operationName}: Attempt ${attempt} failed:`, error.message);
+
+        // Don't retry on the last attempt
+        if (attempt < maxRetries) {
+          // Exponential backoff: 1s, 2s, 4s, etc.
+          const delay = baseDelay * Math.pow(2, attempt - 1);
+          console.log(`[NotebookLM Takeout] ${operationName}: Retrying in ${delay}ms...`);
+          await sleep(delay);
+        }
+      }
+    }
+
+    // All retries failed
+    console.error(`[NotebookLM Takeout] ${operationName}: All ${maxRetries} attempts failed`);
+    throw lastError;
+  }
+
   // Extract note content
   async function extractNoteContent(noteIndex, noteTitle, includeImages = false) {
     console.log('[NotebookLM Takeout] Extracting note:', noteTitle, 'at index:', noteIndex);
@@ -1402,6 +1436,12 @@
 
       console.log(`[NotebookLM Takeout] Extracted ${htmlContent.length} chars of HTML content`);
 
+      // Warn about very large content (>5MB) that may cause performance issues
+      const contentSizeMB = htmlContent.length / (1024 * 1024);
+      if (contentSizeMB > 5) {
+        console.warn(`[NotebookLM Takeout] Large source detected: ${contentSizeMB.toFixed(1)}MB - conversion may be slow`);
+      }
+
       // Check for YouTube iframe
       let youtubeUrl = null;
       const youtubeIframe = sourceViewer.querySelector('.youtube-container iframe');
@@ -1409,10 +1449,29 @@
         const src = youtubeIframe.getAttribute('src');
         if (src) {
           // Extract video ID from embed URL (e.g., https://www.youtube-nocookie.com/embed/VIDEO_ID)
-          const videoIdMatch = src.match(/\/embed\/([^?]+)/);
+          let videoIdMatch = src.match(/\/embed\/([^?&]+)/);
+
+          // Also try shorts pattern (e.g., /shorts/VIDEO_ID)
+          if (!videoIdMatch) {
+            videoIdMatch = src.match(/\/shorts\/([^?&]+)/);
+          }
+
           if (videoIdMatch) {
             const videoId = videoIdMatch[1];
             youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
+
+            // Preserve playlist parameter if present
+            const playlistMatch = src.match(/[?&]list=([^&]+)/);
+            if (playlistMatch) {
+              youtubeUrl += `&list=${playlistMatch[1]}`;
+            }
+
+            // Preserve timestamp parameters (t= or start=)
+            const timestampMatch = src.match(/[?&](?:t|start)=([^&]+)/);
+            if (timestampMatch) {
+              youtubeUrl += `&t=${timestampMatch[1]}`;
+            }
+
             console.log(`[NotebookLM Takeout] Found YouTube video: ${youtubeUrl}`);
           }
         }
@@ -1478,6 +1537,18 @@
     try {
       const response = await fetch(url);
       const blob = await response.blob();
+
+      // Warn about large images (>2MB) that may cause issues
+      const sizeMB = blob.size / (1024 * 1024);
+      if (sizeMB > 2) {
+        console.warn(`[NotebookLM Takeout] Large image: ${sizeMB.toFixed(1)}MB - ${url}`);
+      }
+
+      // Reject images larger than 5MB to prevent memory issues
+      if (sizeMB > 5) {
+        console.warn(`[NotebookLM Takeout] Image too large (${sizeMB.toFixed(1)}MB), using original URL: ${url}`);
+        return url;
+      }
 
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -3399,6 +3470,13 @@
 
       // Check if parsing was successful
       if (!isNaN(parsed.getTime())) {
+        // If the parsed date is in the future (more than 1 day ahead), it's probably from last year
+        // This handles year boundaries: e.g., if today is Jan 5, 2026 and message says "Dec 28",
+        // it means Dec 28, 2025, not Dec 28, 2026
+        if (parsed > now && (parsed - now) > 86400000) { // 86400000ms = 1 day
+          parsed.setFullYear(parsed.getFullYear() - 1);
+        }
+
         const year = parsed.getFullYear();
         const month = String(parsed.getMonth() + 1).padStart(2, '0');
         const day = String(parsed.getDate()).padStart(2, '0');
@@ -3517,7 +3595,7 @@
             cancelable: true
           }));
 
-          await sleep(200);
+          await sleep(500);  // Increased from 200ms for slower networks
 
           // Wait for tooltip
           const tooltip = await raceWithCleanup([
@@ -3565,15 +3643,15 @@
             // Try to process structural elements first
             const textElements = textEl.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
             if (textElements.length > 0) {
-              textElements.forEach(element => {
-                const markdown = htmlToMarkdown(element);
+              for (const element of textElements) {
+                const markdown = await htmlToMarkdownWithImages(element, includeCitationImages);
                 if (markdown && markdown.length > 0) {
                   quoteMarkdown += markdown + '\n\n';
                 }
-              });
+              }
             } else {
               // Fallback: convert the whole textEl
-              quoteMarkdown = htmlToMarkdown(textEl);
+              quoteMarkdown = await htmlToMarkdownWithImages(textEl, includeCitationImages);
             }
           }
           quoteMarkdown = quoteMarkdown.trim();
@@ -3588,7 +3666,7 @@
 
           // Close tooltip
           button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-          await sleep(250);
+          await sleep(400);  // Increased from 250ms for slower networks
 
           // Wait for tooltip to close
           for (let attempt = 0; attempt < 20; attempt++) {
@@ -3802,15 +3880,15 @@
             // Try to process structural elements first
             const textElements = textEl.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
             if (textElements.length > 0) {
-              textElements.forEach(element => {
-                const markdown = htmlToMarkdown(element);
+              for (const element of textElements) {
+                const markdown = await htmlToMarkdownWithImages(element, includeCitationImages);
                 if (markdown && markdown.length > 0) {
                   quoteMarkdown += markdown + '\n\n';
                 }
-              });
+              }
             } else {
               // Fallback: convert the whole textEl
-              quoteMarkdown = htmlToMarkdown(textEl);
+              quoteMarkdown = await htmlToMarkdownWithImages(textEl, includeCitationImages);
             }
           }
           quoteMarkdown = quoteMarkdown.trim();
@@ -3962,7 +4040,7 @@
         try {
           // Scroll button into view
           button.scrollIntoView({ behavior: 'instant', block: 'center' });
-          await sleep(200);  // Increased from 150ms
+          await sleep(300);  // Increased from 200ms for slower networks
 
           // Hover over button
           button.dispatchEvent(new MouseEvent('mouseenter', {
@@ -3971,7 +4049,7 @@
             cancelable: true
           }));
 
-          await sleep(300);  // Increased from 200ms
+          await sleep(500);  // Increased from 300ms for slower networks
 
           // Wait for tooltip
           const tooltip = await raceWithCleanup([
@@ -4019,15 +4097,15 @@
             // Try to process structural elements first
             const textElements = textEl.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
             if (textElements.length > 0) {
-              textElements.forEach(element => {
-                const markdown = htmlToMarkdown(element);
+              for (const element of textElements) {
+                const markdown = await htmlToMarkdownWithImages(element, includeCitationImages);
                 if (markdown && markdown.length > 0) {
                   quoteMarkdown += markdown + '\n\n';
                 }
-              });
+              }
             } else {
               // Fallback: convert the whole textEl
-              quoteMarkdown = htmlToMarkdown(textEl);
+              quoteMarkdown = await htmlToMarkdownWithImages(textEl, includeCitationImages);
             }
           }
           quoteMarkdown = quoteMarkdown.trim();
@@ -4041,7 +4119,7 @@
 
           // Close tooltip
           button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-          await sleep(250);  // Increased from 200ms
+          await sleep(400);  // Increased from 250ms for slower networks  // Increased from 200ms
 
           // Wait for tooltip to close
           for (let attempt = 0; attempt < 20; attempt++) {
@@ -4187,15 +4265,15 @@
             // Try to process structural elements first
             const textElements = textEl.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
             if (textElements.length > 0) {
-              textElements.forEach(element => {
-                const markdown = htmlToMarkdown(element);
+              for (const element of textElements) {
+                const markdown = await htmlToMarkdownWithImages(element, includeCitationImages);
                 if (markdown && markdown.length > 0) {
                   quoteMarkdown += markdown + '\n\n';
                 }
-              });
+              }
             } else {
               // Fallback: convert the whole textEl
-              quoteMarkdown = htmlToMarkdown(textEl);
+              quoteMarkdown = await htmlToMarkdownWithImages(textEl, includeCitationImages);
             }
           }
           quoteMarkdown = quoteMarkdown.trim();

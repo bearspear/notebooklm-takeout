@@ -488,7 +488,22 @@ async function downloadArtifact(data) {
 }
 
 function sanitizeFilename(filename) {
-  return filename.replace(/[<>:"/\\|?*]/g, '_');
+  let clean = filename
+    .replace(/[<>:"/\\|?*]/g, '_')
+    .replace(/[\u0027\u0060\u00B4\u2018\u2019\u0022\u201C\u201D]/g, '')
+    .replace(/[#%&{}$!@+]/g, '_')
+    .replace(/\.{2,}/g, '.')
+    .replace(/\s+/g, '-')
+    .replace(/[-_]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .substring(0, 100);
+
+  // Fallback if sanitization resulted in empty string
+  if (clean.length === 0) {
+    clean = 'untitled';
+  }
+
+  return clean;
 }
 
 // Fetch file content and return as base64

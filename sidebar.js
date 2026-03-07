@@ -17,8 +17,29 @@ const logger = {
   }
 };
 
+/**
+ * Create a standardized TurndownService instance with consistent configuration
+ * This ensures all markdown conversions use the same settings
+ * @param {Object} customOptions - Optional custom options to override defaults
+ * @returns {TurndownService} Configured TurndownService instance
+ */
+function createTurndownService(customOptions = {}) {
+  const defaultOptions = {
+    headingStyle: 'atx',        // Use # style headings (not underlined)
+    hr: '---',                  // Horizontal rules with three dashes
+    bulletListMarker: '*',      // Use * for unordered lists (changed from - for consistency)
+    codeBlockStyle: 'fenced',   // Use ``` code blocks (not indented)
+    emDelimiter: '_',           // Use _ for emphasis (not *)
+    strongDelimiter: '**',      // Use ** for strong (not __)
+    linkStyle: 'inlined'        // Use [text](url) format (not reference style)
+  };
+
+  return new TurndownService({ ...defaultOptions, ...customOptions });
+}
+
 let currentTabId = null;
 let autoRefreshInterval = null;
+let settingsLoaded = false;
 let settings = {
   autoZip: false,
   showNotifications: true,
@@ -26,7 +47,8 @@ let settings = {
   citationsCodeBlock: false, // Don't wrap citations in code blocks by default
   includeCitationImages: false, // Include images in citations as base64
   includeSourceSummary: true, // Include source guide summary in exports
-  includeSourceKeywords: true // Include key topics in source exports
+  includeSourceKeywords: true, // Include key topics in source exports
+  exportWithImagesVersion: false // Export separate -with-images.md file (default: off)
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -34,7 +56,15 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 async function init() {
+  // Disable export buttons until settings are loaded
+  disableExportButtons();
+
   await loadSettings();
+  settingsLoaded = true;
+
+  // Re-enable export buttons after settings are loaded
+  enableExportButtons();
+
   await checkStatus();
   setupEventListeners();
   setupTabSwitching();
@@ -43,6 +73,42 @@ async function init() {
   // Monitor tab changes
   chrome.tabs.onActivated.addListener(handleTabChange);
   chrome.tabs.onUpdated.addListener(handleTabUpdate);
+}
+
+function disableExportButtons() {
+  const exportButtons = [
+    'export-notes-btn',
+    'export-sources-btn',
+    'export-chat-btn',
+    'scan-sources-btn',
+    'scan-chat-btn'
+  ];
+
+  exportButtons.forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) {
+      btn.disabled = true;
+      btn.style.opacity = '0.5';
+    }
+  });
+}
+
+function enableExportButtons() {
+  const exportButtons = [
+    'export-notes-btn',
+    'export-sources-btn',
+    'export-chat-btn',
+    'scan-sources-btn',
+    'scan-chat-btn'
+  ];
+
+  exportButtons.forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) {
+      btn.disabled = false;
+      btn.style.opacity = '1';
+    }
+  });
 }
 
 async function loadSettings() {
@@ -59,6 +125,7 @@ async function loadSettings() {
   document.getElementById('include-citation-images-checkbox').checked = settings.includeCitationImages;
   document.getElementById('include-source-summary-checkbox').checked = settings.includeSourceSummary;
   document.getElementById('include-source-keywords-checkbox').checked = settings.includeSourceKeywords;
+  document.getElementById('export-with-images-version-checkbox').checked = settings.exportWithImagesVersion;
 }
 
 async function saveSettings() {
@@ -69,6 +136,7 @@ async function saveSettings() {
   settings.includeCitationImages = document.getElementById('include-citation-images-checkbox').checked;
   settings.includeSourceSummary = document.getElementById('include-source-summary-checkbox').checked;
   settings.includeSourceKeywords = document.getElementById('include-source-keywords-checkbox').checked;
+  settings.exportWithImagesVersion = document.getElementById('export-with-images-version-checkbox').checked;
 
   await chrome.storage.local.set({ settings });
 }
@@ -1202,8 +1270,8 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
     });
   }
 
-  // Initialize TurndownService (simple setup like working extension)
-  const turndownService = new TurndownService({ headingStyle: 'atx' });
+  // Initialize TurndownService with standardized configuration
+  const turndownService = createTurndownService();
 
   // Track citation occurrences for back-references
   const citationOccurrences = new Map();
@@ -1243,6 +1311,50 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
     },
     replacement: (content) => {
       return content; // Return inner content, strip wrapper
+    }
+  });
+
+  // Custom rule for lists with Angular wrapper components
+  // Handles <ol>/<ul> where <li> elements are nested inside wrapper components
+  turndownService.addRule('listsWithWrappers', {
+    filter: (node) => {
+      return node.nodeName === 'OL' || node.nodeName === 'UL';
+    },
+    replacement: (content, node, options) => {
+      const isOrdered = node.nodeName === 'OL';
+
+      // Find all <li> elements at any depth
+      const allLis = Array.from(node.querySelectorAll('li'));
+
+      // Filter to only include <li> elements that belong directly to this list
+      // (exclude nested list items)
+      const items = allLis.filter(li => {
+        let parent = li.parentElement;
+        while (parent && parent !== node) {
+          const tagName = parent.tagName;
+          if (tagName === 'OL' || tagName === 'UL') {
+            return false; // This li belongs to a nested list
+          }
+          parent = parent.parentElement;
+        }
+        return true; // This li belongs to this list
+      });
+
+      if (items.length === 0) {
+        // No list items found, fall back to default behavior
+        return '\n' + content + '\n';
+      }
+
+      // Generate markdown for each list item
+      let markdown = '\n';
+      items.forEach((li, idx) => {
+        const marker = isOrdered ? `${idx + 1}.` : options.bulletListMarker;
+        const itemContent = turndownService.turndown(li.innerHTML).trim();
+        markdown += `${marker} ${itemContent}\n`;
+      });
+      markdown += '\n';
+
+      return markdown;
     }
   });
 
@@ -1425,7 +1537,7 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
 }
 
 function sanitizeFilename(filename) {
-  return filename
+  let clean = filename
     // Replace OS-restricted characters with underscore
     .replace(/[<>:"/\\|?*]/g, '_')
     // Replace quotes and apostrophes (straight and curly) with nothing
@@ -1435,6 +1547,8 @@ function sanitizeFilename(filename) {
     .replace(/[\u0027\u0060\u00B4\u2018\u2019\u0022\u201C\u201D]/g, '')
     // Replace other problematic characters
     .replace(/[#%&{}$!@+]/g, '_')
+    // Replace multiple periods with single period (avoid confusion with extensions)
+    .replace(/\.{2,}/g, '.')
     // Replace whitespace with hyphens
     .replace(/\s+/g, '-')
     // Collapse multiple hyphens/underscores
@@ -1443,6 +1557,47 @@ function sanitizeFilename(filename) {
     .replace(/^-+|-+$/g, '')
     // Limit length (leave room for extension)
     .substring(0, 100);
+
+  // Fallback if sanitization resulted in empty string
+  if (clean.length === 0) {
+    clean = 'untitled';
+  }
+
+  return clean;
+}
+
+/**
+ * Retry an async operation with exponential backoff
+ * @param {Function} operation - Async function to retry
+ * @param {number} maxRetries - Maximum number of retry attempts (default: 2)
+ * @param {number} baseDelay - Base delay in ms for exponential backoff (default: 1000)
+ * @param {string} operationName - Name for logging purposes
+ * @returns {Promise<any>} Result of the operation
+ */
+async function retryOperation(operation, maxRetries = 2, baseDelay = 1000, operationName = 'operation') {
+  let lastError;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      logger.info('Retry', `${operationName}: Attempt ${attempt}/${maxRetries}`);
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      logger.warn('Retry', `${operationName}: Attempt ${attempt} failed - ${error.message}`);
+
+      // Don't retry on the last attempt
+      if (attempt < maxRetries) {
+        // Exponential backoff: 1s, 2s, etc.
+        const delay = baseDelay * Math.pow(2, attempt - 1);
+        logger.info('Retry', `${operationName}: Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  // All retries failed
+  logger.error('Retry', `${operationName}: All ${maxRetries} attempts failed`);
+  throw lastError;
 }
 
 /**
@@ -1753,6 +1908,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
 
 async function createNotesZip(notes, errors = []) {
   const zip = new JSZip();
+  const indexFiles = []; // Track all files for _index.md
 
   // Add errors.txt if there are any errors
   if (errors.length > 0) {
@@ -1764,6 +1920,7 @@ async function createNotesZip(notes, errors = []) {
       errorsContent += `${idx + 1}. ${err}\n`;
     });
     zip.file('errors.txt', errorsContent);
+    indexFiles.push({ path: 'errors.txt', title: 'Export Errors' });
   }
 
   // Separate notes and mindmaps
@@ -1788,6 +1945,7 @@ async function createNotesZip(notes, errors = []) {
 
       usedFilenames.add(filename);
       notesFolder.file(filename, note.markdown);
+      indexFiles.push({ path: `notes/${filename}`, title: note.title });
     });
 
     // Create combined markdown file with unique citation anchors per note
@@ -1815,6 +1973,7 @@ async function createNotesZip(notes, errors = []) {
     });
 
     zip.file('combined-notes.md', combinedMarkdown);
+    indexFiles.push({ path: 'combined-notes.md', title: 'Combined Notes (All Notes in One File)' });
   }
 
   // Create mindmap SVG and JSON files
@@ -1836,8 +1995,48 @@ async function createNotesZip(notes, errors = []) {
       usedMindmapNames.add(uniqueName);
       mindmapsFolder.file(`${uniqueName}.svg`, mindmap.svgContent);
       mindmapsFolder.file(`${uniqueName}.json`, JSON.stringify(mindmap.treeData, null, 2));
+      indexFiles.push({ path: `mindmaps/${uniqueName}.svg`, title: `${mindmap.title} (SVG)` });
+      indexFiles.push({ path: `mindmaps/${uniqueName}.json`, title: `${mindmap.title} (JSON)` });
     });
   }
+
+  // Generate _index.md with links to all files
+  let indexContent = '# NotebookLM Notes Export - File Index\n\n';
+  indexContent += `Generated: ${new Date().toLocaleString()}\n\n`;
+  indexContent += `Total Files: ${indexFiles.length}\n\n`;
+  indexContent += '---\n\n';
+
+  if (markdownNotes.length > 0) {
+    indexContent += '## Combined Notes\n\n';
+    const combinedFile = indexFiles.find(f => f.path === 'combined-notes.md');
+    if (combinedFile) {
+      indexContent += `- [${combinedFile.title}](${encodeURI(combinedFile.path)})\n\n`;
+    }
+
+    indexContent += '## Individual Notes\n\n';
+    indexFiles.filter(f => f.path.startsWith('notes/')).forEach(file => {
+      indexContent += `- [${file.title}](${encodeURI(file.path)})\n`;
+    });
+    indexContent += '\n';
+  }
+
+  if (mindmaps.length > 0) {
+    indexContent += '## Mindmaps\n\n';
+    indexFiles.filter(f => f.path.startsWith('mindmaps/')).forEach(file => {
+      indexContent += `- [${file.title}](${encodeURI(file.path)})\n`;
+    });
+    indexContent += '\n';
+  }
+
+  if (errors.length > 0) {
+    indexContent += '## Errors\n\n';
+    const errorFile = indexFiles.find(f => f.path === 'errors.txt');
+    if (errorFile) {
+      indexContent += `- [${errorFile.title}](${encodeURI(errorFile.path)})\n\n`;
+    }
+  }
+
+  zip.file('_index.md', indexContent);
 
   // Generate and download ZIP
   const blob = await zip.generateAsync({ type: 'blob' });
@@ -2094,11 +2293,18 @@ async function exportSources(selectedSources) {
       console.log(`[NotebookLM Takeout] Extracting source: "${source.title}"`);
 
       try {
-        // Extract source content
-        const sourceData = await chrome.tabs.sendMessage(tab.id, {
-          type: 'EXTRACT_SOURCE',
-          data: { sourceIndex: source.index }
-        });
+        // Extract source content with retry logic for transient failures
+        const sourceData = await retryOperation(
+          async () => {
+            return await chrome.tabs.sendMessage(tab.id, {
+              type: 'EXTRACT_SOURCE',
+              data: { sourceIndex: source.index }
+            });
+          },
+          2, // maxRetries
+          1500, // baseDelay (1.5s)
+          `Extract source "${source.title}"`
+        );
 
         if (sourceData.error) {
           console.error(`[NotebookLM Takeout] Failed to extract "${source.title}":`, sourceData.error);
@@ -2207,7 +2413,8 @@ async function exportSources(selectedSources) {
         exportedSources.push({
           title: source.title,
           markdown: markdown,
-          markdownNoImages: markdownNoImages
+          markdownNoImages: markdownNoImages,
+          youtubeUrl: sourceData.youtubeUrl || null
         });
 
         stats.successfulExtractions++;
@@ -2248,6 +2455,7 @@ async function exportSources(selectedSources) {
       const zip = new JSZip();
       const sourcesFolder = zip.folder('sources');
       const usedSourceFilenames = new Set();
+      const indexFiles = []; // Track all files for _index.md
 
       exportedSources.forEach(source => {
         let baseFilename = sanitizeFilename(source.title);
@@ -2263,19 +2471,23 @@ async function exportSources(selectedSources) {
 
         usedSourceFilenames.add(filenameNoImages);
         sourcesFolder.file(filenameNoImages, source.markdownNoImages);
+        indexFiles.push({ path: `sources/${filenameNoImages}`, title: source.title, hasImages: false });
 
-        // Add version with embedded images (append -with-images)
-        const baseWithImages = baseFilename + '-with-images';
-        let filenameWithImages = baseWithImages + '.md';
-        let counterWithImages = 2;
+        // Add version with embedded images (append -with-images) - only if setting is enabled
+        if (settings.exportWithImagesVersion) {
+          const baseWithImages = baseFilename + '-with-images';
+          let filenameWithImages = baseWithImages + '.md';
+          let counterWithImages = 2;
 
-        while (usedSourceFilenames.has(filenameWithImages)) {
-          filenameWithImages = `${baseWithImages}-${counterWithImages}.md`;
-          counterWithImages++;
+          while (usedSourceFilenames.has(filenameWithImages)) {
+            filenameWithImages = `${baseWithImages}-${counterWithImages}.md`;
+            counterWithImages++;
+          }
+
+          usedSourceFilenames.add(filenameWithImages);
+          sourcesFolder.file(filenameWithImages, source.markdown);
+          indexFiles.push({ path: `sources/${filenameWithImages}`, title: `${source.title} (with images)`, hasImages: true });
         }
-
-        usedSourceFilenames.add(filenameWithImages);
-        sourcesFolder.file(filenameWithImages, source.markdown);
       });
 
       // Add README explaining the file naming
@@ -2283,20 +2495,32 @@ async function exportSources(selectedSources) {
       readmeContent += `Generated: ${new Date().toLocaleString()}\n\n`;
       readmeContent += '---\n\n';
       readmeContent += '## File Naming Convention\n\n';
-      readmeContent += 'Each source is exported in two versions:\n\n';
-      readmeContent += '### 1. Standard files (e.g., `Document-1.md`)\n\n';
-      readmeContent += '- **Text-only version** with all images removed\n';
-      readmeContent += '- Smaller file sizes, faster to load\n';
-      readmeContent += '- Best for AI processing, search indexing, or text analysis\n';
-      readmeContent += '- Perfect for feeding into Claude, ChatGPT, or other LLMs\n\n';
-      readmeContent += '### 2. `-with-images` files (e.g., `Document-1-with-images.md`)\n\n';
-      readmeContent += '- **Full version** with images embedded as base64 data URIs\n';
-      readmeContent += '- Self-contained markdown files that work offline\n';
-      readmeContent += '- Larger file sizes due to embedded images\n';
-      readmeContent += '- Best for archival, offline viewing, and complete backups\n';
-      if (stats.imagesFound > 0) {
-        readmeContent += `\n**Note:** ${stats.imagesFound} image(s) were found across all sources. `;
-        readmeContent += `${stats.imagesEmbedded} were successfully embedded as base64.\n`;
+
+      if (settings.exportWithImagesVersion) {
+        readmeContent += 'Each source is exported in two versions:\n\n';
+        readmeContent += '### 1. Standard files (e.g., `Document-1.md`)\n\n';
+        readmeContent += '- **Text-only version** with all images removed\n';
+        readmeContent += '- Smaller file sizes, faster to load\n';
+        readmeContent += '- Best for AI processing, search indexing, or text analysis\n';
+        readmeContent += '- Perfect for feeding into Claude, ChatGPT, or other LLMs\n\n';
+        readmeContent += '### 2. `-with-images` files (e.g., `Document-1-with-images.md`)\n\n';
+        readmeContent += '- **Full version** with images embedded as base64 data URIs\n';
+        readmeContent += '- Self-contained markdown files that work offline\n';
+        readmeContent += '- Larger file sizes due to embedded images\n';
+        readmeContent += '- Best for archival, offline viewing, and complete backups\n';
+        if (stats.imagesFound > 0) {
+          readmeContent += `\n**Note:** ${stats.imagesFound} image(s) were found across all sources. `;
+          readmeContent += `${stats.imagesEmbedded} were successfully embedded as base64.\n`;
+        }
+      } else {
+        readmeContent += 'Each source is exported as a text-only markdown file with images removed.\n\n';
+        readmeContent += '- Smaller file sizes, faster to load\n';
+        readmeContent += '- Best for AI processing, search indexing, or text analysis\n';
+        readmeContent += '- Perfect for feeding into Claude, ChatGPT, or other LLMs\n';
+        if (stats.imagesFound > 0) {
+          readmeContent += `\n**Note:** ${stats.imagesFound} image(s) were found across all sources but were not embedded. `;
+          readmeContent += 'Enable "Export separate -with-images.md files" in settings to include images.\n';
+        }
       }
       readmeContent += '\n---\n\n';
       readmeContent += '## Source Contents\n\n';
@@ -2423,7 +2647,98 @@ async function exportSources(selectedSources) {
         errorsContent += '  https://github.com/anthropics/claude-code/issues\n';
 
         zip.file('errors.txt', errorsContent);
+        indexFiles.push({ path: 'errors.txt', title: 'Export Error Report' });
       }
+
+      // Add README to index
+      indexFiles.push({ path: 'README.txt', title: 'README - File Naming Convention' });
+
+      // Create youtube-urls.txt if any YouTube sources were found
+      const youtubeUrls = exportedSources
+        .filter(source => source.youtubeUrl)
+        .map(source => ({ title: source.title, url: source.youtubeUrl }));
+
+      if (youtubeUrls.length > 0) {
+        let youtubeContent = '# YouTube Source URLs\n\n';
+        youtubeContent += `Generated: ${new Date().toLocaleString()}\n\n`;
+        youtubeContent += `Total YouTube Sources: ${youtubeUrls.length}\n\n`;
+        youtubeContent += '---\n\n';
+
+        youtubeUrls.forEach((item, idx) => {
+          youtubeContent += `${idx + 1}. ${item.title}\n`;
+          youtubeContent += `   ${item.url}\n\n`;
+        });
+
+        zip.file('youtube-urls.txt', youtubeContent);
+        indexFiles.push({ path: 'youtube-urls.txt', title: 'YouTube Source URLs' });
+        console.log(`[NotebookLM Takeout] Created youtube-urls.txt with ${youtubeUrls.length} URL(s)`);
+      }
+
+      // Generate _index.md with links to all files
+      let indexContent = '# NotebookLM Sources Export - File Index\n\n';
+      indexContent += `Generated: ${new Date().toLocaleString()}\n\n`;
+      indexContent += `Total Sources: ${exportedSources.length}\n`;
+      indexContent += `Total Files: ${indexFiles.length}\n\n`;
+      indexContent += '---\n\n';
+
+      indexContent += '## Getting Started\n\n';
+      indexContent += `- [README.txt](${encodeURI('README.txt')}) - Read this first for file naming conventions\n\n`;
+      indexContent += '---\n\n';
+
+      indexContent += '## Sources\n\n';
+      if (settings.exportWithImagesVersion) {
+        indexContent += 'Each source is available in two versions:\n';
+        indexContent += '- **Standard** (text-only, optimized for AI processing)\n';
+        indexContent += '- **With images** (embedded images for archival)\n\n';
+      } else {
+        indexContent += 'Sources exported as text-only markdown files.\n\n';
+      }
+
+      // Group by source title (without images vs with images)
+      const sourcesByTitle = {};
+      indexFiles.filter(f => f.path.startsWith('sources/')).forEach(file => {
+        const baseTitle = file.title.replace(' (with images)', '');
+        if (!sourcesByTitle[baseTitle]) {
+          sourcesByTitle[baseTitle] = { standard: null, withImages: null };
+        }
+        if (file.hasImages) {
+          sourcesByTitle[baseTitle].withImages = file;
+        } else {
+          sourcesByTitle[baseTitle].standard = file;
+        }
+      });
+
+      Object.keys(sourcesByTitle).sort().forEach(title => {
+        const versions = sourcesByTitle[title];
+        indexContent += `### ${title}\n\n`;
+        if (versions.standard) {
+          indexContent += `- [Standard version](${encodeURI(versions.standard.path)})\n`;
+        }
+        if (versions.withImages) {
+          indexContent += `- [Version with images](${encodeURI(versions.withImages.path)})\n`;
+        }
+        indexContent += '\n';
+      });
+
+      // Add YouTube URLs section if file exists
+      const youtubeFile = indexFiles.find(f => f.path === 'youtube-urls.txt');
+      if (youtubeFile) {
+        indexContent += '---\n\n';
+        indexContent += '## YouTube Sources\n\n';
+        indexContent += `This export includes ${youtubeUrls.length} YouTube video source(s).\n\n`;
+        indexContent += `- [${youtubeFile.title}](${encodeURI(youtubeFile.path)}) - List of all YouTube video URLs\n\n`;
+      }
+
+      if (allErrors.length > 0) {
+        indexContent += '---\n\n';
+        indexContent += '## Error Report\n\n';
+        const errorFile = indexFiles.find(f => f.path === 'errors.txt');
+        if (errorFile) {
+          indexContent += `- [${errorFile.title}](${encodeURI(errorFile.path)})\n\n`;
+        }
+      }
+
+      zip.file('_index.md', indexContent);
 
       // Generate ZIP
       const blob = await zip.generateAsync({ type: 'blob' });
@@ -2858,7 +3173,10 @@ async function exportChat(chatData, extractFullCitations = false) {
     if (shouldZip) {
       // Create ZIP with markdown + errors.txt
       const zip = new JSZip();
+      const indexFiles = []; // Track all files for _index.md
+
       zip.file(filename, markdown);
+      indexFiles.push({ path: filename, title: 'Chat Export' });
 
       // Add detailed errors file
       let errorsContent = '# Chat Export Error Report\n\n';
@@ -2875,8 +3193,8 @@ async function exportChat(chatData, extractFullCitations = false) {
       if (stats.extractFullCitations) {
         errorsContent += `- **Successful Extractions:** ${stats.successfulExtractions}\n`;
         errorsContent += `- **Failed Extractions:** ${stats.failedExtractions}\n`;
-        const successRate = stats.totalCitationsFound > 0
-          ? ((stats.successfulExtractions / stats.totalCitationsFound) * 100).toFixed(1)
+        const successRate = stats.totalCitationsExtracted > 0
+          ? ((stats.successfulExtractions / stats.totalCitationsExtracted) * 100).toFixed(1)
           : '0';
         errorsContent += `- **Success Rate:** ${successRate}%\n`;
       }
@@ -2930,6 +3248,33 @@ async function exportChat(chatData, extractFullCitations = false) {
       errorsContent += '  https://github.com/anthropics/claude-code/issues\n\n';
 
       zip.file('errors.txt', errorsContent);
+      indexFiles.push({ path: 'errors.txt', title: 'Export Error Report' });
+
+      // Generate _index.md with links to all files
+      let indexContent = '# NotebookLM Chat Export - File Index\n\n';
+      indexContent += `Chat: ${chatData.notebookTitle}\n`;
+      indexContent += `Generated: ${new Date().toLocaleString()}\n\n`;
+      indexContent += `Total Messages: ${stats.totalMessages}\n`;
+      indexContent += `Messages with Citations: ${stats.messagesWithCitations}\n`;
+      indexContent += `Total Files: ${indexFiles.length}\n\n`;
+      indexContent += '---\n\n';
+
+      indexContent += '## Chat Export\n\n';
+      const chatFile = indexFiles.find(f => f.path === filename);
+      if (chatFile) {
+        indexContent += `- [${chatFile.title}](${encodeURI(chatFile.path)}) - Full chat conversation with ${stats.totalMessages} messages\n\n`;
+      }
+
+      if (allErrors.length > 0) {
+        indexContent += '---\n\n';
+        indexContent += '## Error Report\n\n';
+        const errorFile = indexFiles.find(f => f.path === 'errors.txt');
+        if (errorFile) {
+          indexContent += `- [${errorFile.title}](${encodeURI(errorFile.path)}) - ${allErrors.length} error(s) encountered during export\n\n`;
+        }
+      }
+
+      zip.file('_index.md', indexContent);
 
       const blob = await zip.generateAsync({ type: 'blob' });
       const url = URL.createObjectURL(blob);
@@ -3011,14 +3356,8 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
   markdown += `Total Messages: ${messages.length}\n\n`;
   markdown += '---\n\n';
 
-  // Initialize TurndownService with same config as notes
-  const turndownService = new TurndownService({
-    headingStyle: 'atx',
-    codeBlockStyle: 'fenced',
-    emDelimiter: '_',
-    strongDelimiter: '**',
-    linkStyle: 'inlined'
-  });
+  // Initialize TurndownService with standardized configuration
+  const turndownService = createTurndownService();
 
   // Use closure to track current message index
   let currentMessageIndex = 0;
@@ -3098,6 +3437,47 @@ function addChatTurndownRules(turndownService, citationsCodeBlock, getCurrentMes
       return nodeName === 'labs-tailwind-structural-element-view-v2';
     },
     replacement: (content) => content
+  });
+
+  // Rule: Handle lists with Angular wrapper components
+  turndownService.addRule('listsWithWrappers', {
+    filter: (node) => {
+      return node.nodeName === 'OL' || node.nodeName === 'UL';
+    },
+    replacement: (content, node, options) => {
+      const isOrdered = node.nodeName === 'OL';
+
+      // Find all <li> elements at any depth
+      const allLis = Array.from(node.querySelectorAll('li'));
+
+      // Filter to only include <li> elements that belong directly to this list
+      const items = allLis.filter(li => {
+        let parent = li.parentElement;
+        while (parent && parent !== node) {
+          const tagName = parent.tagName;
+          if (tagName === 'OL' || tagName === 'UL') {
+            return false; // This li belongs to a nested list
+          }
+          parent = parent.parentElement;
+        }
+        return true;
+      });
+
+      if (items.length === 0) {
+        return '\n' + content + '\n';
+      }
+
+      // Generate markdown for each list item
+      let markdown = '\n';
+      items.forEach((li, idx) => {
+        const marker = isOrdered ? `${idx + 1}.` : options.bulletListMarker;
+        const itemContent = turndownService.turndown(li.innerHTML).trim();
+        markdown += `${marker} ${itemContent}\n`;
+      });
+      markdown += '\n';
+
+      return markdown;
+    }
   });
 
   // Rule: Convert div headings with role="heading"
