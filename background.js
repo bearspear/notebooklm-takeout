@@ -234,11 +234,17 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
 
     // Determine file extension BEFORE async operations
     let extension = '';
+    console.log('[Background] Determining extension for:', pendingRequest.type);
+    console.log('[Background] downloadItem.filename:', downloadItem.filename);
+    console.log('[Background] downloadItem.mime:', downloadItem.mime);
 
     // Try to get extension from filename
     if (downloadItem.filename) {
       const match = downloadItem.filename.match(/\.[^.]+$/);
       extension = match ? match[0] : '';
+      if (extension) {
+        console.log('[Background] Extension from filename:', extension);
+      }
     }
 
     // Fallback: use MIME type or artifact type
@@ -255,20 +261,38 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
           'video/mp4': '.mp4'
         };
         extension = mimeExtensions[downloadItem.mime] || '';
+        if (extension) {
+          console.log('[Background] Extension from MIME type:', extension, 'for MIME:', downloadItem.mime);
+        } else if (downloadItem.mime) {
+          console.warn('[Background] Unknown MIME type (no mapping):', downloadItem.mime);
+        }
       }
 
       // Last resort: use artifact type from pending request
       if (!extension && pendingRequest.type === 'Infographic') {
         extension = '.png';
+        console.log('[Background] Extension from artifact type (Infographic):', extension);
       } else if (!extension && pendingRequest.type === 'Slides') {
         extension = '.pdf';
+        console.log('[Background] Extension from artifact type (Slides):', extension);
       } else if (!extension && pendingRequest.type === 'Audio Overview') {
         extension = '.m4a';
+        console.log('[Background] Extension from artifact type (Audio Overview):', extension);
       }
     }
 
+    if (!extension) {
+      console.error('[Background] Could not determine extension! Type:', pendingRequest.type, 'MIME:', downloadItem.mime, 'Filename:', downloadItem.filename);
+      console.log('[Background] Will wait for onDeterminingFilename to get extension from original filename');
+    }
+
     // Create new filename
-    const newFilename = sanitizeFilename(pendingRequest.name || 'download') + extension;
+    let newFilename = sanitizeFilename(pendingRequest.name || 'download') + extension;
+
+    // Safety check: if still no extension, we'll try to get it in onDeterminingFilename
+    if (!extension) {
+      console.log('[Background] No extension determined yet - will extract from original filename later');
+    }
     console.log('[Background] Re-downloading as:', newFilename, '(extension from:', downloadItem.filename ? 'filename' : downloadItem.mime ? 'mime' : 'type', ')');
 
     // Store re-download info for onDeterminingFilename handler (use download ID as key)
@@ -365,7 +389,19 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
   // Check if this download is an intercepted download in our Map
   const interceptInfo = interceptedDownloads.get(downloadItem.id);
   if (interceptInfo && isFromNotebookLM) {
-    const filename = interceptInfo.filename;
+    let filename = interceptInfo.filename;
+
+    // If filename doesn't have an extension, extract it from the original download filename
+    if (!filename.match(/\.[^.]+$/)) {
+      const originalExt = downloadItem.filename?.match(/\.[^.]+$/)?.[0] || '';
+      if (originalExt) {
+        filename = filename + originalExt;
+        console.log('[Background] Added extension from original filename:', originalExt);
+      } else {
+        console.warn('[Background] Could not determine extension for:', filename);
+      }
+    }
+
     console.log('[Background] Renaming intercepted download to:', filename);
     suggest({ filename: filename });
     return true;

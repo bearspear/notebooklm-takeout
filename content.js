@@ -336,9 +336,15 @@
       console.log('[NotebookLM Takeout] Message index:', message.data.messageIndex);
       console.log('[NotebookLM Takeout] Source indices:', message.data.sourceIndices);
       console.log('[NotebookLM Takeout] Message HTML length:', message.data.messageHTML?.length || 0);
+      console.log('[NotebookLM Takeout] Include citation images:', message.data.includeCitationImages);
 
       try {
-        extractMessageCitations(message.data.messageIndex, message.data.messageHTML, message.data.sourceIndices)
+        extractMessageCitations(
+          message.data.messageIndex,
+          message.data.messageHTML,
+          message.data.sourceIndices,
+          message.data.includeCitationImages || false
+        )
           .then(result => {
             console.log('[NotebookLM Takeout] ====== Message citations extracted ======');
             console.log('[NotebookLM Takeout] Result:', result);
@@ -929,10 +935,12 @@
 
     const notes = [];
     const allNoteElements = document.querySelectorAll('artifact-library-note');
+    const allItemElements = document.querySelectorAll('artifact-library-item');
 
-    console.log(`[NotebookLM Takeout] Found ${allNoteElements.length} total note elements`);
+    console.log(`[NotebookLM Takeout] Found ${allNoteElements.length} artifact-library-note elements`);
+    console.log(`[NotebookLM Takeout] Found ${allItemElements.length} artifact-library-item elements`);
 
-    // Don't filter by visibility - use ALL notes for consistent indexing
+    // First, scan artifact-library-note elements (regular notes and mindmaps)
     allNoteElements.forEach((noteEl, idx) => {
       const titleEl = noteEl.querySelector('.artifact-title, .note-title');
       const title = titleEl?.textContent?.trim() || `Note ${idx + 1}`;
@@ -947,16 +955,42 @@
         noteType = 'Mindmap';
       } else if (iconType === 'description' || iconType === 'note') {
         noteType = 'Note';
+      } else {
+        // Unknown icon type - log it for debugging
+        console.warn(`[NotebookLM Takeout] Unknown icon type "${iconType}" for note "${title}" - treating as Note`);
       }
 
       notes.push({
-        index: idx,
+        index: notes.length, // Use global index across both types
         title: title,
         type: noteType,
-        iconType: iconType
+        iconType: iconType,
+        elementType: 'note'
       });
 
-      console.log(`[NotebookLM Takeout] Note ${idx}: "${title}" (${noteType})`);
+      console.log(`[NotebookLM Takeout] Note ${notes.length - 1}: "${title}" (${noteType}, icon: ${iconType})`);
+    });
+
+    // Then, scan artifact-library-item elements for reports
+    allItemElements.forEach((itemEl, idx) => {
+      const mainButton = itemEl.querySelector('button[aria-description]');
+      const ariaType = mainButton?.getAttribute('aria-description') || '';
+
+      // Only include Reports in the Notes tab
+      if (ariaType === 'Report') {
+        const titleEl = itemEl.querySelector('.artifact-title');
+        const title = titleEl?.textContent?.trim() || `Report ${idx + 1}`;
+
+        notes.push({
+          index: notes.length, // Use global index across both types
+          title: title,
+          type: 'Report',
+          iconType: 'assignment', // Use assignment icon for reports
+          elementType: 'item'
+        });
+
+        console.log(`[NotebookLM Takeout] Report ${notes.length - 1}: "${title}" (Report, from artifact-library-item)`);
+      }
     });
 
     return notes;
@@ -1185,30 +1219,58 @@
       }
 
       // Wait for note list to be present (in case we just navigated back)
-      await waitForElement('artifact-library-note', 3000);
+      try {
+        await waitForElement('artifact-library-note, artifact-library-item', 3000);
+      } catch (e) {
+        console.warn('[NotebookLM Takeout] No artifact elements found');
+      }
 
       // Small delay to let DOM stabilize after navigation
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      // Find all note elements (don't filter by visibility yet - we need to find ALL notes)
+      // Build combined list of all notes and reports in the same order as scan
       const allNoteElements = document.querySelectorAll('artifact-library-note');
+      const allItemElements = document.querySelectorAll('artifact-library-item');
+
       console.log('[NotebookLM Takeout] Total note elements found:', allNoteElements.length);
+      console.log('[NotebookLM Takeout] Total item elements found:', allItemElements.length);
+
+      // Build combined array matching scan order: notes first, then reports
+      const combinedElements = [];
+
+      // Add all artifact-library-note elements
+      allNoteElements.forEach(el => {
+        combinedElements.push({ element: el, type: 'note' });
+      });
+
+      // Add all Report items from artifact-library-item
+      allItemElements.forEach(el => {
+        const mainButton = el.querySelector('button[aria-description]');
+        const ariaType = mainButton?.getAttribute('aria-description') || '';
+        if (ariaType === 'Report') {
+          combinedElements.push({ element: el, type: 'report' });
+        }
+      });
+
+      console.log('[NotebookLM Takeout] Total combined elements:', combinedElements.length);
 
       let noteEl = null;
+      let elementType = null;
 
       if (noteTitle) {
-        // Try to find by title first (search ALL notes, not just visible ones)
+        // Try to find by title first (search ALL elements, not just visible ones)
         console.log('[NotebookLM Takeout] Searching for note with title:', noteTitle);
 
         const foundTitles = [];
-        for (const el of allNoteElements) {
-          const titleEl = el.querySelector('.artifact-title, .note-title');
+        for (const item of combinedElements) {
+          const titleEl = item.element.querySelector('.artifact-title, .note-title');
           const title = titleEl?.textContent?.trim();
           foundTitles.push(title);
 
           if (title === noteTitle) {
-            noteEl = el;
-            console.log('[NotebookLM Takeout] ✓ Found note by exact title match');
+            noteEl = item.element;
+            elementType = item.type;
+            console.log('[NotebookLM Takeout] ✓ Found by exact title match (type:', elementType, ')');
             break;
           }
         }
@@ -1223,44 +1285,56 @@
       if (!noteEl) {
         console.log('[NotebookLM Takeout] Falling back to index-based lookup...');
 
-        // Use ALL note elements, not filtered (since scan also uses all)
-        if (noteIndex < allNoteElements.length) {
-          noteEl = allNoteElements[noteIndex];
-          console.log('[NotebookLM Takeout] Using note at index:', noteIndex);
+        // Use combined array (since scan also uses combined indexing)
+        if (noteIndex < combinedElements.length) {
+          noteEl = combinedElements[noteIndex].element;
+          elementType = combinedElements[noteIndex].type;
+          console.log('[NotebookLM Takeout] Using element at index:', noteIndex, '(type:', elementType, ')');
         } else {
-          console.error('[NotebookLM Takeout] Index out of bounds:', noteIndex, 'of', allNoteElements.length);
+          console.error('[NotebookLM Takeout] Index out of bounds:', noteIndex, 'of', combinedElements.length);
         }
       }
 
       if (!noteEl) {
-        const errorMsg = `Note not found: "${noteTitle}" at index ${noteIndex}. Total notes: ${allNoteElements.length}`;
+        const errorMsg = `Note/Report not found: "${noteTitle}" at index ${noteIndex}. Total elements: ${combinedElements.length}`;
         console.error('[NotebookLM Takeout]', errorMsg);
         throw new Error(errorMsg);
       }
 
-      // Find and click the note button
-      const button = noteEl.querySelector('button.artifact-button-content, button');
-      if (!button) {
-        throw new Error('Could not find button for note');
+      // Find and click the appropriate button based on element type
+      let button = null;
+      if (elementType === 'report') {
+        // For reports, find the main button with aria-description
+        button = noteEl.querySelector('button[aria-description="Report"]');
+        console.log('[NotebookLM Takeout] Found report button:', !!button);
+      } else {
+        // For notes, use the existing selector
+        button = noteEl.querySelector('button.artifact-button-content, button');
+        console.log('[NotebookLM Takeout] Found note button:', !!button);
       }
 
-      console.log('[NotebookLM Takeout] Clicking note button...');
+      if (!button) {
+        throw new Error(`Could not find button for ${elementType}`);
+      }
+
+      console.log('[NotebookLM Takeout] Clicking', elementType, 'button...');
       button.click();
 
-      // Wait for content to load (editor or mindmap viewer)
+      // Wait for content to load (editor, mindmap viewer, or report viewer)
       console.log('[NotebookLM Takeout] Waiting for content...');
       const content = await raceWithCleanup([
         waitForElement('rich-text-editor .ql-editor', 5000),
         waitForElement('markdown-editor-legacy .ql-editor', 5000),
         waitForElement('labs-tailwind-doc-viewer', 5000),
-        waitForElement('mindmap-viewer', 5000)
+        waitForElement('mindmap-viewer', 5000),
+        waitForElement('report-viewer', 5000)
       ]).catch(() => null);
 
       if (!content) {
-        throw new Error('Content not found (no editor or mindmap viewer)');
+        throw new Error('Content not found (no editor, mindmap viewer, or report viewer)');
       }
 
-      console.log('[NotebookLM Takeout] Content found:', content.tagName);
+      console.log('[NotebookLM Takeout] Content found:', content.tagName, content.className || '(no class)');
 
       // Wait a bit for content to fully render
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1269,6 +1343,19 @@
       if (content.tagName.toLowerCase() === 'mindmap-viewer') {
         console.log('[NotebookLM Takeout] Mindmap detected, extracting SVG...');
         return await extractMindmapSVG(content);
+      }
+
+      // Check if it's a report viewer (extract like tailwind viewer)
+      if (content.tagName.toLowerCase() === 'report-viewer') {
+        console.log('[NotebookLM Takeout] Report viewer detected, waiting for doc viewer...');
+        // Reports use the same structure as tailwind doc viewer, but it might not be loaded yet
+        try {
+          const docViewer = await waitForElement('report-viewer labs-tailwind-doc-viewer', 5000);
+          console.log('[NotebookLM Takeout] Found labs-tailwind-doc-viewer inside report-viewer');
+          return await extractTailwindNoteContent(docViewer);
+        } catch (e) {
+          throw new Error('Could not find labs-tailwind-doc-viewer inside report-viewer after 5s timeout');
+        }
       }
 
       // Check if it's a Tailwind viewer (new format with sources)
@@ -1535,6 +1622,25 @@
    */
   async function imageToBase64(url) {
     try {
+      // For Google URLs, ask the sidebar to download (it has proper permissions)
+      if (url.includes('googleusercontent.com') || url.includes('google.com')) {
+        console.log(`[NotebookLM Takeout] Requesting sidebar to download image: ${url.substring(0, 80)}...`);
+
+        const response = await chrome.runtime.sendMessage({
+          type: 'DOWNLOAD_IMAGE_AS_BASE64',
+          url: url
+        });
+
+        if (response && response.success) {
+          console.log(`[NotebookLM Takeout] Image downloaded via sidebar (${(response.dataUri.length / 1024).toFixed(1)} KB)`);
+          return response.dataUri;
+        } else {
+          console.warn('[NotebookLM Takeout] Sidebar failed to download image:', response?.error || 'Unknown error');
+          return url; // Return original URL on failure
+        }
+      }
+
+      // Fallback to regular fetch for non-Google URLs
       const response = await fetch(url);
       const blob = await response.blob();
 
@@ -2625,8 +2731,14 @@
         throw new Error(`Could not find Data Table with title: "${tableTitle}"`);
       }
 
-      // Get the parent button and click it to open table-viewer
-      const tableButton = titleElement.closest('button');
+      // Find the parent artifact-library-item, then find the button
+      const artifactItem = titleElement.closest('artifact-library-item');
+      if (!artifactItem) {
+        throw new Error('Could not find artifact-library-item parent');
+      }
+
+      // Look for button with aria-description="Data Table"
+      const tableButton = artifactItem.querySelector('button[aria-description="Data Table"]');
       if (!tableButton) {
         throw new Error('Could not find Data Table button');
       }
@@ -3950,12 +4062,14 @@
    * @param {number} messageIndex - Index of the message (for logging only)
    * @param {string} messageHTML - The HTML content of the AI response (for extracting aria-labels)
    * @param {Array<string>} sourceIndices - Array of source indices to extract
+   * @param {boolean} includeCitationImages - Whether to embed images as base64 in citations
    * @returns {Promise<{sourcesByIndex: Object, errors: Array}>}
    */
-  async function extractMessageCitations(messageIndex, messageHTML, sourceIndices) {
+  async function extractMessageCitations(messageIndex, messageHTML, sourceIndices, includeCitationImages = false) {
     console.log(`[NotebookLM Takeout] extractMessageCitations called for message ${messageIndex}`);
     console.log(`[NotebookLM Takeout] Source indices:`, sourceIndices);
     console.log(`[NotebookLM Takeout] Message HTML length:`, messageHTML?.length || 0);
+    console.log(`[NotebookLM Takeout] Include citation images:`, includeCitationImages);
 
     const sourcesByIndex = {};
     const errors = [];

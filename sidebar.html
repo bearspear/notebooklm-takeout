@@ -170,56 +170,70 @@
       </button>
     </div>
     <div class="settings-content">
-      <div class="setting-group">
-        <label>
-          <input type="checkbox" id="auto-zip-checkbox">
-          <span>Always use ZIP for batch downloads</span>
-        </label>
+      <!-- General Settings -->
+      <div class="setting-section">
+        <h3 class="setting-section-title">General</h3>
+
+        <div class="setting-group">
+          <label>
+            <input type="checkbox" id="show-notifications-checkbox" checked>
+            <span>Show download notifications</span>
+          </label>
+        </div>
+
+        <div class="setting-group">
+          <label>Auto-refresh interval (seconds)</label>
+          <input type="number" id="refresh-interval-input" min="5" max="60" value="10" class="number-input">
+        </div>
       </div>
-      <div class="setting-group">
-        <label>
-          <input type="checkbox" id="show-notifications-checkbox" checked>
-          <span>Show download notifications</span>
-        </label>
+
+      <!-- Export Format Settings -->
+      <div class="setting-section">
+        <h3 class="setting-section-title">Export Format</h3>
+
+        <div class="setting-group">
+          <label>
+            <input type="checkbox" id="auto-zip-checkbox">
+            <span>Always use ZIP for batch downloads</span>
+          </label>
+        </div>
+
+        <div class="setting-group">
+          <label>
+            <input type="checkbox" id="citations-code-block-checkbox" checked>
+            <span>Wrap citations in code blocks (data format)</span>
+          </label>
+          <p class="setting-help">When checked, citations are wrapped in ```markdown code blocks. When unchecked, markdown is rendered directly.</p>
+        </div>
+
+        <div class="setting-group">
+          <label>
+            <input type="checkbox" id="include-citation-images-checkbox">
+            <span>Include images in citations as base64</span>
+          </label>
+          <p class="setting-help">When checked, images within citation tooltips are embedded as base64 data URLs in exported footnotes.</p>
+        </div>
       </div>
-      <div class="setting-group">
-        <label>
-          <input type="checkbox" id="citations-code-block-checkbox" checked>
-          <span>Wrap citations in code blocks (data format)</span>
-        </label>
-        <p class="setting-help">When checked, citations are wrapped in ```markdown code blocks. When unchecked, markdown is rendered directly.</p>
-      </div>
-      <div class="setting-group">
-        <label>
-          <input type="checkbox" id="include-citation-images-checkbox">
-          <span>Include images in citations as base64</span>
-        </label>
-        <p class="setting-help">When checked, images within citation tooltips are embedded as base64 data URLs in exported footnotes.</p>
-      </div>
-      <div class="setting-group">
-        <label>
-          <input type="checkbox" id="include-source-summary-checkbox" checked>
-          <span>Include source guide summary in exports</span>
-        </label>
-        <p class="setting-help">When checked, AI-generated source summaries are included in source exports.</p>
-      </div>
-      <div class="setting-group">
-        <label>
-          <input type="checkbox" id="include-source-keywords-checkbox" checked>
-          <span>Include key topics in source exports</span>
-        </label>
-        <p class="setting-help">When checked, key topics extracted from sources are included in exports.</p>
-      </div>
-      <div class="setting-group">
-        <label>
-          <input type="checkbox" id="export-with-images-version-checkbox">
-          <span>Export separate -with-images.md files</span>
-        </label>
-        <p class="setting-help">When checked, exports two versions of each source: a standard text-only file and a -with-images file with embedded images. When unchecked, only exports standard files.</p>
-      </div>
-      <div class="setting-group">
-        <label>Auto-refresh interval (seconds)</label>
-        <input type="number" id="refresh-interval-input" min="5" max="60" value="10" class="number-input">
+
+      <!-- Source Options Settings -->
+      <div class="setting-section">
+        <h3 class="setting-section-title">Source Options</h3>
+
+        <div class="setting-group">
+          <label>
+            <input type="checkbox" id="include-source-metadata-checkbox" checked>
+            <span>Include source metadata (summary & key topics)</span>
+          </label>
+          <p class="setting-help">When checked, AI-generated source summaries and key topics are included in source exports.</p>
+        </div>
+
+        <div class="setting-group">
+          <label>
+            <input type="checkbox" id="export-with-images-version-checkbox">
+            <span>Export separate -with-images.md files</span>
+          </label>
+          <p class="setting-help">When checked, exports two versions of each source: a standard text-only file and a -with-images file with embedded images. When unchecked, only exports standard files.</p>
+        </div>
       </div>
     </div>
   </div>
