@@ -42,6 +42,20 @@ let batchStatus = '';
 const interceptedDownloads = new Map(); // downloadId -> {originalId, newId, filename, url}
 const redownloadRequests = new Map(); // downloadId -> {filename, originalId}
 
+/**
+ * Get artifact type prefix for filenames
+ */
+function getArtifactTypePrefix(artifactType) {
+  const typeMap = {
+    'Audio Overview': 'audio-overview',
+    'Data Table': 'data-table',
+    'Report': 'report',
+    'Infographic': 'infographic',
+    'Slides': 'slides'
+  };
+  return typeMap[artifactType] || artifactType.toLowerCase().replace(/\s+/g, '-');
+}
+
 // Listen for messages from content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
@@ -286,14 +300,17 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
       console.log('[Background] Will wait for onDeterminingFilename to get extension from original filename');
     }
 
-    // Create new filename
-    let newFilename = sanitizeFilename(pendingRequest.name || 'download') + extension;
+    // Create new filename with type prefix
+    const typePrefix = getArtifactTypePrefix(pendingRequest.type);
+    console.log('[Background] Artifact type:', pendingRequest.type, '-> prefix:', typePrefix);
+    let newFilename = `[${typePrefix}]_${sanitizeFilename(pendingRequest.name || 'download')}${extension}`;
 
     // Safety check: if still no extension, we'll try to get it in onDeterminingFilename
     if (!extension) {
       console.log('[Background] No extension determined yet - will extract from original filename later');
     }
     console.log('[Background] Re-downloading as:', newFilename, '(extension from:', downloadItem.filename ? 'filename' : downloadItem.mime ? 'mime' : 'type', ')');
+    console.log('[Background] Full filename with prefix:', newFilename);
 
     // Store re-download info for onDeterminingFilename handler (use download ID as key)
     redownloadRequests.set(downloadItem.id, {
@@ -387,22 +404,28 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
   }
 
   // Check if this download is an intercepted download in our Map
+  // Priority check: If it's in our Map, rename it regardless of URL detection
   const interceptInfo = interceptedDownloads.get(downloadItem.id);
-  if (interceptInfo && isFromNotebookLM) {
+  if (interceptInfo) {
     let filename = interceptInfo.filename;
+    console.log('[Background] Intercepted download - stored filename:', filename);
+    console.log('[Background] Original downloadItem.filename:', downloadItem.filename);
 
     // If filename doesn't have an extension, extract it from the original download filename
     if (!filename.match(/\.[^.]+$/)) {
+      console.log('[Background] Filename missing extension, extracting from original...');
       const originalExt = downloadItem.filename?.match(/\.[^.]+$/)?.[0] || '';
       if (originalExt) {
         filename = filename + originalExt;
-        console.log('[Background] Added extension from original filename:', originalExt);
+        console.log('[Background] Added extension from original filename:', originalExt, '-> new filename:', filename);
       } else {
         console.warn('[Background] Could not determine extension for:', filename);
       }
+    } else {
+      console.log('[Background] Filename already has extension');
     }
 
-    console.log('[Background] Renaming intercepted download to:', filename);
+    console.log('[Background] Final filename for rename:', filename);
     suggest({ filename: filename });
     return true;
   }

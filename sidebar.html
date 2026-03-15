@@ -220,19 +220,70 @@
         <h3 class="setting-section-title">Source Options</h3>
 
         <div class="setting-group">
-          <label>
-            <input type="checkbox" id="include-source-metadata-checkbox" checked>
-            <span>Include source metadata (summary & key topics)</span>
+          <label style="font-weight: 500; display: block; margin-bottom: 8px;">Export Versions (select which file types to create)</label>
+          <p class="setting-help" style="margin-top: 0; margin-bottom: 12px;">Choose which combinations of source files to export. At least one version must be selected.</p>
+
+          <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <input type="checkbox" id="export-source-base-checkbox" checked disabled>
+            <span>Base version (text-only, no metadata)</span>
           </label>
-          <p class="setting-help">When checked, AI-generated source summaries and key topics are included in source exports.</p>
+
+          <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <input type="checkbox" id="export-source-plus-meta-checkbox" checked>
+            <span>With metadata (includes AI summary & key topics)</span>
+          </label>
+
+          <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <input type="checkbox" id="export-source-with-images-checkbox">
+            <span>With images (text-only, embedded base64 images)</span>
+          </label>
+
+          <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <input type="checkbox" id="export-source-plus-meta-with-images-checkbox">
+            <span>With metadata + images (all features combined)</span>
+          </label>
         </div>
 
         <div class="setting-group">
-          <label>
-            <input type="checkbox" id="export-with-images-version-checkbox">
-            <span>Export separate -with-images.md files</span>
+          <label>Sources per ZIP file (batch size)</label>
+          <input type="number" id="sources-per-zip-input" min="5" max="100" value="25" class="number-input">
+          <p class="setting-help">Number of sources to include in each ZIP file. Lower values use less memory and are safer for large exports. Higher values create fewer ZIP files. Recommended: 25 for most users, 10-15 for low-memory systems, 50+ for powerful systems.</p>
+        </div>
+      </div>
+
+      <!-- Notes Options Settings -->
+      <div class="setting-section">
+        <h3 class="setting-section-title">Note Options</h3>
+
+        <div class="setting-group">
+          <label style="font-weight: 500; display: block; margin-bottom: 8px;">Export Versions (select which file types to create)</label>
+          <p class="setting-help" style="margin-top: 0; margin-bottom: 12px;">Choose which combinations of note files to export. At least one version must be selected.</p>
+
+          <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <input type="checkbox" id="export-note-base-checkbox" checked disabled>
+            <span>Base version (markdown citations, no images)</span>
           </label>
-          <p class="setting-help">When checked, exports two versions of each source: a standard text-only file and a -with-images file with embedded images. When unchecked, only exports standard files.</p>
+
+          <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <input type="checkbox" id="export-note-code-blocks-checkbox" checked>
+            <span>Code blocks (citations in code blocks, no images)</span>
+          </label>
+
+          <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <input type="checkbox" id="export-note-with-images-checkbox">
+            <span>With images (markdown citations, embedded base64 images)</span>
+          </label>
+
+          <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+            <input type="checkbox" id="export-note-code-blocks-with-images-checkbox">
+            <span>Code blocks + images (all features combined)</span>
+          </label>
+        </div>
+
+        <div class="setting-group">
+          <label>Notes per ZIP file (batch size)</label>
+          <input type="number" id="notes-per-zip-input" min="5" max="100" value="25" class="number-input">
+          <p class="setting-help">Number of notes to include in each ZIP file. Lower values use less memory and are safer for large exports. Higher values create fewer ZIP files. Recommended: 25 for most users, 10-15 for low-memory systems, 50+ for powerful systems.</p>
         </div>
       </div>
     </div>

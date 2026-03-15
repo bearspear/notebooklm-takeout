@@ -44,10 +44,19 @@ let settings = {
   autoZip: false,
   showNotifications: true,
   refreshInterval: 10,
-  citationsCodeBlock: false, // Don't wrap citations in code blocks by default
-  includeCitationImages: false, // Include images in citations as base64
-  includeSourceMetadata: true, // Include source metadata (summary & key topics) in exports
-  exportWithImagesVersion: false // Export separate -with-images.md file (default: off)
+  // Source export versions (which combinations to create)
+  exportSourceBase: true, // Base version (always enabled, can't be disabled)
+  exportSourcePlusMeta: true, // With metadata (summary & key topics)
+  exportSourceWithImages: false, // With images (no metadata)
+  exportSourcePlusMetaWithImages: false, // With metadata + images
+  // Note export versions (which combinations to create)
+  exportNoteBase: true, // Base version (always enabled, can't be disabled)
+  exportNoteCodeBlocks: true, // Code blocks, no images (was: citationsCodeBlock)
+  exportNoteWithImages: false, // With images, markdown (was: includeCitationImages)
+  exportNoteCodeBlocksWithImages: false, // Code blocks + images
+  // Batch sizes
+  sourcesPerZip: 25, // Number of sources per ZIP file (prevents memory issues)
+  notesPerZip: 25 // Number of notes per ZIP file (prevents memory issues)
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -129,27 +138,86 @@ function enableExportButtons() {
 async function loadSettings() {
   const stored = await chrome.storage.local.get(['settings']);
   if (stored.settings) {
-    settings = { ...settings, ...stored.settings };
+    // Migrate old settings to new format if needed
+    const migrated = { ...settings, ...stored.settings };
+
+    // Migrate old citationsCodeBlock to new exportNoteCodeBlocks
+    if ('citationsCodeBlock' in stored.settings && !('exportNoteCodeBlocks' in stored.settings)) {
+      migrated.exportNoteCodeBlocks = stored.settings.citationsCodeBlock;
+    }
+
+    // Migrate old includeCitationImages to new exportNoteWithImages
+    if ('includeCitationImages' in stored.settings && !('exportNoteWithImages' in stored.settings)) {
+      migrated.exportNoteWithImages = stored.settings.includeCitationImages;
+    }
+
+    // Migrate old includeSourceMetadata to new exportSourcePlusMeta
+    if ('includeSourceMetadata' in stored.settings && !('exportSourcePlusMeta' in stored.settings)) {
+      migrated.exportSourcePlusMeta = stored.settings.includeSourceMetadata;
+    }
+
+    // Migrate old exportWithImagesVersion to new exportSourceWithImages
+    if ('exportWithImagesVersion' in stored.settings && !('exportSourceWithImages' in stored.settings)) {
+      migrated.exportSourceWithImages = stored.settings.exportWithImagesVersion;
+    }
+
+    settings = migrated;
   }
 
   // Apply settings to UI
   document.getElementById('auto-zip-checkbox').checked = settings.autoZip;
   document.getElementById('show-notifications-checkbox').checked = settings.showNotifications;
   document.getElementById('refresh-interval-input').value = settings.refreshInterval;
-  document.getElementById('citations-code-block-checkbox').checked = settings.citationsCodeBlock;
-  document.getElementById('include-citation-images-checkbox').checked = settings.includeCitationImages;
-  document.getElementById('include-source-metadata-checkbox').checked = settings.includeSourceMetadata;
-  document.getElementById('export-with-images-version-checkbox').checked = settings.exportWithImagesVersion;
+  document.getElementById('citations-code-block-checkbox').checked = settings.citationsCodeBlock || settings.exportNoteCodeBlocks;
+  document.getElementById('include-citation-images-checkbox').checked = settings.includeCitationImages || settings.exportNoteWithImages;
+
+  // Source version checkboxes
+  document.getElementById('export-source-base-checkbox').checked = settings.exportSourceBase;
+  document.getElementById('export-source-plus-meta-checkbox').checked = settings.exportSourcePlusMeta;
+  document.getElementById('export-source-with-images-checkbox').checked = settings.exportSourceWithImages;
+  document.getElementById('export-source-plus-meta-with-images-checkbox').checked = settings.exportSourcePlusMetaWithImages;
+
+  // Note version checkboxes
+  document.getElementById('export-note-base-checkbox').checked = settings.exportNoteBase;
+  document.getElementById('export-note-code-blocks-checkbox').checked = settings.exportNoteCodeBlocks;
+  document.getElementById('export-note-with-images-checkbox').checked = settings.exportNoteWithImages;
+  document.getElementById('export-note-code-blocks-with-images-checkbox').checked = settings.exportNoteCodeBlocksWithImages;
+
+  // Batch sizes
+  document.getElementById('sources-per-zip-input').value = settings.sourcesPerZip;
+  document.getElementById('notes-per-zip-input').value = settings.notesPerZip;
 }
 
 async function saveSettings() {
   settings.autoZip = document.getElementById('auto-zip-checkbox').checked;
   settings.showNotifications = document.getElementById('show-notifications-checkbox').checked;
   settings.refreshInterval = parseInt(document.getElementById('refresh-interval-input').value) || 10;
-  settings.citationsCodeBlock = document.getElementById('citations-code-block-checkbox').checked;
-  settings.includeCitationImages = document.getElementById('include-citation-images-checkbox').checked;
-  settings.includeSourceMetadata = document.getElementById('include-source-metadata-checkbox').checked;
-  settings.exportWithImagesVersion = document.getElementById('export-with-images-version-checkbox').checked;
+
+  // Keep old settings for backward compatibility (chat/data table exports)
+  const citationsCodeBlockCheckbox = document.getElementById('citations-code-block-checkbox');
+  const includeCitationImagesCheckbox = document.getElementById('include-citation-images-checkbox');
+  if (citationsCodeBlockCheckbox) {
+    settings.citationsCodeBlock = citationsCodeBlockCheckbox.checked;
+  }
+  if (includeCitationImagesCheckbox) {
+    settings.includeCitationImages = includeCitationImagesCheckbox.checked;
+  }
+
+  // Source version selections
+  settings.exportSourceBase = document.getElementById('export-source-base-checkbox').checked;
+  settings.exportSourcePlusMeta = document.getElementById('export-source-plus-meta-checkbox').checked;
+  settings.exportSourceWithImages = document.getElementById('export-source-with-images-checkbox').checked;
+  settings.exportSourcePlusMetaWithImages = document.getElementById('export-source-plus-meta-with-images-checkbox').checked;
+
+  // Note version selections
+  settings.exportNoteBase = document.getElementById('export-note-base-checkbox').checked;
+  settings.exportNoteCodeBlocks = document.getElementById('export-note-code-blocks-checkbox').checked;
+  settings.exportNoteWithImages = document.getElementById('export-note-with-images-checkbox').checked;
+  settings.exportNoteCodeBlocksWithImages = document.getElementById('export-note-code-blocks-with-images-checkbox').checked;
+
+  // Batch sizes
+  settings.sourcesPerZip = parseInt(document.getElementById('sources-per-zip-input').value) || 25;
+  settings.notesPerZip = parseInt(document.getElementById('notes-per-zip-input').value) || 25;
 
   await chrome.storage.local.set({ settings });
 }
@@ -177,6 +245,60 @@ function setupEventListeners() {
   // Settings inputs
   document.querySelectorAll('#settings-panel input').forEach(input => {
     input.addEventListener('change', saveSettings);
+  });
+
+  // Add validation for source version checkboxes (ensure at least one is selected)
+  const sourceVersionCheckboxes = [
+    'export-source-base-checkbox',
+    'export-source-plus-meta-checkbox',
+    'export-source-with-images-checkbox',
+    'export-source-plus-meta-with-images-checkbox'
+  ];
+
+  sourceVersionCheckboxes.forEach(id => {
+    const checkbox = document.getElementById(id);
+    if (checkbox && !checkbox.disabled) {
+      checkbox.addEventListener('change', (e) => {
+        // Check if at least one source version is still selected
+        const anyChecked = sourceVersionCheckboxes.some(cbId => {
+          const cb = document.getElementById(cbId);
+          return cb && cb.checked;
+        });
+
+        // If none are checked, prevent unchecking this one
+        if (!anyChecked) {
+          e.target.checked = true;
+          showToast('At least one source version must be selected', 'error');
+        }
+      });
+    }
+  });
+
+  // Add validation for note version checkboxes (ensure at least one is selected)
+  const noteVersionCheckboxes = [
+    'export-note-base-checkbox',
+    'export-note-code-blocks-checkbox',
+    'export-note-with-images-checkbox',
+    'export-note-code-blocks-with-images-checkbox'
+  ];
+
+  noteVersionCheckboxes.forEach(id => {
+    const checkbox = document.getElementById(id);
+    if (checkbox && !checkbox.disabled) {
+      checkbox.addEventListener('change', (e) => {
+        // Check if at least one note version is still selected
+        const anyChecked = noteVersionCheckboxes.some(cbId => {
+          const cb = document.getElementById(cbId);
+          return cb && cb.checked;
+        });
+
+        // If none are checked, prevent unchecking this one
+        if (!anyChecked) {
+          e.target.checked = true;
+          showToast('At least one note version must be selected', 'error');
+        }
+      });
+    }
   });
 
   // Sources scan button
@@ -309,6 +431,20 @@ async function retryDownload(downloadFn, maxRetries = 3, itemName = 'item') {
 // ==================== MESSAGE-BASED DOWNLOAD ====================
 
 /**
+ * Get artifact type prefix for filenames
+ */
+function getArtifactTypePrefix(artifactType) {
+  const typeMap = {
+    'Audio Overview': 'audio-overview',
+    'Data Table': 'data-table',
+    'Report': 'report',
+    'Infographic': 'infographic',
+    'Slides': 'slides'
+  };
+  return typeMap[artifactType] || artifactType.toLowerCase().replace(/\s+/g, '-');
+}
+
+/**
  * Download artifact using message passing (NEW PATTERN)
  * Replaces script injection with content script messaging
  */
@@ -380,18 +516,19 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
     // Handle different download methods
     if (response.method === 'content_extraction') {
       // Content extraction (Reports and Data Tables)
-      const filename = response.title || artifactName || 'report';
+      const baseFilename = response.title || artifactName || 'artifact';
+      const typePrefix = getArtifactTypePrefix(artifactType);
 
       // For Data Tables, convert to CSV
       if (artifactType === 'Data Table') {
-        logger.info('Download', `Downloading extracted content as CSV: "${filename}"`);
+        logger.info('Download', `Downloading extracted content as CSV: "${baseFilename}"`);
 
         // Convert HTML table to CSV and JSON
         let csvContent;
         let tableData = null;
         let footnotes = '';
         if (response.format === 'html') {
-          logger.info('Download', `Converting HTML table to CSV for: "${filename}"`);
+          logger.info('Download', `Converting HTML table to CSV for: "${baseFilename}"`);
           csvContent = convertTableToCSV(response.data);
 
           // Extract structured table data for JSON
@@ -403,22 +540,30 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
           csvContent = response.data;
         }
 
-        // If there are footnotes or structured data, create a ZIP with CSV, JSON, and references
+        // If there are footnotes or structured data, create a ZIP with CSV, JSON, HTML, and references
         if ((footnotes && footnotes.trim().length > 0) || tableData) {
-          logger.info('Download', `Creating ZIP with CSV, JSON, and references for: "${filename}"`);
+          logger.info('Download', `Creating ZIP with CSV, JSON, HTML, and references for: "${baseFilename}"`);
 
           const zip = new JSZip();
-          zip.file(sanitizeFilename(filename) + '.csv', csvContent);
+          const sanitizedName = sanitizeFilename(baseFilename);
+          zip.file(`${sanitizedName}.csv`, csvContent);
 
           // Add JSON version with table data and footnotes
           if (tableData) {
             const jsonData = {
-              title: filename,
+              title: baseFilename,
               exported: new Date().toISOString(),
               table: tableData,
               footnotes: footnotes ? footnotes.split('\n\n').filter(line => /^\[\d+\]/.test(line.trim())) : []
             };
-            zip.file(sanitizeFilename(filename) + '.json', JSON.stringify(jsonData, null, 2));
+            zip.file(`${sanitizedName}.json`, JSON.stringify(jsonData, null, 2));
+          }
+
+          // Add clean HTML version with table and footnotes
+          const cleanHTML = createCleanTableHTML(response.data, baseFilename, footnotes);
+          if (cleanHTML) {
+            zip.file(`${sanitizedName}.html`, cleanHTML);
+            logger.info('Download', `Added clean HTML table to ZIP`);
           }
 
           // Add references text file
@@ -431,12 +576,12 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
             try {
               const a = document.createElement('a');
               a.href = url;
-              a.download = sanitizeFilename(filename) + '.zip';
+              a.download = `[${typePrefix}]_${sanitizedName}.zip`;
               document.body.appendChild(a);
               a.click();
               document.body.removeChild(a);
 
-              logger.download(filename, 'success', `Downloaded as ZIP with CSV, JSON, and references`);
+              logger.download(baseFilename, 'success', `Downloaded as ZIP with CSV, HTML, JSON, and references`);
             } finally {
               URL.revokeObjectURL(url);
             }
@@ -448,12 +593,12 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
           try {
             const a = document.createElement('a');
             a.href = url;
-            a.download = sanitizeFilename(filename) + '.csv';
+            a.download = `[${typePrefix}]_${sanitizeFilename(baseFilename)}.csv`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
 
-            logger.download(filename, 'success', `Downloaded as CSV (${csvContent.length} chars)`);
+            logger.download(baseFilename, 'success', `Downloaded as CSV (${csvContent.length} chars)`);
           } finally {
             URL.revokeObjectURL(url);
           }
@@ -463,15 +608,15 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
         chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
       } else {
         // For Reports and other content, convert to markdown
-        logger.info('Download', `Downloading extracted content as markdown: "${filename}"`);
+        logger.info('Download', `Downloading extracted content as markdown: "${baseFilename}"`);
 
         // Convert HTML to markdown (content.js returns HTML, we convert it here)
         let markdownContent;
         if (response.format === 'html') {
-          logger.info('Download', `Converting HTML to markdown for: "${filename}"`);
+          logger.info('Download', `Converting HTML to markdown for: "${baseFilename}"`);
           // For Reports, skip adding title if it's already in the content (prevents duplicate H1)
           const skipTitle = (artifactType === 'Report');
-          markdownContent = convertToMarkdown(response.data, [], filename, settings.citationsCodeBlock, skipTitle);
+          markdownContent = convertToMarkdown(response.data, [], baseFilename, settings.citationsCodeBlock, skipTitle);
         } else {
           // Already markdown
           markdownContent = response.data;
@@ -483,7 +628,7 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
         try {
           const a = document.createElement('a');
           a.href = url;
-          a.download = sanitizeFilename(filename) + '.md';
+          a.download = `[${typePrefix}]_${sanitizeFilename(baseFilename)}.md`;
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
@@ -491,7 +636,7 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
           // Cancel intercept mode (wasn't needed)
           chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
 
-          logger.download(filename, 'success', `Downloaded as markdown (${markdownContent.length} chars)`);
+          logger.download(baseFilename, 'success', `Downloaded as markdown (${markdownContent.length} chars)`);
         } finally {
           URL.revokeObjectURL(url);
         }
@@ -501,7 +646,7 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
       // Use title from response (extracted from page) or fall back to artifactName parameter
       const filename = response.title || artifactName || 'infographic';
       logger.info('Download', `Using filename: "${filename}"`, { from: response.title ? 'response' : 'parameter' });
-      await handleSVGDownload(response.data, filename, response.format);
+      await handleSVGDownload(response.data, filename, response.format, artifactType);
 
       // Cancel intercept mode (wasn't needed)
       chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
@@ -538,7 +683,7 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
  * Handle SVG/Canvas data URL downloads
  * Converts data URL to blob and triggers download
  */
-async function handleSVGDownload(dataUrl, filename, format) {
+async function handleSVGDownload(dataUrl, filename, format, artifactType = 'Infographic') {
   // Validate and sanitize filename
   if (!filename || filename.trim() === '') {
     filename = `infographic-${Date.now()}`;
@@ -556,9 +701,10 @@ async function handleSVGDownload(dataUrl, filename, format) {
     const url = URL.createObjectURL(blob);
 
     try {
-      // Trigger download
+      // Trigger download with type prefix
       const extension = format === 'svg' ? 'svg' : 'png';
-      const sanitizedFilename = sanitizeFilename(filename) + '.' + extension;
+      const typePrefix = getArtifactTypePrefix(artifactType);
+      const sanitizedFilename = `[${typePrefix}]_${sanitizeFilename(filename)}.${extension}`;
 
       logger.info('Download', `Sanitized filename: "${sanitizedFilename}"`);
 
@@ -878,17 +1024,13 @@ function renderNotesList(notes) {
     ${notes.map((note, idx) => {
       // Choose icon based on note type
       const isMindmap = note.type === 'Mindmap';
-      const isReport = note.type === 'Report';
 
       let iconColor = '#1a73e8'; // Default: blue for notes
       if (isMindmap) iconColor = '#ea4335'; // Red for mindmaps
-      if (isReport) iconColor = '#34a853'; // Green for reports
 
       let iconPath;
       if (isMindmap) {
         iconPath = 'M14 2l6 6v12c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h8zm-1 2H6v16h12V9h-5V4zM12 11c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm-5 4h2.5c-.3-.6-.5-1.3-.5-2s.2-1.4.5-2H7v4zm8.5 0H18v-4h-2.5c.3.6.5 1.3.5 2s-.2 1.4-.5 2z';
-      } else if (isReport) {
-        iconPath = 'M19 3h-4.18C14.4 1.84 13.3 1 12 1s-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7-.25c.41 0 .75.34.75.75s-.34.75-.75.75-.75-.34-.75-.75.34-.75.75-.75zM9.1 17H7v-2.14l5.96-5.96 2.12 2.12L9.1 17zm7.75-7.73l-1.06 1.06-2.12-2.12 1.06-1.06c.2-.2.51-.2.71 0l1.41 1.41c.2.2.2.51 0 .71z';
       } else {
         iconPath = 'M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z';
       }
@@ -1263,6 +1405,217 @@ function extractTableDataAsJSON(htmlContent) {
   }
 }
 
+/**
+ * Create a clean HTML file from table data with footnotes
+ * Returns a formatted HTML document string
+ */
+function createCleanTableHTML(htmlContent, title, footnotes) {
+  logger.info('HTML', `Creating clean HTML table document for: "${title}"`);
+
+  try {
+    // Parse HTML content
+    const parser = new DOMParser();
+    let htmlToParse = htmlContent;
+
+    // If HTML starts with <tr>, wrap in table tags
+    if (htmlContent.trim().startsWith('<tr')) {
+      htmlToParse = `<table>${htmlContent}</table>`;
+    }
+
+    const doc = parser.parseFromString(htmlToParse, 'text/html');
+
+    // Try multiple selectors to find the table
+    const tableSelectors = ['table', '[role="table"]', '.table'];
+    let sourceTable = null;
+    for (const selector of tableSelectors) {
+      sourceTable = doc.querySelector(selector);
+      if (sourceTable) {
+        logger.info('HTML', `Found table using selector: ${selector}`);
+        break;
+      }
+    }
+
+    if (!sourceTable) {
+      logger.warn('HTML', 'No table element found');
+      return null;
+    }
+
+    // Get all rows
+    let allRows = sourceTable.querySelectorAll('tr');
+    if (allRows.length === 0) {
+      allRows = sourceTable.querySelectorAll('[role="row"]');
+    }
+
+    logger.info('HTML', `Found ${allRows.length} rows`);
+
+    if (allRows.length === 0) {
+      return null;
+    }
+
+    // Build clean table HTML
+    let tableHTML = '<table>\n';
+
+    allRows.forEach((row, rowIndex) => {
+      // Get cells for this row
+      let cellElements = row.querySelectorAll('th, td');
+      if (cellElements.length === 0) {
+        cellElements = row.querySelectorAll('[role="cell"], [role="columnheader"]');
+      }
+
+      // Determine if this is a header row (first row or contains th elements)
+      const isHeaderRow = rowIndex === 0 || row.querySelectorAll('th').length > 0;
+      const cellTag = isHeaderRow ? 'th' : 'td';
+
+      tableHTML += '  <tr>\n';
+
+      cellElements.forEach(cell => {
+        const cellText = cell.textContent.trim();
+        // Escape HTML entities
+        const escapedText = cellText
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+
+        tableHTML += `    <${cellTag}>${escapedText}</${cellTag}>\n`;
+      });
+
+      tableHTML += '  </tr>\n';
+    });
+
+    tableHTML += '</table>';
+
+    // Build footnotes HTML if present
+    let footnotesHTML = '';
+    if (footnotes && footnotes.trim().length > 0) {
+      footnotesHTML = '\n\n<section class="footnotes">\n';
+      footnotesHTML += '  <h2>References</h2>\n';
+
+      // Parse footnotes into individual items
+      const footnoteItems = footnotes.split('\n\n').filter(line => /^\[\d+\]/.test(line.trim()));
+
+      if (footnoteItems.length > 0) {
+        footnoteItems.forEach(footnote => {
+          const escapedFootnote = footnote
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+          footnotesHTML += `  <p class="footnote">${escapedFootnote}</p>\n`;
+        });
+      }
+
+      footnotesHTML += '</section>';
+    }
+
+    // Create complete HTML document
+    const htmlDocument = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      line-height: 1.6;
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+
+    h1 {
+      color: #333;
+      border-bottom: 3px solid #4285f4;
+      padding-bottom: 10px;
+      margin-bottom: 30px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      margin-bottom: 40px;
+    }
+
+    th, td {
+      border: 1px solid #ddd;
+      padding: 12px 15px;
+      text-align: left;
+    }
+
+    th {
+      background-color: #4285f4;
+      color: white;
+      font-weight: 600;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    tr:nth-child(even) {
+      background-color: #f9f9f9;
+    }
+
+    tr:hover {
+      background-color: #f0f0f0;
+    }
+
+    .footnotes {
+      background: white;
+      padding: 20px 30px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .footnotes h2 {
+      color: #333;
+      border-bottom: 2px solid #4285f4;
+      padding-bottom: 8px;
+      margin-bottom: 20px;
+    }
+
+    .footnote {
+      margin: 12px 0;
+      padding: 8px 0;
+      color: #555;
+      line-height: 1.8;
+    }
+
+    @media print {
+      body {
+        background: white;
+      }
+
+      table {
+        box-shadow: none;
+      }
+
+      th {
+        position: relative;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>${title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</h1>
+
+${tableHTML}
+${footnotesHTML}
+</body>
+</html>`;
+
+    logger.info('HTML', `Created clean HTML document (${htmlDocument.length} chars)`);
+    return htmlDocument;
+
+  } catch (error) {
+    logger.error('HTML', `Error creating clean HTML: ${error.message}`);
+    return null;
+  }
+}
+
 // ==================== MARKDOWN CONVERSION ====================
 
 function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock = true, skipTitleIfPresent = false, noteId = null) {
@@ -1504,7 +1857,23 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
   });
 
   // Convert main content
-  const bodyMarkdown = turndownService.turndown(htmlContent);
+  let bodyMarkdown = turndownService.turndown(htmlContent);
+
+  // Clean up: Merge consecutive footnote references into a single <sup> tag
+  // Pattern: <sup>...[1]...</sup>,<sup>...[2]...</sup> → <sup>...[1]... ...[2]...</sup>
+  // This removes both commas and the >< between footnotes
+  bodyMarkdown = bodyMarkdown.replace(/<\/sup>\s*,?\s*<sup>/g, ' ');
+
+  // Clean up escaped brackets that appear between sup tags
+  // Pattern: </sup>\> <<sup> (literal backslash-greater-than space less-than)
+  bodyMarkdown = bodyMarkdown.replace(/<\/sup>\\>\s*<<sup>/g, ' ');
+
+  // Also clean up unescaped >< between sup tags
+  // Pattern: </sup>><sup> or </sup>> <<sup>
+  bodyMarkdown = bodyMarkdown.replace(/<\/sup>>\s*<<sup>/g, ' ');
+
+  // Final cleanup: remove any remaining standalone \> < patterns in text
+  bodyMarkdown = bodyMarkdown.replace(/\\>\s*</g, '');
 
   // Check if content already starts with the title as H1
   let markdown = '';
@@ -1739,10 +2108,31 @@ function stripImagesFromMarkdown(markdown) {
 
 // ==================== EXPORT ORCHESTRATION ====================
 
+/**
+ * Extract project name from the NotebookLM page
+ */
+async function getProjectName(tabId) {
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_PROJECT_NAME' });
+    if (response && response.projectName) {
+      console.log('[NotebookLM Takeout] Project name:', response.projectName);
+      return response.projectName;
+    }
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Could not extract project name:', error);
+  }
+  return 'NotebookLM';
+}
+
 async function exportNotesAsMarkdown(selectedNotes) {
   console.log('[NotebookLM Takeout] Starting export for notes:', selectedNotes.length);
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+  // Get project name and timestamp at the start (same for all batches)
+  const projectName = await getProjectName(tab.id);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+  console.log('[NotebookLM Takeout] Export timestamp:', timestamp, 'Project:', projectName);
 
   // Show overlay on the page
   await chrome.tabs.sendMessage(tab.id, {
@@ -1758,7 +2148,6 @@ async function exportNotesAsMarkdown(selectedNotes) {
   progressText.textContent = 'Preparing export...';
   progressFill.style.width = '0%';
 
-  const exportedNotes = [];
   const allErrors = [];
   let cancelled = false;
 
@@ -1773,7 +2162,28 @@ async function exportNotesAsMarkdown(selectedNotes) {
   console.log('[NotebookLM Takeout] Current tab ID:', tab?.id);
 
   try {
-    for (let i = 0; i < selectedNotes.length; i++) {
+    // Calculate batch configuration
+    const NOTES_PER_ZIP = settings.notesPerZip;
+    const totalZips = Math.ceil(selectedNotes.length / NOTES_PER_ZIP);
+    console.log(`[NotebookLM Takeout] Will create ${totalZips} ZIP(s) for ${selectedNotes.length} notes (${NOTES_PER_ZIP} per ZIP)`);
+
+    // Process in batches: extract batch → create ZIP → download → clear memory → repeat
+    for (let zipIndex = 0; zipIndex < totalZips; zipIndex++) {
+      if (cancelled) {
+        console.log('[NotebookLM Takeout] Export cancelled by user');
+        showToast('Export cancelled', 'warning');
+        break;
+      }
+
+      const startIdx = zipIndex * NOTES_PER_ZIP;
+      const endIdx = Math.min(startIdx + NOTES_PER_ZIP, selectedNotes.length);
+      const batchNotes = selectedNotes.slice(startIdx, endIdx);
+      const exportedNotes = []; // Only store current batch in memory
+
+      console.log(`[NotebookLM Takeout] Processing batch ${zipIndex + 1}/${totalZips}: notes ${startIdx + 1}-${endIdx}`);
+
+    // Extract notes for this batch only
+    for (let i = 0; i < batchNotes.length; i++) {
       // Check for cancellation
       if (cancelled) {
         console.log('[NotebookLM Takeout] Export cancelled by user');
@@ -1781,19 +2191,20 @@ async function exportNotesAsMarkdown(selectedNotes) {
         break;
       }
 
-      const note = selectedNotes[i];
-      const progress = ((i + 1) / selectedNotes.length) * 100;
+      const note = batchNotes[i];
+      const overallIndex = startIdx + i;
+      const progress = ((overallIndex + 1) / selectedNotes.length) * 100;
 
-      console.log(`[NotebookLM Takeout] Processing note ${i + 1}/${selectedNotes.length}:`, note.title, 'index:', note.index);
+      console.log(`[NotebookLM Takeout] Processing note ${overallIndex + 1}/${selectedNotes.length}:`, note.title, 'index:', note.index);
 
       // Update sidebar progress
       progressFill.style.width = `${progress}%`;
-      progressText.textContent = `Processing ${i + 1}/${selectedNotes.length}: ${note.title}`;
+      progressText.textContent = `Batch ${zipIndex + 1}/${totalZips}: Processing ${i + 1}/${batchNotes.length}: ${note.title}`;
 
       // Update page overlay
       await chrome.tabs.sendMessage(tab.id, {
         type: 'UPDATE_EXPORT_OVERLAY',
-        message: `Processing ${i + 1}/${selectedNotes.length}: ${note.title}`,
+        message: `Batch ${zipIndex + 1}/${totalZips}: Processing ${i + 1}/${batchNotes.length}: ${note.title}`,
         progress: progress
       });
 
@@ -1826,7 +2237,6 @@ async function exportNotesAsMarkdown(selectedNotes) {
             exportedNotes.push({
               title: note.title,
               isMindmap: true,
-              isReport: note.type === 'Report',
               svgContent: noteData.svgContent,
               treeData: noteData.treeData
             });
@@ -1837,14 +2247,13 @@ async function exportNotesAsMarkdown(selectedNotes) {
             exportedNotes.push({
               title: note.title,
               markdown: markdown,
-              isReport: note.type === 'Report',
               // Store raw data for combined-notes.md (which needs unique noteIds)
               html: noteData.html,
               sources: noteData.sources
             });
           }
 
-          console.log(`[NotebookLM Takeout] ✓ Successfully extracted note ${i + 1}/${selectedNotes.length}`);
+          console.log(`[NotebookLM Takeout] ✓ Successfully extracted note ${overallIndex + 1}/${selectedNotes.length}`);
         } else {
           const errorMsg = `[${note.title}] Failed to extract: ${noteData?.error || 'unknown error'}`;
           allErrors.push(errorMsg);
@@ -1876,67 +2285,65 @@ async function exportNotesAsMarkdown(selectedNotes) {
       }
     }
 
-    // Create ZIP with both formats (or download single file if only one item)
+    // Now create ZIP for this batch and download it immediately
     if (exportedNotes.length > 0) {
-      if (exportedNotes.length === 1 && exportedNotes[0].isMindmap) {
-        // Single mindmap - download as ZIP with SVG and JSON
-        const mindmap = exportedNotes[0];
-        const zip = new JSZip();
-        const baseName = sanitizeFilename(mindmap.title);
+      console.log(`[NotebookLM Takeout] Creating ZIP ${zipIndex + 1}/${totalZips} with ${exportedNotes.length} notes from this batch`);
+      progressText.textContent = `Creating ZIP ${zipIndex + 1}/${totalZips}...`;
+      progressFill.style.width = '100%';
+      // Create ZIP for this batch (pass ALL errors only to LAST batch so errors.txt contains everything)
+      const batchErrors = (zipIndex === totalZips - 1) ? allErrors : [];
+      const versionCount = await createNotesZip(exportedNotes, batchErrors, zipIndex + 1, totalZips, projectName, timestamp);
 
-        // Add errors.txt if there are any errors
-        if (allErrors.length > 0) {
-          let errorsContent = '# NotebookLM Export Errors\n\n';
-          errorsContent += `Total Errors: ${allErrors.length}\n`;
-          errorsContent += `Generated: ${new Date().toLocaleString()}\n\n`;
-          errorsContent += '---\n\n';
-          allErrors.forEach((err, idx) => {
-            errorsContent += `${idx + 1}. ${err}\n`;
-          });
-          zip.file('errors.txt', errorsContent);
-        }
-
-        zip.file(`${baseName}.svg`, mindmap.svgContent);
-        zip.file(`${baseName}.json`, JSON.stringify(mindmap.treeData, null, 2));
-
-        const blob = await zip.generateAsync({ type: 'blob' });
-        const url = URL.createObjectURL(blob);
-        try {
-          const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-          const filename = `${baseName}-${timestamp}.zip`;
-
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = filename;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-
-          const successMsg = allErrors.length > 0
-            ? `Exported mindmap with ${allErrors.length} errors (see errors.txt)`
-            : `Successfully exported mindmap`;
-          showToast(successMsg, allErrors.length > 0 ? 'warning' : 'success');
-        } finally {
-          URL.revokeObjectURL(url);
-        }
-      } else {
-        // Multiple items or markdown notes - create ZIP
-        const versionCount = await createNotesZip(exportedNotes, allErrors);
+      // Show toast only on last batch
+      if (zipIndex === totalZips - 1) {
         let successMsg;
-        if (versionCount > 1) {
-          successMsg = allErrors.length > 0
-            ? `Exported ${exportedNotes.length} notes in ${versionCount} versions with ${allErrors.length} errors (see errors.txt)`
-            : `Successfully exported ${exportedNotes.length} notes in ${versionCount} versions`;
+        if (allErrors.length > 0) {
+          // Build detailed error message
+          const errorCount = allErrors.length;
+          const failedNotes = allErrors.filter(e => e.includes('Extraction failed')).length;
+
+          if (versionCount > 1) {
+            successMsg = `Exported ${selectedNotes.length} notes in ${totalZips} ZIP(s) (${versionCount} versions) with ${errorCount} warning(s)`;
+          } else {
+            successMsg = `Exported ${selectedNotes.length} notes in ${totalZips} ZIP(s) with ${errorCount} warning(s)`;
+          }
+
+          if (failedNotes > 0) {
+            successMsg += ` (${failedNotes} failed to extract)`;
+          }
+          successMsg += '. See errors.txt in last ZIP for details.';
         } else {
-          successMsg = allErrors.length > 0
-            ? `Exported ${exportedNotes.length} notes with ${allErrors.length} errors (see errors.txt)`
-            : `Successfully exported ${exportedNotes.length} notes`;
+          // Success message
+          if (versionCount > 1) {
+            successMsg = `Successfully exported ${selectedNotes.length} notes in ${totalZips} ZIP(s) (${versionCount} versions)`;
+          } else {
+            successMsg = `Successfully exported ${selectedNotes.length} notes in ${totalZips} ZIP(s)`;
+          }
         }
         showToast(successMsg, allErrors.length > 0 ? 'warning' : 'success');
       }
-    } else {
-      showToast('No notes were exported', 'error');
-    }
+
+      // CRITICAL: Clear memory after each ZIP to prevent crashes
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Clear the batch data to free memory
+      exportedNotes.forEach(note => {
+        note.markdown = null;
+        note.html = null;
+        note.sources = null;
+        note.svgContent = null;
+        note.treeData = null;
+      });
+
+      console.log(`[NotebookLM Takeout] Cleared memory for batch ${zipIndex + 1}/${totalZips}`);
+      exportedNotes.length = 0;
+
+      // Give GC time to work between batches
+      if (zipIndex < totalZips - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    } // End of "if exportedNotes.length > 0"
+    } // End of batch loop
 
   } catch (error) {
     console.error('Export failed:', error);
@@ -1959,13 +2366,18 @@ async function exportNotesAsMarkdown(selectedNotes) {
   }
 }
 
-async function createNotesZip(notes, errors = []) {
+async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches = 1, projectName = 'NotebookLM', timestamp = null) {
   const zip = new JSZip();
   const indexFiles = []; // Track all files for _index.md
   let versionCount = 0; // Track number of versions created
 
-  // Add errors.txt if there are any errors
-  if (errors.length > 0) {
+  // Use provided timestamp or generate new one
+  if (!timestamp) {
+    timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+  }
+
+  // Add errors.txt if there are any errors (only in LAST batch so it contains ALL errors)
+  if (errors.length > 0 && batchIndex === totalBatches) {
     let errorsContent = '# NotebookLM Export Errors\n\n';
     errorsContent += `Total Errors: ${errors.length}\n`;
     errorsContent += `Generated: ${new Date().toLocaleString()}\n\n`;
@@ -1977,27 +2389,28 @@ async function createNotesZip(notes, errors = []) {
     indexFiles.push({ path: 'errors.txt', title: 'Export Errors' });
   }
 
-  // Separate notes, reports, and mindmaps
-  const regularNotes = notes.filter(n => !n.isMindmap && !n.isReport);
-  const reports = notes.filter(n => n.isReport);
+  // Separate notes and mindmaps
+  const regularNotes = notes.filter(n => !n.isMindmap);
   const mindmaps = notes.filter(n => n.isMindmap);
 
-  // Determine which versions to create (cumulative based on settings)
+  // Determine which versions to create based on settings
   const versions = [];
 
-  // Version 1: Base (markdown rendering, no images) - ALWAYS included
-  versions.push({
-    folderSuffix: '',
-    fileSuffix: '',
-    combinedSuffix: '',
-    citationsCodeBlock: false,
-    stripImages: true,
-    title: 'Base (markdown, no images)',
-    description: 'Citations rendered as markdown, images stripped'
-  });
+  // Version 1: Base (markdown rendering, no images) - Always created if enabled
+  if (settings.exportNoteBase) {
+    versions.push({
+      folderSuffix: '',
+      fileSuffix: '',
+      combinedSuffix: '',
+      citationsCodeBlock: false,
+      stripImages: true,
+      title: 'Base (markdown, no images)',
+      description: 'Citations rendered as markdown, images stripped'
+    });
+  }
 
-  // Version 2: Code blocks, no images (if citationsCodeBlock is ON)
-  if (settings.citationsCodeBlock) {
+  // Version 2: Code blocks, no images
+  if (settings.exportNoteCodeBlocks) {
     versions.push({
       folderSuffix: '-code-blocks',
       fileSuffix: '-code-blocks',
@@ -2009,8 +2422,8 @@ async function createNotesZip(notes, errors = []) {
     });
   }
 
-  // Version 3: Markdown rendering, with images (if includeCitationImages is ON)
-  if (settings.includeCitationImages) {
+  // Version 3: Markdown rendering, with images
+  if (settings.exportNoteWithImages) {
     versions.push({
       folderSuffix: '-with-images',
       fileSuffix: '-with-images',
@@ -2022,8 +2435,8 @@ async function createNotesZip(notes, errors = []) {
     });
   }
 
-  // Version 4: Code blocks, with images (if BOTH settings are ON)
-  if (settings.citationsCodeBlock && settings.includeCitationImages) {
+  // Version 4: Code blocks, with images
+  if (settings.exportNoteCodeBlocksWithImages) {
     versions.push({
       folderSuffix: '-code-blocks-with-images',
       fileSuffix: '-code-blocks-with-images',
@@ -2035,8 +2448,7 @@ async function createNotesZip(notes, errors = []) {
     });
   }
 
-  console.log(`[NotebookLM Takeout] Creating ${versions.length} version(s)`);
-  console.log(`[NotebookLM Takeout] Regular notes: ${regularNotes.length}, Reports: ${reports.length}`);
+  console.log(`[NotebookLM Takeout] Creating ${versions.length} version(s) of ${regularNotes.length} notes`);
   versionCount = versions.length;
 
   // Process regular notes (all versions in single notes/ folder with suffixes)
@@ -2128,81 +2540,6 @@ async function createNotesZip(notes, errors = []) {
     });
   }
 
-  // Process reports (single version only - no permutations)
-  if (reports.length > 0) {
-    const reportsFolder = zip.folder('reports');
-    const usedFilenames = new Set();
-
-    // Individual report files
-    reports.forEach(report => {
-      let baseFilename = sanitizeFilename(report.title);
-      let filename = baseFilename + '.md';
-      let counter = 2;
-
-      // If duplicate, append counter
-      while (usedFilenames.has(filename)) {
-        filename = `${baseFilename}-${counter}.md`;
-        counter++;
-      }
-
-      usedFilenames.add(filename);
-
-      // Generate markdown - always use base settings (markdown rendering, no images)
-      // Use skipTitleIfPresent=true to avoid duplicate titles
-      let markdown = convertToMarkdown(
-        report.html,
-        report.sources,
-        report.title,
-        false, // citationsCodeBlock = false (markdown rendering)
-        true   // skipTitleIfPresent = true
-      );
-
-      // Strip images (reports are text-only)
-      markdown = stripImagesFromMarkdown(markdown);
-
-      reportsFolder.file(filename, markdown);
-      indexFiles.push({
-        path: `reports/${filename}`,
-        title: report.title,
-        itemType: 'Reports'
-      });
-    });
-
-    // Combined reports file
-    let combinedMarkdown = '# NotebookLM Reports Export\n\n';
-    combinedMarkdown += `Exported: ${new Date().toLocaleString()}\n\n`;
-    combinedMarkdown += `Total Reports: ${reports.length}\n\n`;
-    combinedMarkdown += '---\n\n';
-
-    reports.forEach((report, idx) => {
-      // Re-convert with unique reportId to prevent citation anchor collisions
-      const reportId = idx + 1;
-      let reportMarkdown = convertToMarkdown(
-        report.html,
-        report.sources,
-        report.title,
-        false, // citationsCodeBlock = false
-        false, // skipTitleIfPresent = false (include title in combined file)
-        reportId // unique ID for this report's anchors
-      );
-
-      // Strip images
-      reportMarkdown = stripImagesFromMarkdown(reportMarkdown);
-
-      combinedMarkdown += reportMarkdown + '\n\n';
-      if (idx < reports.length - 1) {
-        combinedMarkdown += '---\n\n';
-      }
-    });
-
-    zip.file('combined-reports.md', combinedMarkdown);
-    indexFiles.push({
-      path: 'combined-reports.md',
-      title: 'Combined Reports',
-      itemType: 'Reports'
-    });
-  }
-
   // Create mindmap SVG and JSON files
   if (mindmaps.length > 0) {
     const mindmapsFolder = zip.folder('mindmaps');
@@ -2228,10 +2565,14 @@ async function createNotesZip(notes, errors = []) {
   }
 
   // Generate _index.md with links to all files
-  let indexContent = '# NotebookLM Notes & Reports Export - File Index\n\n';
+  let indexContent = '# NotebookLM Notes Export - File Index\n\n';
   indexContent += `Generated: ${new Date().toLocaleString()}\n\n`;
+
+  if (totalBatches > 1) {
+    indexContent += `**Part ${batchIndex} of ${totalBatches}**\n\n`;
+  }
+
   indexContent += `Total Notes: ${regularNotes.length}\n`;
-  indexContent += `Total Reports: ${reports.length}\n`;
   indexContent += `Total Mindmaps: ${mindmaps.length}\n`;
   indexContent += `Total Files: ${indexFiles.length}\n\n`;
   indexContent += '---\n\n';
@@ -2283,29 +2624,6 @@ async function createNotesZip(notes, errors = []) {
     }
   }
 
-  // Generate Reports section (single version only)
-  if (reports.length > 0) {
-    indexContent += `# Reports\n\n`;
-    indexContent += `Total: ${reports.length}\n\n`;
-
-    // Combined reports file
-    const combinedReports = indexFiles.find(f => f.path === 'combined-reports.md');
-    if (combinedReports) {
-      indexContent += `## Combined Reports (All in One File)\n\n`;
-      indexContent += `- **[${combinedReports.title}](${encodeURI(combinedReports.path)})**\n\n`;
-    }
-
-    // Individual report files
-    const reportFiles = indexFiles.filter(f => f.path.startsWith('reports/') && f.itemType === 'Reports');
-    if (reportFiles.length > 0) {
-      indexContent += `## Individual Reports\n\n`;
-      reportFiles.forEach(file => {
-        indexContent += `- [${file.title}](${encodeURI(file.path)})\n`;
-      });
-      indexContent += '\n';
-    }
-  }
-
   if (mindmaps.length > 0) {
     indexContent += '# Mindmaps\n\n';
     indexContent += `Total: ${mindmaps.length}\n\n`;
@@ -2330,8 +2648,13 @@ async function createNotesZip(notes, errors = []) {
   const url = URL.createObjectURL(blob);
 
   try {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-    const filename = `notebooklm-notes-${timestamp}.zip`;
+    const sanitizedProjectName = sanitizeFilename(projectName);
+    let filename;
+    if (totalBatches > 1) {
+      filename = `${sanitizedProjectName}-notes-${timestamp}-part${batchIndex}of${totalBatches}.zip`;
+    } else {
+      filename = `${sanitizedProjectName}-notes-${timestamp}.zip`;
+    }
 
     const a = document.createElement('a');
     a.href = url;
@@ -2339,6 +2662,8 @@ async function createNotesZip(notes, errors = []) {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+
+    console.log(`[NotebookLM Takeout] Downloaded notes ZIP ${batchIndex}/${totalBatches}: ${filename}`);
   } finally {
     URL.revokeObjectURL(url);
   }
@@ -2516,6 +2841,11 @@ async function exportSources(selectedSources) {
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
+  // Get project name and timestamp at the start (same for all batches)
+  const projectName = await getProjectName(tab.id);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+  console.log('[NotebookLM Takeout] Export timestamp:', timestamp, 'Project:', projectName);
+
   // Show overlay on the page
   await chrome.tabs.sendMessage(tab.id, {
     type: 'SHOW_EXPORT_OVERLAY',
@@ -2531,7 +2861,6 @@ async function exportSources(selectedSources) {
   progressText.textContent = `Exporting sources...`;
   progressFill.style.width = '0%';
 
-  const exportedSources = [];
   const allErrors = [];
   let cancelled = false;
 
@@ -2556,8 +2885,28 @@ async function exportSources(selectedSources) {
   chrome.runtime.onMessage.addListener(cancelListener);
 
   try {
-    // Extract each source
-    for (let i = 0; i < selectedSources.length; i++) {
+    // Calculate batch configuration
+    const SOURCES_PER_ZIP = settings.sourcesPerZip;
+    const totalZips = Math.ceil(selectedSources.length / SOURCES_PER_ZIP);
+    console.log(`[NotebookLM Takeout] Will create ${totalZips} ZIP(s) for ${selectedSources.length} sources (${SOURCES_PER_ZIP} per ZIP)`);
+
+    // Process in batches: extract batch → create ZIP → download → clear memory → repeat
+    for (let zipIndex = 0; zipIndex < totalZips; zipIndex++) {
+      if (cancelled) {
+        console.log('[NotebookLM Takeout] Export cancelled by user');
+        showToast('Export cancelled', 'warning');
+        break;
+      }
+
+      const startIdx = zipIndex * SOURCES_PER_ZIP;
+      const endIdx = Math.min(startIdx + SOURCES_PER_ZIP, selectedSources.length);
+      const batchSources = selectedSources.slice(startIdx, endIdx);
+      const exportedSources = []; // Only store current batch in memory
+
+      console.log(`[NotebookLM Takeout] Processing batch ${zipIndex + 1}/${totalZips}: sources ${startIdx + 1}-${endIdx}`);
+
+    // Extract sources for this batch only
+    for (let i = 0; i < batchSources.length; i++) {
       // Check for cancellation
       if (cancelled) {
         console.log('[NotebookLM Takeout] Export cancelled by user');
@@ -2565,17 +2914,18 @@ async function exportSources(selectedSources) {
         break;
       }
 
-      const source = selectedSources[i];
-      const progress = ((i + 1) / selectedSources.length) * 100;
+      const source = batchSources[i];
+      const overallIndex = startIdx + i;
+      const progress = ((overallIndex + 1) / selectedSources.length) * 100;
 
       // Update sidebar progress
       progressFill.style.width = `${progress}%`;
-      progressText.textContent = `Extracting ${i + 1}/${selectedSources.length}: ${source.title}`;
+      progressText.textContent = `Batch ${zipIndex + 1}/${totalZips}: Extracting ${i + 1}/${batchSources.length}: ${source.title}`;
 
       // Update page overlay
       await chrome.tabs.sendMessage(tab.id, {
         type: 'UPDATE_EXPORT_OVERLAY',
-        message: `Extracting ${i + 1}/${selectedSources.length}: ${source.title}`,
+        message: `Batch ${zipIndex + 1}/${totalZips}: Extracting ${i + 1}/${batchSources.length}: ${source.title}`,
         progress: progress
       });
 
@@ -2772,12 +3122,18 @@ async function exportSources(selectedSources) {
       }
     }
 
-    // Always create ZIP (includes both image-embedded and image-stripped versions)
+    // Now create ZIP for this batch and download it immediately
     if (exportedSources.length > 0) {
+      console.log(`[NotebookLM Takeout] Creating ZIP ${zipIndex + 1}/${totalZips} with ${exportedSources.length} sources from this batch`);
+
+      // Update progress
+      progressText.textContent = `Creating ZIP ${zipIndex + 1}/${totalZips}...`;
+      progressFill.style.width = '100%';
+
       const zip = new JSZip();
       const sourcesFolder = zip.folder('sources');
       const usedSourceFilenames = new Set();
-      const indexFiles = []; // Track all files for _index.md
+      const indexFiles = []; // Track files in this ZIP
 
       exportedSources.forEach(source => {
         let baseFilename = sanitizeFilename(source.title);
@@ -2794,19 +3150,21 @@ async function exportSources(selectedSources) {
           return filename;
         };
 
-        // 1. ALWAYS create base version: [filename].md (no meta, no images)
-        const baseFilename1 = getUniqueFilename();
-        sourcesFolder.file(baseFilename1, source.versions.base);
-        indexFiles.push({
-          path: `sources/${baseFilename1}`,
-          title: source.title,
-          variant: 'base',
-          hasMeta: false,
-          hasImages: false
-        });
+        // 1. Base version: [filename].md (no meta, no images) - Always created if enabled
+        if (settings.exportSourceBase) {
+          const baseFilename1 = getUniqueFilename();
+          sourcesFolder.file(baseFilename1, source.versions.base);
+          indexFiles.push({
+            path: `sources/${baseFilename1}`,
+            title: source.title,
+            variant: 'base',
+            hasMeta: false,
+            hasImages: false
+          });
+        }
 
-        // 2. If metadata enabled: create [filename]-plus-meta.md (with meta, no images)
-        if (settings.includeSourceMetadata) {
+        // 2. Plus metadata version: [filename]-plus-meta.md (with meta, no images)
+        if (settings.exportSourcePlusMeta) {
           const plusMetaFilename = getUniqueFilename('-plus-meta');
           sourcesFolder.file(plusMetaFilename, source.versions.plusMeta);
           indexFiles.push({
@@ -2818,8 +3176,8 @@ async function exportSources(selectedSources) {
           });
         }
 
-        // 3. If images enabled: create [filename]-with-images.md (no meta, with images)
-        if (settings.exportWithImagesVersion) {
+        // 3. With images version: [filename]-with-images.md (no meta, with images)
+        if (settings.exportSourceWithImages) {
           const withImagesFilename = getUniqueFilename('-with-images');
           sourcesFolder.file(withImagesFilename, source.versions.withImages);
           indexFiles.push({
@@ -2831,8 +3189,8 @@ async function exportSources(selectedSources) {
           });
         }
 
-        // 4. If BOTH enabled: create [filename]-plus-meta-with-images.md (with meta, with images)
-        if (settings.includeSourceMetadata && settings.exportWithImagesVersion) {
+        // 4. Plus metadata with images version: [filename]-plus-meta-with-images.md (with meta, with images)
+        if (settings.exportSourcePlusMetaWithImages) {
           const plusMetaWithImagesFilename = getUniqueFilename('-plus-meta-with-images');
           sourcesFolder.file(plusMetaWithImagesFilename, source.versions.plusMetaWithImages);
           indexFiles.push({
@@ -2852,31 +3210,39 @@ async function exportSources(selectedSources) {
       readmeContent += '## File Naming Convention\n\n';
 
       // Determine which versions were created based on settings
-      const hasMetadata = settings.includeSourceMetadata;
-      const hasImages = settings.exportWithImagesVersion;
-      const versionCount = (hasMetadata ? 2 : 1) * (hasImages ? 2 : 1);
+      const enabledVersions = [];
+      if (settings.exportSourceBase) enabledVersions.push('base');
+      if (settings.exportSourcePlusMeta) enabledVersions.push('plusMeta');
+      if (settings.exportSourceWithImages) enabledVersions.push('withImages');
+      if (settings.exportSourcePlusMetaWithImages) enabledVersions.push('plusMetaWithImages');
 
+      const versionCount = enabledVersions.length;
       readmeContent += `Each source is exported in ${versionCount} version(s):\n\n`;
 
-      // 1. Base version (always created)
-      readmeContent += '### 1. Base files (e.g., `Document-1.md`)\n\n';
-      readmeContent += '- **Minimal version** - no metadata, no images\n';
-      readmeContent += '- Smallest file size, fastest to process\n';
-      readmeContent += '- Perfect for AI processing (Claude, ChatGPT, etc.)\n';
-      readmeContent += '- Best for search indexing and text analysis\n\n';
+      let sectionNum = 1;
 
-      // 2. Plus-meta version (if metadata enabled)
-      if (hasMetadata) {
-        readmeContent += '### 2. Plus-meta files (e.g., `Document-1-plus-meta.md`)\n\n';
+      // 1. Base version
+      if (settings.exportSourceBase) {
+        readmeContent += `### ${sectionNum}. Base files (e.g., \`Document-1.md\`)\n\n`;
+        readmeContent += '- **Minimal version** - no metadata, no images\n';
+        readmeContent += '- Smallest file size, fastest to process\n';
+        readmeContent += '- Perfect for AI processing (Claude, ChatGPT, etc.)\n';
+        readmeContent += '- Best for search indexing and text analysis\n\n';
+        sectionNum++;
+      }
+
+      // 2. Plus-meta version
+      if (settings.exportSourcePlusMeta) {
+        readmeContent += `### ${sectionNum}. Plus-meta files (e.g., \`Document-1-plus-meta.md\`)\n\n`;
         readmeContent += '- **With metadata** - includes AI-generated summary & key topics\n';
         readmeContent += '- No images (text only)\n';
         readmeContent += '- Good for understanding source context\n';
         readmeContent += '- Still optimized for AI processing\n\n';
+        sectionNum++;
       }
 
-      // 3. With-images version (if images enabled)
-      if (hasImages) {
-        const sectionNum = hasMetadata ? 3 : 2;
+      // 3. With-images version
+      if (settings.exportSourceWithImages) {
         readmeContent += `### ${sectionNum}. With-images files (e.g., \`Document-1-with-images.md\`)\n\n`;
         readmeContent += '- **With embedded images** - images as base64 data URIs\n';
         readmeContent += '- No metadata (content only)\n';
@@ -2888,15 +3254,17 @@ async function exportSources(selectedSources) {
           readmeContent += `**Image Statistics:** ${stats.imagesFound} image(s) found, `;
           readmeContent += `${stats.imagesEmbedded} successfully embedded as base64.\n\n`;
         }
+        sectionNum++;
       }
 
-      // 4. Plus-meta-with-images version (if both enabled)
-      if (hasMetadata && hasImages) {
-        readmeContent += '### 4. Plus-meta-with-images files (e.g., `Document-1-plus-meta-with-images.md`)\n\n';
+      // 4. Plus-meta-with-images version
+      if (settings.exportSourcePlusMetaWithImages) {
+        readmeContent += `### ${sectionNum}. Plus-meta-with-images files (e.g., \`Document-1-plus-meta-with-images.md\`)\n\n`;
         readmeContent += '- **Complete version** - metadata + images\n';
         readmeContent += '- Largest file size\n';
         readmeContent += '- Best for comprehensive archival\n';
         readmeContent += '- Self-contained with full context\n\n';
+        sectionNum++;
       }
 
       readmeContent += '---\n\n';
@@ -2915,10 +3283,19 @@ async function exportSources(selectedSources) {
       readmeContent += '- **For complete archival**: Use plus-meta-with-images files\n';
       readmeContent += '\n';
 
+      // Add batch info to README
+      if (totalZips > 1) {
+        readmeContent += `\n---\n\n`;
+        readmeContent += `**Note:** This is part ${zipIndex + 1} of ${totalZips} in a split export.\n`;
+        readmeContent += `Total sources across all ZIPs: ${selectedSources.length}\n`;
+        readmeContent += `Sources in this ZIP: ${exportedSources.length}\n`;
+      }
+
       zip.file('README.txt', readmeContent);
 
       // Add detailed error report if there are any issues
-      if (allErrors.length > 0) {
+      // Include errors.txt in the LAST ZIP so it contains ALL errors from all batches
+      if ((zipIndex === totalZips - 1) && allErrors.length > 0) {
         let errorsContent = '# Source Export Error Report\n\n';
         errorsContent += `Generated: ${new Date().toLocaleString()}\n\n`;
         errorsContent += '---\n\n';
@@ -2928,7 +3305,7 @@ async function exportSources(selectedSources) {
         errorsContent += `- **Total Sources Selected:** ${stats.totalSources}\n`;
         errorsContent += `- **Successfully Extracted:** ${stats.successfulExtractions}\n`;
         errorsContent += `- **Failed Extractions:** ${stats.failedExtractions}\n`;
-        if (settings.includeSourceMetadata) {
+        if (settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages) {
           errorsContent += `- **Missing Summaries:** ${stats.missingSummaries}\n`;
           errorsContent += `- **Missing Key Topics:** ${stats.missingKeyTopics}\n`;
         }
@@ -2972,7 +3349,7 @@ async function exportSources(selectedSources) {
           errorsContent += `\n`;
         }
 
-        if (settings.includeSourceMetadata && errorsByType.missing_summary) {
+        if ((settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages) && errorsByType.missing_summary) {
           errorsContent += '### MISSING SUMMARIES\n\n';
           errorsContent += 'The following sources were exported but their source guide/summary was not found:\n\n';
           errorsByType.missing_summary.forEach((err, idx) => {
@@ -2981,7 +3358,7 @@ async function exportSources(selectedSources) {
           errorsContent += `\n`;
         }
 
-        if (settings.includeSourceMetadata && errorsByType.missing_key_topics) {
+        if ((settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages) && errorsByType.missing_key_topics) {
           errorsContent += '### MISSING KEY TOPICS\n\n';
           errorsContent += 'The following sources were exported but their key topics were not found:\n\n';
           errorsByType.missing_key_topics.forEach((err, idx) => {
@@ -3013,10 +3390,10 @@ async function exportSources(selectedSources) {
         if (stats.failedExtractions > 0) {
           errorsContent += '- Some sources failed to extract completely. Try exporting them individually.\n';
         }
-        if (settings.includeSourceMetadata && stats.missingSummaries > 0) {
+        if ((settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages) && stats.missingSummaries > 0) {
           errorsContent += '- Some sources are missing summaries. This may happen if NotebookLM hasn\'t generated the source guide yet.\n';
         }
-        if (settings.includeSourceMetadata && stats.missingKeyTopics > 0) {
+        if ((settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages) && stats.missingKeyTopics > 0) {
           errorsContent += '- Some sources are missing key topics. This is usually included in the source guide.\n';
         }
         if (errorsByType.image_download_failed || errorsByType.image_embedding_error) {
@@ -3032,7 +3409,7 @@ async function exportSources(selectedSources) {
       // Add README to index
       indexFiles.push({ path: 'README.txt', title: 'README - File Naming Convention' });
 
-      // Create youtube-urls.txt if any YouTube sources were found
+      // Create youtube-urls.txt if any YouTube sources were found in THIS batch
       const youtubeUrls = exportedSources
         .filter(source => source.youtubeUrl)
         .map(source => ({ title: source.title, url: source.youtubeUrl }));
@@ -3059,10 +3436,17 @@ async function exportSources(selectedSources) {
         console.log(`[NotebookLM Takeout] Created sources/youtube-urls.raw.txt with ${youtubeUrls.length} URL(s)`);
       }
 
-      // Generate _index.md with links to all files (in sources/ folder)
+      // Generate _index.md with links to all files (in sources/ folder) for THIS batch
       let indexContent = '# NotebookLM Sources Export\n\n';
       indexContent += `Generated: ${new Date().toLocaleString()}\n\n`;
-      indexContent += `Total Sources: ${exportedSources.length}\n\n`;
+
+      if (totalZips > 1) {
+        indexContent += `**Part ${zipIndex + 1} of ${totalZips}**\n\n`;
+        indexContent += `Total Sources (all parts): ${selectedSources.length}\n`;
+        indexContent += `Sources in this part: ${exportedSources.length}\n\n`;
+      } else {
+        indexContent += `Total Sources: ${exportedSources.length}\n\n`;
+      }
 
       // Reuse hasMetadata, hasImages, versionCount from README section above
       indexContent += `Each source is available in ${versionCount} version(s).\n\n`;
@@ -3079,7 +3463,7 @@ async function exportSources(selectedSources) {
 
       indexContent += '## Sources\n\n';
 
-      // Group sources by title for display
+      // Group sources by title for display (only for THIS batch)
       exportedSources.forEach((source, idx) => {
         if (idx > 0) indexContent += '---\n\n';
 
@@ -3146,11 +3530,17 @@ async function exportSources(selectedSources) {
       sourcesFolder.file('_index.md', indexContent);
 
       // Generate ZIP
+      console.log(`[NotebookLM Takeout] Generating ZIP ${zipIndex + 1}/${totalZips}...`);
       const blob = await zip.generateAsync({ type: 'blob' });
       const url = URL.createObjectURL(blob);
       try {
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-        const filename = `notebooklm-sources-${timestamp}.zip`;
+        const sanitizedProjectName = sanitizeFilename(projectName);
+        let filename;
+        if (totalZips > 1) {
+          filename = `${sanitizedProjectName}-sources-${timestamp}-part${zipIndex + 1}of${totalZips}.zip`;
+        } else {
+          filename = `${sanitizedProjectName}-sources-${timestamp}.zip`;
+        }
 
         const a = document.createElement('a');
         a.href = url;
@@ -3159,17 +3549,53 @@ async function exportSources(selectedSources) {
         a.click();
         document.body.removeChild(a);
 
-        if (allErrors.length > 0) {
-          showToast(`Exported ${exportedSources.length} source(s) with warnings (see errors.txt)`, 'warning');
-        } else {
-          showToast(`Exported ${exportedSources.length} source(s) - see README.txt`, 'success');
+        console.log(`[NotebookLM Takeout] Downloaded ZIP ${zipIndex + 1}/${totalZips}: ${filename}`);
+
+        // Show toast for each ZIP (or final toast at the end)
+        if (zipIndex === totalZips - 1) {
+          // Last ZIP
+          if (allErrors.length > 0) {
+            const errorCount = allErrors.length;
+            const failedSources = allErrors.filter(e => e.includes('Extraction failed')).length;
+            const missingMetadata = allErrors.filter(e => e.includes('Missing')).length;
+
+            let errorSummary = `Exported ${selectedSources.length} source(s) in ${totalZips} ZIP(s) with ${errorCount} warning(s)`;
+            if (failedSources > 0) {
+              errorSummary += ` (${failedSources} failed to extract)`;
+            }
+            showToast(errorSummary + '. See errors.txt in last ZIP for details.', 'warning');
+          } else {
+            showToast(`Successfully exported ${selectedSources.length} source(s) in ${totalZips} ZIP(s)`, 'success');
+          }
         }
       } finally {
         URL.revokeObjectURL(url);
       }
-    } else {
-      showToast('No sources were exported', 'warning');
-    }
+
+      // CRITICAL: Clear memory after each ZIP to prevent crashes
+      // Wait a moment for download to initiate, then clear references
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Clear the batch data to free memory
+      exportedSources.forEach(source => {
+        // Nullify the large version strings
+        source.versions.base = null;
+        source.versions.plusMeta = null;
+        source.versions.withImages = null;
+        source.versions.plusMetaWithImages = null;
+      });
+
+      console.log(`[NotebookLM Takeout] Cleared memory for batch ${zipIndex + 1}/${totalZips}`);
+
+      // Clear the array itself
+      exportedSources.length = 0;
+
+      // Give GC time to work between batches
+      if (zipIndex < totalZips - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    } // End of "if exportedSources.length > 0"
+    } // End of batch loop
 
   } catch (error) {
     console.error('[NotebookLM Takeout] Export failed:', error);
@@ -3868,7 +4294,24 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
     markdown += `## Q: ${msg.userMessage}\n\n`;
 
     // Convert AI response HTML to markdown
-    const aiResponseMarkdown = turndownService.turndown(msg.aiResponseHTML);
+    let aiResponseMarkdown = turndownService.turndown(msg.aiResponseHTML);
+
+    // Clean up: Merge consecutive footnote references into a single <sup> tag
+    // Pattern: <sup>...[1]...</sup>,<sup>...[2]...</sup> → <sup>...[1]... ...[2]...</sup>
+    // This removes both commas and the >< between footnotes
+    aiResponseMarkdown = aiResponseMarkdown.replace(/<\/sup>\s*,?\s*<sup>/g, ' ');
+
+    // Clean up escaped brackets that appear between sup tags
+    // Pattern: </sup>\> <<sup> (literal backslash-greater-than space less-than)
+    aiResponseMarkdown = aiResponseMarkdown.replace(/<\/sup>\\>\s*<<sup>/g, ' ');
+
+    // Also clean up unescaped >< between sup tags
+    // Pattern: </sup>><sup> or </sup>> <<sup>
+    aiResponseMarkdown = aiResponseMarkdown.replace(/<\/sup>>\s*<<sup>/g, ' ');
+
+    // Final cleanup: remove any remaining standalone \> < patterns in text
+    aiResponseMarkdown = aiResponseMarkdown.replace(/\\>\s*</g, '');
+
     console.log(`[Chat Export] Message ${idx + 1} markdown length:`, aiResponseMarkdown.length);
     markdown += `**A:** ${aiResponseMarkdown}\n\n`;
 
@@ -4191,20 +4634,14 @@ function scanPageForItems() {
     }
   });
 
-  let itemCounter = 0; // Counter for non-skipped items
   artifactItems.forEach((item, idx) => {
     // Get the type from aria-description on the button
     const mainButton = item.querySelector('button[aria-description]');
     const type = mainButton?.getAttribute('aria-description') || '';
 
-    // Skip Reports - they're now handled in the Notes tab
-    if (type === 'Report') {
-      return;
-    }
-
     // Get the title from .artifact-title
     const titleEl = item.querySelector('.artifact-title');
-    const artifactTitle = titleEl?.textContent?.trim() || `Artifact ${itemCounter + 1}`;
+    const artifactTitle = titleEl?.textContent?.trim() || `Artifact ${idx + 1}`;
 
     // Get details from .artifact-details
     const detailsEl = item.querySelector('.artifact-details');
@@ -4226,8 +4663,6 @@ function scanPageForItems() {
       details: artifactDetails,
       disabled: false
     });
-
-    itemCounter++; // Increment only when we actually push an item
   });
 
   return items;
