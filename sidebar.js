@@ -3202,38 +3202,45 @@ async function exportSources(selectedSources) {
         let baseMarkdownWithImages = baseMarkdown;
         let plusMetaMarkdownWithImages = plusMetaMarkdown;
 
-        // Embed images for the image versions
-        try {
-          const {
-            markdown: baseEmbedded,
-            errors: imageErrors,
-            imagesFound,
-            imagesEmbedded
-          } = await embedImagesInMarkdown(baseMarkdown, source.title);
+        // Only download and embed images if user has enabled image versions
+        const needsImageVersions = settings.exportSourceWithImages || settings.exportSourcePlusMetaWithImages;
 
-          baseMarkdownWithImages = baseEmbedded;
+        if (needsImageVersions) {
+          // Embed images for the image versions
+          try {
+            const {
+              markdown: baseEmbedded,
+              errors: imageErrors,
+              imagesFound,
+              imagesEmbedded
+            } = await embedImagesInMarkdown(baseMarkdown, source.title);
 
-          // Track image statistics (only once)
-          stats.imagesFound += imagesFound;
-          stats.imagesEmbedded += imagesEmbedded;
-          stats.imagesFailed += (imagesFound - imagesEmbedded);
+            baseMarkdownWithImages = baseEmbedded;
 
-          // Track image download errors
-          if (imageErrors.length > 0) {
-            allErrors.push(...imageErrors);
+            // Track image statistics (only once)
+            stats.imagesFound += imagesFound;
+            stats.imagesEmbedded += imagesEmbedded;
+            stats.imagesFailed += (imagesFound - imagesEmbedded);
+
+            // Track image download errors
+            if (imageErrors.length > 0) {
+              allErrors.push(...imageErrors);
+            }
+
+            // Also embed images in the plus-meta version
+            const { markdown: plusMetaEmbedded } = await embedImagesInMarkdown(plusMetaMarkdown, source.title);
+            plusMetaMarkdownWithImages = plusMetaEmbedded;
+
+          } catch (error) {
+            console.error(`[NotebookLM Takeout] Error embedding images for "${source.title}":`, error);
+            allErrors.push({
+              source: source.title,
+              type: 'image_embedding_error',
+              message: `Failed to embed images: ${error.message}`
+            });
           }
-
-          // Also embed images in the plus-meta version
-          const { markdown: plusMetaEmbedded } = await embedImagesInMarkdown(plusMetaMarkdown, source.title);
-          plusMetaMarkdownWithImages = plusMetaEmbedded;
-
-        } catch (error) {
-          console.error(`[NotebookLM Takeout] Error embedding images for "${source.title}":`, error);
-          allErrors.push({
-            source: source.title,
-            type: 'image_embedding_error',
-            message: `Failed to embed images: ${error.message}`
-          });
+        } else {
+          console.log(`[NotebookLM Takeout] Skipping image downloads for "${source.title}" (no image versions enabled)`);
         }
 
         exportedSources.push({
