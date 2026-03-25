@@ -41,6 +41,8 @@ let batchStatus = '';
 // Track intercepted downloads by ID instead of global state
 const interceptedDownloads = new Map(); // downloadId -> {originalId, newId, filename, url}
 const redownloadRequests = new Map(); // downloadId -> {filename, originalId}
+const activeRedownloadUrls = new Set(); // URLs currently being re-downloaded (to avoid double interception)
+const directDownloads = new Map(); // downloadId -> {filename, artifactType} for direct URL downloads
 
 /**
  * Get artifact type prefix for filenames
@@ -219,6 +221,41 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         status: batchStatus
       });
       break;
+
+    case 'DIRECT_DOWNLOAD_URL':
+      // Direct download from intercepted URL (no tab opened)
+      // Start download and use onDeterminingFilename to rename
+      (async () => {
+        try {
+          console.log('[Background] Direct download requested:', message.filename);
+          console.log('[Background] URL:', message.url?.substring(0, 100));
+
+          // Start the download
+          const downloadId = await chrome.downloads.download({
+            url: message.url,
+            saveAs: false
+          });
+
+          console.log('[Background] Direct download started:', downloadId);
+
+          // Store filename for onDeterminingFilename to use
+          directDownloads.set(downloadId, {
+            filename: message.filename,
+            artifactType: message.artifactType
+          });
+
+          // Clean up after 30 seconds
+          setTimeout(() => {
+            directDownloads.delete(downloadId);
+          }, 30000);
+
+          sendResponse({ success: true, downloadId: downloadId });
+        } catch (error) {
+          console.error('[Background] Direct download failed:', error);
+          sendResponse({ success: false, error: error.message });
+        }
+      })();
+      return true; // Keep channel open for async
   }
   return true; // Keep channel open for async response
 });
@@ -231,10 +268,14 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
 
   // Check if this download matches a pending intercept request
   const hasInterceptRequest = pendingDownloads.some(d => d.intercept);
-  console.log('[Background] Download created:', downloadItem.id, 'URL:', downloadItem.url?.substring(0, 100), 'batchMode:', batchDownloadMode, 'hasInterceptRequest:', hasInterceptRequest);
+
+  // Check if this is a re-download we initiated (skip interception to avoid loops)
+  const isOurRedownload = activeRedownloadUrls.has(downloadItem.url);
+  console.log('[Background] Download created:', downloadItem.id, 'URL:', downloadItem.url?.substring(0, 100), 'batchMode:', batchDownloadMode, 'hasInterceptRequest:', hasInterceptRequest, 'isOurRedownload:', isOurRedownload);
 
   // INTERCEPT MODE - Capture, cancel, and re-download without opening tab
-  if (hasInterceptRequest && isFromNotebookLM && downloadItem.url) {
+  // Skip if this is our own re-download to prevent double interception
+  if (hasInterceptRequest && isFromNotebookLM && downloadItem.url && !isOurRedownload) {
     // Find and remove the intercept request from queue (FIFO - take first intercept request)
     const interceptIndex = pendingDownloads.findIndex(d => d.intercept);
     if (interceptIndex === -1) {
@@ -326,6 +367,10 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
         await chrome.downloads.cancel(downloadItem.id);
         console.log('[Background] Cancelled original download:', downloadItem.id);
 
+        // Mark this URL as our re-download to prevent double interception
+        activeRedownloadUrls.add(downloadItem.url);
+        console.log('[Background] Added URL to activeRedownloadUrls:', downloadItem.url?.substring(0, 80));
+
         // Re-download directly (this won't open a tab)
         const newDownloadId = await chrome.downloads.download({
           url: downloadItem.url,
@@ -334,6 +379,12 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
         });
 
         console.log('[Background] Re-download started:', newDownloadId);
+
+        // Clean up activeRedownloadUrls after a short delay (download should be created by now)
+        setTimeout(() => {
+          activeRedownloadUrls.delete(downloadItem.url);
+          console.log('[Background] Removed URL from activeRedownloadUrls:', downloadItem.url?.substring(0, 80));
+        }, 2000);
 
         // Store intercepted download info in Map (use newDownloadId as key)
         interceptedDownloads.set(newDownloadId, {
@@ -353,6 +404,7 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
         console.error('[Background] Intercept mode failed:', error);
         // Clean up on error
         redownloadRequests.delete(downloadItem.id);
+        activeRedownloadUrls.delete(downloadItem.url);
       }
     })();
 
@@ -401,6 +453,26 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
   if (redownloadInfo && downloadItem.id === redownloadInfo.originalId) {
     console.log('[Background] Skipping original download (will be cancelled)');
     return false; // Let it use default name, we'll cancel it anyway
+  }
+
+  // Check if this is a direct download (from URL interception - no tab opened)
+  const directInfo = directDownloads.get(downloadItem.id);
+  if (directInfo) {
+    let filename = directInfo.filename;
+    console.log('[Background] Direct download - using filename:', filename);
+
+    // If filename doesn't have an extension, extract from original
+    if (!filename.match(/\.[^.]+$/)) {
+      const originalExt = downloadItem.filename?.match(/\.[^.]+$/)?.[0] || '';
+      if (originalExt) {
+        filename = filename + originalExt;
+        console.log('[Background] Added extension:', originalExt);
+      }
+    }
+
+    suggest({ filename: filename });
+    directDownloads.delete(downloadItem.id); // Clean up
+    return true;
   }
 
   // Check if this download is an intercepted download in our Map

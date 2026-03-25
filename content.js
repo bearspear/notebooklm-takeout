@@ -305,8 +305,36 @@
       sendResponse({ cancelled: isExportCancelled() });
       return true;
     } else if (message.type === 'DEBUG_NOTES') {
-      // Diagnostic: list all note titles
-      const allNoteElements = document.querySelectorAll('artifact-library-note');
+      // Diagnostic: list all note titles with fallback selectors
+      let allNoteElements = document.querySelectorAll('artifact-library-note');
+      console.log(`[NotebookLM Takeout] DEBUG: Direct selector found ${allNoteElements.length} notes`);
+
+      // Fallback via container
+      if (allNoteElements.length === 0) {
+        const container = document.querySelector('.artifact-library-container artifact-library');
+        if (container) {
+          allNoteElements = container.querySelectorAll('artifact-library-note');
+          console.log(`[NotebookLM Takeout] DEBUG: Via container found ${allNoteElements.length} notes`);
+        }
+      }
+
+      // Fallback via icon
+      if (allNoteElements.length === 0) {
+        const noteIcons = document.querySelectorAll('mat-icon.artifact-icon');
+        const noteParents = [];
+        noteIcons.forEach(icon => {
+          const iconText = icon.textContent.trim();
+          if (iconText === 'sticky_note_2' || iconText === 'flowchart') {
+            const noteEl = icon.closest('artifact-library-note');
+            if (noteEl && !noteParents.includes(noteEl)) {
+              noteParents.push(noteEl);
+            }
+          }
+        });
+        allNoteElements = noteParents;
+        console.log(`[NotebookLM Takeout] DEBUG: Via icon search found ${allNoteElements.length} notes`);
+      }
+
       const titles = [];
       allNoteElements.forEach((el, idx) => {
         const titleEl = el.querySelector('.artifact-title, .note-title');
@@ -314,7 +342,7 @@
         titles.push({ index: idx, title: title });
       });
       console.log('[NotebookLM Takeout] DEBUG: All notes:', titles);
-      sendResponse({ notes: titles });
+      sendResponse({ notes: titles, count: allNoteElements.length });
       return true;
     } else if (message.type === 'DOWNLOAD_ARTIFACT') {
       // Download artifact via message passing (new pattern)
@@ -476,6 +504,10 @@
     }
   }
 
+  // Store for intercepted download URLs (from window.open interception)
+  let lastInterceptedDownloadUrl = null;
+  let downloadUrlResolvers = []; // Callbacks waiting for intercepted URLs
+
   function handleInjectedMessage(data) {
     switch (data.type) {
       case 'NLME_AUDIO_DETECTED':
@@ -490,7 +522,46 @@
       case 'NLME_NETWORK_RESPONSE':
         parseNetworkResponse(data.payload);
         break;
+      case 'NLME_DOWNLOAD_URL_INTERCEPTED':
+        // URL intercepted from window.open - no tab will open
+        console.log('[NotebookLM Takeout] Download URL intercepted:', data.payload.url?.substring(0, 100));
+        lastInterceptedDownloadUrl = data.payload.url;
+        // Resolve any waiting promises
+        while (downloadUrlResolvers.length > 0) {
+          const resolver = downloadUrlResolvers.shift();
+          resolver(data.payload.url);
+        }
+        break;
     }
+  }
+
+  /**
+   * Wait for an intercepted download URL (with timeout)
+   */
+  function waitForInterceptedUrl(timeoutMs = 3000) {
+    return new Promise((resolve) => {
+      // Check if we already have a recent URL
+      if (lastInterceptedDownloadUrl) {
+        const url = lastInterceptedDownloadUrl;
+        lastInterceptedDownloadUrl = null; // Consume it
+        resolve(url);
+        return;
+      }
+
+      // Set up timeout
+      const timeout = setTimeout(() => {
+        const index = downloadUrlResolvers.indexOf(resolverFn);
+        if (index > -1) downloadUrlResolvers.splice(index, 1);
+        resolve(null); // Timeout - no URL intercepted
+      }, timeoutMs);
+
+      // Add resolver to wait list
+      const resolverFn = (url) => {
+        clearTimeout(timeout);
+        resolve(url);
+      };
+      downloadUrlResolvers.push(resolverFn);
+    });
   }
 
   function captureArtifact(type, artifact) {
@@ -960,9 +1031,40 @@
     console.log('[NotebookLM Takeout] Scanning for notes...');
 
     const notes = [];
-    const allNoteElements = document.querySelectorAll('artifact-library-note');
+    let allNoteElements = document.querySelectorAll('artifact-library-note');
 
     console.log(`[NotebookLM Takeout] Found ${allNoteElements.length} artifact-library-note elements`);
+
+    // Fallback: If direct selector fails, try via parent container
+    if (allNoteElements.length === 0) {
+      console.log('[NotebookLM Takeout] Trying fallback selectors...');
+      const container = document.querySelector('.artifact-library-container artifact-library');
+      if (container) {
+        allNoteElements = container.querySelectorAll('artifact-library-note');
+        console.log(`[NotebookLM Takeout] Via container: Found ${allNoteElements.length} notes`);
+      }
+    }
+
+    // Second fallback: Find via icon content
+    if (allNoteElements.length === 0) {
+      console.log('[NotebookLM Takeout] Trying icon-based fallback...');
+      const noteIcons = document.querySelectorAll('mat-icon.artifact-icon');
+      const noteParents = [];
+      noteIcons.forEach(icon => {
+        const iconText = icon.textContent.trim();
+        // Notes use sticky_note_2, Mindmaps use flowchart
+        if (iconText === 'sticky_note_2' || iconText === 'flowchart') {
+          const noteEl = icon.closest('artifact-library-note');
+          if (noteEl && !noteParents.includes(noteEl)) {
+            noteParents.push(noteEl);
+          }
+        }
+      });
+      if (noteParents.length > 0) {
+        allNoteElements = noteParents;
+        console.log(`[NotebookLM Takeout] Via icon search: Found ${allNoteElements.length} notes`);
+      }
+    }
 
     // Scan artifact-library-note elements (regular notes and mindmaps only)
     allNoteElements.forEach((noteEl, idx) => {
@@ -1174,32 +1276,57 @@
             break;
           }
 
-          // Method 2: Find and click arrow_back button
-          const arrowBackButtons = Array.from(document.querySelectorAll('mat-icon')).filter(icon =>
-            icon.textContent.trim() === 'arrow_back'
-          );
-          for (const icon of arrowBackButtons) {
+          // Method 2: Find and click close button by aria-label (most reliable)
+          const closeNoteButton = document.querySelector('button[aria-label="Close note view"]');
+          if (closeNoteButton) {
+            console.log('[NotebookLM Takeout] Clicking "Close note view" button');
+            closeNoteButton.click();
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+
+          // Check again
+          existingViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer');
+          if (!existingViewer) {
+            console.log('[NotebookLM Takeout] ✓ Viewer closed via Close note view button');
+            break;
+          }
+
+          // Method 3: Find and click collapse_content or arrow_back icon buttons
+          const closeIcons = Array.from(document.querySelectorAll('mat-icon')).filter(icon => {
+            const text = icon.textContent.trim();
+            return text === 'collapse_content' || text === 'arrow_back' || text === 'close';
+          });
+          for (const icon of closeIcons) {
             const button = icon.closest('button');
             if (button) {
-              console.log('[NotebookLM Takeout] Clicking arrow_back button');
+              console.log('[NotebookLM Takeout] Clicking close icon button:', icon.textContent.trim());
               button.click();
               await new Promise(resolve => setTimeout(resolve, 500));
+              // Check if closed after each click
+              existingViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer');
+              if (!existingViewer) {
+                console.log('[NotebookLM Takeout] ✓ Viewer closed via icon button');
+                break;
+              }
             }
           }
 
           // Check again
           existingViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer');
           if (!existingViewer) {
-            console.log('[NotebookLM Takeout] ✓ Viewer closed via arrow_back');
             break;
           }
 
-          // Method 3: Panel header children[1] click
+          // Method 4: Panel header close button (fallback)
           const panelHeaders = document.querySelectorAll('.panel-header');
-          if (panelHeaders.length > 0 && panelHeaders[0].children.length > 1) {
-            console.log('[NotebookLM Takeout] Clicking panel header children[1]');
-            panelHeaders[0].children[1].click();
-            await new Promise(resolve => setTimeout(resolve, 500));
+          for (const header of panelHeaders) {
+            const closeBtn = header.querySelector('button[aria-label*="Close"], button[aria-label*="close"]');
+            if (closeBtn) {
+              console.log('[NotebookLM Takeout] Clicking panel header close button');
+              closeBtn.click();
+              await new Promise(resolve => setTimeout(resolve, 500));
+              break;
+            }
           }
 
           // Final check
@@ -1221,13 +1348,63 @@
       }
 
       // Wait for note list to be present (in case we just navigated back)
-      await waitForElement('artifact-library-note', 3000);
+      // Use retry logic to handle Angular re-rendering timing issues
+      let allNoteElements = [];
+      const maxRetries = 5;
+      const retryDelay = 500;
 
-      // Small delay to let DOM stabilize after navigation
-      await new Promise(resolve => setTimeout(resolve, 500));
+      for (let retry = 0; retry < maxRetries; retry++) {
+        // Wait for at least one note element to appear
+        try {
+          await waitForElement('artifact-library-note', 3000);
+        } catch (e) {
+          console.warn(`[NotebookLM Takeout] waitForElement attempt ${retry + 1} failed:`, e.message);
+        }
 
-      // Find all note elements (don't filter by visibility yet - we need to find ALL notes)
-      const allNoteElements = document.querySelectorAll('artifact-library-note');
+        // Small delay to let DOM stabilize after navigation
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+
+        // Find all note elements (don't filter by visibility yet - we need to find ALL notes)
+        allNoteElements = document.querySelectorAll('artifact-library-note');
+        console.log(`[NotebookLM Takeout] Attempt ${retry + 1}: Found ${allNoteElements.length} artifact-library-note elements`);
+
+        if (allNoteElements.length > 0) {
+          break;
+        }
+
+        // If still 0, try alternative selectors as fallback
+        if (retry === 2) {
+          console.log('[NotebookLM Takeout] Trying alternative selectors...');
+          // Try querying via the parent container
+          const container = document.querySelector('.artifact-library-container artifact-library');
+          if (container) {
+            allNoteElements = container.querySelectorAll('artifact-library-note');
+            console.log(`[NotebookLM Takeout] Via container: Found ${allNoteElements.length} notes`);
+            if (allNoteElements.length > 0) break;
+          }
+
+          // Try finding notes by their icon (sticky_note_2 or flowchart)
+          const noteIcons = document.querySelectorAll('mat-icon.artifact-icon');
+          const noteParents = [];
+          noteIcons.forEach(icon => {
+            const iconText = icon.textContent.trim();
+            if (iconText === 'sticky_note_2' || iconText === 'flowchart') {
+              const noteEl = icon.closest('artifact-library-note');
+              if (noteEl && !noteParents.includes(noteEl)) {
+                noteParents.push(noteEl);
+              }
+            }
+          });
+          if (noteParents.length > 0) {
+            allNoteElements = noteParents;
+            console.log(`[NotebookLM Takeout] Via icon search: Found ${allNoteElements.length} notes`);
+            break;
+          }
+        }
+
+        console.log(`[NotebookLM Takeout] Retry ${retry + 1}/${maxRetries}...`);
+      }
+
       console.log('[NotebookLM Takeout] Total note elements found:', allNoteElements.length);
 
       let noteEl = null;
@@ -1269,7 +1446,19 @@
       }
 
       if (!noteEl) {
-        const errorMsg = `Note not found: "${noteTitle}" at index ${noteIndex}. Total notes: ${allNoteElements.length}`;
+        // Gather diagnostic info
+        const diagnostics = {
+          notesFound: allNoteElements.length,
+          containerExists: !!document.querySelector('.artifact-library-container'),
+          libraryExists: !!document.querySelector('artifact-library'),
+          artifactIconsCount: document.querySelectorAll('mat-icon.artifact-icon').length,
+          viewerOpen: !!document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer'),
+          documentReadyState: document.readyState,
+          bodyChildCount: document.body?.children?.length || 0
+        };
+        console.error('[NotebookLM Takeout] DOM Diagnostics:', diagnostics);
+
+        const errorMsg = `Note not found: "${noteTitle}" at index ${noteIndex}. Total notes: ${allNoteElements.length}. Container: ${diagnostics.containerExists}, Library: ${diagnostics.libraryExists}, Icons: ${diagnostics.artifactIconsCount}`;
         console.error('[NotebookLM Takeout]', errorMsg);
         throw new Error(errorMsg);
       }
@@ -2646,8 +2835,10 @@
         throw new Error('Could not find artifact-library-item parent');
       }
 
-      // Look for button with aria-description="Report"
-      const reportButton = artifactItem.querySelector('button[aria-description="Report"]');
+      // Look for the main artifact button (by icon or first button with aria-description)
+      // Icon 'auto_tab_group' = Report
+      const icon = artifactItem.querySelector('mat-icon');
+      const reportButton = icon?.closest('button') || artifactItem.querySelector('button[aria-description]');
       if (!reportButton) {
         throw new Error('Could not find Report button');
       }
@@ -2748,8 +2939,10 @@
         throw new Error('Could not find artifact-library-item parent');
       }
 
-      // Look for button with aria-description="Data Table"
-      const tableButton = artifactItem.querySelector('button[aria-description="Data Table"]');
+      // Look for the main artifact button (by icon or first button with aria-description)
+      // Icon 'table_view' = Data Table
+      const icon = artifactItem.querySelector('mat-icon');
+      const tableButton = icon?.closest('button') || artifactItem.querySelector('button[aria-description]');
       if (!tableButton) {
         throw new Error('Could not find Data Table button');
       }
@@ -2832,24 +3025,40 @@
         return;
       }
 
-      // Method 1: Arrow back icon button (for notes/reports)
-      console.log('[NotebookLM Takeout] Trying arrow_back button...');
-      const arrowBackButtons = Array.from(document.querySelectorAll('mat-icon')).filter(icon =>
-        icon.textContent.trim() === 'arrow_back'
-      );
-      for (const icon of arrowBackButtons) {
+      // Method 1: Close note view button by aria-label (most reliable for notes)
+      console.log('[NotebookLM Takeout] Trying "Close note view" button...');
+      const closeNoteButton = document.querySelector('button[aria-label="Close note view"]');
+      if (closeNoteButton) {
+        console.log('[NotebookLM Takeout] Clicking "Close note view" button');
+        closeNoteButton.click();
+        await new Promise(resolve => setTimeout(resolve, 800));
+
+        noteViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer, table-viewer');
+        if (!noteViewer) {
+          console.log('[NotebookLM Takeout] ✓ Panel closed via "Close note view" button');
+          return;
+        }
+      }
+
+      // Method 1b: collapse_content or arrow_back icon button (for notes/reports)
+      console.log('[NotebookLM Takeout] Trying collapse_content/arrow_back button...');
+      const closeIconButtons = Array.from(document.querySelectorAll('mat-icon')).filter(icon => {
+        const text = icon.textContent.trim();
+        return text === 'collapse_content' || text === 'arrow_back' || text === 'close';
+      });
+      for (const icon of closeIconButtons) {
         const button = icon.closest('button');
         if (button) {
-          console.log('[NotebookLM Takeout] Clicking arrow_back button');
+          console.log('[NotebookLM Takeout] Clicking close icon button:', icon.textContent.trim());
           button.click();
           await new Promise(resolve => setTimeout(resolve, 800));
         }
       }
 
       // Check again
-      noteViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer');
+      noteViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer, table-viewer');
       if (!noteViewer) {
-        console.log('[NotebookLM Takeout] ✓ Panel closed via arrow_back');
+        console.log('[NotebookLM Takeout] ✓ Panel closed via close icon');
         return;
       }
 
@@ -2889,8 +3098,10 @@
       panelHeaders: document.querySelectorAll('.panel-header').length,
       backButtons: document.querySelectorAll('button[aria-label*="Back"]').length,
       closeButtons: document.querySelectorAll('button[aria-label*="Close"]').length,
+      closeNoteViewButton: !!document.querySelector('button[aria-label="Close note view"]'),
+      collapseContentIcons: Array.from(document.querySelectorAll('mat-icon')).filter(i => i.textContent.trim() === 'collapse_content').length,
       arrowBackIcons: Array.from(document.querySelectorAll('mat-icon')).filter(i => i.textContent.trim() === 'arrow_back').length,
-      noteViewers: document.querySelectorAll('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer').length
+      noteViewers: document.querySelectorAll('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer, table-viewer').length
     });
   }
 
@@ -2956,6 +3167,26 @@
         }
       } else {
         console.log('[NotebookLM Takeout] [Download] More button already clicked, waiting for menu...');
+      }
+
+      // Detect artifact type from icon if artifactItem is available (fallback for DOM changes)
+      if (artifactItem) {
+        const iconToType = {
+          'auto_tab_group': 'Report',
+          'tablet': 'Slides',
+          'stacked_bar_chart': 'Infographic',
+          'table_view': 'Data Table',
+          'flowchart': 'Flowchart',
+          'headphones': 'Audio Overview',
+          'audio_magic_eraser': 'Audio Overview'
+        };
+        const icon = artifactItem.querySelector('mat-icon');
+        const iconText = icon?.textContent?.trim() || '';
+        const detectedType = iconToType[iconText];
+        if (detectedType && detectedType !== artifactType) {
+          console.log(`[NotebookLM Takeout] [Download] Type corrected from "${artifactType}" to "${detectedType}" (via icon)`);
+          artifactType = detectedType;
+        }
       }
 
       // Extract artifact title from the element (try multiple selectors)
@@ -3038,11 +3269,25 @@
       const buttonResult = await clickArtifactDownloadButton(moreButtonAlreadyClicked ? null : artifactItem?.querySelector('button[aria-label="More"]'), artifactItem, moreButtonAlreadyClicked);
 
       const duration = Date.now() - startTime;
+
+      // Check if we got an intercepted URL (no tab opened)
+      if (buttonResult.interceptedUrl) {
+        console.log(`[NotebookLM Takeout] [Download] ✓ URL intercepted (no tab) (${duration}ms)`);
+        return {
+          success: true,
+          method: 'url_intercepted',
+          url: buttonResult.interceptedUrl,
+          title: artifactTitle,
+          duration: duration
+        };
+      }
+
       console.log(`[NotebookLM Takeout] [Download] ✓ Download initiated via button (${duration}ms)`);
 
       return {
         success: true,
         method: 'button_click',
+        title: artifactTitle, // Include title for filename
         duration: duration
       };
 
@@ -3060,8 +3305,12 @@
   /**
    * Click the download button for an artifact with adaptive waiting
    * Uses MutationObserver to detect UI state changes instead of hard-coded delays
+   * Now also captures intercepted download URLs from window.open
    */
   async function clickArtifactDownloadButton(moreButton, artifactItem, moreButtonAlreadyClicked = false) {
+    // Clear any previous intercepted URL
+    lastInterceptedDownloadUrl = null;
+
     // Click the More button to open menu (unless already clicked)
     if (!moreButtonAlreadyClicked && moreButton) {
       console.log('[NotebookLM Takeout] [Download] Clicking More button...');
@@ -3085,7 +3334,17 @@
     console.log('[NotebookLM Takeout] [Download] Found download button, clicking...');
     downloadButton.click();
 
-    // Wait for download to initiate (detect aria-busy or other loading states)
+    // Wait for intercepted URL (from window.open interception) or download initiation
+    console.log('[NotebookLM Takeout] [Download] Waiting for intercepted URL...');
+    const interceptedUrl = await waitForInterceptedUrl(2000);
+
+    if (interceptedUrl) {
+      console.log('[NotebookLM Takeout] [Download] Got intercepted URL (no tab opened):', interceptedUrl.substring(0, 100));
+      return { success: true, interceptedUrl: interceptedUrl };
+    }
+
+    // Fallback: wait for traditional download initiation
+    console.log('[NotebookLM Takeout] [Download] No intercepted URL, falling back to traditional download...');
     await waitForDownloadInitiation();
 
     return { success: true };

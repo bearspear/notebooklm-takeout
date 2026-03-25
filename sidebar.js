@@ -650,6 +650,47 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
 
       // Cancel intercept mode (wasn't needed)
       chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
+    } else if (response.method === 'url_intercepted') {
+      // URL was intercepted from window.open - no tab opened!
+      // Have background.js download so onDeterminingFilename can rename
+      const filename = response.title || artifactName;
+      const typePrefix = getArtifactTypePrefix(artifactType);
+
+      // Determine extension based on artifact type
+      const extensionMap = {
+        'Infographic': '.png',
+        'Slides': '.pdf',
+        'Audio Overview': '.m4a',
+        'Report': '.md',
+        'Data Table': '.zip'
+      };
+      const extension = extensionMap[artifactType] || '';
+
+      const fullFilename = `[${typePrefix}]_${sanitizeFilename(filename)}${extension}`;
+
+      logger.info('Download', `URL intercepted (no tab), sending to background for download: ${fullFilename}`);
+
+      // Cancel intercept mode (wasn't needed for original flow)
+      chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
+
+      // Send to background.js to download with proper renaming
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: 'DIRECT_DOWNLOAD_URL',
+          url: response.url,
+          filename: fullFilename,
+          artifactType: artifactType
+        });
+
+        if (result && result.success) {
+          logger.download(fullFilename, 'success', `Direct download via background: ${result.downloadId}`);
+        } else {
+          throw new Error(result?.error || 'Direct download failed');
+        }
+      } catch (downloadError) {
+        logger.error('Download', `Direct download failed: ${downloadError.message}`);
+        throw downloadError;
+      }
     } else if (response.method === 'button_click') {
       // Button click - intercept mode was already enabled, wait for completion
       const filename = response.title || artifactName;
@@ -4634,10 +4675,22 @@ function scanPageForItems() {
     }
   });
 
+  // Icon to artifact type mapping
+  const iconToType = {
+    'auto_tab_group': 'Report',
+    'tablet': 'Slides',
+    'stacked_bar_chart': 'Infographic',
+    'table_view': 'Data Table',
+    'flowchart': 'Flowchart',
+    'headphones': 'Audio Overview',
+    'audio_magic_eraser': 'Audio Overview'
+  };
+
   artifactItems.forEach((item, idx) => {
-    // Get the type from aria-description on the button
-    const mainButton = item.querySelector('button[aria-description]');
-    const type = mainButton?.getAttribute('aria-description') || '';
+    // Get the type from icon text content (aria-description now contains title, not type)
+    const icon = item.querySelector('mat-icon');
+    const iconText = icon?.textContent?.trim() || '';
+    const type = iconToType[iconText] || iconText || 'Unknown';
 
     // Get the title from .artifact-title
     const titleEl = item.querySelector('.artifact-title');

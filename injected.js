@@ -6,10 +6,74 @@
 
   console.log('[NotebookLM Takeout] Injected script loaded');
 
-  // Store original fetch and XMLHttpRequest
+  // Store original fetch, XMLHttpRequest, and window.open
   const originalFetch = window.fetch;
   const originalXHROpen = XMLHttpRequest.prototype.open;
   const originalXHRSend = XMLHttpRequest.prototype.send;
+  const originalWindowOpen = window.open;
+
+  // Helper to check if URL is a NotebookLM download URL
+  function isNotebookLMDownloadUrl(urlString) {
+    if (!urlString) return false;
+    return urlString.includes('contribution.usercontent.google.com') ||
+           urlString.includes('lh3.googleusercontent.com/notebooklm') ||
+           urlString.includes('googleusercontent.com/download') ||
+           urlString.includes('lh3.googleusercontent.com') && urlString.includes('notebooklm');
+  }
+
+  // Intercept window.open to capture download URLs before tabs open
+  window.open = function(url, target, features) {
+    const urlString = url ? url.toString() : '';
+
+    if (isNotebookLMDownloadUrl(urlString)) {
+      console.log('[NotebookLM Takeout] Intercepted window.open download URL:', urlString.substring(0, 100));
+
+      // Send URL to content script instead of opening tab
+      window.postMessage({
+        type: 'NLME_DOWNLOAD_URL_INTERCEPTED',
+        payload: {
+          url: urlString,
+          timestamp: Date.now()
+        }
+      }, '*');
+
+      // Return a fake window object to prevent errors
+      return {
+        closed: false,
+        close: function() { this.closed = true; },
+        focus: function() {},
+        blur: function() {},
+        location: { href: urlString }
+      };
+    }
+
+    // For non-download URLs, use original window.open
+    return originalWindowOpen.apply(this, [url, target, features]);
+  };
+
+  // Intercept link clicks that might trigger downloads
+  document.addEventListener('click', function(event) {
+    const link = event.target.closest('a[href]');
+    if (!link) return;
+
+    const href = link.href;
+    if (isNotebookLMDownloadUrl(href)) {
+      console.log('[NotebookLM Takeout] Intercepted link click download URL:', href.substring(0, 100));
+
+      // Prevent the default navigation/download
+      event.preventDefault();
+      event.stopPropagation();
+
+      // Send URL to content script
+      window.postMessage({
+        type: 'NLME_DOWNLOAD_URL_INTERCEPTED',
+        payload: {
+          url: href,
+          timestamp: Date.now()
+        }
+      }, '*');
+    }
+  }, true); // Use capture phase to intercept before other handlers
 
   // Patterns to match NotebookLM API endpoints
   const API_PATTERNS = {
