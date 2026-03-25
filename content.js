@@ -45,6 +45,52 @@
   // Track detected artifacts
   const detectedArtifacts = new Map();
 
+  // DOM Health Tracker - Monitors selector failures to detect UI changes
+  const DOMHealthTracker = {
+    errors: [],
+    selectorFailures: {},
+    stuckOperations: [],
+
+    track(type, selector, context) {
+      this.errors.push({ type, selector, context, timestamp: Date.now() });
+      if (selector) {
+        this.selectorFailures[selector] = (this.selectorFailures[selector] || 0) + 1;
+      }
+      if (type === 'stuck') {
+        this.stuckOperations.push(context);
+      }
+      console.log(`[NotebookLM Takeout] DOM issue tracked: ${type}`, { selector, context });
+    },
+
+    shouldWarn() {
+      const criticalSelectors = [
+        'artifact-library-note',
+        '.single-source-container',
+        'button[aria-label="Close note view"]'
+      ];
+      return this.errors.some(e => criticalSelectors.includes(e.selector)) ||
+             Object.values(this.selectorFailures).some(count => count >= 3) ||
+             this.stuckOperations.length >= 2;
+    },
+
+    getIssues() {
+      const issues = [];
+      for (const [selector, count] of Object.entries(this.selectorFailures)) {
+        if (count >= 2) issues.push(`"${selector}" not found (${count}x)`);
+      }
+      if (this.stuckOperations.length > 0) {
+        issues.push(`${this.stuckOperations.length} operation(s) couldn't complete`);
+      }
+      return issues;
+    },
+
+    reset() {
+      this.errors = [];
+      this.selectorFailures = {};
+      this.stuckOperations = [];
+    }
+  };
+
   // Inject the page script for deeper access
   function injectPageScript() {
     const script = document.createElement('script');
@@ -415,6 +461,36 @@
         sendResponse({ sourcesByIndex: {}, errors: [error.message] });
       }
       return true;
+    } else if (message.type === 'CHECK_DOM_HEALTH') {
+      // Pre-export health check
+      const type = message.data?.type || 'notes';
+      const checks = {
+        notes: ['artifact-library-note', '.artifact-library-container'],
+        sources: ['.single-source-container'],
+        artifacts: ['artifact-library-item'],
+        chat: ['.chat-turn', '.chat-message']
+      };
+      const issues = [];
+      for (const selector of (checks[type] || [])) {
+        if (!document.querySelector(selector)) {
+          issues.push(`${selector} not found`);
+        }
+      }
+      sendResponse({
+        healthy: issues.length === 0,
+        issues,
+        trackerIssues: DOMHealthTracker.getIssues()
+      });
+    } else if (message.type === 'GET_DOM_ERRORS') {
+      // Get current DOM error state
+      sendResponse({
+        shouldWarn: DOMHealthTracker.shouldWarn(),
+        issues: DOMHealthTracker.getIssues()
+      });
+    } else if (message.type === 'RESET_DOM_TRACKER') {
+      // Reset tracker at start of new export
+      DOMHealthTracker.reset();
+      sendResponse({ success: true });
     }
 
     return true;
@@ -1245,6 +1321,147 @@
     throw lastError;
   }
 
+  /**
+   * Extract a single citation with retry logic
+   * @param {Element} button - The citation button element to hover
+   * @param {string} spanIndex - The citation index for logging
+   * @param {boolean} includeImages - Whether to include images in citation
+   * @param {number} maxRetries - Maximum retry attempts (default: 3)
+   * @returns {Promise<{success: boolean, data?: object, error?: string}>}
+   */
+  async function extractSingleCitationWithRetry(button, spanIndex, includeImages = false, maxRetries = 3) {
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // Scroll button into view
+        button.scrollIntoView({ behavior: 'instant', block: 'center' });
+        await sleep(100);
+
+        // Close any existing tooltip first
+        const existingTooltip = document.querySelector('xap-inline-dialog-container[role="dialog"]');
+        if (existingTooltip) {
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+          await sleep(200);
+        }
+
+        // Simulate hover on the button
+        button.dispatchEvent(new MouseEvent('mouseenter', {
+          view: window,
+          bubbles: true,
+          cancelable: true
+        }));
+
+        // Increase wait time on retries
+        const tooltipWaitTime = 2500 + (attempt - 1) * 500;
+        await sleep(150 + (attempt - 1) * 50);
+
+        // Wait for tooltip with multiple possible selectors
+        const tooltip = await raceWithCleanup([
+          waitForElement('xap-inline-dialog-container[role="dialog"]', tooltipWaitTime),
+          waitForElement('.citation-tooltip', tooltipWaitTime),
+          waitForElement('[role="dialog"].ng-star-inserted', tooltipWaitTime)
+        ]).catch(() => null);
+
+        if (!tooltip) {
+          lastError = 'Tooltip did not appear';
+          console.warn(`[NotebookLM Takeout] Citation ${spanIndex}: Attempt ${attempt}/${maxRetries} - ${lastError}`);
+          button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+          await sleep(300 + attempt * 100);
+          continue;
+        }
+
+        // Wait for content to load with increased attempts on retry
+        const maxContentAttempts = 15 + (attempt - 1) * 5;
+        let contentLoaded = false;
+        for (let contentAttempt = 0; contentAttempt < maxContentAttempts; contentAttempt++) {
+          const opacity = parseFloat(window.getComputedStyle(tooltip).opacity);
+          if (opacity > 0.5 && tooltip.textContent.trim().length > 0) {
+            contentLoaded = true;
+            break;
+          }
+          await sleep(50);
+        }
+
+        if (!contentLoaded) {
+          lastError = 'Tooltip content did not load';
+          console.warn(`[NotebookLM Takeout] Citation ${spanIndex}: Attempt ${attempt}/${maxRetries} - ${lastError}`);
+          button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+          await sleep(300 + attempt * 100);
+          continue;
+        }
+
+        // Extract citation data
+        const footerEl = tooltip.querySelector('.citation-tooltip-footer');
+        const textEl = tooltip.querySelector('.citation-tooltip-text');
+
+        const sourceTitle = footerEl?.textContent?.trim() || '';
+
+        // Convert HTML to markdown
+        let quoteMarkdown = '';
+        if (textEl) {
+          const textElements = textEl.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
+          if (textElements.length > 0) {
+            for (const element of textElements) {
+              const markdown = await htmlToMarkdownWithImages(element, includeImages);
+              if (markdown && markdown.length > 0) {
+                quoteMarkdown += markdown + '\n\n';
+              }
+            }
+          } else {
+            quoteMarkdown = await htmlToMarkdownWithImages(textEl, includeImages);
+          }
+        }
+        quoteMarkdown = quoteMarkdown.trim();
+
+        // Close tooltip
+        button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+        await sleep(200);
+
+        // Wait for tooltip to fully close
+        for (let closeAttempt = 0; closeAttempt < 20; closeAttempt++) {
+          if (!document.querySelector('xap-inline-dialog-container[role="dialog"]')) {
+            break;
+          }
+          await sleep(100);
+        }
+
+        // Success!
+        if (attempt > 1) {
+          console.log(`[NotebookLM Takeout] Citation ${spanIndex}: Succeeded on attempt ${attempt}`);
+        }
+
+        return {
+          success: true,
+          data: {
+            text: sourceTitle,
+            quote: quoteMarkdown,
+            sourceIndex: spanIndex
+          }
+        };
+
+      } catch (error) {
+        lastError = error.message;
+        console.warn(`[NotebookLM Takeout] Citation ${spanIndex}: Attempt ${attempt}/${maxRetries} error:`, error.message);
+
+        // Clean up
+        try {
+          button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+        } catch (e) {}
+
+        await sleep(300 + attempt * 100);
+      }
+    }
+
+    // All retries failed - track in DOMHealthTracker
+    DOMHealthTracker.track('selector', 'citation-tooltip', `Citation ${spanIndex}`);
+
+    return {
+      success: false,
+      error: `Citation ${spanIndex}: ${lastError} (after ${maxRetries} attempts)`
+    };
+  }
+
   // Extract note content
   async function extractNoteContent(noteIndex, noteTitle, includeImages = false) {
     console.log('[NotebookLM Takeout] Extracting note:', noteTitle, 'at index:', noteIndex);
@@ -1341,6 +1558,7 @@
         existingViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer');
         if (existingViewer) {
           console.error('[NotebookLM Takeout] ERROR: Failed to close viewer after 3 attempts');
+          DOMHealthTracker.track('stuck', 'button[aria-label="Close note view"]', 'Viewer close failed');
           // Don't throw - instead, warn and try to continue
           console.warn('[NotebookLM Takeout] Attempting to continue anyway...');
           await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1460,6 +1678,7 @@
 
         const errorMsg = `Note not found: "${noteTitle}" at index ${noteIndex}. Total notes: ${allNoteElements.length}. Container: ${diagnostics.containerExists}, Library: ${diagnostics.libraryExists}, Icons: ${diagnostics.artifactIconsCount}`;
         console.error('[NotebookLM Takeout]', errorMsg);
+        DOMHealthTracker.track('selector', 'artifact-library-note', `Note "${noteTitle}"`);
         throw new Error(errorMsg);
       }
 
@@ -3094,6 +3313,7 @@
     }
 
     console.error('[NotebookLM Takeout] ERROR: Failed to close panel after all attempts!');
+    DOMHealthTracker.track('stuck', null, 'Panel close failed');
     console.log('[NotebookLM Takeout] Available elements:', {
       panelHeaders: document.querySelectorAll('.panel-header').length,
       backButtons: document.querySelectorAll('button[aria-label*="Back"]').length,
@@ -4202,112 +4422,23 @@
 
         console.log(`[NotebookLM Takeout] Extracting citation ${i + 1}/${citationButtons.length}: ${spanIndex}`);
 
-        try {
-          // Scroll button into view to ensure it's visible
-          button.scrollIntoView({ behavior: 'instant', block: 'center' });
-          await sleep(100);
+        // Use retry helper for citation extraction
+        const result = await extractSingleCitationWithRetry(button, spanIndex, includeCitationImages, 3);
 
-          // Simulate hover on the REAL button
-          button.dispatchEvent(new MouseEvent('mouseenter', {
-            view: window,
-            bubbles: true,
-            cancelable: true
-          }));
-
-          await sleep(150);
-
-          // Wait for tooltip with multiple possible selectors
-          const tooltip = await raceWithCleanup([
-            waitForElement('xap-inline-dialog-container[role="dialog"]', 2500),
-            waitForElement('.citation-tooltip', 2500),
-            waitForElement('[role="dialog"].ng-star-inserted', 2500)
-          ]).catch(() => null);
-
-          if (!tooltip) {
-            console.warn(`[NotebookLM Takeout] Citation ${spanIndex}: Tooltip did not appear`);
-            errors.push(`Citation ${spanIndex}: Tooltip did not appear`);
-            button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-            continue;
-          }
-
-          console.log(`[NotebookLM Takeout] Citation ${spanIndex}: Tooltip appeared!`);
-
-          // Wait for content to load (check opacity)
-          let contentLoaded = false;
-          for (let attempt = 0; attempt < 15; attempt++) {
-            const opacity = parseFloat(window.getComputedStyle(tooltip).opacity);
-            if (opacity > 0.5 && tooltip.textContent.trim().length > 0) {
-              contentLoaded = true;
-              break;
-            }
-            await sleep(50);
-          }
-
-          if (!contentLoaded) {
-            console.warn(`[NotebookLM Takeout] Citation ${spanIndex}: Tooltip content did not load`);
-            errors.push(`Citation ${spanIndex}: Tooltip content did not load`);
-            button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-            continue;
-          }
-
-          // Extract citation data
-          const footerEl = tooltip.querySelector('.citation-tooltip-footer');
-          const textEl = tooltip.querySelector('.citation-tooltip-text');
-
-          const sourceTitle = footerEl?.textContent?.trim() || '';
-
-          // Convert HTML to markdown using the same function as note exports
-          let quoteMarkdown = '';
-          if (textEl) {
-            // Try to process structural elements first
-            const textElements = textEl.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
-            if (textElements.length > 0) {
-              for (const element of textElements) {
-                const markdown = await htmlToMarkdownWithImages(element, includeCitationImages);
-                if (markdown && markdown.length > 0) {
-                  quoteMarkdown += markdown + '\n\n';
-                }
-              }
-            } else {
-              // Fallback: convert the whole textEl
-              quoteMarkdown = await htmlToMarkdownWithImages(textEl, includeCitationImages);
-            }
-          }
-          quoteMarkdown = quoteMarkdown.trim();
-
-          console.log(`[NotebookLM Takeout] Citation ${spanIndex}: Title="${sourceTitle?.substring(0, 50)}", Quote length=${quoteMarkdown.length}`);
-
+        if (result.success) {
           uniqueSources.set(spanIndex, {
             index: uniqueSources.size + 1,
-            text: sourceTitle,
-            quote: quoteMarkdown,
-            sourceIndex: spanIndex
+            ...result.data
           });
 
           sources.push({
             index: uniqueSources.size,
-            text: sourceTitle,
-            quote: quoteMarkdown,
-            sourceIndex: spanIndex
+            ...result.data
           });
 
-          console.log(`[NotebookLM Takeout] ✓ Extracted citation ${spanIndex}: ${sourceTitle}`);
-
-          // Close tooltip
-          button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-          await sleep(200);
-
-          // Wait for tooltip to fully close
-          for (let attempt = 0; attempt < 20; attempt++) {
-            if (!document.querySelector('xap-inline-dialog-container[role="dialog"]')) {
-              break;
-            }
-            await sleep(100);
-          }
-
-        } catch (error) {
-          console.error(`[NotebookLM Takeout] Error extracting citation ${spanIndex}:`, error);
-          errors.push(`Citation ${spanIndex}: ${error.message}`);
+          console.log(`[NotebookLM Takeout] ✓ Extracted citation ${spanIndex}: ${result.data.text}`);
+        } else {
+          errors.push(result.error);
         }
       }
 
@@ -4417,109 +4548,25 @@
 
       console.log(`[NotebookLM Takeout] Matched ${buttonsToExtract.size} buttons in message ${messageIndex}`);
 
-      // Extract from matched live buttons
+      // Extract from matched live buttons with retry logic
       for (const [sourceIndex, button] of buttonsToExtract.entries()) {
         console.log(`[NotebookLM Takeout] Extracting source ${sourceIndex} from live button...`);
 
-        try {
-          // Scroll button into view
-          button.scrollIntoView({ behavior: 'instant', block: 'center' });
-          await sleep(300);  // Increased from 200ms for slower networks
+        // Use retry helper for citation extraction
+        const result = await extractSingleCitationWithRetry(button, sourceIndex, includeCitationImages, 3);
 
-          // Hover over button
-          button.dispatchEvent(new MouseEvent('mouseenter', {
-            view: window,
-            bubbles: true,
-            cancelable: true
-          }));
-
-          await sleep(500);  // Increased from 300ms for slower networks
-
-          // Wait for tooltip
-          const tooltip = await raceWithCleanup([
-            waitForElement('xap-inline-dialog-container[role="dialog"]', 3000),
-            waitForElement('.citation-tooltip', 3000),
-            waitForElement('[role="dialog"].ng-star-inserted', 3000)
-          ]).catch(() => null);
-
-          if (!tooltip) {
-            console.warn(`[NotebookLM Takeout] Source ${sourceIndex}: Tooltip did not appear`);
-            errors.push(`Source ${sourceIndex}: Tooltip did not appear`);
-            button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-            continue;
-          }
-
-          console.log(`[NotebookLM Takeout] Source ${sourceIndex}: Tooltip appeared`);
-
-          // Wait for content to load (increased timeout for slow API responses)
-          let contentLoaded = false;
-          for (let attempt = 0; attempt < 50; attempt++) {  // Increased from 20 to 50 attempts (2.5 seconds)
-            const opacity = parseFloat(window.getComputedStyle(tooltip).opacity);
-            if (opacity > 0.5 && tooltip.textContent.trim().length > 0) {
-              contentLoaded = true;
-              break;
-            }
-            await sleep(50);
-          }
-
-          if (!contentLoaded) {
-            console.warn(`[NotebookLM Takeout] Source ${sourceIndex}: Content did not load after 2.5 seconds`);
-            errors.push(`Source ${sourceIndex}: Content did not load`);
-            button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-            continue;
-          }
-
-          // Extract citation data
-          const footerEl = tooltip.querySelector('.citation-tooltip-footer');
-          const textEl = tooltip.querySelector('.citation-tooltip-text');
-
-          const sourceTitle = footerEl?.textContent?.trim() || '';
-
-          // Convert HTML to markdown using the same function as note exports
-          let quoteMarkdown = '';
-          if (textEl) {
-            // Try to process structural elements first
-            const textElements = textEl.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
-            if (textElements.length > 0) {
-              for (const element of textElements) {
-                const markdown = await htmlToMarkdownWithImages(element, includeCitationImages);
-                if (markdown && markdown.length > 0) {
-                  quoteMarkdown += markdown + '\n\n';
-                }
-              }
-            } else {
-              // Fallback: convert the whole textEl
-              quoteMarkdown = await htmlToMarkdownWithImages(textEl, includeCitationImages);
-            }
-          }
-          quoteMarkdown = quoteMarkdown.trim();
-
+        if (result.success) {
           sourcesByIndex[sourceIndex] = {
-            text: sourceTitle,
-            quote: quoteMarkdown
+            text: result.data.text,
+            quote: result.data.quote
           };
-
-          console.log(`[NotebookLM Takeout] ✓ Source ${sourceIndex}: "${sourceTitle}" (${quoteMarkdown.length} chars)`);
-
-          // Close tooltip
-          button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-          await sleep(400);  // Increased from 250ms for slower networks  // Increased from 200ms
-
-          // Wait for tooltip to close
-          for (let attempt = 0; attempt < 20; attempt++) {
-            if (!document.querySelector('xap-inline-dialog-container[role="dialog"]')) {
-              break;
-            }
-            await sleep(100);
-          }
-
-          // Add delay between citations to avoid overwhelming API (especially with many citations)
-          await sleep(150);
-
-        } catch (error) {
-          console.error(`[NotebookLM Takeout] Error extracting source ${sourceIndex}:`, error);
-          errors.push(`Source ${sourceIndex}: ${error.message}`);
+          console.log(`[NotebookLM Takeout] ✓ Source ${sourceIndex}: "${result.data.text}" (${result.data.quote.length} chars)`);
+        } else {
+          errors.push(result.error);
         }
+
+        // Add delay between citations to avoid overwhelming API
+        await sleep(150);
       }
 
     } catch (error) {
@@ -4591,108 +4638,30 @@
 
         console.log(`[NotebookLM Takeout] Extracting citation ${i + 1}/${citationButtons.length}: ${spanIndex}`);
 
-        try {
-          // Make button visible temporarily for event handling
-          button.style.cssText = 'position: fixed; left: 50%; top: 50%; z-index: 10000;';
+        // Make button visible temporarily for event handling (temp container buttons need positioning)
+        const originalStyle = button.style.cssText;
+        button.style.cssText = 'position: fixed; left: 50%; top: 50%; z-index: 10000;';
 
-          // Simulate hover
-          button.dispatchEvent(new MouseEvent('mouseenter', {
-            view: window,
-            bubbles: true,
-            cancelable: true
-          }));
+        // Use retry helper for citation extraction
+        const result = await extractSingleCitationWithRetry(button, spanIndex, includeCitationImages, 3);
 
-          await sleep(100);
+        // Restore original style
+        button.style.cssText = originalStyle;
 
-          // Wait for tooltip with multiple possible selectors
-          const tooltip = await raceWithCleanup([
-            waitForElement('xap-inline-dialog-container[role="dialog"]', 2000),
-            waitForElement('.citation-tooltip', 2000),
-            waitForElement('[role="dialog"].ng-star-inserted', 2000)
-          ]).catch(() => null);
-
-          if (!tooltip) {
-            console.warn(`[NotebookLM Takeout] Citation ${spanIndex}: Tooltip did not appear`);
-            errors.push(`Citation ${spanIndex}: Tooltip did not appear`);
-            button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-            continue;
-          }
-
-          console.log(`[NotebookLM Takeout] Citation ${spanIndex}: Tooltip appeared!`);
-
-          // Wait for content to load (check opacity)
-          let contentLoaded = false;
-          for (let attempt = 0; attempt < 12; attempt++) {
-            const opacity = parseFloat(window.getComputedStyle(tooltip).opacity);
-            if (opacity > 0.5 && tooltip.textContent.trim().length > 0) {
-              contentLoaded = true;
-              break;
-            }
-            await sleep(50);
-          }
-
-          if (!contentLoaded) {
-            errors.push(`Citation ${spanIndex}: Tooltip content did not load`);
-            button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-            continue;
-          }
-
-          // Extract citation data
-          const footerEl = tooltip.querySelector('.citation-tooltip-footer');
-          const textEl = tooltip.querySelector('.citation-tooltip-text');
-
-          const sourceTitle = footerEl?.textContent?.trim() || '';
-
-          // Convert HTML to markdown using the same function as note exports
-          let quoteMarkdown = '';
-          if (textEl) {
-            // Try to process structural elements first
-            const textElements = textEl.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
-            if (textElements.length > 0) {
-              for (const element of textElements) {
-                const markdown = await htmlToMarkdownWithImages(element, includeCitationImages);
-                if (markdown && markdown.length > 0) {
-                  quoteMarkdown += markdown + '\n\n';
-                }
-              }
-            } else {
-              // Fallback: convert the whole textEl
-              quoteMarkdown = await htmlToMarkdownWithImages(textEl, includeCitationImages);
-            }
-          }
-          quoteMarkdown = quoteMarkdown.trim();
-
+        if (result.success) {
           uniqueSources.set(spanIndex, {
             index: uniqueSources.size + 1,
-            text: sourceTitle,
-            quote: quoteMarkdown,
-            sourceIndex: spanIndex
+            ...result.data
           });
 
           sources.push({
             index: uniqueSources.size,
-            text: sourceTitle,
-            quote: quoteMarkdown,
-            sourceIndex: spanIndex
+            ...result.data
           });
 
-          console.log(`[NotebookLM Takeout] ✓ Extracted citation ${spanIndex}: ${sourceTitle}`);
-
-          // Close tooltip
-          button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-          await sleep(150);
-
-          // Wait for tooltip to fully close
-          for (let attempt = 0; attempt < 15; attempt++) {
-            if (!document.querySelector('xap-inline-dialog-container[role="dialog"]')) {
-              break;
-            }
-            await sleep(100);
-          }
-
-        } catch (error) {
-          console.error(`[NotebookLM Takeout] Error extracting citation ${spanIndex}:`, error);
-          errors.push(`Citation ${spanIndex}: ${error.message}`);
+          console.log(`[NotebookLM Takeout] ✓ Extracted citation ${spanIndex}: ${result.data.text}`);
+        } else {
+          errors.push(result.error);
         }
       }
 

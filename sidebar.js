@@ -18,6 +18,73 @@ const logger = {
 };
 
 /**
+ * Show a warning dialog for DOM compatibility issues
+ * @param {string[]} issues - List of issues to display
+ * @param {boolean} isMidExport - Whether this is during an export (vs pre-export)
+ * @returns {Promise<boolean>} - Whether user wants to continue
+ */
+function showDOMWarningDialog(issues, isMidExport = false) {
+  return new Promise((resolve) => {
+    const dialog = document.createElement('div');
+    dialog.className = 'dom-warning-dialog';
+    dialog.innerHTML = `
+      <div class="dialog-overlay"></div>
+      <div class="dialog-content">
+        <h3>${isMidExport ? 'Export Issues Detected' : 'Potential Compatibility Issues'}</h3>
+        <p style="font-size: 13px; color: #666; margin: 0 0 8px;">
+          ${isMidExport
+            ? 'Multiple errors occurred. NotebookLM may have been updated.'
+            : 'Some expected elements were not found. The extension may need an update.'}
+        </p>
+        <ul>${issues.map(i => `<li>${i}</li>`).join('')}</ul>
+        <div class="dialog-actions">
+          <button class="btn btn-secondary" data-action="cancel">Cancel</button>
+          <button class="btn btn-primary" data-action="continue">
+            ${isMidExport ? 'Continue' : 'Try Anyway'}
+          </button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    dialog.addEventListener('click', (e) => {
+      const action = e.target.dataset.action;
+      if (action === 'cancel' || e.target.classList.contains('dialog-overlay')) {
+        dialog.remove();
+        resolve(false);
+      } else if (action === 'continue') {
+        dialog.remove();
+        resolve(true);
+      }
+    });
+  });
+}
+
+/**
+ * Show the warning banner in the sidebar
+ * @param {string} message - Warning message to display
+ */
+function showWarningBanner(message) {
+  const banner = document.getElementById('dom-warning-banner');
+  const messageEl = document.getElementById('warning-message');
+  if (banner && messageEl) {
+    messageEl.textContent = message;
+    banner.style.display = 'flex';
+  }
+}
+
+/**
+ * Hide the warning banner
+ */
+function hideWarningBanner() {
+  const banner = document.getElementById('dom-warning-banner');
+  if (banner) {
+    banner.style.display = 'none';
+  }
+}
+
+/**
  * Create a standardized TurndownService instance with consistent configuration
  * This ensures all markdown conversions use the same settings
  * @param {Object} customOptions - Optional custom options to override defaults
@@ -311,6 +378,12 @@ function setupEventListeners() {
   const scanChatBtn = document.getElementById('scan-chat-btn');
   if (scanChatBtn) {
     scanChatBtn.addEventListener('click', scanChatPage);
+  }
+
+  // Dismiss warning banner button
+  const dismissWarningBtn = document.getElementById('dismiss-warning-btn');
+  if (dismissWarningBtn) {
+    dismissWarningBtn.addEventListener('click', hideWarningBanner);
   }
 }
 
@@ -2175,6 +2248,21 @@ async function exportNotesAsMarkdown(selectedNotes) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
   console.log('[NotebookLM Takeout] Export timestamp:', timestamp, 'Project:', projectName);
 
+  // Reset DOM tracker and perform pre-export health check
+  await chrome.tabs.sendMessage(tab.id, { type: 'RESET_DOM_TRACKER' });
+  const healthCheck = await chrome.tabs.sendMessage(tab.id, {
+    type: 'CHECK_DOM_HEALTH',
+    data: { type: 'notes' }
+  });
+
+  if (!healthCheck.healthy) {
+    const proceed = await showDOMWarningDialog(healthCheck.issues);
+    if (!proceed) {
+      showToast('Export cancelled', 'info');
+      return;
+    }
+  }
+
   // Show overlay on the page
   await chrome.tabs.sendMessage(tab.id, {
     type: 'SHOW_EXPORT_OVERLAY',
@@ -2191,6 +2279,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
 
   const allErrors = [];
   let cancelled = false;
+  let userAcknowledgedWarning = false; // Track if user already acknowledged DOM issues
 
   // Listen for cancellation
   const cancelListener = (message) => {
@@ -2307,6 +2396,22 @@ async function exportNotesAsMarkdown(selectedNotes) {
         allErrors.push(errorMsg);
         console.error(`Failed to process note: ${note.title}`, error);
         showToast(`Error processing: ${note.title}`, 'error');
+
+        // Check for accumulated DOM errors every 3 failures
+        if (allErrors.length % 3 === 0 && !userAcknowledgedWarning) {
+          try {
+            const errorReport = await chrome.tabs.sendMessage(tab.id, { type: 'GET_DOM_ERRORS' });
+            if (errorReport && errorReport.shouldWarn) {
+              const proceed = await showDOMWarningDialog(errorReport.issues, true);
+              if (!proceed) {
+                cancelled = true;
+              }
+              userAcknowledgedWarning = true;
+            }
+          } catch (e) {
+            console.warn('[NotebookLM Takeout] Could not check DOM errors:', e);
+          }
+        }
       } finally {
         // Always try to navigate back, even if extraction failed
         try {
@@ -2887,6 +2992,21 @@ async function exportSources(selectedSources) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
   console.log('[NotebookLM Takeout] Export timestamp:', timestamp, 'Project:', projectName);
 
+  // Reset DOM tracker and perform pre-export health check
+  await chrome.tabs.sendMessage(tab.id, { type: 'RESET_DOM_TRACKER' });
+  const healthCheck = await chrome.tabs.sendMessage(tab.id, {
+    type: 'CHECK_DOM_HEALTH',
+    data: { type: 'sources' }
+  });
+
+  if (!healthCheck.healthy) {
+    const proceed = await showDOMWarningDialog(healthCheck.issues);
+    if (!proceed) {
+      showToast('Export cancelled', 'info');
+      return;
+    }
+  }
+
   // Show overlay on the page
   await chrome.tabs.sendMessage(tab.id, {
     type: 'SHOW_EXPORT_OVERLAY',
@@ -2904,6 +3024,7 @@ async function exportSources(selectedSources) {
 
   const allErrors = [];
   let cancelled = false;
+  let userAcknowledgedWarning = false; // Track if user already acknowledged DOM issues
 
   // Track statistics for error reporting
   const stats = {
@@ -3151,6 +3272,22 @@ async function exportSources(selectedSources) {
           message: error.message,
           stack: error.stack
         });
+
+        // Check for accumulated DOM errors every 3 failures
+        if (stats.failedExtractions % 3 === 0 && !userAcknowledgedWarning) {
+          try {
+            const errorReport = await chrome.tabs.sendMessage(tab.id, { type: 'GET_DOM_ERRORS' });
+            if (errorReport && errorReport.shouldWarn) {
+              const proceed = await showDOMWarningDialog(errorReport.issues, true);
+              if (!proceed) {
+                cancelled = true;
+              }
+              userAcknowledgedWarning = true;
+            }
+          } catch (e) {
+            console.warn('[NotebookLM Takeout] Could not check DOM errors:', e);
+          }
+        }
 
         // Try to close panel even if extraction failed
         try {
