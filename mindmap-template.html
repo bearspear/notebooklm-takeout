@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{TITLE}} - Mind Map</title>
+    <style>
+        :root {
+            --bg-primary: #1e1e1e;
+            --bg-secondary: #2d2d2d;
+            --bg-tertiary: #252525;
+            --bg-info: #404040;
+            --text-primary: #ffffff;
+            --text-secondary: #aaa;
+            --text-muted: #888;
+            --border-color: #404040;
+            --button-bg: #0d7377;
+            --button-hover: #0a5d5f;
+            --grid-line: rgba(255, 255, 255, 0.05);
+            --node-hover: rgba(255, 255, 255, 0.1);
+        }
+        [data-theme="light"] {
+            --bg-primary: #f5f5f5;
+            --bg-secondary: #ffffff;
+            --bg-tertiary: #fafafa;
+            --bg-info: #e0e0e0;
+            --text-primary: #212121;
+            --text-secondary: #555;
+            --text-muted: #757575;
+            --border-color: #ddd;
+            --button-bg: #0d7377;
+            --button-hover: #0a5d5f;
+            --grid-line: rgba(0, 0, 0, 0.05);
+            --node-hover: rgba(0, 0, 0, 0.05);
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            transition: background 0.3s, color 0.3s;
+        }
+        .header {
+            background: var(--bg-secondary);
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: space-between;
+        }
+        .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        button {
+            background: var(--button-bg);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        button:hover { background: var(--button-hover); }
+        button:active { transform: scale(0.98); }
+        .theme-toggle {
+            background: var(--bg-info);
+            color: var(--text-primary);
+            min-width: 100px;
+        }
+        .theme-toggle:hover { background: var(--border-color); }
+        .zoom-info, .node-info {
+            background: var(--bg-info);
+            color: var(--text-primary);
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .zoom-info { min-width: 80px; text-align: center; }
+        .node-info { font-size: 12px; }
+        .viewer-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+            background: var(--bg-tertiary);
+        }
+        .viewer-container.panning { cursor: grabbing !important; }
+        #svgCanvas { width: 100%; height: 100%; position: relative; cursor: grab; }
+        #svgCanvas svg { position: absolute; transform-origin: 0 0; }
+        .viewer-container::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background-image: linear-gradient(var(--grid-line) 1px, transparent 1px),
+                              linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+            background-size: 20px 20px;
+            pointer-events: none;
+            z-index: 0;
+        }
+        .node.expandable { cursor: pointer !important; }
+        .node.expandable:hover rect { filter: brightness(1.1); stroke: var(--text-primary); stroke-width: 2; }
+        .node circle, .node .expand-symbol { cursor: pointer !important; transition: fill 0.2s, opacity 0.2s; }
+        .node.expandable circle:hover { fill: var(--button-bg); opacity: 0.9; }
+        .node, .link, path.link { transition: opacity 0.3s ease, visibility 0.3s ease; }
+        .node.collapsed, .link.collapsed, path.link.collapsed { opacity: 0; visibility: hidden; pointer-events: none; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="controls">
+            <button id="zoomIn">Zoom In (+)</button>
+            <button id="zoomOut">Zoom Out (-)</button>
+            <button id="resetView">Reset View</button>
+            <button id="fitToScreen">Fit to Screen</button>
+            <div class="zoom-info" id="zoomLevel">100%</div>
+        </div>
+        <div class="controls">
+            <button id="expandAll">Expand All</button>
+            <button id="collapseAll">Collapse All</button>
+            <div class="node-info" id="nodeInfo">Nodes: -/-</div>
+            <button id="themeToggle" class="theme-toggle">🌙 Dark</button>
+        </div>
+    </div>
+    <div class="viewer-container" id="viewerContainer">
+        <div id="svgCanvas">
+{{SVG_CONTENT}}
+        </div>
+    </div>
+    <script>
+        class MindMapViewer {
+            constructor() {
+                this.canvas = document.getElementById('svgCanvas');
+                this.container = document.getElementById('viewerContainer');
+                this.zoomLevelDisplay = document.getElementById('zoomLevel');
+                this.nodeInfoDisplay = document.getElementById('nodeInfo');
+                this.themeToggleBtn = document.getElementById('themeToggle');
+                this.scale = 1; this.translateX = 0; this.translateY = 0;
+                this.isPanning = false; this.startX = 0; this.startY = 0;
+                this.svgElement = null;
+                this.nodes = new Map(); this.paths = new Map();
+                this.expandedState = new Map(); this.totalNodes = 0;
+                this.initTheme(); this.initSVG(); this.initEventListeners();
+            }
+            initTheme() {
+                const saved = localStorage.getItem('mindmap-theme') || 'dark';
+                this.setTheme(saved, false);
+            }
+            setTheme(theme, save = true) {
+                if (theme === 'light') {
+                    document.body.setAttribute('data-theme', 'light');
+                    this.themeToggleBtn.textContent = '☀️ Light';
+                } else {
+                    document.body.removeAttribute('data-theme');
+                    this.themeToggleBtn.textContent = '🌙 Dark';
+                }
+                if (save) localStorage.setItem('mindmap-theme', theme);
+            }
+            toggleTheme() {
+                const current = document.body.getAttribute('data-theme');
+                this.setTheme(current === 'light' ? 'dark' : 'light');
+            }
+            initSVG() {
+                this.svgElement = this.canvas.querySelector('svg');
+                if (this.svgElement) {
+                    this.parseMindMap();
+                    setTimeout(() => this.fitToScreen(), 100);
+                }
+            }
+            parseMindMap() {
+                const nodeGroups = this.svgElement.querySelectorAll('g.node');
+                this.totalNodes = nodeGroups.length;
+                nodeGroups.forEach((nodeGroup) => {
+                    const transform = nodeGroup.getAttribute('transform');
+                    const match = transform?.match(/translate\(([-\d.]+),\s*([-\d.]+)\)/);
+                    if (match) {
+                        const x = parseFloat(match[1]), y = parseFloat(match[2]);
+                        const id = `node-${x}-${y}`;
+                        const expandSymbol = nodeGroup.querySelector('.expand-symbol');
+                        const circle = nodeGroup.querySelector('circle');
+                        if (circle) { circle.style.pointerEvents = 'auto'; circle.style.cursor = 'pointer'; }
+                        if (expandSymbol) { expandSymbol.style.pointerEvents = 'auto'; expandSymbol.style.cursor = 'pointer'; }
+                        let circleOffsetX = 0;
+                        if (circle) {
+                            const ct = circle.getAttribute('transform');
+                            if (ct) { const cm = ct.match(/translate\(([-\d.]+)/); if (cm) circleOffsetX = parseFloat(cm[1]); }
+                        }
+                        this.nodes.set(id, { element: nodeGroup, x, y, circleX: x + circleOffsetX, isExpandable: false, children: [], parent: null, expandSymbol, circle });
+                        this.expandedState.set(id, true);
+                    }
+                });
+                const pathElements = this.svgElement.querySelectorAll('path.link');
+                pathElements.forEach((pathElement, index) => {
+                    const d = pathElement.getAttribute('d');
+                    const coords = this.extractPathCoordinates(d);
+                    if (coords) this.paths.set(`path-${index}`, { element: pathElement, ...coords, parent: null, child: null });
+                });
+                this.buildNodeTree();
+                this.updateNodeCounter();
+            }
+            extractPathCoordinates(pathData) {
+                const cleaned = pathData.replace(/\s+/g, ' ').trim();
+                const mMatch = cleaned.match(/M\s*([-\d.]+)\s+([-\d.]+)/);
+                const endMatch = cleaned.match(/([-\d.]+)\s+([-\d.]+)\s*$/);
+                if (mMatch && endMatch) return { startX: parseFloat(mMatch[1]), startY: parseFloat(mMatch[2]), endX: parseFloat(endMatch[1]), endY: parseFloat(endMatch[2]) };
+                return null;
+            }
+            buildNodeTree() {
+                this.paths.forEach((pathData) => {
+                    let parentNode = null, childNode = null, minParentDist = Infinity, minChildDist = Infinity;
+                    this.nodes.forEach((nodeData, nodeId) => {
+                        if (Math.abs(pathData.startY - nodeData.y) < 1 && Math.abs(pathData.startX - nodeData.circleX) < 5) {
+                            const dist = Math.abs(pathData.startX - nodeData.circleX);
+                            if (dist < minParentDist) { minParentDist = dist; parentNode = { id: nodeId, data: nodeData }; }
+                        }
+                        if (Math.abs(pathData.endY - nodeData.y) < 1 && Math.abs(pathData.endX - (nodeData.x - 18)) < 5) {
+                            const dist = Math.abs(pathData.endX - (nodeData.x - 18));
+                            if (dist < minChildDist) { minChildDist = dist; childNode = { id: nodeId, data: nodeData }; }
+                        }
+                    });
+                    if (parentNode && childNode) {
+                        pathData.parent = parentNode.id; pathData.child = childNode.id;
+                        if (!parentNode.data.children.includes(childNode.id)) parentNode.data.children.push(childNode.id);
+                        childNode.data.parent = parentNode.id;
+                    }
+                });
+                this.nodes.forEach((nodeData, nodeId) => {
+                    if (nodeData.children.length > 0) {
+                        nodeData.isExpandable = true;
+                        nodeData.element.classList.add('expandable');
+                        if (nodeData.expandSymbol) nodeData.expandSymbol.textContent = '<';
+                    }
+                });
+            }
+            initEventListeners() {
+                document.getElementById('zoomIn').addEventListener('click', () => this.zoom(1.2));
+                document.getElementById('zoomOut').addEventListener('click', () => this.zoom(0.8));
+                document.getElementById('resetView').addEventListener('click', () => this.resetView());
+                document.getElementById('fitToScreen').addEventListener('click', () => this.fitToScreen());
+                this.themeToggleBtn.addEventListener('click', () => this.toggleTheme());
+                document.getElementById('expandAll').addEventListener('click', () => this.expandAll());
+                document.getElementById('collapseAll').addEventListener('click', () => this.collapseAll());
+                this.container.addEventListener('wheel', (e) => { e.preventDefault(); this.zoom(e.deltaY < 0 ? 1.1 : 0.9, e.clientX, e.clientY); }, { passive: false });
+                this.container.addEventListener('mousedown', (e) => this.startPan(e));
+                this.container.addEventListener('mousemove', (e) => this.pan(e));
+                this.container.addEventListener('mouseup', () => this.endPan());
+                this.container.addEventListener('mouseleave', () => this.endPan());
+                document.addEventListener('keydown', (e) => this.handleKeyboard(e));
+                this.attachNodeListeners();
+            }
+            attachNodeListeners() {
+                this.nodes.forEach((nodeData, nodeId) => {
+                    if (nodeData.isExpandable) {
+                        const handler = (e) => { e.stopPropagation(); e.preventDefault(); this.toggleNode(nodeId); };
+                        if (nodeData.circle) { nodeData.circle.addEventListener('click', handler); nodeData.circle.addEventListener('mousedown', (e) => e.stopPropagation()); }
+                        if (nodeData.expandSymbol) { nodeData.expandSymbol.addEventListener('click', handler); nodeData.expandSymbol.addEventListener('mousedown', (e) => e.stopPropagation()); }
+                        const rect = nodeData.element.querySelector('rect');
+                        if (rect) { rect.addEventListener('click', handler); rect.addEventListener('mousedown', (e) => e.stopPropagation()); }
+                    }
+                });
+            }
+            toggleNode(nodeId) {
+                const nodeData = this.nodes.get(nodeId); if (!nodeData) return;
+                const newState = !this.expandedState.get(nodeId);
+                this.expandedState.set(nodeId, newState);
+                newState ? this.expandNode(nodeId) : this.collapseNode(nodeId);
+                this.updateNodeCounter();
+            }
+            expandNode(nodeId) {
+                const nodeData = this.nodes.get(nodeId); if (!nodeData) return;
+                if (nodeData.expandSymbol) nodeData.expandSymbol.textContent = '<';
+                nodeData.children.forEach(childId => {
+                    const childNode = this.nodes.get(childId);
+                    if (childNode) {
+                        childNode.element.classList.remove('collapsed');
+                        this.showPathToChild(nodeId, childId);
+                        if (this.expandedState.get(childId) && childNode.isExpandable) this.expandNode(childId);
+                    }
+                });
+            }
+            collapseNode(nodeId) {
+                const nodeData = this.nodes.get(nodeId); if (!nodeData) return;
+                if (nodeData.expandSymbol) nodeData.expandSymbol.textContent = '>';
+                this.hideDescendants(nodeId);
+            }
+            hideDescendants(nodeId) {
+                const nodeData = this.nodes.get(nodeId); if (!nodeData) return;
+                nodeData.children.forEach(childId => {
+                    const childNode = this.nodes.get(childId);
+                    if (childNode) { childNode.element.classList.add('collapsed'); this.hidePathToChild(nodeId, childId); this.hideDescendants(childId); }
+                });
+            }
+            showPathToChild(parentId, childId) { this.paths.forEach((p) => { if (p.parent === parentId && p.child === childId) p.element.classList.remove('collapsed'); }); }
+            hidePathToChild(parentId, childId) { this.paths.forEach((p) => { if (p.parent === parentId && p.child === childId) p.element.classList.add('collapsed'); }); }
+            expandAll() {
+                this.nodes.forEach((nodeData, nodeId) => {
+                    if (nodeData.isExpandable) { this.expandedState.set(nodeId, true); if (nodeData.expandSymbol) nodeData.expandSymbol.textContent = '<'; }
+                    nodeData.element.classList.remove('collapsed');
+                });
+                this.paths.forEach((p) => p.element.classList.remove('collapsed'));
+                this.updateNodeCounter();
+            }
+            collapseAll() {
+                const rootNodes = [];
+                this.nodes.forEach((nodeData, nodeId) => { if (!nodeData.parent) rootNodes.push(nodeId); });
+                this.nodes.forEach((nodeData, nodeId) => { if (!rootNodes.includes(nodeId)) nodeData.element.classList.add('collapsed'); });
+                this.paths.forEach((p) => p.element.classList.add('collapsed'));
+                this.nodes.forEach((nodeData, nodeId) => {
+                    if (nodeData.isExpandable) { this.expandedState.set(nodeId, false); if (nodeData.expandSymbol) nodeData.expandSymbol.textContent = '>'; }
+                });
+                this.updateNodeCounter();
+            }
+            updateNodeCounter() {
+                const visible = Array.from(this.nodes.values()).filter(n => !n.element.classList.contains('collapsed')).length;
+                this.nodeInfoDisplay.textContent = `Nodes: ${visible}/${this.totalNodes}`;
+            }
+            zoom(factor, cx = null, cy = null) {
+                const oldScale = this.scale;
+                this.scale = Math.max(0.1, Math.min(20, this.scale * factor));
+                if (cx !== null && cy !== null) {
+                    const rect = this.container.getBoundingClientRect();
+                    const x = cx - rect.left, y = cy - rect.top;
+                    this.translateX = x - (x - this.translateX) * (this.scale / oldScale);
+                    this.translateY = y - (y - this.translateY) * (this.scale / oldScale);
+                }
+                this.updateTransform();
+            }
+            startPan(e) {
+                if (e.button !== 0 || e.target.closest('.node.expandable')) return;
+                this.isPanning = true;
+                this.startX = e.clientX - this.translateX;
+                this.startY = e.clientY - this.translateY;
+                this.container.classList.add('panning');
+            }
+            pan(e) { if (!this.isPanning) return; this.translateX = e.clientX - this.startX; this.translateY = e.clientY - this.startY; this.updateTransform(); }
+            endPan() { this.isPanning = false; this.container.classList.remove('panning'); }
+            handleKeyboard(e) {
+                switch(e.key) {
+                    case '+': case '=': e.preventDefault(); this.zoom(1.2); break;
+                    case '-': case '_': e.preventDefault(); this.zoom(0.8); break;
+                    case 'r': case 'R': e.preventDefault(); this.resetView(); break;
+                    case 'f': case 'F': e.preventDefault(); this.fitToScreen(); break;
+                    case 't': case 'T': e.preventDefault(); this.toggleTheme(); break;
+                    case 'e': case 'E': e.preventDefault(); this.expandAll(); break;
+                    case 'c': case 'C': e.preventDefault(); this.collapseAll(); break;
+                }
+            }
+            resetView() { this.scale = 1; this.translateX = 0; this.translateY = 0; this.updateTransform(); }
+            fitToScreen() {
+                if (!this.svgElement) return;
+                const cr = this.container.getBoundingClientRect();
+                const sw = this.svgElement.viewBox?.baseVal?.width || this.svgElement.width?.baseVal?.value || cr.width;
+                const sh = this.svgElement.viewBox?.baseVal?.height || this.svgElement.height?.baseVal?.value || cr.height;
+                this.scale = Math.min((cr.width * 0.9) / sw, (cr.height * 0.9) / sh);
+                this.translateX = (cr.width - sw * this.scale) / 2;
+                this.translateY = (cr.height - sh * this.scale) / 2;
+                this.updateTransform();
+            }
+            updateTransform() {
+                if (this.svgElement) this.svgElement.style.transform = `translate(${this.translateX}px, ${this.translateY}px) scale(${this.scale})`;
+                this.zoomLevelDisplay.textContent = `${Math.round(this.scale * 100)}%`;
+            }
+        }
+        window.addEventListener('DOMContentLoaded', () => new MindMapViewer());
+    </script>
+</body>
+</html>
