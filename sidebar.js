@@ -235,8 +235,6 @@ async function loadSettings() {
   document.getElementById('auto-zip-checkbox').checked = settings.autoZip;
   document.getElementById('show-notifications-checkbox').checked = settings.showNotifications;
   document.getElementById('refresh-interval-input').value = settings.refreshInterval;
-  document.getElementById('citations-code-block-checkbox').checked = settings.citationsCodeBlock || settings.exportNoteCodeBlocks;
-  document.getElementById('include-citation-images-checkbox').checked = settings.includeCitationImages || settings.exportNoteWithImages;
 
   // Source version checkboxes
   document.getElementById('export-source-base-checkbox').checked = settings.exportSourceBase;
@@ -250,6 +248,10 @@ async function loadSettings() {
   document.getElementById('export-note-with-images-checkbox').checked = settings.exportNoteWithImages;
   document.getElementById('export-note-code-blocks-with-images-checkbox').checked = settings.exportNoteCodeBlocksWithImages;
 
+  // Sync legacy settings for chat export compatibility
+  settings.citationsCodeBlock = settings.exportNoteCodeBlocks || settings.exportNoteCodeBlocksWithImages;
+  settings.includeCitationImages = settings.exportNoteWithImages || settings.exportNoteCodeBlocksWithImages;
+
   // Batch sizes
   document.getElementById('sources-per-zip-input').value = settings.sourcesPerZip;
   document.getElementById('notes-per-zip-input').value = settings.notesPerZip;
@@ -259,16 +261,6 @@ async function saveSettings() {
   settings.autoZip = document.getElementById('auto-zip-checkbox').checked;
   settings.showNotifications = document.getElementById('show-notifications-checkbox').checked;
   settings.refreshInterval = parseInt(document.getElementById('refresh-interval-input').value) || 10;
-
-  // Keep old settings for backward compatibility (chat/data table exports)
-  const citationsCodeBlockCheckbox = document.getElementById('citations-code-block-checkbox');
-  const includeCitationImagesCheckbox = document.getElementById('include-citation-images-checkbox');
-  if (citationsCodeBlockCheckbox) {
-    settings.citationsCodeBlock = citationsCodeBlockCheckbox.checked;
-  }
-  if (includeCitationImagesCheckbox) {
-    settings.includeCitationImages = includeCitationImagesCheckbox.checked;
-  }
 
   // Source version selections
   settings.exportSourceBase = document.getElementById('export-source-base-checkbox').checked;
@@ -281,6 +273,10 @@ async function saveSettings() {
   settings.exportNoteCodeBlocks = document.getElementById('export-note-code-blocks-checkbox').checked;
   settings.exportNoteWithImages = document.getElementById('export-note-with-images-checkbox').checked;
   settings.exportNoteCodeBlocksWithImages = document.getElementById('export-note-code-blocks-with-images-checkbox').checked;
+
+  // Sync legacy settings for chat export compatibility
+  settings.citationsCodeBlock = settings.exportNoteCodeBlocks || settings.exportNoteCodeBlocksWithImages;
+  settings.includeCitationImages = settings.exportNoteWithImages || settings.exportNoteCodeBlocksWithImages;
 
   // Batch sizes
   settings.sourcesPerZip = parseInt(document.getElementById('sources-per-zip-input').value) || 25;
@@ -314,54 +310,80 @@ function setupEventListeners() {
     input.addEventListener('change', saveSettings);
   });
 
-  // Add validation for source version checkboxes (ensure at least one is selected)
-  const sourceVersionCheckboxes = [
-    'export-source-base-checkbox',
-    'export-source-plus-meta-checkbox',
-    'export-source-with-images-checkbox',
-    'export-source-plus-meta-with-images-checkbox'
+  // Source version checkboxes - parent/child relationships
+  // Parent checkboxes control whether child "include images" checkboxes are enabled
+  const sourceParentChildPairs = [
+    { parent: 'export-source-base-checkbox', child: 'export-source-with-images-checkbox' },
+    { parent: 'export-source-plus-meta-checkbox', child: 'export-source-plus-meta-with-images-checkbox' }
   ];
 
-  sourceVersionCheckboxes.forEach(id => {
-    const checkbox = document.getElementById(id);
-    if (checkbox && !checkbox.disabled) {
-      checkbox.addEventListener('change', (e) => {
-        // Check if at least one source version is still selected
-        const anyChecked = sourceVersionCheckboxes.some(cbId => {
-          const cb = document.getElementById(cbId);
-          return cb && cb.checked;
-        });
+  // Function to update child checkbox state based on parent
+  function updateSourceChildState(parentId, childId) {
+    const parent = document.getElementById(parentId);
+    const child = document.getElementById(childId);
+    if (parent && child) {
+      child.disabled = !parent.checked;
+      if (!parent.checked) {
+        child.checked = false;
+      }
+    }
+  }
 
-        // If none are checked, prevent unchecking this one
-        if (!anyChecked) {
-          e.target.checked = true;
+  // Initialize child states and add event listeners
+  sourceParentChildPairs.forEach(({ parent, child }) => {
+    updateSourceChildState(parent, child);
+
+    const parentCheckbox = document.getElementById(parent);
+    if (parentCheckbox && !parentCheckbox.disabled) {
+      parentCheckbox.addEventListener('change', () => {
+        updateSourceChildState(parent, child);
+
+        // Ensure at least one parent version is selected
+        const baseChecked = document.getElementById('export-source-base-checkbox').checked;
+        const metaChecked = document.getElementById('export-source-plus-meta-checkbox').checked;
+        if (!baseChecked && !metaChecked) {
+          parentCheckbox.checked = true;
+          updateSourceChildState(parent, child);
           showToast('At least one source version must be selected', 'error');
         }
       });
     }
   });
 
-  // Add validation for note version checkboxes (ensure at least one is selected)
-  const noteVersionCheckboxes = [
-    'export-note-base-checkbox',
-    'export-note-code-blocks-checkbox',
-    'export-note-with-images-checkbox',
-    'export-note-code-blocks-with-images-checkbox'
+  // Note version checkboxes - parent/child relationships
+  // Parent checkboxes control whether child "include images" checkboxes are enabled
+  const noteParentChildPairs = [
+    { parent: 'export-note-base-checkbox', child: 'export-note-with-images-checkbox' },
+    { parent: 'export-note-code-blocks-checkbox', child: 'export-note-code-blocks-with-images-checkbox' }
   ];
 
-  noteVersionCheckboxes.forEach(id => {
-    const checkbox = document.getElementById(id);
-    if (checkbox && !checkbox.disabled) {
-      checkbox.addEventListener('change', (e) => {
-        // Check if at least one note version is still selected
-        const anyChecked = noteVersionCheckboxes.some(cbId => {
-          const cb = document.getElementById(cbId);
-          return cb && cb.checked;
-        });
+  // Function to update child checkbox state based on parent
+  function updateNoteChildState(parentId, childId) {
+    const parent = document.getElementById(parentId);
+    const child = document.getElementById(childId);
+    if (parent && child) {
+      child.disabled = !parent.checked;
+      if (!parent.checked) {
+        child.checked = false;
+      }
+    }
+  }
 
-        // If none are checked, prevent unchecking this one
-        if (!anyChecked) {
-          e.target.checked = true;
+  // Initialize child states and add event listeners
+  noteParentChildPairs.forEach(({ parent, child }) => {
+    updateNoteChildState(parent, child);
+
+    const parentCheckbox = document.getElementById(parent);
+    if (parentCheckbox && !parentCheckbox.disabled) {
+      parentCheckbox.addEventListener('change', () => {
+        updateNoteChildState(parent, child);
+
+        // Ensure at least one parent version is selected
+        const baseChecked = document.getElementById('export-note-base-checkbox').checked;
+        const codeBlocksChecked = document.getElementById('export-note-code-blocks-checkbox').checked;
+        if (!baseChecked && !codeBlocksChecked) {
+          parentCheckbox.checked = true;
+          updateNoteChildState(parent, child);
           showToast('At least one note version must be selected', 'error');
         }
       });
@@ -1906,9 +1928,28 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
     }
   });
 
+  // Strip mat-icon elements (Google Material icons that shouldn't appear in markdown)
+  turndownService.addRule('matIcons', {
+    filter: (node) => node.nodeName === 'MAT-ICON',
+    replacement: () => '' // Strip entirely
+  });
+
   // Custom rule for citation buttons
   turndownService.addRule('citationButtons', {
     filter: (node) => {
+      // Skip expand/collapse buttons (more_horiz, unfold_less icons)
+      if (node.nodeName === 'BUTTON') {
+        const matIcon = node.querySelector('mat-icon');
+        if (matIcon) {
+          const iconText = matIcon.textContent?.trim();
+          const ariaLabel = matIcon.getAttribute('aria-label') || '';
+          if (iconText === 'more_horiz' || iconText === 'unfold_less' ||
+              ariaLabel.includes('additional citations')) {
+            return false; // Skip these buttons entirely
+          }
+        }
+      }
+
       if (node.nodeName === 'BUTTON' && node.classList.contains('ng-star-inserted')) {
         return true;
       }
@@ -1932,10 +1973,13 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
                                 node.getAttribute('href')?.replace('#cite-', '');
 
       if (!originalSourceIndex && node.nodeName === 'BUTTON') {
+        // Try mat-icon first (new DOM), then span (old DOM)
+        const matIcon = node.querySelector('mat-icon');
         const span = node.querySelector('span');
-        if (span) {
-          originalSourceIndex = span.textContent.trim();
-          logger.info('Citation', `  - extracted from BUTTON span: "${originalSourceIndex}"`);
+        const textSource = matIcon || span;
+        if (textSource) {
+          originalSourceIndex = textSource.textContent.trim();
+          logger.info('Citation', `  - extracted from BUTTON ${matIcon ? 'mat-icon' : 'span'}: "${originalSourceIndex}"`);
         }
       }
 
@@ -2342,12 +2386,15 @@ async function exportNotesAsMarkdown(selectedNotes) {
         // Extract note content via content script
         console.log('[NotebookLM Takeout] Sending message to extract note content...');
 
+        // Only download images if user has enabled an image version
+        const needsImages = settings.exportNoteWithImages || settings.exportNoteCodeBlocksWithImages;
+
         const noteData = await chrome.tabs.sendMessage(tab.id, {
           type: 'EXTRACT_NOTE',
           data: {
             noteIndex: note.index,
             noteTitle: note.title,
-            includeCitationImages: settings.includeCitationImages
+            includeCitationImages: needsImages
           }
         });
 
@@ -4696,18 +4743,41 @@ function addChatTurndownRules(turndownService, citationsCodeBlock, getCurrentMes
     }
   });
 
+  // Strip mat-icon elements (Google Material icons that shouldn't appear in markdown)
+  turndownService.addRule('matIcons', {
+    filter: (node) => node.nodeName === 'MAT-ICON',
+    replacement: () => ''
+  });
+
   // Rule: Citation buttons - with message-specific anchors
   turndownService.addRule('citationButtons', {
     filter: (node) => {
-      return node.nodeName === 'BUTTON' && node.classList.contains('citation-marker');
+      if (node.nodeName !== 'BUTTON' || !node.classList.contains('citation-marker')) {
+        return false;
+      }
+      // Skip expand/collapse buttons (more_horiz, unfold_less icons)
+      const matIcon = node.querySelector('mat-icon');
+      if (matIcon) {
+        const iconText = matIcon.textContent?.trim();
+        const ariaLabel = matIcon.getAttribute('aria-label') || '';
+        if (iconText === 'more_horiz' || iconText === 'unfold_less' ||
+            ariaLabel.includes('additional citations')) {
+          return false;
+        }
+      }
+      return true;
     },
     replacement: (content, node) => {
+      // Try mat-icon first (new DOM), then span (old DOM)
+      const matIcon = node.querySelector('mat-icon');
       const span = node.querySelector('span');
-      const sourceIndex = span?.textContent?.trim();
+      const sourceIndex = matIcon?.textContent?.trim() || span?.textContent?.trim();
 
       // Skip invalid source indices
       if (!sourceIndex ||
           sourceIndex === '...' ||
+          sourceIndex === 'more_horiz' ||
+          sourceIndex === 'unfold_less' ||
           sourceIndex.includes('<') ||
           sourceIndex.includes('>') ||
           !/^[0-9]+$/.test(sourceIndex)) {

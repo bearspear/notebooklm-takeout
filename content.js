@@ -2406,13 +2406,15 @@
     // Step 1: Expand all collapsed citation groups
     console.log('[NotebookLM Takeout] Checking for collapsed citation groups...');
 
-    // Find all "show more" buttons (contain "..." text or "Show additional citations" aria-label)
+    // Find all "show more" buttons (contain "..." or "more_horiz" text, or "Show additional citations" aria-label)
     const showMoreButtons = Array.from(viewer.querySelectorAll('button.citation-marker'))
       .filter(btn => {
-        const span = btn.querySelector('span[aria-label="Show additional citations"], span');
-        return span && (
-          span.textContent?.trim() === '...' ||
-          span.getAttribute('aria-label') === 'Show additional citations'
+        // Check for mat-icon (new DOM) or span (old DOM)
+        const icon = btn.querySelector('mat-icon[aria-label="Show additional citations"], mat-icon, span[aria-label="Show additional citations"], span');
+        return icon && (
+          icon.textContent?.trim() === '...' ||
+          icon.textContent?.trim() === 'more_horiz' ||
+          icon.getAttribute('aria-label') === 'Show additional citations'
         );
       });
 
@@ -3890,14 +3892,15 @@
       return;
     }
 
-    // Find all citation buttons with "..." text
+    // Find all citation buttons with "..." or "more_horiz" text (collapsed indicators)
     const allCitationButtons = chatPanel.querySelectorAll('button.citation-marker');
     const collapsedButtons = Array.from(allCitationButtons).filter(button => {
-      const span = button.querySelector('span');
-      const text = span?.textContent?.trim();
-      const ariaLabel = span?.getAttribute('aria-label');
-      // Check for "..." text or "Show additional citations" aria-label
-      return text === '...' || ariaLabel?.includes('additional citations');
+      // Check for mat-icon (new DOM) or span (old DOM)
+      const icon = button.querySelector('mat-icon, span');
+      const text = icon?.textContent?.trim();
+      const ariaLabel = icon?.getAttribute('aria-label');
+      // Check for "..." or "more_horiz" text, or "Show additional citations" aria-label
+      return text === '...' || text === 'more_horiz' || ariaLabel?.includes('additional citations');
     });
 
     console.log(`[NotebookLM Takeout] Found ${collapsedButtons.length} collapsed citation indicators`);

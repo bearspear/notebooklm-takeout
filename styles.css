@@ -21,6 +21,7 @@ body {
 
 /* Header */
 header {
+  position: relative;
   text-align: center;
   margin-bottom: 16px;
   padding-bottom: 16px;
@@ -37,6 +38,26 @@ header h1 {
 header .subtitle {
   font-size: 12px;
   color: #5f6368;
+}
+
+.header-settings-btn {
+  position: absolute;
+  top: 0;
+  right: 0;
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: #5f6368;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.header-settings-btn:hover {
+  background: #f1f3f4;
+  color: #202124;
 }
 
 /* Status */
@@ -723,6 +744,42 @@ footer {
   font-weight: 500;
   margin-bottom: 8px;
   display: block;
+}
+
+/* Nested version options (parent/child checkboxes) */
+.version-option {
+  margin-bottom: 12px;
+}
+
+.version-option:last-child {
+  margin-bottom: 0;
+}
+
+.version-parent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  cursor: pointer;
+}
+
+.version-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 24px;
+  padding: 4px 0;
+  cursor: pointer;
+  color: #5f6368;
+  font-size: 12px;
+}
+
+.version-child input[type="checkbox"]:checked + span {
+  color: #202124;
+}
+
+.version-child input[type="checkbox"]:disabled + span {
+  color: #9aa0a6;
 }
 
 .setting-help {
