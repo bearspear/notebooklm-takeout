@@ -17,6 +17,66 @@ const logger = {
   }
 };
 
+// Mindmap HTML template - loaded from external file for easy updates
+let mindmapTemplate = null;
+
+/**
+ * Load the mindmap HTML template from external file
+ * @returns {Promise<string>} - The template content
+ */
+async function loadMindmapTemplate() {
+  if (mindmapTemplate) return mindmapTemplate;
+
+  try {
+    const templateUrl = chrome.runtime.getURL('mindmap-template.html');
+    const response = await fetch(templateUrl);
+    mindmapTemplate = await response.text();
+    console.log('[NotebookLM Takeout] Mindmap template loaded successfully');
+    return mindmapTemplate;
+  } catch (error) {
+    console.error('[NotebookLM Takeout] Failed to load mindmap template:', error);
+    // Return a minimal fallback template
+    return `<!DOCTYPE html>
+<html><head><title>{{TITLE}}</title></head>
+<body><h1>{{TITLE}}</h1><div>{{SVG_CONTENT}}</div></body></html>`;
+  }
+}
+
+/**
+ * Generate interactive HTML viewer for mindmap SVG
+ * @param {string} svgContent - The SVG content to embed
+ * @param {string} title - The mindmap title
+ * @returns {Promise<string>} - Complete HTML document
+ */
+async function generateMindmapHTML(svgContent, title) {
+  const template = await loadMindmapTemplate();
+  return template
+    .replace('{{TITLE}}', title)
+    .replace('{{SVG_CONTENT}}', svgContent);
+}
+
+// Keep synchronous version for backwards compatibility (uses cached template)
+function generateMindmapHTMLSync(svgContent, title) {
+  if (!mindmapTemplate) {
+    console.warn('[NotebookLM Takeout] Template not loaded, using fallback');
+    return `<!DOCTYPE html>
+<html><head><title>${title}</title></head>
+<body><h1>${title}</h1><div>${svgContent}</div></body></html>`;
+  }
+  return mindmapTemplate
+    .replace('{{TITLE}}', title)
+    .replace('{{SVG_CONTENT}}', svgContent);
+}
+
+// Pre-load template on script init
+loadMindmapTemplate();
+
+/*
+ * REMOVED INLINE TEMPLATE - Now loaded from mindmap-template.html
+ * To update the template, edit mindmap-template.html directly.
+ * Placeholders: {{TITLE}} and {{SVG_CONTENT}}
+ */
+
 /**
  * Show a warning dialog for DOM compatibility issues
  * @param {string[]} issues - List of issues to display
@@ -2752,8 +2812,10 @@ async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches =
       usedMindmapNames.add(uniqueName);
       mindmapsFolder.file(`${uniqueName}.svg`, mindmap.svgContent);
       mindmapsFolder.file(`${uniqueName}.json`, JSON.stringify(mindmap.treeData, null, 2));
+      mindmapsFolder.file(`${uniqueName}.html`, generateMindmapHTMLSync(mindmap.svgContent, mindmap.title));
       indexFiles.push({ path: `mindmaps/${uniqueName}.svg`, title: `${mindmap.title} (SVG)` });
       indexFiles.push({ path: `mindmaps/${uniqueName}.json`, title: `${mindmap.title} (JSON)` });
+      indexFiles.push({ path: `mindmaps/${uniqueName}.html`, title: `${mindmap.title} (Interactive HTML)` });
     });
   }
 
