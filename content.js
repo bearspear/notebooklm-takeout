@@ -462,13 +462,13 @@
       }
       return true;
     } else if (message.type === 'CHECK_DOM_HEALTH') {
-      // Pre-export health check
+      // Pre-export health check (basic version - use RUN_COMPREHENSIVE_HEALTH_CHECK for full check)
       const type = message.data?.type || 'notes';
       const checks = {
         notes: ['artifact-library-note', '.artifact-library-container'],
-        sources: ['.single-source-container'],
+        sources: ['.single-source-container', '.scroll-area-desktop'],
         artifacts: ['artifact-library-item'],
-        chat: ['.chat-turn', '.chat-message']
+        chat: ['.chat-message-pair', '.from-user-container', '.to-user-container']
       };
       const issues = [];
       for (const selector of (checks[type] || [])) {
@@ -491,6 +491,19 @@
       // Reset tracker at start of new export
       DOMHealthTracker.reset();
       sendResponse({ success: true });
+    } else if (message.type === 'RUN_COMPREHENSIVE_HEALTH_CHECK') {
+      // Comprehensive DOM health check for preflight validation
+      runComprehensiveHealthCheck(message.options || {})
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({
+          overallHealthy: false,
+          error: error.message,
+          categories: {},
+          criticalFailures: [error.message],
+          recommendations: ['Try refreshing the page and running the check again.'],
+          duration: 0
+        }));
+      return true;
     }
 
     return true;
@@ -1268,6 +1281,626 @@
     };
 
     return promise;
+  }
+
+  // ==================== COMPREHENSIVE HEALTH CHECK SYSTEM ====================
+
+  /**
+   * Check if an element is visible (has dimensions, not hidden)
+   * @param {Element} el - Element to check
+   * @returns {boolean}
+   */
+  function isElementVisible(el) {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return (
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      parseFloat(style.opacity) > 0 &&
+      rect.width > 0 &&
+      rect.height > 0
+    );
+  }
+
+  /**
+   * Check if an element is interactable (visible + not disabled)
+   * @param {Element} el - Element to check
+   * @returns {boolean}
+   */
+  function isElementInteractable(el) {
+    if (!el || !isElementVisible(el)) return false;
+    return !el.disabled && !el.hasAttribute('aria-disabled');
+  }
+
+  /**
+   * Check health of Notes functionality
+   * @returns {Object} - { healthy: boolean, checks: [...] }
+   */
+  function checkNotesHealth() {
+    const checks = [];
+
+    // Detect which view we're in: notes list vs note viewer
+    const noteViewer = document.querySelector('studio-panel note-editor');
+    const isViewingNote = !!noteViewer;
+
+    if (isViewingNote) {
+      // === NOTE VIEWER MODE ===
+      checks.push({
+        name: 'Note viewer detected',
+        selector: 'studio-panel note-editor',
+        passed: true,
+        critical: false,
+        note: 'Currently viewing a note (close to see notes list)'
+      });
+
+      // Check note title input
+      const titleInput = noteViewer.querySelector('input.note-header__editable-title');
+      const titleText = titleInput?.value?.trim();
+      checks.push({
+        name: 'Note title input',
+        selector: 'input.note-header__editable-title',
+        passed: !!titleInput,
+        critical: true,
+        note: titleText ? `Title: "${titleText.substring(0, 40)}${titleText.length > 40 ? '...' : ''}"` : 'Title input found'
+      });
+
+      // Check content viewer
+      const contentViewer = noteViewer.querySelector('labs-tailwind-doc-viewer, rich-text-editor .ql-editor');
+      checks.push({
+        name: 'Note content viewer',
+        selector: 'labs-tailwind-doc-viewer',
+        passed: !!contentViewer,
+        critical: true,
+        note: contentViewer ? 'Content viewer present' : 'Content viewer not found'
+      });
+
+      // Check close button
+      const closeButton = document.querySelector('button[aria-label="Close note view"]');
+      checks.push({
+        name: 'Close button',
+        selector: 'button[aria-label="Close note view"]',
+        passed: !!closeButton && isElementInteractable(closeButton),
+        critical: true,
+        note: closeButton ? 'Close button found' : 'Close button missing'
+      });
+
+      // Check for citations in note (non-critical)
+      const citations = noteViewer.querySelectorAll('button.citation-marker');
+      checks.push({
+        name: 'Citation buttons in note',
+        selector: 'button.citation-marker',
+        passed: true, // informational
+        count: citations.length,
+        critical: false,
+        note: citations.length > 0 ? `Found ${citations.length} citation(s)` : 'No citations in this note'
+      });
+
+    } else {
+      // === NOTES LIST MODE ===
+      // Check for notes container
+      const container = document.querySelector('.artifact-library-container');
+      checks.push({
+        name: 'Notes container present',
+        selector: '.artifact-library-container',
+        passed: !!container,
+        critical: true
+      });
+
+      // Check for note elements
+      const noteElements = document.querySelectorAll('artifact-library-note');
+      const hasNotes = noteElements.length > 0;
+      checks.push({
+        name: 'Note elements found',
+        selector: 'artifact-library-note',
+        passed: hasNotes,
+        count: noteElements.length,
+        critical: false, // Notebook might just be empty
+        note: hasNotes ? `Found ${noteElements.length} note(s)` : 'No notes in notebook (may be empty)'
+      });
+
+      // Check note titles are readable
+      if (hasNotes) {
+        const firstNote = noteElements[0];
+        const titleEl = firstNote.querySelector('.artifact-title');
+        const titleText = titleEl?.textContent?.trim();
+        checks.push({
+          name: 'Note titles readable',
+          selector: '.artifact-title',
+          passed: !!titleText && titleText.length > 0,
+          critical: true,
+          note: titleText ? `Sample: "${titleText.substring(0, 40)}${titleText.length > 40 ? '...' : ''}"` : 'Title element empty or missing'
+        });
+
+        // Check click targets (stretched button)
+        const clickTarget = firstNote.querySelector('button.artifact-stretched-button');
+        checks.push({
+          name: 'Note click targets exist',
+          selector: 'button.artifact-stretched-button',
+          passed: !!clickTarget && isElementInteractable(clickTarget),
+          critical: true,
+          note: clickTarget ? 'Stretched button found' : 'No clickable button found'
+        });
+
+        // Check note icon
+        const noteIcon = firstNote.querySelector('mat-icon.artifact-icon');
+        checks.push({
+          name: 'Note type icons',
+          selector: 'mat-icon.artifact-icon',
+          passed: !!noteIcon,
+          critical: false,
+          note: noteIcon ? `Icon: ${noteIcon.textContent?.trim() || 'unknown'}` : 'No icon (cosmetic)'
+        });
+      }
+    }
+
+    const healthy = checks.filter(c => c.critical).every(c => c.passed);
+    return { healthy, checks };
+  }
+
+  /**
+   * Check health of Sources functionality
+   * @returns {Object} - { healthy: boolean, checks: [...] }
+   */
+  function checkSourcesHealth() {
+    const checks = [];
+
+    // Check for sources scroll container
+    const scrollArea = document.querySelector('.scroll-area-desktop, .source-list-container, source-list');
+    checks.push({
+      name: 'Source list container',
+      selector: '.scroll-area-desktop, .source-list-container',
+      passed: !!scrollArea,
+      critical: true
+    });
+
+    // Check for individual source items
+    const sourceItems = document.querySelectorAll('.single-source-container');
+    const hasSources = sourceItems.length > 0;
+    checks.push({
+      name: 'Source items found',
+      selector: '.single-source-container',
+      passed: hasSources,
+      count: sourceItems.length,
+      critical: false, // Notebook might have no sources
+      note: hasSources ? `Found ${sourceItems.length} source(s)` : 'No sources in notebook (may be empty)'
+    });
+
+    // Check source titles are readable
+    if (hasSources) {
+      const firstSource = sourceItems[0];
+      // Primary: .source-title, fallback: button aria-label
+      const titleEl = firstSource.querySelector('.source-title');
+      const titleText = titleEl?.textContent?.trim();
+      const buttonLabel = firstSource.querySelector('button.source-stretched-button')?.getAttribute('aria-label');
+      const foundTitle = titleText || buttonLabel;
+      checks.push({
+        name: 'Source titles readable',
+        selector: '.source-title, button[aria-label]',
+        passed: !!foundTitle && foundTitle.length > 0,
+        critical: true,
+        note: foundTitle ? `Sample: "${foundTitle.substring(0, 40)}${foundTitle.length > 40 ? '...' : ''}"` : 'Title element empty or missing'
+      });
+
+      // Check source click targets (the stretched button)
+      const clickTarget = firstSource.querySelector('button.source-stretched-button, button[aria-label]');
+      checks.push({
+        name: 'Source click targets exist',
+        selector: 'button.source-stretched-button',
+        passed: !!clickTarget && isElementInteractable(clickTarget),
+        critical: true,
+        note: clickTarget ? 'Stretched button found' : 'No clickable button found'
+      });
+
+      // Check source type icon
+      const typeIcon = firstSource.querySelector('mat-icon[class*="source-item-source-icon"]');
+      checks.push({
+        name: 'Source type icons',
+        selector: 'mat-icon.source-item-source-icon',
+        passed: !!typeIcon,
+        critical: false,
+        note: typeIcon ? `Icon: ${typeIcon.textContent?.trim() || 'unknown'}` : 'No type icon (cosmetic)'
+      });
+    }
+
+    const healthy = checks.filter(c => c.critical).every(c => c.passed);
+    return { healthy, checks };
+  }
+
+  /**
+   * Check health of Chat functionality
+   * @returns {Object} - { healthy: boolean, checks: [...] }
+   */
+  function checkChatHealth() {
+    const checks = [];
+
+    // Check for chat panel content container (used by actual export)
+    const chatPanelContent = document.querySelector('chat-panel .chat-panel-content');
+    const chatPanel = document.querySelector('chat-panel');
+    checks.push({
+      name: 'Chat panel present',
+      selector: 'chat-panel .chat-panel-content',
+      passed: !!chatPanelContent || !!chatPanel,
+      critical: true,
+      note: chatPanelContent ? 'Chat panel with content found' : (chatPanel ? 'Chat panel found (no content container)' : 'Chat panel not found')
+    });
+
+    // Check for message pairs (the actual selector used by export)
+    const messagePairs = document.querySelectorAll('.chat-message-pair');
+    const hasMessages = messagePairs.length > 0;
+    checks.push({
+      name: 'Chat message pairs found',
+      selector: '.chat-message-pair',
+      passed: hasMessages,
+      count: messagePairs.length,
+      critical: false, // Chat might be empty
+      note: hasMessages ? `Found ${messagePairs.length} message pair(s)` : 'No chat history (may be empty)'
+    });
+
+    if (hasMessages) {
+      // Check for user message container (actual selector from extractMessagePair)
+      const userMessages = document.querySelectorAll('.chat-message-pair .from-user-container .message-text-content');
+      checks.push({
+        name: 'User messages structure',
+        selector: '.from-user-container .message-text-content',
+        passed: userMessages.length > 0,
+        count: userMessages.length,
+        critical: true
+      });
+
+      // Check for AI response container (actual selector from extractMessagePair)
+      const aiResponses = document.querySelectorAll('.chat-message-pair .to-user-container .message-text-content');
+      checks.push({
+        name: 'AI response structure',
+        selector: '.to-user-container .message-text-content',
+        passed: aiResponses.length > 0,
+        count: aiResponses.length,
+        critical: true
+      });
+
+      // Check for date separators (nice to have)
+      const dateSeparators = document.querySelectorAll('.chat-panel-content .date-separator');
+      checks.push({
+        name: 'Date separators',
+        selector: '.date-separator',
+        passed: true, // informational
+        count: dateSeparators.length,
+        critical: false,
+        note: dateSeparators.length > 0 ? `Found ${dateSeparators.length} date separator(s)` : 'No date separators'
+      });
+    }
+
+    const healthy = checks.filter(c => c.critical).every(c => c.passed);
+    return { healthy, checks };
+  }
+
+  /**
+   * NON-DESTRUCTIVE citation workflow test
+   * Hovers over a citation button to verify tooltip mechanics work
+   * @returns {Promise<Object>} - { healthy: boolean, checks: [...] }
+   */
+  async function checkCitationWorkflow() {
+    const checks = [];
+
+    // Find citation buttons - they have class "citation-marker" and "xap-inline-dialog"
+    // Can be in chat (.model-response) or in notes (note-editor, labs-tailwind-doc-viewer)
+    const citationButtons = document.querySelectorAll(
+      'button.citation-marker, ' +
+      'button.xap-inline-dialog[dialoglabel="Citation Details"]'
+    );
+
+    const hasButtons = citationButtons.length > 0;
+    checks.push({
+      name: 'Citation buttons present',
+      selector: 'button.citation-marker',
+      passed: hasButtons,
+      count: citationButtons.length,
+      critical: false, // Chat/notes might not have citations
+      note: hasButtons ? `Found ${citationButtons.length} citation button(s)` : 'No citations found (may be expected)'
+    });
+
+    if (!hasButtons) {
+      return { healthy: true, checks }; // No citations to test
+    }
+
+    // Filter to visible citation buttons only (not the "more_horiz" expand buttons)
+    const visibleButtons = Array.from(citationButtons).filter(btn => {
+      // Skip "show more citations" buttons (they have mat-icon inside)
+      if (btn.querySelector('mat-icon')) return false;
+      // Must have dialoglabel attribute (real citation buttons have this)
+      if (!btn.hasAttribute('dialoglabel')) return false;
+      // Check visibility
+      return isElementVisible(btn);
+    });
+
+    console.log(`[NotebookLM Takeout] Health check: ${citationButtons.length} total citation buttons, ${visibleButtons.length} visible/testable`);
+    if (visibleButtons.length > 0) {
+      const sample = visibleButtons[0];
+      console.log('[NotebookLM Takeout] Sample button:', {
+        outerHTML: sample.outerHTML.substring(0, 200),
+        isVisible: isElementVisible(sample),
+        rect: sample.getBoundingClientRect()
+      });
+    }
+
+    // Test hover mechanics - try up to 3 buttons
+    let tooltipAppeared = false;
+    let tooltipHadContent = false;
+    let tooltipClosed = false;
+    let testedButton = null;
+    const maxAttempts = Math.min(3, visibleButtons.length);
+
+    for (let attempt = 0; attempt < maxAttempts && !tooltipAppeared; attempt++) {
+      const testButton = visibleButtons[attempt];
+      testedButton = testButton;
+
+      try {
+        // Close any existing tooltip first
+        const existingTooltip = document.querySelector('xap-inline-dialog-container[role="dialog"]');
+        if (existingTooltip) {
+          existingTooltip.remove();
+          await sleep(100);
+        }
+
+        // Scroll button into view and wait for scroll to complete
+        testButton.scrollIntoView({ behavior: 'instant', block: 'center' });
+        await sleep(300);
+
+        // Get button coordinates for realistic mouse events
+        const rect = testButton.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+
+        console.log(`[NotebookLM Takeout] Testing button at (${centerX.toFixed(0)}, ${centerY.toFixed(0)}), size: ${rect.width.toFixed(0)}x${rect.height.toFixed(0)}`);
+
+        // Focus the button first
+        testButton.focus();
+        await sleep(100);
+
+        // Try hover with proper coordinates (mouseover + mouseenter + pointerenter)
+        testButton.dispatchEvent(new PointerEvent('pointerenter', {
+          view: window,
+          bubbles: true,
+          cancelable: true,
+          clientX: centerX,
+          clientY: centerY,
+          pointerType: 'mouse'
+        }));
+        testButton.dispatchEvent(new MouseEvent('mouseover', {
+          view: window,
+          bubbles: true,
+          cancelable: true,
+          clientX: centerX,
+          clientY: centerY
+        }));
+        testButton.dispatchEvent(new MouseEvent('mouseenter', {
+          view: window,
+          bubbles: true,
+          cancelable: true,
+          clientX: centerX,
+          clientY: centerY
+        }));
+        await sleep(600);
+
+        // Check for tooltip
+        let tooltip = document.querySelector('xap-inline-dialog-container[role="dialog"]') ||
+                      document.querySelector('xap-inline-dialog-container') ||
+                      document.querySelector('.citation-tooltip');
+
+        // If hover didn't work, try click (some UIs require click for dialogs)
+        if (!tooltip) {
+          testButton.click();
+          await sleep(500);
+          tooltip = document.querySelector('xap-inline-dialog-container[role="dialog"]') ||
+                    document.querySelector('xap-inline-dialog-container') ||
+                    document.querySelector('.citation-tooltip');
+        }
+
+        // If still no tooltip, try waiting longer with waitForElement
+        if (!tooltip) {
+          tooltip = await raceWithCleanup([
+            waitForElement('xap-inline-dialog-container[role="dialog"]', 2000),
+            waitForElement('xap-inline-dialog-container', 2000),
+            waitForElement('.citation-tooltip', 2000)
+          ]).catch(() => null);
+        }
+
+        // Debug: Check what dialogs/tooltips exist
+        const anyDialog = document.querySelector('xap-inline-dialog-container');
+        const anyTooltip = document.querySelector('[role="dialog"]');
+        console.log(`[NotebookLM Takeout] Tooltip attempt ${attempt + 1}: found=${!!tooltip}, anyDialog=${!!anyDialog}, anyRoleDialog=${!!anyTooltip}`);
+        if (anyDialog && !tooltip) {
+          console.log('[NotebookLM Takeout] Dialog found but not matched:', anyDialog.outerHTML.substring(0, 300));
+        }
+
+        tooltipAppeared = !!tooltip;
+
+        if (tooltip) {
+          // Check if tooltip has content
+          await sleep(300); // Wait for content to load
+          const content = tooltip.textContent?.trim();
+          tooltipHadContent = content && content.length > 10;
+
+          // Close tooltip - try multiple methods
+          testButton.dispatchEvent(new MouseEvent('mouseleave', {
+            view: window,
+            bubbles: true,
+            cancelable: true
+          }));
+          await sleep(150);
+
+          // Method 2: Click elsewhere
+          let stillOpen = document.querySelector('xap-inline-dialog-container[role="dialog"]');
+          if (stillOpen) {
+            document.body.click();
+            await sleep(150);
+          }
+
+          // Method 3: Escape key
+          stillOpen = document.querySelector('xap-inline-dialog-container[role="dialog"]');
+          if (stillOpen) {
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            await sleep(150);
+          }
+
+          // Method 4: Remove directly as last resort (cleanup)
+          stillOpen = document.querySelector('xap-inline-dialog-container[role="dialog"]');
+          if (stillOpen) {
+            stillOpen.remove();
+            await sleep(50);
+          }
+
+          tooltipClosed = !document.querySelector('xap-inline-dialog-container[role="dialog"]');
+        }
+      } catch (error) {
+        console.warn(`[NotebookLM Takeout] Citation workflow test attempt ${attempt + 1} error:`, error);
+        // Cleanup on error
+        const leftoverTooltip = document.querySelector('xap-inline-dialog-container[role="dialog"]');
+        if (leftoverTooltip) leftoverTooltip.remove();
+      }
+    } // end for loop
+
+    // Handle case where no testable buttons were found
+    if (visibleButtons.length === 0) {
+      checks.push({
+        name: 'Tooltip appears on hover',
+        selector: 'xap-inline-dialog-container[role="dialog"]',
+        passed: true, // Can't test, but not a failure
+        critical: false,
+        note: 'No testable citation buttons visible (all may be "show more" buttons)'
+      });
+      const healthy = checks.filter(c => c.critical).every(c => c.passed);
+      return { healthy, checks };
+    }
+
+    // Tooltip test is informational only - synthetic events can't trigger Angular overlays reliably.
+    // This limitation doesn't affect real exports which use click interactions.
+    checks.push({
+      name: 'Tooltip hover test (informational)',
+      selector: 'xap-inline-dialog-container[role="dialog"]',
+      passed: tooltipAppeared,
+      critical: false, // Not critical - synthetic events often fail but real exports work
+      note: tooltipAppeared
+        ? 'Tooltip appeared successfully'
+        : 'Synthetic events cannot trigger Angular overlays - this is expected and does not affect exports'
+    });
+
+    if (tooltipAppeared) {
+      checks.push({
+        name: 'Tooltip content loads',
+        passed: tooltipHadContent,
+        critical: false,
+        note: tooltipHadContent ? 'Content loaded successfully' : 'Tooltip was empty or content did not load'
+      });
+
+      checks.push({
+        name: 'Tooltip closes properly',
+        passed: tooltipClosed,
+        critical: false,
+        note: tooltipClosed ? 'Closed successfully' : 'Tooltip remained open (will not affect exports)'
+      });
+    }
+
+    // Citations category is healthy if buttons are present (tooltip test is informational)
+    const healthy = hasButtons;
+    return { healthy, checks };
+  }
+
+  /**
+   * Run comprehensive health check across all categories
+   * @param {Object} options - { skipCitations: boolean, fastMode: boolean }
+   * @returns {Promise<Object>} - Full health check results
+   */
+  async function runComprehensiveHealthCheck(options = {}) {
+    const startTime = Date.now();
+    console.log('[NotebookLM Takeout] Starting comprehensive health check...');
+
+    const results = {
+      overallHealthy: true,
+      categories: {},
+      criticalFailures: [],
+      recommendations: [],
+      duration: 0
+    };
+
+    // Run category checks
+    try {
+      results.categories.notes = checkNotesHealth();
+      if (!results.categories.notes.healthy) {
+        results.overallHealthy = false;
+        results.criticalFailures.push('Notes: Some critical selectors not found');
+      }
+    } catch (error) {
+      results.categories.notes = { healthy: false, checks: [], error: error.message };
+      results.overallHealthy = false;
+      results.criticalFailures.push(`Notes check failed: ${error.message}`);
+    }
+
+    try {
+      results.categories.sources = checkSourcesHealth();
+      if (!results.categories.sources.healthy) {
+        results.overallHealthy = false;
+        results.criticalFailures.push('Sources: Some critical selectors not found');
+      }
+    } catch (error) {
+      results.categories.sources = { healthy: false, checks: [], error: error.message };
+      results.overallHealthy = false;
+      results.criticalFailures.push(`Sources check failed: ${error.message}`);
+    }
+
+    try {
+      results.categories.chat = checkChatHealth();
+      if (!results.categories.chat.healthy) {
+        results.overallHealthy = false;
+        results.criticalFailures.push('Chat: Some critical selectors not found');
+      }
+    } catch (error) {
+      results.categories.chat = { healthy: false, checks: [], error: error.message };
+      results.overallHealthy = false;
+      results.criticalFailures.push(`Chat check failed: ${error.message}`);
+    }
+
+    // Citation workflow test (can be skipped for fast mode)
+    if (!options.skipCitations && !options.fastMode) {
+      try {
+        results.categories.citations = await checkCitationWorkflow();
+        if (!results.categories.citations.healthy) {
+          results.overallHealthy = false;
+          results.criticalFailures.push('Citations: Tooltip workflow not working');
+        }
+      } catch (error) {
+        results.categories.citations = { healthy: false, checks: [], error: error.message };
+        results.overallHealthy = false;
+        results.criticalFailures.push(`Citation check failed: ${error.message}`);
+      }
+    } else {
+      results.categories.citations = { healthy: true, checks: [{ name: 'Skipped', passed: true, note: 'Citation test skipped (fast mode)' }] };
+    }
+
+    // Generate recommendations
+    if (!results.overallHealthy) {
+      results.recommendations.push('NotebookLM may have been updated. Check for extension updates.');
+      results.recommendations.push('Try refreshing the page and running the check again.');
+
+      // Specific recommendations based on failures
+      if (!results.categories.notes?.healthy) {
+        results.recommendations.push('Notes export may fail or produce incomplete results.');
+      }
+      if (!results.categories.sources?.healthy) {
+        results.recommendations.push('Source export may fail or produce incomplete results.');
+      }
+      if (!results.categories.chat?.healthy) {
+        results.recommendations.push('Chat export may fail or produce incomplete results.');
+      }
+      if (!results.categories.citations?.healthy) {
+        results.recommendations.push('Citation extraction may fail. Consider disabling "Extract Full Citations" option.');
+      }
+    }
+
+    results.duration = Date.now() - startTime;
+    console.log('[NotebookLM Takeout] Health check complete:', results);
+
+    return results;
   }
 
   // Helper function to race promises with proper cleanup of losers

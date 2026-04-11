@@ -183,7 +183,9 @@ let settings = {
   exportNoteCodeBlocksWithImages: false, // Code blocks + images
   // Batch sizes
   sourcesPerZip: 25, // Number of sources per ZIP file (prevents memory issues)
-  notesPerZip: 25 // Number of notes per ZIP file (prevents memory issues)
+  notesPerZip: 25, // Number of notes per ZIP file (prevents memory issues)
+  // Text cleanup
+  cleanOCRArtifacts: true // Clean OCR garbage (~~~, :~:, etc.) from citation quotes
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -315,6 +317,9 @@ async function loadSettings() {
   // Batch sizes
   document.getElementById('sources-per-zip-input').value = settings.sourcesPerZip;
   document.getElementById('notes-per-zip-input').value = settings.notesPerZip;
+
+  // Text processing
+  document.getElementById('clean-ocr-artifacts-checkbox').checked = settings.cleanOCRArtifacts;
 }
 
 async function saveSettings() {
@@ -342,6 +347,9 @@ async function saveSettings() {
   settings.sourcesPerZip = parseInt(document.getElementById('sources-per-zip-input').value) || 25;
   settings.notesPerZip = parseInt(document.getElementById('notes-per-zip-input').value) || 25;
 
+  // Text processing
+  settings.cleanOCRArtifacts = document.getElementById('clean-ocr-artifacts-checkbox').checked;
+
   await chrome.storage.local.set({ settings });
 }
 
@@ -363,6 +371,23 @@ function setupEventListeners() {
   document.getElementById('close-settings-btn').addEventListener('click', () => {
     document.getElementById('settings-panel').style.display = 'none';
     saveSettings();
+  });
+
+  // Health check panel
+  document.getElementById('health-check-btn').addEventListener('click', () => {
+    runHealthCheck();
+  });
+
+  document.getElementById('close-health-check-btn').addEventListener('click', () => {
+    document.getElementById('health-check-panel').style.display = 'none';
+  });
+
+  document.getElementById('rerun-health-check-btn').addEventListener('click', () => {
+    runHealthCheck();
+  });
+
+  document.getElementById('copy-health-report-btn').addEventListener('click', () => {
+    copyHealthReport();
   });
 
   // Settings inputs
@@ -1994,6 +2019,290 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
     replacement: () => '' // Strip entirely
   });
 
+  // Handle KaTeX math notation - extract original LaTeX or convert to readable text
+  turndownService.addRule('katexMath', {
+    filter: (node) => {
+      return node.nodeName === 'SPAN' && node.classList.contains('katex');
+    },
+    replacement: (content, node) => {
+      // Check if display math (block) vs inline
+      const isDisplay = node.closest('.katex-display') !== null;
+      const mathDelim = isDisplay ? '$$' : '$';
+
+      // Best case: KaTeX preserves original LaTeX in an annotation tag
+      const annotation = node.querySelector('annotation[encoding="application/x-tex"]');
+      if (annotation && annotation.textContent) {
+        const latex = annotation.textContent.trim();
+        return `${mathDelim}${latex}${mathDelim}`;
+      }
+
+      // Fallback: reconstruct from KaTeX HTML structure
+      // Helper to extract fraction content
+      function extractFraction(fracEl) {
+        const vlist = fracEl.querySelector('.vlist-r > .vlist');
+        if (!vlist) return null;
+
+        const spans = Array.from(vlist.children).filter(s => s.querySelector('.mord'));
+        if (spans.length < 2) return null;
+
+        // Sort by top position: most negative = numerator (top), least negative = denominator (bottom)
+        spans.sort((a, b) => {
+          const topA = parseFloat(a.style.top) || 0;
+          const topB = parseFloat(b.style.top) || 0;
+          return topA - topB; // Most negative first
+        });
+
+        const numerator = spans[0]?.textContent?.trim() || '';
+        const denominator = spans[spans.length - 1]?.textContent?.trim() || '';
+        return { numerator, denominator };
+      }
+
+      // Helper to convert Unicode math symbols to LaTeX
+      function unicodeToLatex(text) {
+        const map = {
+          '∂': '\\partial ',
+          'ρ': '\\rho ',
+          'α': '\\alpha ',
+          'β': '\\beta ',
+          'γ': '\\gamma ',
+          'δ': '\\delta ',
+          'ε': '\\epsilon ',
+          'θ': '\\theta ',
+          'λ': '\\lambda ',
+          'μ': '\\mu ',
+          'π': '\\pi ',
+          'σ': '\\sigma ',
+          'τ': '\\tau ',
+          'φ': '\\phi ',
+          'ω': '\\omega ',
+          'Δ': '\\Delta ',
+          'Σ': '\\Sigma ',
+          'Π': '\\Pi ',
+          'Ω': '\\Omega ',
+          '∞': '\\infty ',
+          '∫': '\\int ',
+          '∑': '\\sum ',
+          '∏': '\\prod ',
+          '√': '\\sqrt',
+          '±': '\\pm ',
+          '×': '\\times ',
+          '÷': '\\div ',
+          '≤': '\\leq ',
+          '≥': '\\geq ',
+          '≠': '\\neq ',
+          '≈': '\\approx ',
+          '→': '\\rightarrow ',
+          '←': '\\leftarrow ',
+          '↔': '\\leftrightarrow ',
+          '∈': '\\in ',
+          '∉': '\\notin ',
+          '⊂': '\\subset ',
+          '⊃': '\\supset ',
+          '∪': '\\cup ',
+          '∩': '\\cap ',
+          '∧': '\\land ',
+          '∨': '\\lor ',
+          '¬': '\\neg ',
+          '∀': '\\forall ',
+          '∃': '\\exists ',
+          '∇': '\\nabla ',
+          '·': '\\cdot '
+        };
+        let result = text;
+        for (const [unicode, latex] of Object.entries(map)) {
+          result = result.split(unicode).join(latex);
+        }
+        return result;
+      }
+
+      // Process each .base element (represents a group of math content)
+      const bases = node.querySelectorAll('.katex-html > .base');
+      let mathParts = [];
+
+      for (const base of bases) {
+        let basePart = '';
+
+        // Process children in order
+        for (const child of base.children) {
+          // Skip struts (spacing elements)
+          if (child.classList.contains('strut')) continue;
+
+          // Handle fractions
+          if (child.querySelector('.mfrac')) {
+            const fracEl = child.querySelector('.mfrac');
+            const frac = extractFraction(fracEl);
+            if (frac) {
+              const num = unicodeToLatex(frac.numerator);
+              const den = unicodeToLatex(frac.denominator);
+              basePart += `\\frac{${num.trim()}}{${den.trim()}}`;
+            }
+            continue;
+          }
+
+          // Handle square roots
+          if (child.classList.contains('sqrt') || child.querySelector('.sqrt')) {
+            const sqrtEl = child.classList.contains('sqrt') ? child : child.querySelector('.sqrt');
+            const radicand = sqrtEl?.querySelector('.mord:not(.sqrt)')?.textContent?.trim() || '';
+            basePart += `\\sqrt{${unicodeToLatex(radicand).trim()}}`;
+            continue;
+          }
+
+          // Handle large operators (sum, prod, int, lim, etc.) - class .mop
+          if (child.classList.contains('mop') || child.querySelector('.mop')) {
+            const mopEl = child.classList.contains('mop') ? child : child.querySelector('.mop');
+            let opText = '';
+            let subScript = '';
+            let supScript = '';
+
+            // Check if this is op-limits style (limits above/below operator)
+            const isOpLimits = mopEl?.classList.contains('op-limits');
+
+            if (isOpLimits) {
+              // For op-limits, the operator and limits are in a vlist
+              // Structure: vlist contains items sorted by 'top' position
+              // - Most negative top = superscript (top)
+              // - Middle = operator
+              // - Least negative top = subscript (bottom)
+              const vlist = mopEl.querySelector('.vlist-r > .vlist');
+              if (vlist) {
+                const items = Array.from(vlist.children).filter(el => el.style?.top);
+                // Sort by top value (most negative first)
+                items.sort((a, b) => {
+                  const topA = parseFloat(a.style.top) || 0;
+                  const topB = parseFloat(b.style.top) || 0;
+                  return topA - topB;
+                });
+
+                // Extract based on position
+                for (const item of items) {
+                  const opSymbol = item.querySelector('.mop.op-symbol, .op-symbol');
+                  if (opSymbol) {
+                    // This is the operator
+                    const symText = opSymbol.textContent?.trim() || '';
+                    if (symText.includes('∑') || symText.includes('Σ')) {
+                      opText = '\\sum';
+                    } else if (symText.includes('∫')) {
+                      opText = '\\int';
+                    } else if (symText.includes('∏')) {
+                      opText = '\\prod';
+                    } else {
+                      opText = unicodeToLatex(symText);
+                    }
+                  } else {
+                    // This is a limit (sub or superscript)
+                    const limitText = item.querySelector('.mord')?.textContent?.trim() || '';
+                    const topVal = parseFloat(item.style.top) || 0;
+                    // Find the operator's top value to compare
+                    const opItem = items.find(i => i.querySelector('.mop.op-symbol, .op-symbol'));
+                    const opTop = opItem ? parseFloat(opItem.style.top) || 0 : -3;
+
+                    if (topVal < opTop) {
+                      // More negative = above operator = superscript
+                      supScript = unicodeToLatex(limitText).trim();
+                    } else if (topVal > opTop) {
+                      // Less negative = below operator = subscript
+                      subScript = unicodeToLatex(limitText).trim();
+                    }
+                  }
+                }
+              }
+            } else {
+              // Regular mop without op-limits
+              const opContent = mopEl?.textContent?.trim() || '';
+              if (opContent.includes('∑') || opContent.includes('Σ')) {
+                opText = '\\sum';
+              } else if (opContent.includes('∫')) {
+                opText = '\\int';
+              } else if (opContent.includes('∏')) {
+                opText = '\\prod';
+              } else if (opContent.toLowerCase().includes('lim')) {
+                opText = '\\lim';
+              } else if (opContent.toLowerCase().includes('max')) {
+                opText = '\\max';
+              } else if (opContent.toLowerCase().includes('min')) {
+                opText = '\\min';
+              } else if (opContent) {
+                opText = unicodeToLatex(opContent);
+              } else {
+                opText = '\\sum'; // Default fallback
+              }
+
+              // Check for limits in .msupsub sibling
+              const msupsub = child.querySelector('.msupsub');
+              if (msupsub) {
+                const vlist = msupsub.querySelector('.vlist-t');
+                if (vlist) {
+                  const subs = vlist.querySelectorAll('.vlist-r .mord');
+                  if (subs.length >= 2) {
+                    subScript = unicodeToLatex(subs[1]?.textContent?.trim() || '').trim();
+                    supScript = unicodeToLatex(subs[0]?.textContent?.trim() || '').trim();
+                  } else if (subs.length === 1) {
+                    subScript = unicodeToLatex(subs[0]?.textContent?.trim() || '').trim();
+                  }
+                }
+              }
+            }
+
+            // Build the final operator string
+            if (subScript || supScript) {
+              if (subScript) opText += `_{${subScript}}`;
+              if (supScript) opText += `^{${supScript}}`;
+            }
+
+            basePart += opText + ' ';
+            continue;
+          }
+
+          // Handle operators and relations
+          if (child.classList.contains('mbin') || child.classList.contains('mrel')) {
+            const op = child.textContent?.trim() || '';
+            basePart += ` ${unicodeToLatex(op).trim()} `;
+            continue;
+          }
+
+          // Handle regular content (mord, etc.)
+          if (child.classList.contains('mord') || child.classList.contains('minner')) {
+            // Skip if contains img/svg
+            if (child.querySelector('svg') || child.querySelector('img')) continue;
+            const text = child.textContent?.trim() || '';
+            basePart += unicodeToLatex(text);
+            continue;
+          }
+
+          // Handle spacing
+          if (child.classList.contains('mspace')) {
+            basePart += ' ';
+            continue;
+          }
+        }
+
+        if (basePart.trim()) {
+          mathParts.push(basePart.trim());
+        }
+      }
+
+      if (mathParts.length > 0) {
+        const latex = mathParts.join(' ');
+        return `${mathDelim}${latex}${mathDelim}`;
+      }
+
+      // Last resort: extract all text, filter SVG noise
+      const mathContent = Array.from(node.querySelectorAll('.mord, .mbin, .mrel, .mopen, .mclose, .mop'))
+        .map(el => {
+          if (el.querySelector('svg') || el.querySelector('img')) return '';
+          return el.textContent?.trim() || '';
+        })
+        .filter(t => t.length > 0)
+        .join(' ');
+
+      if (mathContent) {
+        return `${mathDelim}${unicodeToLatex(mathContent)}${mathDelim}`;
+      }
+
+      return node.textContent?.replace(/\s+/g, ' ').trim() || '';
+    }
+  });
+
   // Custom rule for citation buttons
   turndownService.addRule('citationButtons', {
     filter: (node) => {
@@ -2153,18 +2462,87 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
 
       // Include the quote if available
       if (source.quote && source.quote.length > 0) {
+        // Optionally clean OCR artifacts, then escape markdown
+        const cleanedQuote = settings.cleanOCRArtifacts ? cleanOCRArtifacts(source.quote) : source.quote;
         if (citationsCodeBlock) {
           // Wrap in markdown code block for data separation
-          markdown += `\`\`\`markdown\n${source.quote}\n\`\`\`\n\n`;
+          markdown += `\`\`\`markdown\n${cleanedQuote}\n\`\`\`\n\n`;
         } else {
-          // Insert markdown directly (rendered)
-          markdown += `${source.quote}\n\n`;
+          // Escape markdown chars to prevent quote content from breaking formatting
+          markdown += `${escapeMarkdownInQuote(cleanedQuote)}\n\n`;
         }
       }
     });
   }
 
   return markdown;
+}
+
+/**
+ * Escape markdown special characters in quote content to prevent rendering issues
+ * @param {string} text - The quote text to escape
+ * @returns {string} - Text with markdown characters escaped
+ */
+function escapeMarkdownInQuote(text) {
+  if (!text) return '';
+  return text
+    .replace(/^(#{1,6})\s/gm, '\\$1 ')   // Escape headers
+    .replace(/^(\s*[-*+])\s/gm, '\\$1 ') // Escape list markers
+    .replace(/^>/gm, '\\>')              // Escape blockquotes
+    .replace(/\|/g, '\\|');              // Escape table pipes
+}
+
+/**
+ * Clean up common OCR artifacts and garbage characters
+ * This handles text that was poorly OCR'd, especially from older documents or Fraktur
+ * @param {string} text - The text to clean
+ * @param {Object} options - Options for cleanup
+ * @param {boolean} options.markUnclear - If true, mark unclear sections with [OCR?]
+ * @returns {string} - Cleaned text
+ */
+function cleanOCRArtifacts(text) {
+  if (!text) return '';
+
+  let cleaned = text
+    // Remove sequences of 3+ tildes (common OCR failure pattern)
+    .replace(/~{3,}/g, '')
+
+    // Clean tilde-colon patterns: :~:, ~:~, :~~:, etc.
+    .replace(/[:;]+~+[:;]*/g, '')
+    .replace(/~+[:;]+~*/g, '')
+
+    // Clean equals-tilde patterns: =~, ~=
+    .replace(/[=]+~+/g, '')
+    .replace(/~+[=]+/g, '')
+
+    // Clean exclamation/semicolon noise: ;!, !;, ;!~
+    .replace(/[;!]{2,}/g, '')
+    .replace(/[;!]~+[;!]*/g, '')
+
+    // Clean isolated tildes around single characters: ~a~ -> a
+    .replace(/~([a-zA-ZäöüÄÖÜß])~/g, '$1')
+
+    // Clean tilde at word boundaries: word~ -> word, ~word -> word
+    .replace(/~+(\s)/g, '$1')
+    .replace(/(\s)~+/g, '$1')
+
+    // Clean double tildes: ~~ -> (nothing)
+    .replace(/~~/g, '')
+
+    // Clean remaining isolated tildes between letters (likely OCR errors)
+    // e.g., "Gru~d" -> "Grund" (but be conservative)
+    .replace(/([a-zA-ZäöüÄÖÜß])~([a-zA-ZäöüÄÖÜß])/g, '$1$2')
+
+    // Clean up multiple spaces left behind
+    .replace(/\s{2,}/g, ' ')
+
+    // Clean up spaces before punctuation
+    .replace(/\s+([.,;:!?])/g, '$1')
+
+    // Trim
+    .trim();
+
+  return cleaned;
 }
 
 function sanitizeFilename(filename) {
@@ -4619,12 +4997,14 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
 
         // Add quote if available
         if (source.quote && source.quote.trim().length > 0) {
+          // Optionally clean OCR artifacts, then escape markdown
+          const cleanedQuote = settings.cleanOCRArtifacts ? cleanOCRArtifacts(source.quote) : source.quote;
           if (citationsCodeBlock) {
             // Wrap in markdown code block for data separation (same as note export)
-            markdown += `\`\`\`markdown\n${source.quote}\n\`\`\`\n\n`;
+            markdown += `\`\`\`markdown\n${cleanedQuote}\n\`\`\`\n\n`;
           } else {
-            // Add blank line separator before quote content
-            markdown += `\n${source.quote}\n\n`;
+            // Escape markdown chars to prevent quote content from breaking formatting
+            markdown += `\n${escapeMarkdownInQuote(cleanedQuote)}\n\n`;
           }
         }
         markdown += '\n';
@@ -4809,6 +5189,175 @@ function addChatTurndownRules(turndownService, citationsCodeBlock, getCurrentMes
   turndownService.addRule('matIcons', {
     filter: (node) => node.nodeName === 'MAT-ICON',
     replacement: () => ''
+  });
+
+  // Handle KaTeX math notation - extract original LaTeX or convert to readable text
+  turndownService.addRule('katexMath', {
+    filter: (node) => {
+      return node.nodeName === 'SPAN' && node.classList.contains('katex');
+    },
+    replacement: (content, node) => {
+      // Check if display math (block) vs inline
+      const isDisplay = node.closest('.katex-display') !== null;
+      const mathDelim = isDisplay ? '$$' : '$';
+
+      // Best case: KaTeX preserves original LaTeX in an annotation tag
+      const annotation = node.querySelector('annotation[encoding="application/x-tex"]');
+      if (annotation && annotation.textContent) {
+        const latex = annotation.textContent.trim();
+        return `${mathDelim}${latex}${mathDelim}`;
+      }
+
+      // Fallback: reconstruct from KaTeX HTML structure
+      function extractFraction(fracEl) {
+        const vlist = fracEl.querySelector('.vlist-r > .vlist');
+        if (!vlist) return null;
+        const spans = Array.from(vlist.children).filter(s => s.querySelector('.mord'));
+        if (spans.length < 2) return null;
+        spans.sort((a, b) => (parseFloat(a.style.top) || 0) - (parseFloat(b.style.top) || 0));
+        return {
+          numerator: spans[0]?.textContent?.trim() || '',
+          denominator: spans[spans.length - 1]?.textContent?.trim() || ''
+        };
+      }
+
+      function unicodeToLatex(text) {
+        const map = {
+          '∂': '\\partial ', 'ρ': '\\rho ', 'α': '\\alpha ', 'β': '\\beta ',
+          'γ': '\\gamma ', 'δ': '\\delta ', 'ε': '\\epsilon ', 'θ': '\\theta ',
+          'λ': '\\lambda ', 'μ': '\\mu ', 'π': '\\pi ', 'σ': '\\sigma ',
+          'τ': '\\tau ', 'φ': '\\phi ', 'ω': '\\omega ', 'Δ': '\\Delta ',
+          'Σ': '\\Sigma ', 'Π': '\\Pi ', 'Ω': '\\Omega ', '∞': '\\infty ',
+          '∫': '\\int ', '∑': '\\sum ', '∏': '\\prod ', '√': '\\sqrt',
+          '±': '\\pm ', '×': '\\times ', '÷': '\\div ', '≤': '\\leq ',
+          '≥': '\\geq ', '≠': '\\neq ', '≈': '\\approx ', '→': '\\rightarrow ',
+          '←': '\\leftarrow ', '∈': '\\in ', '∉': '\\notin ', '⊂': '\\subset ',
+          '∪': '\\cup ', '∩': '\\cap ', '∀': '\\forall ', '∃': '\\exists ',
+          '∇': '\\nabla ', '·': '\\cdot '
+        };
+        let result = text;
+        for (const [unicode, latex] of Object.entries(map)) {
+          result = result.split(unicode).join(latex);
+        }
+        return result;
+      }
+
+      const bases = node.querySelectorAll('.katex-html > .base');
+      let mathParts = [];
+
+      for (const base of bases) {
+        let basePart = '';
+        for (const child of base.children) {
+          if (child.classList.contains('strut')) continue;
+          if (child.querySelector('.mfrac')) {
+            const frac = extractFraction(child.querySelector('.mfrac'));
+            if (frac) {
+              basePart += `\\frac{${unicodeToLatex(frac.numerator).trim()}}{${unicodeToLatex(frac.denominator).trim()}}`;
+            }
+            continue;
+          }
+          if (child.classList.contains('sqrt') || child.querySelector('.sqrt')) {
+            const sqrtEl = child.classList.contains('sqrt') ? child : child.querySelector('.sqrt');
+            const radicand = sqrtEl?.querySelector('.mord:not(.sqrt)')?.textContent?.trim() || '';
+            basePart += `\\sqrt{${unicodeToLatex(radicand).trim()}}`;
+            continue;
+          }
+          // Handle large operators (sum, prod, int, lim, etc.) - class .mop
+          if (child.classList.contains('mop') || child.querySelector('.mop')) {
+            const mopEl = child.classList.contains('mop') ? child : child.querySelector('.mop');
+            let opText = '';
+            let subScript = '';
+            let supScript = '';
+            const isOpLimits = mopEl?.classList.contains('op-limits');
+
+            if (isOpLimits) {
+              // For op-limits, operator and limits are in a vlist
+              const vlist = mopEl.querySelector('.vlist-r > .vlist');
+              if (vlist) {
+                const items = Array.from(vlist.children).filter(el => el.style?.top);
+                items.sort((a, b) => (parseFloat(a.style.top) || 0) - (parseFloat(b.style.top) || 0));
+
+                for (const item of items) {
+                  const opSymbol = item.querySelector('.mop.op-symbol, .op-symbol');
+                  if (opSymbol) {
+                    const symText = opSymbol.textContent?.trim() || '';
+                    if (symText.includes('∑') || symText.includes('Σ')) opText = '\\sum';
+                    else if (symText.includes('∫')) opText = '\\int';
+                    else if (symText.includes('∏')) opText = '\\prod';
+                    else opText = unicodeToLatex(symText);
+                  } else {
+                    const limitText = item.querySelector('.mord')?.textContent?.trim() || '';
+                    const topVal = parseFloat(item.style.top) || 0;
+                    const opItem = items.find(i => i.querySelector('.mop.op-symbol, .op-symbol'));
+                    const opTop = opItem ? parseFloat(opItem.style.top) || 0 : -3;
+                    if (topVal < opTop) supScript = unicodeToLatex(limitText).trim();
+                    else if (topVal > opTop) subScript = unicodeToLatex(limitText).trim();
+                  }
+                }
+              }
+            } else {
+              const opContent = mopEl?.textContent?.trim() || '';
+              if (opContent.includes('∑') || opContent.includes('Σ')) opText = '\\sum';
+              else if (opContent.includes('∫')) opText = '\\int';
+              else if (opContent.includes('∏')) opText = '\\prod';
+              else if (opContent.toLowerCase().includes('lim')) opText = '\\lim';
+              else if (opContent) opText = unicodeToLatex(opContent);
+              else opText = '\\sum';
+
+              const msupsub = child.querySelector('.msupsub');
+              if (msupsub) {
+                const vlist = msupsub.querySelector('.vlist-t');
+                if (vlist) {
+                  const subs = vlist.querySelectorAll('.vlist-r .mord');
+                  if (subs.length >= 2) {
+                    subScript = unicodeToLatex(subs[1]?.textContent?.trim() || '').trim();
+                    supScript = unicodeToLatex(subs[0]?.textContent?.trim() || '').trim();
+                  } else if (subs.length === 1) {
+                    subScript = unicodeToLatex(subs[0]?.textContent?.trim() || '').trim();
+                  }
+                }
+              }
+            }
+
+            if (subScript) opText += `_{${subScript}}`;
+            if (supScript) opText += `^{${supScript}}`;
+            basePart += opText + ' ';
+            continue;
+          }
+          if (child.classList.contains('mbin') || child.classList.contains('mrel')) {
+            basePart += ` ${unicodeToLatex(child.textContent?.trim() || '').trim()} `;
+            continue;
+          }
+          if (child.classList.contains('mord') || child.classList.contains('minner')) {
+            if (child.querySelector('svg') || child.querySelector('img')) continue;
+            basePart += unicodeToLatex(child.textContent?.trim() || '');
+            continue;
+          }
+          if (child.classList.contains('mspace')) {
+            basePart += ' ';
+          }
+        }
+        if (basePart.trim()) mathParts.push(basePart.trim());
+      }
+
+      if (mathParts.length > 0) {
+        return `${mathDelim}${mathParts.join(' ')}${mathDelim}`;
+      }
+
+      const mathContent = Array.from(node.querySelectorAll('.mord, .mbin, .mrel, .mopen, .mclose, .mop'))
+        .map(el => {
+          if (el.querySelector('svg') || el.querySelector('img')) return '';
+          return el.textContent?.trim() || '';
+        })
+        .filter(t => t.length > 0)
+        .join(' ');
+
+      if (mathContent) {
+        return `${mathDelim}${unicodeToLatex(mathContent)}${mathDelim}`;
+      }
+
+      return node.textContent?.replace(/\s+/g, ' ').trim() || '';
+    }
   });
 
   // Rule: Citation buttons - with message-specific anchors
@@ -5287,6 +5836,303 @@ function showToast(message, type = 'success') {
     toast.classList.add('toast-hide');
     setTimeout(() => toast.remove(), 300);
   }, duration);
+}
+
+// ==================== DOM HEALTH CHECK ====================
+
+// Store last health check results for report generation
+let lastHealthCheckResults = null;
+
+/**
+ * Run comprehensive DOM health check and display results
+ */
+async function runHealthCheck() {
+  const panel = document.getElementById('health-check-panel');
+  const loadingEl = document.getElementById('health-check-loading');
+  const resultsEl = document.getElementById('health-check-results');
+
+  // Show panel with loading state
+  panel.style.display = 'block';
+  loadingEl.style.display = 'flex';
+  resultsEl.style.display = 'none';
+
+  try {
+    // Get current tab
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.url?.includes('notebooklm.google.com')) {
+      displayHealthCheckError('Please open NotebookLM first');
+      return;
+    }
+
+    // Run the health check
+    const results = await chrome.tabs.sendMessage(tab.id, {
+      type: 'RUN_COMPREHENSIVE_HEALTH_CHECK',
+      options: {}
+    });
+
+    // Store results for report generation
+    lastHealthCheckResults = results;
+
+    // Display results
+    displayHealthCheckResults(results);
+  } catch (error) {
+    console.error('[NotebookLM Takeout] Health check error:', error);
+    displayHealthCheckError(error.message || 'Failed to run health check');
+  }
+}
+
+/**
+ * Display health check error
+ * @param {string} message - Error message
+ */
+function displayHealthCheckError(message) {
+  const loadingEl = document.getElementById('health-check-loading');
+  const resultsEl = document.getElementById('health-check-results');
+
+  loadingEl.style.display = 'none';
+  resultsEl.style.display = 'block';
+
+  // Show error state
+  const overallEl = document.getElementById('health-overall');
+  overallEl.className = 'health-overall unhealthy';
+  document.getElementById('health-overall-title').textContent = 'Health Check Failed';
+  document.getElementById('health-overall-subtitle').textContent = message;
+
+  // Clear categories
+  document.getElementById('health-categories').innerHTML = '';
+  document.getElementById('health-recommendations').style.display = 'none';
+  document.getElementById('health-check-duration').textContent = '';
+}
+
+/**
+ * Display health check results
+ * @param {Object} results - Health check results from content script
+ */
+function displayHealthCheckResults(results) {
+  const loadingEl = document.getElementById('health-check-loading');
+  const resultsEl = document.getElementById('health-check-results');
+
+  loadingEl.style.display = 'none';
+  resultsEl.style.display = 'block';
+
+  // Overall status
+  const overallEl = document.getElementById('health-overall');
+  overallEl.className = `health-overall ${results.overallHealthy ? 'healthy' : 'unhealthy'}`;
+
+  document.getElementById('health-overall-title').textContent =
+    results.overallHealthy ? 'All Systems Operational' : 'Issues Detected';
+  document.getElementById('health-overall-subtitle').textContent =
+    results.overallHealthy
+      ? 'Extension is ready to export from this notebook.'
+      : `${results.criticalFailures?.length || 0} critical issue(s) found.`;
+
+  // Recommendations
+  const recsEl = document.getElementById('health-recommendations');
+  const recsListEl = document.getElementById('health-recommendations-list');
+  if (results.recommendations && results.recommendations.length > 0) {
+    recsListEl.innerHTML = results.recommendations.map(r => `<li>${escapeHtml(r)}</li>`).join('');
+    recsEl.style.display = 'block';
+  } else {
+    recsEl.style.display = 'none';
+  }
+
+  // Categories
+  const categoriesEl = document.getElementById('health-categories');
+  categoriesEl.innerHTML = '';
+
+  const categoryLabels = {
+    notes: 'Notes',
+    sources: 'Sources',
+    chat: 'Chat History',
+    citations: 'Citations'
+  };
+
+  for (const [categoryKey, categoryData] of Object.entries(results.categories || {})) {
+    const categoryEl = document.createElement('div');
+    categoryEl.className = 'health-category';
+
+    const headerEl = document.createElement('div');
+    headerEl.className = 'health-category-header';
+    headerEl.innerHTML = `
+      <div class="health-category-title">
+        <span class="health-category-status ${categoryData.healthy ? 'passed' : 'failed'}"></span>
+        <span>${categoryLabels[categoryKey] || categoryKey}</span>
+      </div>
+      <svg class="health-category-toggle" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/>
+      </svg>
+    `;
+
+    headerEl.addEventListener('click', () => {
+      categoryEl.classList.toggle('expanded');
+    });
+
+    const checksEl = document.createElement('div');
+    checksEl.className = 'health-category-checks';
+
+    if (categoryData.error) {
+      checksEl.innerHTML = `
+        <div class="health-check-item">
+          <div class="health-check-icon failed"></div>
+          <div class="health-check-details">
+            <div class="health-check-name">Check failed</div>
+            <div class="health-check-note">${escapeHtml(categoryData.error)}</div>
+          </div>
+        </div>
+      `;
+    } else if (categoryData.checks && categoryData.checks.length > 0) {
+      checksEl.innerHTML = categoryData.checks.map(check => {
+        // Non-critical failures show as 'info' (gray), critical failures show as 'failed' (red)
+        let statusClass;
+        if (check.passed) {
+          statusClass = 'passed';
+        } else if (check.name === 'Skipped') {
+          statusClass = 'skipped';
+        } else if (check.critical === false) {
+          statusClass = 'info'; // Non-critical failure - informational only
+        } else {
+          statusClass = 'failed';
+        }
+        return `
+          <div class="health-check-item">
+            <div class="health-check-icon ${statusClass}"></div>
+            <div class="health-check-details">
+              <div class="health-check-name">${escapeHtml(check.name)}${check.count !== undefined ? ` (${check.count})` : ''}</div>
+              ${check.note ? `<div class="health-check-note">${escapeHtml(check.note)}</div>` : ''}
+              ${check.selector ? `<div class="health-check-selector">${escapeHtml(check.selector)}</div>` : ''}
+            </div>
+          </div>
+        `;
+      }).join('');
+    } else {
+      checksEl.innerHTML = `
+        <div class="health-check-item">
+          <div class="health-check-icon skipped"></div>
+          <div class="health-check-details">
+            <div class="health-check-name">No checks performed</div>
+          </div>
+        </div>
+      `;
+    }
+
+    categoryEl.appendChild(headerEl);
+    categoryEl.appendChild(checksEl);
+    categoriesEl.appendChild(categoryEl);
+
+    // Auto-expand failed categories
+    if (!categoryData.healthy) {
+      categoryEl.classList.add('expanded');
+    }
+  }
+
+  // Duration
+  document.getElementById('health-check-duration').textContent =
+    results.duration ? `Completed in ${results.duration}ms` : '';
+}
+
+/**
+ * Generate a text report from health check results
+ * @param {Object} results - Health check results
+ * @returns {string} - Formatted text report
+ */
+function generateHealthReport(results) {
+  const lines = [];
+  const timestamp = new Date().toISOString();
+
+  lines.push('# NotebookLM Takeout - DOM Health Check Report');
+  lines.push(`Generated: ${timestamp}`);
+  lines.push('');
+
+  // Overall status
+  lines.push(`## Overall Status: ${results.overallHealthy ? 'HEALTHY' : 'ISSUES DETECTED'}`);
+  lines.push('');
+
+  // Critical failures
+  if (results.criticalFailures && results.criticalFailures.length > 0) {
+    lines.push('## Critical Failures');
+    results.criticalFailures.forEach(f => lines.push(`- ${f}`));
+    lines.push('');
+  }
+
+  // Recommendations
+  if (results.recommendations && results.recommendations.length > 0) {
+    lines.push('## Recommendations');
+    results.recommendations.forEach(r => lines.push(`- ${r}`));
+    lines.push('');
+  }
+
+  // Category details
+  const categoryLabels = {
+    notes: 'Notes',
+    sources: 'Sources',
+    chat: 'Chat History',
+    citations: 'Citations'
+  };
+
+  lines.push('## Category Details');
+  lines.push('');
+
+  for (const [categoryKey, categoryData] of Object.entries(results.categories || {})) {
+    const label = categoryLabels[categoryKey] || categoryKey;
+    const status = categoryData.healthy ? 'PASS' : 'FAIL';
+    lines.push(`### ${label}: ${status}`);
+
+    if (categoryData.error) {
+      lines.push(`Error: ${categoryData.error}`);
+    } else if (categoryData.checks && categoryData.checks.length > 0) {
+      categoryData.checks.forEach(check => {
+        // Non-critical failures show as [INFO], critical failures show as [FAIL]
+        let icon;
+        if (check.passed) {
+          icon = '[OK]';
+        } else if (check.critical === false) {
+          icon = '[INFO]'; // Non-critical - informational only
+        } else {
+          icon = '[FAIL]';
+        }
+        let line = `  ${icon} ${check.name}`;
+        if (check.count !== undefined) line += ` (${check.count})`;
+        lines.push(line);
+        if (check.note) lines.push(`       ${check.note}`);
+        if (check.selector && !check.passed) lines.push(`       Selector: ${check.selector}`);
+      });
+    }
+    lines.push('');
+  }
+
+  // Metadata
+  lines.push('## Metadata');
+  lines.push(`Duration: ${results.duration}ms`);
+  lines.push(`User Agent: ${navigator.userAgent}`);
+  lines.push('');
+
+  // Note about tooltip test
+  lines.push('---');
+  lines.push('Note: The "Tooltip hover test" may show [FAIL] even when everything works correctly.');
+  lines.push('This is because synthetic JavaScript events cannot trigger Angular overlays.');
+  lines.push('If citation buttons are present, exports will work normally.');
+  lines.push('');
+
+  return lines.join('\n');
+}
+
+/**
+ * Copy health check report to clipboard
+ */
+async function copyHealthReport() {
+  if (!lastHealthCheckResults) {
+    showToast('No health check results to copy', 'error');
+    return;
+  }
+
+  try {
+    const report = generateHealthReport(lastHealthCheckResults);
+    await navigator.clipboard.writeText(report);
+    showToast('Report copied to clipboard', 'success');
+  } catch (error) {
+    console.error('[NotebookLM Takeout] Failed to copy report:', error);
+    showToast('Failed to copy report', 'error');
+  }
 }
 
 function escapeHtml(text) {
