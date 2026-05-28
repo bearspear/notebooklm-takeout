@@ -504,6 +504,20 @@
           duration: 0
         }));
       return true;
+    } else if (message.type === 'SCAN_STUDIO_ITEMS') {
+      // Unified Studio scan: artifacts + notes/mindmaps in DOM order.
+      try {
+        sendResponse({ items: scanStudioItems() });
+      } catch (e) {
+        sendResponse({ items: [], error: e.message });
+      }
+    } else if (message.type === 'DELETE_STUDIO_ITEM') {
+      // Resolve by label (preferred when provided — resilient to index shifts)
+      // or by combined DOM index as a fallback.
+      deleteStudioItem(message.data || {})
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ success: false, error: error.message || 'Delete failed' }));
+      return true;
     }
 
     return true;
@@ -1346,13 +1360,13 @@
       });
 
       // Check content viewer
-      const contentViewer = noteViewer.querySelector('labs-tailwind-doc-viewer, rich-text-editor .ql-editor');
+      const contentViewer = noteViewer.querySelector('labs-tailwind-doc-viewer, rich-text-editor .ql-editor, rich-text-editor .ProseMirror');
       checks.push({
         name: 'Note content viewer',
-        selector: 'labs-tailwind-doc-viewer',
+        selector: 'labs-tailwind-doc-viewer | rich-text-editor .ql-editor | rich-text-editor .ProseMirror',
         passed: !!contentViewer,
         critical: true,
-        note: contentViewer ? 'Content viewer present' : 'Content viewer not found'
+        note: contentViewer ? `Content viewer present (${contentViewer.tagName.toLowerCase()}${contentViewer.className ? '.' + contentViewer.className.split(' ')[0] : ''})` : 'Content viewer not found'
       });
 
       // Check close button
@@ -1511,6 +1525,60 @@
    * Check health of Chat functionality
    * @returns {Object} - { healthy: boolean, checks: [...] }
    */
+  /**
+   * Check whether the notebook's project title is detectable.
+   * The title feeds filename generation for every export (notes, sources, chat).
+   * If all selectors miss, exports fall back to "NotebookLM" (or "NotebookLM Chat")
+   * and filenames look like `NotebookLM-Chat-chat-2026-04-23T19-31-50.zip`.
+   */
+  function checkProjectTitleHealth() {
+    const checks = [];
+    const selectors = [
+      '.title-label-inner',
+      'editable-project-title .title-label span',
+      '.title-container .title span',
+      '[class*="title-label"]',
+      '.notebook-title' // legacy fallback
+    ];
+
+    let matchedSelector = null;
+    let resolvedTitle = null;
+    for (const selector of selectors) {
+      const el = document.querySelector(selector);
+      const text = el?.textContent?.trim();
+      if (text) {
+        matchedSelector = selector;
+        resolvedTitle = text;
+        break;
+      }
+    }
+
+    const passed = !!resolvedTitle;
+    checks.push({
+      name: 'Notebook project title detectable',
+      selector: matchedSelector || selectors.join(', '),
+      passed,
+      critical: true,
+      note: passed
+        ? `Matched "${matchedSelector}" → "${resolvedTitle.substring(0, 60)}${resolvedTitle.length > 60 ? '…' : ''}"`
+        : 'None of the title selectors matched — export filenames will use generic "NotebookLM" prefix'
+    });
+
+    // Informational: which fallback rank matched.
+    if (passed && matchedSelector !== selectors[0]) {
+      checks.push({
+        name: 'Primary selector still best',
+        selector: selectors[0],
+        passed: false,
+        critical: false,
+        note: `Primary selector "${selectors[0]}" missed; using fallback "${matchedSelector}". Extension may be drifting behind NotebookLM UI changes.`
+      });
+    }
+
+    const healthy = checks.every(c => !c.critical || c.passed);
+    return { healthy, checks };
+  }
+
   function checkChatHealth() {
     const checks = [];
 
@@ -1825,6 +1893,18 @@
 
     // Run category checks
     try {
+      results.categories.general = checkProjectTitleHealth();
+      if (!results.categories.general.healthy) {
+        results.overallHealthy = false;
+        results.criticalFailures.push('General: Notebook project title selector broken');
+      }
+    } catch (error) {
+      results.categories.general = { healthy: false, checks: [], error: error.message };
+      results.overallHealthy = false;
+      results.criticalFailures.push(`General check failed: ${error.message}`);
+    }
+
+    try {
       results.categories.notes = checkNotesHealth();
       if (!results.categories.notes.healthy) {
         results.overallHealthy = false;
@@ -1883,6 +1963,9 @@
       results.recommendations.push('Try refreshing the page and running the check again.');
 
       // Specific recommendations based on failures
+      if (!results.categories.general?.healthy) {
+        results.recommendations.push('Project title not detected — export filenames will fall back to generic "NotebookLM" prefix.');
+      }
       if (!results.categories.notes?.healthy) {
         results.recommendations.push('Notes export may fail or produce incomplete results.');
       }
@@ -2025,10 +2108,11 @@
         }
 
         // Extract citation data
-        const footerEl = tooltip.querySelector('.citation-tooltip-footer');
+        // Source title moved from footer to header in recent NotebookLM update
+        const headerEl = tooltip.querySelector('.citation-tooltip-header');
         const textEl = tooltip.querySelector('.citation-tooltip-text');
 
-        const sourceTitle = footerEl?.textContent?.trim() || '';
+        const sourceTitle = headerEl?.textContent?.trim() || '';
 
         // Convert HTML to markdown
         let quoteMarkdown = '';
@@ -2324,13 +2408,19 @@
       console.log('[NotebookLM Takeout] Clicking note button...');
       button.click();
 
-      // Wait for content to load (editor or mindmap viewer)
+      // Wait for content to load (editor or mindmap viewer).
+      // Scope to <studio-panel> so we don't accidentally pick up the chat panel's
+      // labs-tailwind-doc-viewer (used to render AI replies). When the chat
+      // panel is in DOM order, an unscoped lookup grabs the chat viewer and
+      // every citation hover ends up reading chat sources instead of the note's.
       console.log('[NotebookLM Takeout] Waiting for content...');
+      const studioPanel = document.querySelector('studio-panel') || document;
       const content = await raceWithCleanup([
-        waitForElement('rich-text-editor .ql-editor', 5000),
-        waitForElement('markdown-editor-legacy .ql-editor', 5000),
-        waitForElement('labs-tailwind-doc-viewer', 5000),
-        waitForElement('mindmap-viewer', 5000)
+        waitForElement('rich-text-editor .ql-editor', 5000, studioPanel),
+        waitForElement('rich-text-editor .ProseMirror', 5000, studioPanel),
+        waitForElement('markdown-editor-legacy .ql-editor', 5000, studioPanel),
+        waitForElement('labs-tailwind-doc-viewer', 5000, studioPanel),
+        waitForElement('mindmap-viewer', 5000, studioPanel)
       ]).catch(() => null);
 
       if (!content) {
@@ -3222,9 +3312,10 @@
         console.log('[NotebookLM Takeout] Tooltip appeared! Extracting data...');
         console.log('  - tooltip HTML preview:', tooltip.outerHTML.substring(0, 500));
 
-        // Extract source filename from footer (may be empty for some citations)
-        const sourceTitle = footerEl?.textContent?.trim() || '';
-        console.log('  - footer element found:', !!footerEl, 'content:', sourceTitle || '(empty)');
+        // Extract source filename from header (moved from footer in recent update)
+        const headerEl = tooltip.querySelector('.citation-tooltip-header');
+        const sourceTitle = headerEl?.textContent?.trim() || '';
+        console.log('  - header element found:', !!headerEl, 'content:', sourceTitle || '(empty)');
 
         // Extract quote text from citation-tooltip-text
         const tooltipText = tooltip.querySelector('.citation-tooltip-text');
@@ -3521,20 +3612,21 @@
       }
     });
 
-    // Get SVG dimensions and viewBox
+    // Get SVG dimensions using bounding box
     const bbox = svg.getBBox();
-    const width = Math.ceil(bbox.width + bbox.x + 100);
-    const height = Math.ceil(bbox.height + bbox.y + 100);
+    const padding = 50;
+
+    // Calculate viewBox to capture all content with padding
+    const viewBoxX = Math.floor(bbox.x - padding);
+    const viewBoxY = Math.floor(bbox.y - padding);
+    const viewBoxWidth = Math.ceil(bbox.width + (padding * 2));
+    const viewBoxHeight = Math.ceil(bbox.height + (padding * 2));
 
     // Set proper SVG attributes for standalone file
-    svgClone.setAttribute('width', width);
-    svgClone.setAttribute('height', height);
+    svgClone.setAttribute('width', viewBoxWidth);
+    svgClone.setAttribute('height', viewBoxHeight);
     svgClone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-
-    // Add viewBox if not present
-    if (!svgClone.hasAttribute('viewBox')) {
-      svgClone.setAttribute('viewBox', `${bbox.x - 50} ${bbox.y - 50} ${width} ${height}`);
-    }
+    svgClone.setAttribute('viewBox', `${viewBoxX} ${viewBoxY} ${viewBoxWidth} ${viewBoxHeight}`);
 
     // Add embedded styles for text rendering
     const styleElement = document.createElementNS('http://www.w3.org/2000/svg', 'style');
@@ -4206,62 +4298,243 @@
   }
 
   /**
-   * Find download button trying multiple selectors
-   * Returns the first matching button or null
+   * Find an open menu item whose visible text contains the given text (case-insensitive).
+   * Searches `.mat-mdc-menu-item` and `[role="menuitem"]` across all open overlays.
+   * @param {string} text - e.g. 'Download', 'Delete'
+   * @returns {Element|null}
    */
-  async function findDownloadButton() {
-    const selectors = [
-      // Material menu items with "Download" text
-      '.mat-mdc-menu-item .mat-mdc-menu-item-text:has-text("Download")',
-      '.mat-mdc-menu-item:has-text("Download")',
-
-      // Generic patterns
-      'button[aria-label*="Download"]',
-      'button[aria-label*="download"]',
-      '[role="menuitem"]:has-text("Download")',
-
-      // Broader fallback - find all menu items and filter by text
-      '.mat-mdc-menu-item, [role="menuitem"]'
-    ];
-
-    for (const selector of selectors) {
-      try {
-        if (selector.includes(':has-text')) {
-          // Manual text search for :has-text pseudo-selector
-          const baseSelector = selector.split(':has-text')[0];
-          const textMatch = selector.match(/:has-text\("([^"]+)"\)/)?.[1];
-          const elements = document.querySelectorAll(baseSelector);
-
-          for (const el of elements) {
-            if (textMatch && el.textContent?.toLowerCase().includes(textMatch.toLowerCase())) {
-              console.log(`[NotebookLM Takeout] [Download] Found download button with selector: ${baseSelector} (text: "${textMatch}")`);
-              return el;
-            }
-          }
-        } else {
-          const button = document.querySelector(selector);
-          if (button) {
-            console.log(`[NotebookLM Takeout] [Download] Found download button with selector: ${selector}`);
-            return button;
-          }
-        }
-      } catch (e) {
-        // Selector not supported, continue to next
-        continue;
-      }
-    }
-
-    // Final fallback: manually search all menu items
+  function findMenuItemByText(text) {
+    if (!text) return null;
+    const needle = text.toLowerCase();
     const menuItems = document.querySelectorAll('.mat-mdc-menu-item, [role="menuitem"]');
     for (const item of menuItems) {
-      const text = item.textContent?.toLowerCase() || '';
-      if (text.includes('download')) {
-        console.log('[NotebookLM Takeout] [Download] Found download button via text search');
-        return item;
+      const label = (item.textContent || '').toLowerCase();
+      if (label.includes(needle)) return item;
+    }
+    return null;
+  }
+
+  /**
+   * Find the Download menu item in the currently open more-menu.
+   * Thin wrapper around findMenuItemByText — preserves the old call site.
+   */
+  async function findDownloadButton() {
+    const button = findMenuItemByText('download');
+    if (button) {
+      console.log('[NotebookLM Takeout] [Download] Found download menu item via text search');
+    }
+    return button;
+  }
+
+  // ==================== STUDIO TAB (unified list) ====================
+
+  /**
+   * Scan both artifact-library-item and artifact-library-note elements in DOM order.
+   * Each result carries `kind` ('artifact'|'note'), the index inside its own kind
+   * (for routing into existing downloadArtifact / note-export paths), and the
+   * combined index (for delete targeting).
+   */
+  function scanStudioItems() {
+    const ICON_TO_TYPE = {
+      'auto_tab_group': 'Report',
+      'tablet': 'Slides',
+      'stacked_bar_chart': 'Infographic',
+      'table_view': 'Data Table',
+      'flowchart': 'Flowchart',
+      'headphones': 'Audio Overview',
+      'audio_magic_eraser': 'Audio Overview'
+    };
+
+    const nodes = document.querySelectorAll('artifact-library-item, artifact-library-note');
+    let artifactCursor = 0;
+    let noteCursor = 0;
+    const items = [];
+
+    nodes.forEach((el, combinedIndex) => {
+      const tag = el.tagName.toLowerCase();
+      const titleEl = el.querySelector('.artifact-title, .note-title');
+      const label = titleEl?.textContent?.trim() || `Item ${combinedIndex + 1}`;
+      const detailsEl = el.querySelector('.artifact-details');
+      const details = detailsEl?.textContent?.trim() || '';
+      const iconEl = el.querySelector('mat-icon');
+      const iconText = iconEl?.textContent?.trim() || '';
+      const hasMoreButton = !!el.querySelector('button[aria-label="More"]');
+
+      if (tag === 'artifact-library-item') {
+        items.push({
+          combinedIndex,
+          kindIndex: artifactCursor,
+          kind: 'artifact',
+          label,
+          details,
+          type: ICON_TO_TYPE[iconText] || iconText || 'Unknown',
+          hasMoreButton
+        });
+        artifactCursor++;
+      } else {
+        // artifact-library-note — Note or Mindmap
+        let type = 'Note';
+        if (iconText === 'flowchart') type = 'Mindmap';
+        items.push({
+          combinedIndex,
+          kindIndex: noteCursor,
+          kind: 'note',
+          label,
+          details,
+          type,
+          hasMoreButton
+        });
+        noteCursor++;
       }
+    });
+
+    return items;
+  }
+
+  /**
+   * Delete one studio item:
+   *   1. Resolve target element (by label first, else combined index).
+   *   2. Open its "More" menu.
+   *   3. Click the "Delete" menu item.
+   *   4. Wait for the native confirmation dialog and auto-click its confirm button.
+   *   5. Wait for the row to disappear.
+   *
+   * @param {{label?: string, combinedIndex?: number}} data
+   * @returns {Promise<{success: boolean, error?: string}>}
+   */
+  async function deleteStudioItem(data) {
+    const { label, combinedIndex } = data || {};
+    const all = Array.from(document.querySelectorAll('artifact-library-item, artifact-library-note'));
+    if (all.length === 0) {
+      throw new Error('No studio items found on the page');
+    }
+
+    // Resolve target — prefer label (stable across deletes) but fall back to index.
+    let target = null;
+    if (label) {
+      target = all.find(el => {
+        const t = el.querySelector('.artifact-title, .note-title');
+        return t && t.textContent?.trim() === label;
+      }) || null;
+    }
+    if (!target && typeof combinedIndex === 'number' && combinedIndex >= 0 && combinedIndex < all.length) {
+      target = all[combinedIndex];
+    }
+    if (!target) {
+      throw new Error(`Studio item not found${label ? ` (label: "${label}")` : ''}`);
+    }
+
+    const moreButton = target.querySelector('button[aria-label="More"]');
+    if (!moreButton) {
+      throw new Error('More button not found on this item');
+    }
+
+    moreButton.click();
+
+    try {
+      await waitForElement('.mat-mdc-menu-panel, .cdk-overlay-pane', 2000);
+    } catch (e) {
+      throw new Error('More menu did not open');
+    }
+
+    // Small yield so menu items populate.
+    await new Promise(r => setTimeout(r, 150));
+
+    const deleteItem = findMenuItemByText('delete');
+    if (!deleteItem) {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      throw new Error('Delete menu item not found');
+    }
+    deleteItem.click();
+
+    // NotebookLM's behavior varies per item type:
+    //  - Some types (often notes) delete silently with an undo toast — no modal.
+    //  - Others (sources, some artifacts) show a mat-dialog confirmation we must click.
+    // Poll for both: if a confirm dialog appears, auto-click it; in any case,
+    // succeed as soon as the row disappears.
+    const initialCount = all.length;
+    const isGone = () => {
+      if (!document.body.contains(target)) return true;
+      return document.querySelectorAll('artifact-library-item, artifact-library-note').length < initialCount;
+    };
+
+    let confirmed = false;
+    const deadline = Date.now() + 6000;
+    while (Date.now() < deadline) {
+      if (isGone()) return { success: true };
+
+      if (!confirmed) {
+        const confirmBtn = findConfirmDialogButton();
+        if (confirmBtn) {
+          confirmBtn.click();
+          confirmed = true;
+        }
+      }
+
+      await new Promise(r => setTimeout(r, 100));
+    }
+
+    throw new Error(confirmed
+      ? 'Item did not disappear after clicking confirm'
+      : 'Delete did not take effect (no dialog, no removal)');
+  }
+
+  /**
+   * Find the destructive button of an on-screen delete confirmation.
+   * NotebookLM uses several dialog shapes — mat-dialog-container, role=dialog,
+   * mat-mdc-dialog-container, or just a plain .cdk-overlay-pane floating card
+   * with "Cancel" + "Delete" buttons. We scan all three, preferring a
+   * container that has a Cancel sibling (the strongest confirm-dialog signal)
+   * and skipping the more-options menu panel we just used.
+   */
+  function findConfirmDialogButton() {
+    const DESTRUCTIVE = ['delete', 'confirm', 'remove'];
+    const exactMatch = (t) => DESTRUCTIVE.includes(t);
+    const looseMatch = (t) => DESTRUCTIVE.some(w => t.includes(w));
+
+    const candidates = document.querySelectorAll(
+      'mat-dialog-container, mat-mdc-dialog-container, [role="dialog"], [role="alertdialog"], .cdk-dialog-container, .cdk-overlay-pane'
+    );
+
+    for (const container of candidates) {
+      // Skip the more-options menu panel (it has .mat-mdc-menu-panel descendants).
+      if (container.querySelector('.mat-mdc-menu-panel, .mat-menu-panel')) continue;
+
+      const buttons = Array.from(container.querySelectorAll('button'));
+      if (buttons.length === 0) continue;
+
+      const hasCancel = buttons.some(b => (b.textContent || '').trim().toLowerCase() === 'cancel');
+
+      // Exact-text destructive match inside a Cancel-paired container wins.
+      const exact = buttons.find(b => exactMatch((b.textContent || '').trim().toLowerCase()));
+      if (exact && hasCancel) return exact;
+
+      // Loose-text destructive match inside a Cancel-paired container.
+      const loose = buttons.find(b => looseMatch((b.textContent || '').toLowerCase()));
+      if (loose && hasCancel) return loose;
+    }
+
+    // Second pass without the Cancel requirement (some layouts drop Cancel).
+    for (const container of candidates) {
+      if (container.querySelector('.mat-mdc-menu-panel, .mat-menu-panel')) continue;
+      const buttons = Array.from(container.querySelectorAll('button'));
+      const exact = buttons.find(b => exactMatch((b.textContent || '').trim().toLowerCase()));
+      if (exact) return exact;
     }
 
     return null;
+  }
+
+  /**
+   * Poll a condition until true or timeout.
+   */
+  async function waitForCondition(predicate, timeoutMs = 3000, intervalMs = 100) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      try { if (predicate()) return true; } catch (_) { /* noop */ }
+      await new Promise(r => setTimeout(r, intervalMs));
+    }
+    return false;
   }
 
   /**
@@ -4382,19 +4655,21 @@
         }
       });
 
-      // Get SVG dimensions
+      // Get SVG dimensions using bounding box
       const bbox = svg.getBBox();
-      const width = Math.ceil(bbox.width + bbox.x + 20);
-      const height = Math.ceil(bbox.height + bbox.y + 20);
+      const padding = 10;
+
+      // Calculate viewBox to capture all content with padding
+      const viewBoxX = Math.floor(bbox.x - padding);
+      const viewBoxY = Math.floor(bbox.y - padding);
+      const viewBoxWidth = Math.ceil(bbox.width + (padding * 2));
+      const viewBoxHeight = Math.ceil(bbox.height + (padding * 2));
 
       // Set proper SVG attributes
-      svgClone.setAttribute('width', width);
-      svgClone.setAttribute('height', height);
+      svgClone.setAttribute('width', viewBoxWidth);
+      svgClone.setAttribute('height', viewBoxHeight);
       svgClone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-
-      if (!svgClone.hasAttribute('viewBox')) {
-        svgClone.setAttribute('viewBox', `${bbox.x - 10} ${bbox.y - 10} ${width} ${height}`);
-      }
+      svgClone.setAttribute('viewBox', `${viewBoxX} ${viewBoxY} ${viewBoxWidth} ${viewBoxHeight}`);
 
       // Serialize to string
       const svgString = new XMLSerializer().serializeToString(svgClone);
@@ -4613,8 +4888,21 @@
       throw new Error('Chat panel not found');
     }
 
-    // Get notebook title
-    const notebookTitle = document.querySelector('.notebook-title')?.textContent?.trim() || 'NotebookLM Chat';
+    // Get notebook title — use the same selector list as GET_PROJECT_NAME so
+    // chat exports match the filenames used by notes/sources exports.
+    const titleSelectors = [
+      '.title-label-inner',
+      'editable-project-title .title-label span',
+      '.title-container .title span',
+      '[class*="title-label"]',
+      '.notebook-title' // legacy fallback
+    ];
+    let notebookTitle = 'NotebookLM';
+    for (const selector of titleSelectors) {
+      const titleEl = document.querySelector(selector);
+      const text = titleEl?.textContent?.trim();
+      if (text) { notebookTitle = text; break; }
+    }
 
     // Get notebook summary (if present)
     let notebookSummary = null;
@@ -4870,10 +5158,11 @@
           }
 
           // Extract citation data
-          const footerEl = tooltip.querySelector('.citation-tooltip-footer');
+          // Source title moved from footer to header in recent NotebookLM update
+          const headerEl = tooltip.querySelector('.citation-tooltip-header');
           const textEl = tooltip.querySelector('.citation-tooltip-text');
 
-          const sourceTitle = footerEl?.textContent?.trim() || '';
+          const sourceTitle = headerEl?.textContent?.trim() || '';
 
           // Convert HTML to markdown using the same function as note exports
           let quoteMarkdown = '';

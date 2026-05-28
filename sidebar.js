@@ -164,6 +164,301 @@ function createTurndownService(customOptions = {}) {
   return new TurndownService({ ...defaultOptions, ...customOptions });
 }
 
+// ==================== KATEX → LATEX CONVERSION ====================
+// Handles two cases:
+//   1. KaTeX preserved the original LaTeX in an <annotation> tag (happy path).
+//   2. KaTeX rendered HTML-only (no annotation). We reconstruct LaTeX from the
+//      .katex-html tree, covering mopen/mclose/mpunct/msupsub on mord and mclose,
+//      named functions (ln/log/sin/cos/...), big operators with limits,
+//      fractions, square roots, and Unicode → LaTeX symbol mapping.
+//
+// Used by both the notes/sources Turndown service and the chat Turndown service.
+
+const KATEX_UNICODE_MAP = {
+  '∂': '\\partial ', 'ρ': '\\rho ', 'α': '\\alpha ', 'β': '\\beta ',
+  'γ': '\\gamma ', 'δ': '\\delta ', 'ε': '\\epsilon ', 'θ': '\\theta ',
+  'λ': '\\lambda ', 'μ': '\\mu ', 'π': '\\pi ', 'σ': '\\sigma ',
+  'τ': '\\tau ', 'φ': '\\phi ', 'ω': '\\omega ', 'Δ': '\\Delta ',
+  'Σ': '\\Sigma ', 'Π': '\\Pi ', 'Ω': '\\Omega ', '∞': '\\infty ',
+  '∫': '\\int ', '∑': '\\sum ', '∏': '\\prod ', '√': '\\sqrt',
+  '±': '\\pm ', '×': '\\times ', '÷': '\\div ', '≤': '\\leq ',
+  '≥': '\\geq ', '≠': '\\neq ', '≈': '\\approx ', '→': '\\rightarrow ',
+  '←': '\\leftarrow ', '↔': '\\leftrightarrow ', '∈': '\\in ',
+  '∉': '\\notin ', '⊂': '\\subset ', '⊃': '\\supset ', '∪': '\\cup ',
+  '∩': '\\cap ', '∧': '\\land ', '∨': '\\lor ', '¬': '\\neg ',
+  '∀': '\\forall ', '∃': '\\exists ', '∇': '\\nabla ', '·': '\\cdot '
+};
+
+// LaTeX command names for plain-text operators KaTeX renders inside `.mop`.
+// Matched against the operator's textContent in lower case.
+const KATEX_NAMED_FUNCTIONS = [
+  'arcsin', 'arccos', 'arctan',
+  'sinh', 'cosh', 'tanh',
+  'sin', 'cos', 'tan', 'cot', 'sec', 'csc',
+  'log', 'ln', 'lg', 'exp',
+  'lim', 'liminf', 'limsup', 'max', 'min', 'sup', 'inf',
+  'det', 'dim', 'deg', 'arg', 'ker', 'gcd', 'hom', 'Pr',
+  'mod'
+];
+
+function katexUnicodeToLatex(text) {
+  if (!text) return '';
+  let result = text;
+  for (const [unicode, latex] of Object.entries(KATEX_UNICODE_MAP)) {
+    result = result.split(unicode).join(latex);
+  }
+  return result;
+}
+
+function katexNamedFunctionFor(text) {
+  if (!text) return null;
+  const t = text.trim().toLowerCase();
+  for (const name of KATEX_NAMED_FUNCTIONS) {
+    if (t === name || t === name + '\u2009' /* thin space variants */) return '\\' + name;
+  }
+  return null;
+}
+
+// Extract { sub, sup } from a .msupsub element. KaTeX positions sub/sup spans
+// inside a .vlist using inline `top` styles. Convention: more-negative top
+// renders higher on screen → superscript; less-negative or positive top →
+// subscript. For a single positioned span we classify by absolute top value.
+function katexExtractSupSub(supsubEl) {
+  if (!supsubEl) return { sub: '', sup: '' };
+  const vlist = supsubEl.querySelector('.vlist-r > .vlist');
+  if (!vlist) return { sub: '', sup: '' };
+  const items = Array.from(vlist.children).filter(el => el.style && el.style.top);
+  if (items.length === 0) return { sub: '', sup: '' };
+
+  const itemText = (el) => {
+    // Strip the pstrut spacer and grab the inner content.
+    const clone = el.cloneNode(true);
+    clone.querySelectorAll('.pstrut').forEach(p => p.remove());
+    return katexRenderInline(clone).trim();
+  };
+
+  if (items.length === 1) {
+    const top = parseFloat(items[0].style.top) || 0;
+    const text = itemText(items[0]);
+    return top < -1 ? { sub: '', sup: text } : { sub: text, sup: '' };
+  }
+
+  // Two or more: sort by top, most negative first → superscript.
+  const sorted = items.slice().sort((a, b) =>
+    (parseFloat(a.style.top) || 0) - (parseFloat(b.style.top) || 0)
+  );
+  return {
+    sup: itemText(sorted[0]),
+    sub: itemText(sorted[sorted.length - 1])
+  };
+}
+
+// Extract { numerator, denominator } from a .mfrac element.
+function katexExtractFraction(fracEl) {
+  if (!fracEl) return null;
+  const vlist = fracEl.querySelector('.vlist-r > .vlist');
+  if (!vlist) return null;
+  const spans = Array.from(vlist.children).filter(s => s.querySelector('.mord'));
+  if (spans.length < 2) return null;
+  spans.sort((a, b) => (parseFloat(a.style.top) || 0) - (parseFloat(b.style.top) || 0));
+  return {
+    numerator: katexRenderInline(spans[0]).trim() || spans[0].textContent.trim(),
+    denominator: katexRenderInline(spans[spans.length - 1]).trim() || spans[spans.length - 1].textContent.trim()
+  };
+}
+
+// Format a base with optional super/subscripts, wrapping multi-char arguments.
+function katexWithScripts(base, sub, sup) {
+  let out = base;
+  const wrap = (s) => (s.length === 1 ? s : `{${s}}`);
+  if (sub) out += `_${wrap(sub)}`;
+  if (sup) out += `^${wrap(sup)}`;
+  return out;
+}
+
+// Render the *inline* content of any KaTeX HTML element to LaTeX. Walks
+// children in order. Designed to be called recursively from itself and from
+// helpers above.
+function katexRenderInline(el) {
+  if (!el) return '';
+  if (el.nodeType === 3 /* TEXT_NODE */) return katexUnicodeToLatex(el.textContent || '');
+  if (el.nodeType !== 1) return '';
+
+  const cls = el.classList;
+
+  // Skip spacing artifacts.
+  if (cls.contains('strut') || cls.contains('pstrut') || cls.contains('vlist-s')) return '';
+
+  // Skip ARIA-only mirrors.
+  if (el.tagName === 'SPAN' && el.getAttribute('aria-hidden') === 'true' && cls.length === 0) {
+    return '';
+  }
+
+  // Fractions.
+  if (cls.contains('mfrac') || (cls.contains('mord') && el.querySelector(':scope > .mfrac'))) {
+    const fracEl = cls.contains('mfrac') ? el : el.querySelector(':scope > .mfrac');
+    const frac = katexExtractFraction(fracEl);
+    if (frac) return `\\frac{${katexUnicodeToLatex(frac.numerator).trim()}}{${katexUnicodeToLatex(frac.denominator).trim()}}`;
+  }
+
+  // Square roots.
+  if (cls.contains('sqrt')) {
+    const radicand = el.querySelector('.mord:not(.sqrt)');
+    const inner = radicand ? katexRenderInline(radicand).trim() : '';
+    return `\\sqrt{${inner}}`;
+  }
+
+  // Big operators with stacked limits (op-limits).
+  if (cls.contains('mop') && cls.contains('op-limits')) {
+    return katexRenderOpLimits(el);
+  }
+
+  // Walk children. When we see a trailing .msupsub, attach to the previous
+  // emitted fragment as ^/_ — covers `z^n`, `(1.23)^n`, `x_i`, etc.
+  let out = '';
+  const children = Array.from(el.children);
+  for (let i = 0; i < children.length; i++) {
+    const child = children[i];
+    const cc = child.classList;
+
+    if (cc.contains('strut') || cc.contains('pstrut') || cc.contains('vlist-s')) continue;
+
+    if (cc.contains('msupsub')) {
+      const { sub, sup } = katexExtractSupSub(child);
+      if (sub || sup) {
+        if (out.length === 0) out = '{}';
+        // Wrap the preceding atom so the script attaches correctly. Heuristic:
+        // re-wrap whatever was emitted last as a single LaTeX atom.
+        const lastAtom = out.match(/(\\[a-zA-Z]+|.)\s*$/)?.[0]?.trim() || '';
+        if (lastAtom.length > 1 && !/^\\[a-zA-Z]+$/.test(lastAtom)) {
+          // Not a single atom or command — wrap everything in braces.
+          out = `{${out.trim()}}`;
+        }
+        if (sub) out += `_${sub.length === 1 ? sub : `{${sub}}`}`;
+        if (sup) out += `^${sup.length === 1 ? sup : `{${sup}}`}`;
+      }
+      continue;
+    }
+
+    // Named function (\ln, \log, ...) — emit before any trailing msupsub.
+    if (cc.contains('mop')) {
+      const txt = child.textContent.trim();
+      const named = katexNamedFunctionFor(txt);
+      if (named) {
+        out += named + ' ';
+        continue;
+      }
+      if (txt.includes('∑') || txt.includes('Σ')) { out += '\\sum '; continue; }
+      if (txt.includes('∫')) { out += '\\int '; continue; }
+      if (txt.includes('∏')) { out += '\\prod '; continue; }
+      out += katexUnicodeToLatex(txt) + ' ';
+      continue;
+    }
+
+    if (cc.contains('mbin') || cc.contains('mrel')) {
+      out += ` ${katexUnicodeToLatex(child.textContent.trim())} `;
+      continue;
+    }
+
+    if (cc.contains('mopen') || cc.contains('mclose') || cc.contains('mpunct')) {
+      // mclose may itself wrap a nested mclose + msupsub (e.g. `(1.23)^n`).
+      if (child.children.length > 0 && Array.from(child.children).some(c => c.classList.contains('msupsub'))) {
+        out += katexRenderInline(child);
+      } else {
+        out += child.textContent;
+      }
+      continue;
+    }
+
+    if (cc.contains('mord') || cc.contains('minner')) {
+      // If the mord wraps a base + msupsub, recurse so the msupsub handler runs.
+      if (Array.from(child.children).some(c => c.classList.contains('msupsub'))) {
+        out += katexRenderInline(child);
+      } else {
+        out += katexUnicodeToLatex(child.textContent.trim());
+      }
+      continue;
+    }
+
+    if (cc.contains('mspace')) {
+      out += ' ';
+      continue;
+    }
+
+    if (cc.contains('base')) {
+      out += katexRenderInline(child) + ' ';
+      continue;
+    }
+
+    // Unknown class — recurse if it has children, else inline text.
+    if (child.children.length > 0) {
+      out += katexRenderInline(child);
+    } else {
+      out += katexUnicodeToLatex(child.textContent.trim());
+    }
+  }
+
+  return out;
+}
+
+// Render a `.mop.op-limits` element (e.g. `\sum_{i=0}^{N}`).
+function katexRenderOpLimits(mopEl) {
+  let opText = '';
+  let sub = '';
+  let sup = '';
+  const vlist = mopEl.querySelector('.vlist-r > .vlist');
+  if (!vlist) return mopEl.textContent.trim();
+
+  const items = Array.from(vlist.children).filter(el => el.style && el.style.top);
+  items.sort((a, b) => (parseFloat(a.style.top) || 0) - (parseFloat(b.style.top) || 0));
+
+  const opItem = items.find(i => i.querySelector('.mop.op-symbol, .op-symbol'));
+  const opTop = opItem ? parseFloat(opItem.style.top) || 0 : 0;
+
+  for (const item of items) {
+    const opSymbol = item.querySelector('.mop.op-symbol, .op-symbol');
+    if (opSymbol) {
+      const sym = opSymbol.textContent.trim();
+      if (sym.includes('∑') || sym.includes('Σ')) opText = '\\sum';
+      else if (sym.includes('∫')) opText = '\\int';
+      else if (sym.includes('∏')) opText = '\\prod';
+      else opText = katexUnicodeToLatex(sym).trim();
+      continue;
+    }
+    const limitText = katexRenderInline(item).trim();
+    const t = parseFloat(item.style.top) || 0;
+    if (t < opTop) sup = limitText;
+    else if (t > opTop) sub = limitText;
+  }
+
+  return katexWithScripts(opText || '\\sum', sub, sup);
+}
+
+// Top-level entry. Returns the math expression wrapped in `$` (inline) or `$$`
+// (display) delimiters, or a plain text fallback if reconstruction yields
+// nothing useful.
+function convertKatexNodeToLatex(node) {
+  const isDisplay = node.closest('.katex-display') !== null;
+  const delim = isDisplay ? '$$' : '$';
+
+  const annotation = node.querySelector('annotation[encoding="application/x-tex"]');
+  if (annotation && annotation.textContent && annotation.textContent.trim()) {
+    return `${delim}${annotation.textContent.trim()}${delim}`;
+  }
+
+  const katexHtml = node.querySelector('.katex-html');
+  if (katexHtml) {
+    const latex = katexRenderInline(katexHtml).replace(/\s+/g, ' ').trim();
+    if (latex) return `${delim}${latex}${delim}`;
+  }
+
+  // Last-resort textual fallback.
+  const text = node.textContent.replace(/\s+/g, ' ').trim();
+  return text ? `${delim}${katexUnicodeToLatex(text)}${delim}` : '';
+}
+
+// ==================== END KATEX → LATEX CONVERSION ====================
+
 let currentTabId = null;
 let autoRefreshInterval = null;
 let settingsLoaded = false;
@@ -185,7 +480,9 @@ let settings = {
   sourcesPerZip: 25, // Number of sources per ZIP file (prevents memory issues)
   notesPerZip: 25, // Number of notes per ZIP file (prevents memory issues)
   // Text cleanup
-  cleanOCRArtifacts: true // Clean OCR garbage (~~~, :~:, etc.) from citation quotes
+  cleanOCRArtifacts: true, // Clean OCR garbage (~~~, :~:, etc.) from citation quotes
+  // Interface
+  showStudioTab: false // Show the Studio tab (unified per-item list with delete)
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -320,6 +617,33 @@ async function loadSettings() {
 
   // Text processing
   document.getElementById('clean-ocr-artifacts-checkbox').checked = settings.cleanOCRArtifacts;
+
+  // Interface
+  document.getElementById('show-studio-tab-checkbox').checked = settings.showStudioTab;
+  applyStudioTabVisibility();
+}
+
+function applyStudioTabVisibility() {
+  const tabBtn = document.querySelector('.tab-btn[data-tab="studio"]');
+  const tabContent = document.querySelector('.tab-content[data-tab-content="studio"]');
+  if (!tabBtn || !tabContent) return;
+
+  if (settings.showStudioTab) {
+    tabBtn.hidden = false;
+    tabContent.hidden = false;
+  } else {
+    tabBtn.hidden = true;
+    tabContent.hidden = true;
+    // If Studio was the active tab, fall back to Sources.
+    if (tabBtn.classList.contains('active')) {
+      tabBtn.classList.remove('active');
+      tabContent.classList.remove('active');
+      const sourcesBtn = document.querySelector('.tab-btn[data-tab="sources"]');
+      const sourcesContent = document.querySelector('.tab-content[data-tab-content="sources"]');
+      if (sourcesBtn) sourcesBtn.classList.add('active');
+      if (sourcesContent) sourcesContent.classList.add('active');
+    }
+  }
 }
 
 async function saveSettings() {
@@ -349,6 +673,10 @@ async function saveSettings() {
 
   // Text processing
   settings.cleanOCRArtifacts = document.getElementById('clean-ocr-artifacts-checkbox').checked;
+
+  // Interface
+  settings.showStudioTab = document.getElementById('show-studio-tab-checkbox').checked;
+  applyStudioTabVisibility();
 
   await chrome.storage.local.set({ settings });
 }
@@ -492,6 +820,20 @@ function setupEventListeners() {
   if (dismissWarningBtn) {
     dismissWarningBtn.addEventListener('click', hideWarningBanner);
   }
+
+  // Studio tab buttons
+  const scanStudioBtn = document.getElementById('scan-studio-btn');
+  if (scanStudioBtn) {
+    scanStudioBtn.addEventListener('click', scanStudioPage);
+  }
+  const studioDownloadSelectedBtn = document.getElementById('studio-download-selected-btn');
+  if (studioDownloadSelectedBtn) {
+    studioDownloadSelectedBtn.addEventListener('click', handleStudioBulkDownload);
+  }
+  const studioDeleteSelectedBtn = document.getElementById('studio-delete-selected-btn');
+  if (studioDeleteSelectedBtn) {
+    studioDeleteSelectedBtn.addEventListener('click', handleStudioBulkDelete);
+  }
 }
 
 function setupTabSwitching() {
@@ -522,6 +864,8 @@ function setupTabSwitching() {
         await scanPage();
       } else if (targetTab === 'sources') {
         await scanSourcesPage();
+      } else if (targetTab === 'studio') {
+        await scanStudioPage();
       }
       // Chat tab: no auto-scan, user must click "Scan Chat" button manually
     });
@@ -1985,18 +2329,20 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
 
       let markdown = '\n\n';
 
+      // Helper to process cell content using turndown for full formatting/citation support
+      const processCellContent = (cell) => {
+        // Use turndown to process cell HTML - this handles citations, bold, italic, etc.
+        let text = turndownService.turndown(cell.innerHTML);
+        // Clean up for table cell: escape pipes, flatten to single line
+        text = text.replace(/\|/g, '\\|');
+        text = text.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+        return text;
+      };
+
       // Process each row
       rows.forEach((row, rowIndex) => {
         const cells = Array.from(row.querySelectorAll('th, td'));
-        const cellContents = cells.map(cell => {
-          // Get text content and clean it up
-          let text = cell.textContent.trim();
-          // Escape pipe characters
-          text = text.replace(/\|/g, '\\|');
-          // Replace newlines with spaces
-          text = text.replace(/\n/g, ' ');
-          return text;
-        });
+        const cellContents = cells.map(processCellContent);
 
         // Add row
         markdown += '| ' + cellContents.join(' | ') + ' |\n';
@@ -2019,288 +2365,11 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
     replacement: () => '' // Strip entirely
   });
 
-  // Handle KaTeX math notation - extract original LaTeX or convert to readable text
+  // Handle KaTeX math notation — delegates to the shared converter so notes,
+  // sources, and chat all use the same logic. See convertKatexNodeToLatex().
   turndownService.addRule('katexMath', {
-    filter: (node) => {
-      return node.nodeName === 'SPAN' && node.classList.contains('katex');
-    },
-    replacement: (content, node) => {
-      // Check if display math (block) vs inline
-      const isDisplay = node.closest('.katex-display') !== null;
-      const mathDelim = isDisplay ? '$$' : '$';
-
-      // Best case: KaTeX preserves original LaTeX in an annotation tag
-      const annotation = node.querySelector('annotation[encoding="application/x-tex"]');
-      if (annotation && annotation.textContent) {
-        const latex = annotation.textContent.trim();
-        return `${mathDelim}${latex}${mathDelim}`;
-      }
-
-      // Fallback: reconstruct from KaTeX HTML structure
-      // Helper to extract fraction content
-      function extractFraction(fracEl) {
-        const vlist = fracEl.querySelector('.vlist-r > .vlist');
-        if (!vlist) return null;
-
-        const spans = Array.from(vlist.children).filter(s => s.querySelector('.mord'));
-        if (spans.length < 2) return null;
-
-        // Sort by top position: most negative = numerator (top), least negative = denominator (bottom)
-        spans.sort((a, b) => {
-          const topA = parseFloat(a.style.top) || 0;
-          const topB = parseFloat(b.style.top) || 0;
-          return topA - topB; // Most negative first
-        });
-
-        const numerator = spans[0]?.textContent?.trim() || '';
-        const denominator = spans[spans.length - 1]?.textContent?.trim() || '';
-        return { numerator, denominator };
-      }
-
-      // Helper to convert Unicode math symbols to LaTeX
-      function unicodeToLatex(text) {
-        const map = {
-          '∂': '\\partial ',
-          'ρ': '\\rho ',
-          'α': '\\alpha ',
-          'β': '\\beta ',
-          'γ': '\\gamma ',
-          'δ': '\\delta ',
-          'ε': '\\epsilon ',
-          'θ': '\\theta ',
-          'λ': '\\lambda ',
-          'μ': '\\mu ',
-          'π': '\\pi ',
-          'σ': '\\sigma ',
-          'τ': '\\tau ',
-          'φ': '\\phi ',
-          'ω': '\\omega ',
-          'Δ': '\\Delta ',
-          'Σ': '\\Sigma ',
-          'Π': '\\Pi ',
-          'Ω': '\\Omega ',
-          '∞': '\\infty ',
-          '∫': '\\int ',
-          '∑': '\\sum ',
-          '∏': '\\prod ',
-          '√': '\\sqrt',
-          '±': '\\pm ',
-          '×': '\\times ',
-          '÷': '\\div ',
-          '≤': '\\leq ',
-          '≥': '\\geq ',
-          '≠': '\\neq ',
-          '≈': '\\approx ',
-          '→': '\\rightarrow ',
-          '←': '\\leftarrow ',
-          '↔': '\\leftrightarrow ',
-          '∈': '\\in ',
-          '∉': '\\notin ',
-          '⊂': '\\subset ',
-          '⊃': '\\supset ',
-          '∪': '\\cup ',
-          '∩': '\\cap ',
-          '∧': '\\land ',
-          '∨': '\\lor ',
-          '¬': '\\neg ',
-          '∀': '\\forall ',
-          '∃': '\\exists ',
-          '∇': '\\nabla ',
-          '·': '\\cdot '
-        };
-        let result = text;
-        for (const [unicode, latex] of Object.entries(map)) {
-          result = result.split(unicode).join(latex);
-        }
-        return result;
-      }
-
-      // Process each .base element (represents a group of math content)
-      const bases = node.querySelectorAll('.katex-html > .base');
-      let mathParts = [];
-
-      for (const base of bases) {
-        let basePart = '';
-
-        // Process children in order
-        for (const child of base.children) {
-          // Skip struts (spacing elements)
-          if (child.classList.contains('strut')) continue;
-
-          // Handle fractions
-          if (child.querySelector('.mfrac')) {
-            const fracEl = child.querySelector('.mfrac');
-            const frac = extractFraction(fracEl);
-            if (frac) {
-              const num = unicodeToLatex(frac.numerator);
-              const den = unicodeToLatex(frac.denominator);
-              basePart += `\\frac{${num.trim()}}{${den.trim()}}`;
-            }
-            continue;
-          }
-
-          // Handle square roots
-          if (child.classList.contains('sqrt') || child.querySelector('.sqrt')) {
-            const sqrtEl = child.classList.contains('sqrt') ? child : child.querySelector('.sqrt');
-            const radicand = sqrtEl?.querySelector('.mord:not(.sqrt)')?.textContent?.trim() || '';
-            basePart += `\\sqrt{${unicodeToLatex(radicand).trim()}}`;
-            continue;
-          }
-
-          // Handle large operators (sum, prod, int, lim, etc.) - class .mop
-          if (child.classList.contains('mop') || child.querySelector('.mop')) {
-            const mopEl = child.classList.contains('mop') ? child : child.querySelector('.mop');
-            let opText = '';
-            let subScript = '';
-            let supScript = '';
-
-            // Check if this is op-limits style (limits above/below operator)
-            const isOpLimits = mopEl?.classList.contains('op-limits');
-
-            if (isOpLimits) {
-              // For op-limits, the operator and limits are in a vlist
-              // Structure: vlist contains items sorted by 'top' position
-              // - Most negative top = superscript (top)
-              // - Middle = operator
-              // - Least negative top = subscript (bottom)
-              const vlist = mopEl.querySelector('.vlist-r > .vlist');
-              if (vlist) {
-                const items = Array.from(vlist.children).filter(el => el.style?.top);
-                // Sort by top value (most negative first)
-                items.sort((a, b) => {
-                  const topA = parseFloat(a.style.top) || 0;
-                  const topB = parseFloat(b.style.top) || 0;
-                  return topA - topB;
-                });
-
-                // Extract based on position
-                for (const item of items) {
-                  const opSymbol = item.querySelector('.mop.op-symbol, .op-symbol');
-                  if (opSymbol) {
-                    // This is the operator
-                    const symText = opSymbol.textContent?.trim() || '';
-                    if (symText.includes('∑') || symText.includes('Σ')) {
-                      opText = '\\sum';
-                    } else if (symText.includes('∫')) {
-                      opText = '\\int';
-                    } else if (symText.includes('∏')) {
-                      opText = '\\prod';
-                    } else {
-                      opText = unicodeToLatex(symText);
-                    }
-                  } else {
-                    // This is a limit (sub or superscript)
-                    const limitText = item.querySelector('.mord')?.textContent?.trim() || '';
-                    const topVal = parseFloat(item.style.top) || 0;
-                    // Find the operator's top value to compare
-                    const opItem = items.find(i => i.querySelector('.mop.op-symbol, .op-symbol'));
-                    const opTop = opItem ? parseFloat(opItem.style.top) || 0 : -3;
-
-                    if (topVal < opTop) {
-                      // More negative = above operator = superscript
-                      supScript = unicodeToLatex(limitText).trim();
-                    } else if (topVal > opTop) {
-                      // Less negative = below operator = subscript
-                      subScript = unicodeToLatex(limitText).trim();
-                    }
-                  }
-                }
-              }
-            } else {
-              // Regular mop without op-limits
-              const opContent = mopEl?.textContent?.trim() || '';
-              if (opContent.includes('∑') || opContent.includes('Σ')) {
-                opText = '\\sum';
-              } else if (opContent.includes('∫')) {
-                opText = '\\int';
-              } else if (opContent.includes('∏')) {
-                opText = '\\prod';
-              } else if (opContent.toLowerCase().includes('lim')) {
-                opText = '\\lim';
-              } else if (opContent.toLowerCase().includes('max')) {
-                opText = '\\max';
-              } else if (opContent.toLowerCase().includes('min')) {
-                opText = '\\min';
-              } else if (opContent) {
-                opText = unicodeToLatex(opContent);
-              } else {
-                opText = '\\sum'; // Default fallback
-              }
-
-              // Check for limits in .msupsub sibling
-              const msupsub = child.querySelector('.msupsub');
-              if (msupsub) {
-                const vlist = msupsub.querySelector('.vlist-t');
-                if (vlist) {
-                  const subs = vlist.querySelectorAll('.vlist-r .mord');
-                  if (subs.length >= 2) {
-                    subScript = unicodeToLatex(subs[1]?.textContent?.trim() || '').trim();
-                    supScript = unicodeToLatex(subs[0]?.textContent?.trim() || '').trim();
-                  } else if (subs.length === 1) {
-                    subScript = unicodeToLatex(subs[0]?.textContent?.trim() || '').trim();
-                  }
-                }
-              }
-            }
-
-            // Build the final operator string
-            if (subScript || supScript) {
-              if (subScript) opText += `_{${subScript}}`;
-              if (supScript) opText += `^{${supScript}}`;
-            }
-
-            basePart += opText + ' ';
-            continue;
-          }
-
-          // Handle operators and relations
-          if (child.classList.contains('mbin') || child.classList.contains('mrel')) {
-            const op = child.textContent?.trim() || '';
-            basePart += ` ${unicodeToLatex(op).trim()} `;
-            continue;
-          }
-
-          // Handle regular content (mord, etc.)
-          if (child.classList.contains('mord') || child.classList.contains('minner')) {
-            // Skip if contains img/svg
-            if (child.querySelector('svg') || child.querySelector('img')) continue;
-            const text = child.textContent?.trim() || '';
-            basePart += unicodeToLatex(text);
-            continue;
-          }
-
-          // Handle spacing
-          if (child.classList.contains('mspace')) {
-            basePart += ' ';
-            continue;
-          }
-        }
-
-        if (basePart.trim()) {
-          mathParts.push(basePart.trim());
-        }
-      }
-
-      if (mathParts.length > 0) {
-        const latex = mathParts.join(' ');
-        return `${mathDelim}${latex}${mathDelim}`;
-      }
-
-      // Last resort: extract all text, filter SVG noise
-      const mathContent = Array.from(node.querySelectorAll('.mord, .mbin, .mrel, .mopen, .mclose, .mop'))
-        .map(el => {
-          if (el.querySelector('svg') || el.querySelector('img')) return '';
-          return el.textContent?.trim() || '';
-        })
-        .filter(t => t.length > 0)
-        .join(' ');
-
-      if (mathContent) {
-        return `${mathDelim}${unicodeToLatex(mathContent)}${mathDelim}`;
-      }
-
-      return node.textContent?.replace(/\s+/g, ' ').trim() || '';
-    }
+    filter: (node) => node.nodeName === 'SPAN' && node.classList.contains('katex'),
+    replacement: (_content, node) => convertKatexNodeToLatex(node)
   });
 
   // Custom rule for citation buttons
@@ -2995,6 +3064,126 @@ async function exportNotesAsMarkdown(selectedNotes) {
     // Hide sidebar progress panel
     progressPanel.style.display = 'none';
   }
+}
+
+/**
+ * Return the list of note export "versions" the user currently has enabled.
+ * Matches the variant set built by createNotesZip.
+ */
+function getEnabledNoteVersions() {
+  const versions = [];
+  if (settings.exportNoteBase) {
+    versions.push({ fileSuffix: '', citationsCodeBlock: false, stripImages: true });
+  }
+  if (settings.exportNoteCodeBlocks) {
+    versions.push({ fileSuffix: '-code-blocks', citationsCodeBlock: true, stripImages: true });
+  }
+  if (settings.exportNoteWithImages) {
+    versions.push({ fileSuffix: '-with-images', citationsCodeBlock: false, stripImages: false });
+  }
+  if (settings.exportNoteCodeBlocksWithImages) {
+    versions.push({ fileSuffix: '-code-blocks-with-images', citationsCodeBlock: true, stripImages: false });
+  }
+  // Safety net: always produce at least the base version.
+  if (versions.length === 0) {
+    versions.push({ fileSuffix: '', citationsCodeBlock: false, stripImages: true });
+  }
+  return versions;
+}
+
+/**
+ * Trigger a download of a blob as a single file (no ZIP, no user save-as dialog).
+ */
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } finally {
+    // Give the browser a moment to queue the download before releasing the URL.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+}
+
+/**
+ * Export one note (regular or mindmap) as individual file(s) — no ZIP.
+ * Honors the user's enabled note export versions; always includes citations.
+ *
+ * @param {{index: number, title: string, type?: string}} note
+ * @returns {Promise<{success: boolean, filesWritten: number}>}
+ */
+async function exportSingleNote(note) {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || !tab.url || !tab.url.includes('notebooklm.google.com')) {
+    throw new Error('NotebookLM tab not active');
+  }
+
+  await ensureContentScriptLoaded(tab.id);
+
+  const needsImages = settings.exportNoteWithImages || settings.exportNoteCodeBlocksWithImages;
+
+  let noteData;
+  try {
+    noteData = await chrome.tabs.sendMessage(tab.id, {
+      type: 'EXTRACT_NOTE',
+      data: {
+        noteIndex: note.index,
+        noteTitle: note.title,
+        includeCitationImages: needsImages
+      }
+    });
+  } finally {
+    // Always close the note viewer so the next action has a clean page.
+    try { await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_BACK' }); } catch (_) { /* noop */ }
+  }
+
+  if (!noteData || noteData.error) {
+    throw new Error(noteData?.error || 'Failed to extract note');
+  }
+
+  const sanitizedTitle = sanitizeFilename(note.title);
+  let filesWritten = 0;
+
+  if (noteData.isMindmap) {
+    // Drop three files (svg / json / interactive html) — no zip.
+    const base = `[MINDMAP]_${sanitizedTitle}`;
+    downloadBlob(new Blob([noteData.svgContent], { type: 'image/svg+xml' }), `${base}.svg`);
+    filesWritten++;
+    downloadBlob(new Blob([JSON.stringify(noteData.treeData, null, 2)], { type: 'application/json' }), `${base}.json`);
+    filesWritten++;
+    try {
+      const html = await generateMindmapHTML(noteData.svgContent, note.title);
+      downloadBlob(new Blob([html], { type: 'text/html' }), `${base}.html`);
+      filesWritten++;
+    } catch (e) {
+      console.warn('[NotebookLM Takeout] Mindmap HTML viewer template unavailable:', e);
+    }
+    return { success: true, filesWritten };
+  }
+
+  // Regular note — produce enabled markdown versions, each as its own .md file.
+  const versions = getEnabledNoteVersions();
+  for (const version of versions) {
+    let markdown = convertToMarkdown(
+      noteData.html,
+      noteData.sources,
+      note.title,
+      version.citationsCodeBlock,
+      true // skipTitleIfPresent
+    );
+    if (version.stripImages) {
+      markdown = stripImagesFromMarkdown(markdown);
+    }
+    const filename = `[NOTE]_${sanitizedTitle}${version.fileSuffix}.md`;
+    downloadBlob(new Blob([markdown], { type: 'text/markdown' }), filename);
+    filesWritten++;
+  }
+
+  return { success: true, filesWritten };
 }
 
 async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches = 1, projectName = 'NotebookLM', timestamp = null) {
@@ -5001,7 +5190,8 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
     aiResponseMarkdown = aiResponseMarkdown.replace(/\\>\s*</g, '');
 
     console.log(`[Chat Export] Message ${idx + 1} markdown length:`, aiResponseMarkdown.length);
-    markdown += `**A:** ${aiResponseMarkdown}\n\n`;
+    // Use newline after A: to ensure tables/lists at start of response parse correctly
+    markdown += `**A:**\n${aiResponseMarkdown}\n\n`;
 
     // Add sources for this message
     if (msg.sources && msg.sources.length > 0) {
@@ -5142,18 +5332,20 @@ function addChatTurndownRules(turndownService, citationsCodeBlock, getCurrentMes
 
       let markdown = '\n\n';
 
+      // Helper to process cell content using turndown for full formatting/citation support
+      const processCellContent = (cell) => {
+        // Use turndown to process cell HTML - this handles citations, bold, italic, etc.
+        let text = turndownService.turndown(cell.innerHTML);
+        // Clean up for table cell: escape pipes, flatten to single line
+        text = text.replace(/\|/g, '\\|');
+        text = text.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+        return text;
+      };
+
       // Process each row
       rows.forEach((row, rowIndex) => {
         const cells = Array.from(row.querySelectorAll('th, td'));
-        const cellContents = cells.map(cell => {
-          // Get text content and clean it up
-          let text = cell.textContent.trim();
-          // Escape pipe characters
-          text = text.replace(/\|/g, '\\|');
-          // Replace newlines with spaces
-          text = text.replace(/\n/g, ' ');
-          return text;
-        });
+        const cellContents = cells.map(processCellContent);
 
         // Add row
         markdown += '| ' + cellContents.join(' | ') + ' |\n';
@@ -5207,173 +5399,11 @@ function addChatTurndownRules(turndownService, citationsCodeBlock, getCurrentMes
     replacement: () => ''
   });
 
-  // Handle KaTeX math notation - extract original LaTeX or convert to readable text
+  // Handle KaTeX math notation — delegates to the shared converter so notes,
+  // sources, and chat all use the same logic. See convertKatexNodeToLatex().
   turndownService.addRule('katexMath', {
-    filter: (node) => {
-      return node.nodeName === 'SPAN' && node.classList.contains('katex');
-    },
-    replacement: (content, node) => {
-      // Check if display math (block) vs inline
-      const isDisplay = node.closest('.katex-display') !== null;
-      const mathDelim = isDisplay ? '$$' : '$';
-
-      // Best case: KaTeX preserves original LaTeX in an annotation tag
-      const annotation = node.querySelector('annotation[encoding="application/x-tex"]');
-      if (annotation && annotation.textContent) {
-        const latex = annotation.textContent.trim();
-        return `${mathDelim}${latex}${mathDelim}`;
-      }
-
-      // Fallback: reconstruct from KaTeX HTML structure
-      function extractFraction(fracEl) {
-        const vlist = fracEl.querySelector('.vlist-r > .vlist');
-        if (!vlist) return null;
-        const spans = Array.from(vlist.children).filter(s => s.querySelector('.mord'));
-        if (spans.length < 2) return null;
-        spans.sort((a, b) => (parseFloat(a.style.top) || 0) - (parseFloat(b.style.top) || 0));
-        return {
-          numerator: spans[0]?.textContent?.trim() || '',
-          denominator: spans[spans.length - 1]?.textContent?.trim() || ''
-        };
-      }
-
-      function unicodeToLatex(text) {
-        const map = {
-          '∂': '\\partial ', 'ρ': '\\rho ', 'α': '\\alpha ', 'β': '\\beta ',
-          'γ': '\\gamma ', 'δ': '\\delta ', 'ε': '\\epsilon ', 'θ': '\\theta ',
-          'λ': '\\lambda ', 'μ': '\\mu ', 'π': '\\pi ', 'σ': '\\sigma ',
-          'τ': '\\tau ', 'φ': '\\phi ', 'ω': '\\omega ', 'Δ': '\\Delta ',
-          'Σ': '\\Sigma ', 'Π': '\\Pi ', 'Ω': '\\Omega ', '∞': '\\infty ',
-          '∫': '\\int ', '∑': '\\sum ', '∏': '\\prod ', '√': '\\sqrt',
-          '±': '\\pm ', '×': '\\times ', '÷': '\\div ', '≤': '\\leq ',
-          '≥': '\\geq ', '≠': '\\neq ', '≈': '\\approx ', '→': '\\rightarrow ',
-          '←': '\\leftarrow ', '∈': '\\in ', '∉': '\\notin ', '⊂': '\\subset ',
-          '∪': '\\cup ', '∩': '\\cap ', '∀': '\\forall ', '∃': '\\exists ',
-          '∇': '\\nabla ', '·': '\\cdot '
-        };
-        let result = text;
-        for (const [unicode, latex] of Object.entries(map)) {
-          result = result.split(unicode).join(latex);
-        }
-        return result;
-      }
-
-      const bases = node.querySelectorAll('.katex-html > .base');
-      let mathParts = [];
-
-      for (const base of bases) {
-        let basePart = '';
-        for (const child of base.children) {
-          if (child.classList.contains('strut')) continue;
-          if (child.querySelector('.mfrac')) {
-            const frac = extractFraction(child.querySelector('.mfrac'));
-            if (frac) {
-              basePart += `\\frac{${unicodeToLatex(frac.numerator).trim()}}{${unicodeToLatex(frac.denominator).trim()}}`;
-            }
-            continue;
-          }
-          if (child.classList.contains('sqrt') || child.querySelector('.sqrt')) {
-            const sqrtEl = child.classList.contains('sqrt') ? child : child.querySelector('.sqrt');
-            const radicand = sqrtEl?.querySelector('.mord:not(.sqrt)')?.textContent?.trim() || '';
-            basePart += `\\sqrt{${unicodeToLatex(radicand).trim()}}`;
-            continue;
-          }
-          // Handle large operators (sum, prod, int, lim, etc.) - class .mop
-          if (child.classList.contains('mop') || child.querySelector('.mop')) {
-            const mopEl = child.classList.contains('mop') ? child : child.querySelector('.mop');
-            let opText = '';
-            let subScript = '';
-            let supScript = '';
-            const isOpLimits = mopEl?.classList.contains('op-limits');
-
-            if (isOpLimits) {
-              // For op-limits, operator and limits are in a vlist
-              const vlist = mopEl.querySelector('.vlist-r > .vlist');
-              if (vlist) {
-                const items = Array.from(vlist.children).filter(el => el.style?.top);
-                items.sort((a, b) => (parseFloat(a.style.top) || 0) - (parseFloat(b.style.top) || 0));
-
-                for (const item of items) {
-                  const opSymbol = item.querySelector('.mop.op-symbol, .op-symbol');
-                  if (opSymbol) {
-                    const symText = opSymbol.textContent?.trim() || '';
-                    if (symText.includes('∑') || symText.includes('Σ')) opText = '\\sum';
-                    else if (symText.includes('∫')) opText = '\\int';
-                    else if (symText.includes('∏')) opText = '\\prod';
-                    else opText = unicodeToLatex(symText);
-                  } else {
-                    const limitText = item.querySelector('.mord')?.textContent?.trim() || '';
-                    const topVal = parseFloat(item.style.top) || 0;
-                    const opItem = items.find(i => i.querySelector('.mop.op-symbol, .op-symbol'));
-                    const opTop = opItem ? parseFloat(opItem.style.top) || 0 : -3;
-                    if (topVal < opTop) supScript = unicodeToLatex(limitText).trim();
-                    else if (topVal > opTop) subScript = unicodeToLatex(limitText).trim();
-                  }
-                }
-              }
-            } else {
-              const opContent = mopEl?.textContent?.trim() || '';
-              if (opContent.includes('∑') || opContent.includes('Σ')) opText = '\\sum';
-              else if (opContent.includes('∫')) opText = '\\int';
-              else if (opContent.includes('∏')) opText = '\\prod';
-              else if (opContent.toLowerCase().includes('lim')) opText = '\\lim';
-              else if (opContent) opText = unicodeToLatex(opContent);
-              else opText = '\\sum';
-
-              const msupsub = child.querySelector('.msupsub');
-              if (msupsub) {
-                const vlist = msupsub.querySelector('.vlist-t');
-                if (vlist) {
-                  const subs = vlist.querySelectorAll('.vlist-r .mord');
-                  if (subs.length >= 2) {
-                    subScript = unicodeToLatex(subs[1]?.textContent?.trim() || '').trim();
-                    supScript = unicodeToLatex(subs[0]?.textContent?.trim() || '').trim();
-                  } else if (subs.length === 1) {
-                    subScript = unicodeToLatex(subs[0]?.textContent?.trim() || '').trim();
-                  }
-                }
-              }
-            }
-
-            if (subScript) opText += `_{${subScript}}`;
-            if (supScript) opText += `^{${supScript}}`;
-            basePart += opText + ' ';
-            continue;
-          }
-          if (child.classList.contains('mbin') || child.classList.contains('mrel')) {
-            basePart += ` ${unicodeToLatex(child.textContent?.trim() || '').trim()} `;
-            continue;
-          }
-          if (child.classList.contains('mord') || child.classList.contains('minner')) {
-            if (child.querySelector('svg') || child.querySelector('img')) continue;
-            basePart += unicodeToLatex(child.textContent?.trim() || '');
-            continue;
-          }
-          if (child.classList.contains('mspace')) {
-            basePart += ' ';
-          }
-        }
-        if (basePart.trim()) mathParts.push(basePart.trim());
-      }
-
-      if (mathParts.length > 0) {
-        return `${mathDelim}${mathParts.join(' ')}${mathDelim}`;
-      }
-
-      const mathContent = Array.from(node.querySelectorAll('.mord, .mbin, .mrel, .mopen, .mclose, .mop'))
-        .map(el => {
-          if (el.querySelector('svg') || el.querySelector('img')) return '';
-          return el.textContent?.trim() || '';
-        })
-        .filter(t => t.length > 0)
-        .join(' ');
-
-      if (mathContent) {
-        return `${mathDelim}${unicodeToLatex(mathContent)}${mathDelim}`;
-      }
-
-      return node.textContent?.replace(/\s+/g, ' ').trim() || '';
-    }
+    filter: (node) => node.nodeName === 'SPAN' && node.classList.contains('katex'),
+    replacement: (_content, node) => convertKatexNodeToLatex(node)
   });
 
   // Rule: Citation buttons - with message-specific anchors
@@ -5581,6 +5611,267 @@ async function triggerItemDownload(tabId, itemIndex, artifactName, artifactType)
     showToast(`✗ Failed to download ${artifactName}`, 'error');
     throw error;
   }
+}
+
+// ==================== STUDIO TAB ====================
+
+let _studioItems = [];
+let _studioTabId = null;
+
+async function scanStudioPage() {
+  const resultsEl = document.getElementById('studio-scan-results');
+  const countBadge = document.getElementById('studio-count');
+  if (!resultsEl || !countBadge) return;
+
+  resultsEl.innerHTML = '<p class="scanning">Scanning studio items...</p>';
+  countBadge.textContent = '0';
+
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.url || !tab.url.includes('notebooklm.google.com')) {
+      resultsEl.innerHTML = '<p class="empty-message">Please open NotebookLM first.</p>';
+      return;
+    }
+
+    await ensureContentScriptLoaded(tab.id);
+    const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_STUDIO_ITEMS' });
+    const items = response?.items || [];
+
+    _studioItems = items;
+    _studioTabId = tab.id;
+
+    renderStudioList(items);
+  } catch (error) {
+    console.error('[NotebookLM Takeout] Studio scan failed:', error);
+    resultsEl.innerHTML = `<p class="error-message">Studio scan failed: ${escapeHtml(error.message || String(error))}</p>`;
+  }
+}
+
+function renderStudioList(items) {
+  const resultsEl = document.getElementById('studio-scan-results');
+  const countBadge = document.getElementById('studio-count');
+  const downloadBulkBtn = document.getElementById('studio-download-selected-btn');
+  const deleteBulkBtn = document.getElementById('studio-delete-selected-btn');
+  if (!resultsEl || !countBadge) return;
+
+  countBadge.textContent = items.length;
+
+  if (items.length === 0) {
+    resultsEl.innerHTML = '<p class="empty-message">No studio items found. Generate content in NotebookLM first.</p>';
+    if (downloadBulkBtn) downloadBulkBtn.style.display = 'none';
+    if (deleteBulkBtn) deleteBulkBtn.style.display = 'none';
+    return;
+  }
+
+  if (downloadBulkBtn) downloadBulkBtn.style.display = '';
+  if (deleteBulkBtn) deleteBulkBtn.style.display = '';
+  updateStudioBulkButtonsState();
+
+  const rowsHtml = items.map((item, idx) => {
+    const iconSvg = getIconForType(item.type);
+    const detailsStr = item.details ? ` · ${escapeHtml(item.details)}` : '';
+    return `
+      <div class="scan-item studio-scan-item" data-idx="${idx}">
+        <label class="studio-row-check">
+          <input type="checkbox" class="studio-row-checkbox" data-idx="${idx}">
+        </label>
+        <div class="scan-item-icon">${iconSvg}</div>
+        <div class="scan-item-info">
+          <strong>${escapeHtml(item.label)}</strong>
+          <small>${escapeHtml(item.kind === 'note' ? item.type : item.type)}${detailsStr}</small>
+        </div>
+        <button class="btn-icon download-single-btn studio-download-btn" data-idx="${idx}" title="Download ${escapeHtml(item.label)}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+          </svg>
+          <span class="download-status"></span>
+        </button>
+        <button class="btn-icon studio-delete-btn" data-idx="${idx}" title="Delete ${escapeHtml(item.label)}">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+          </svg>
+        </button>
+      </div>
+    `;
+  }).join('');
+
+  resultsEl.innerHTML = `
+    <div class="select-all-container">
+      <label>
+        <input type="checkbox" id="studio-select-all">
+        <span>Select All (${items.length})</span>
+      </label>
+    </div>
+    ${rowsHtml}
+  `;
+
+  const selectAll = document.getElementById('studio-select-all');
+  if (selectAll) {
+    selectAll.addEventListener('change', (e) => {
+      const checked = e.target.checked;
+      resultsEl.querySelectorAll('.studio-row-checkbox').forEach(cb => { cb.checked = checked; });
+      updateStudioBulkButtonsState();
+    });
+  }
+
+  resultsEl.querySelectorAll('.studio-row-checkbox').forEach(cb => {
+    cb.addEventListener('change', () => updateStudioBulkButtonsState());
+  });
+
+  resultsEl.querySelectorAll('.studio-download-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.idx, 10);
+      handleStudioDownloadRow(idx, btn);
+    });
+  });
+
+  resultsEl.querySelectorAll('.studio-delete-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.idx, 10);
+      handleStudioDeleteRow(idx, btn);
+    });
+  });
+}
+
+function updateStudioBulkButtonsState() {
+  const selected = document.querySelectorAll('#studio-scan-results .studio-row-checkbox:checked').length;
+  const downloadBulkBtn = document.getElementById('studio-download-selected-btn');
+  const deleteBulkBtn = document.getElementById('studio-delete-selected-btn');
+  if (downloadBulkBtn) downloadBulkBtn.disabled = selected === 0;
+  if (deleteBulkBtn) deleteBulkBtn.disabled = selected === 0;
+}
+
+function setStudioRowStatus(btn, state) {
+  if (!btn) return;
+  const statusSpan = btn.querySelector('.download-status');
+  if (!statusSpan) return;
+  if (state === 'pending') {
+    statusSpan.textContent = '⏳';
+    statusSpan.className = 'download-status downloading';
+    btn.disabled = true;
+  } else if (state === 'success') {
+    statusSpan.textContent = '✓';
+    statusSpan.className = 'download-status success';
+    setTimeout(() => { statusSpan.textContent = ''; statusSpan.className = 'download-status'; btn.disabled = false; }, 3000);
+  } else if (state === 'error') {
+    statusSpan.textContent = '✗';
+    statusSpan.className = 'download-status error';
+    setTimeout(() => { statusSpan.textContent = ''; statusSpan.className = 'download-status'; btn.disabled = false; }, 3000);
+  }
+}
+
+async function handleStudioDownloadRow(idx, btn) {
+  const item = _studioItems[idx];
+  if (!item) return;
+  setStudioRowStatus(btn, 'pending');
+  try {
+    if (item.kind === 'artifact') {
+      await downloadArtifact(_studioTabId, item.kindIndex, item.type, item.label);
+    } else {
+      // kind === 'note' — regular note or mindmap
+      await exportSingleNote({ index: item.kindIndex, title: item.label, type: item.type });
+    }
+    setStudioRowStatus(btn, 'success');
+  } catch (error) {
+    console.error('[NotebookLM Takeout] Studio download failed:', error);
+    showToast(`✗ Failed to download ${item.label}: ${error.message || error}`, 'error');
+    setStudioRowStatus(btn, 'error');
+    throw error;
+  }
+}
+
+async function handleStudioDeleteRow(idx, btn) {
+  const item = _studioItems[idx];
+  if (!item) return;
+
+  if (!confirm(`Delete "${item.label}"? This cannot be undone.`)) return;
+
+  if (btn) btn.disabled = true;
+  try {
+    await chrome.tabs.sendMessage(_studioTabId, {
+      type: 'DELETE_STUDIO_ITEM',
+      data: { label: item.label, combinedIndex: item.combinedIndex }
+    }).then(response => {
+      if (!response || !response.success) {
+        throw new Error(response?.error || 'Delete failed');
+      }
+    });
+    showToast(`Deleted "${item.label}"`, 'success');
+    // Refresh the list so indices are re-aligned with the DOM.
+    await scanStudioPage();
+  } catch (error) {
+    console.error('[NotebookLM Takeout] Studio delete failed:', error);
+    showToast(`✗ Failed to delete ${item.label}: ${error.message || error}`, 'error');
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function handleStudioBulkDownload() {
+  const selectedIdxs = Array.from(document.querySelectorAll('#studio-scan-results .studio-row-checkbox:checked'))
+    .map(cb => parseInt(cb.dataset.idx, 10))
+    .filter(n => Number.isFinite(n));
+  if (selectedIdxs.length === 0) return;
+
+  const bulkBtn = document.getElementById('studio-download-selected-btn');
+  if (bulkBtn) bulkBtn.disabled = true;
+
+  let okCount = 0;
+  for (const idx of selectedIdxs) {
+    const rowBtn = document.querySelector(`#studio-scan-results .studio-download-btn[data-idx="${idx}"]`);
+    try {
+      await handleStudioDownloadRow(idx, rowBtn);
+      okCount++;
+    } catch (_) {
+      // errors already surfaced per-row
+    }
+  }
+
+  showToast(`Downloaded ${okCount}/${selectedIdxs.length} studio item(s)`, okCount === selectedIdxs.length ? 'success' : 'warning');
+  updateStudioBulkButtonsState();
+}
+
+async function handleStudioBulkDelete() {
+  const selectedCheckboxes = Array.from(document.querySelectorAll('#studio-scan-results .studio-row-checkbox:checked'));
+  const selectedIdxs = selectedCheckboxes.map(cb => parseInt(cb.dataset.idx, 10)).filter(n => Number.isFinite(n));
+  if (selectedIdxs.length === 0) return;
+
+  const selectedLabels = selectedIdxs
+    .map(idx => _studioItems[idx]?.label)
+    .filter(Boolean);
+
+  if (!confirm(`Delete ${selectedLabels.length} item(s)? This cannot be undone.`)) return;
+
+  const bulkBtn = document.getElementById('studio-delete-selected-btn');
+  if (bulkBtn) bulkBtn.disabled = true;
+
+  let okCount = 0;
+  // Resolve by label each iteration to survive index shifts as rows disappear.
+  for (let i = 0; i < selectedLabels.length; i++) {
+    const label = selectedLabels[i];
+    try {
+      const response = await chrome.tabs.sendMessage(_studioTabId, {
+        type: 'DELETE_STUDIO_ITEM',
+        data: { label }
+      });
+      if (response && response.success) {
+        okCount++;
+      } else {
+        console.warn('[NotebookLM Takeout] Bulk delete skipped:', label, response?.error);
+      }
+    } catch (e) {
+      console.warn('[NotebookLM Takeout] Bulk delete error:', label, e);
+    }
+    // Let NotebookLM's undo toast dismiss and the list re-render before the next
+    // label lookup. Skip the delay on the last iteration.
+    if (i < selectedLabels.length - 1) {
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+
+  showToast(`Deleted ${okCount}/${selectedLabels.length} studio item(s)`, okCount === selectedLabels.length ? 'success' : 'warning');
+  await scanStudioPage();
 }
 
 // OLD IMPLEMENTATION (ROLLBACK) - Keep for reference but commented out
@@ -5957,6 +6248,7 @@ function displayHealthCheckResults(results) {
   categoriesEl.innerHTML = '';
 
   const categoryLabels = {
+    general: 'General',
     notes: 'Notes',
     sources: 'Sources',
     chat: 'Chat History',
@@ -6079,6 +6371,7 @@ function generateHealthReport(results) {
 
   // Category details
   const categoryLabels = {
+    general: 'General',
     notes: 'Notes',
     sources: 'Sources',
     chat: 'Chat History',

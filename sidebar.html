@@ -57,6 +57,7 @@
       <button class="tab-btn" data-tab="notes">Notes</button>
       <button class="tab-btn" data-tab="artifacts">Artifacts</button>
       <button class="tab-btn" data-tab="chat">Chat</button>
+      <button class="tab-btn" data-tab="studio" hidden>Studio</button>
     </div>
 
     <div class="tab-content" data-tab-content="artifacts">
@@ -159,6 +160,44 @@
       </section>
     </div>
 
+    <div class="tab-content" data-tab-content="studio" hidden>
+      <section id="studio-section" class="section">
+        <div class="section-header">
+          <h2>Studio</h2>
+          <span id="studio-count" class="count-badge">0</span>
+        </div>
+
+        <div class="studio-info">
+          <p class="info-text">Unified list of every studio item. Download or delete each item individually. No ZIP.</p>
+        </div>
+
+        <div id="studio-scan-results" class="scan-results">
+          <p class="empty-message">Click "Scan Studio" to load all studio items.</p>
+        </div>
+
+        <div class="export-controls">
+          <button id="scan-studio-btn" class="btn btn-secondary">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16a6.5 6.5 0 1 1 0-13zm0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5z"/>
+            </svg>
+            Scan Studio
+          </button>
+          <button id="studio-download-selected-btn" class="btn btn-primary" style="display: none;" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+            </svg>
+            Download Selected
+          </button>
+          <button id="studio-delete-selected-btn" class="btn btn-danger" style="display: none;" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+            </svg>
+            Delete Selected
+          </button>
+        </div>
+      </section>
+    </div>
+
     <div id="download-progress" class="download-progress" style="display: none;">
       <div class="progress-header">
         <h3>Download Progress</h3>
@@ -203,6 +242,14 @@
         <div class="setting-group">
           <label>Auto-refresh interval (seconds)</label>
           <input type="number" id="refresh-interval-input" min="5" max="60" value="10" class="number-input">
+        </div>
+
+        <div class="setting-group">
+          <label>
+            <input type="checkbox" id="show-studio-tab-checkbox">
+            <span>Show Studio tab</span>
+          </label>
+          <p class="setting-help">Adds a fifth tab that mirrors NotebookLM's studio panel as a single flat list (notes, mindmaps, audio, slides, infographics, reports, data tables, flowcharts). Each row can be downloaded or deleted individually — no ZIP. Off by default.</p>
         </div>
       </div>
 
