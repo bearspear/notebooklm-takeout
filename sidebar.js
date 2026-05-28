@@ -3686,8 +3686,9 @@ async function exportSources(selectedSources) {
 
         // 3. With-images: no metadata, with images (conditional)
         // 4. Plus-meta-with-images: with metadata, with images (conditional)
-        let baseMarkdownWithImages = baseMarkdown;
-        let plusMetaMarkdownWithImages = plusMetaMarkdown;
+        let baseMarkdownWithImages = null;
+        let plusMetaMarkdownWithImages = null;
+        let sourceHasImages = false;
 
         // Only download and embed images if user has enabled image versions
         const needsImageVersions = settings.exportSourceWithImages || settings.exportSourcePlusMetaWithImages;
@@ -3702,8 +3703,6 @@ async function exportSources(selectedSources) {
               imagesEmbedded
             } = await embedImagesInMarkdown(baseMarkdown, source.title);
 
-            baseMarkdownWithImages = baseEmbedded;
-
             // Track image statistics (only once)
             stats.imagesFound += imagesFound;
             stats.imagesEmbedded += imagesEmbedded;
@@ -3714,9 +3713,19 @@ async function exportSources(selectedSources) {
               allErrors.push(...imageErrors);
             }
 
-            // Also embed images in the plus-meta version
-            const { markdown: plusMetaEmbedded } = await embedImagesInMarkdown(plusMetaMarkdown, source.title);
-            plusMetaMarkdownWithImages = plusMetaEmbedded;
+            // Only create image versions if this source actually has images
+            if (imagesFound > 0) {
+              sourceHasImages = true;
+              baseMarkdownWithImages = baseEmbedded;
+
+              // Also embed images in the plus-meta version
+              const { markdown: plusMetaEmbedded } = await embedImagesInMarkdown(plusMetaMarkdown, source.title);
+              plusMetaMarkdownWithImages = plusMetaEmbedded;
+
+              console.log(`[NotebookLM Takeout] "${source.title}": ${imagesFound} images found, creating image versions`);
+            } else {
+              console.log(`[NotebookLM Takeout] "${source.title}": No images found, skipping image versions`);
+            }
 
           } catch (error) {
             console.error(`[NotebookLM Takeout] Error embedding images for "${source.title}":`, error);
@@ -3736,12 +3745,13 @@ async function exportSources(selectedSources) {
           // Store metadata for index
           summary: sourceData.guideMarkdown || null,
           keyTopics: sourceData.keyTopics || [],
-          // Store all 4 versions
+          hasImages: sourceHasImages,
+          // Store versions (image versions are null if no images found)
           versions: {
             base: baseMarkdownNoImages,                    // [filename].md
             plusMeta: plusMetaMarkdownNoImages,            // [filename]-plus-meta.md
-            withImages: baseMarkdownWithImages,            // [filename]-with-images.md
-            plusMetaWithImages: plusMetaMarkdownWithImages // [filename]-plus-meta-with-images.md
+            withImages: baseMarkdownWithImages,            // [filename]-with-images.md (null if no images)
+            plusMetaWithImages: plusMetaMarkdownWithImages // [filename]-plus-meta-with-images.md (null if no images)
           }
         });
 
@@ -3849,7 +3859,8 @@ async function exportSources(selectedSources) {
         }
 
         // 3. With images version: [filename]-with-images.md (no meta, with images)
-        if (settings.exportSourceWithImages) {
+        // Only create if setting enabled AND source actually has images
+        if (settings.exportSourceWithImages && source.hasImages && source.versions.withImages) {
           const withImagesFilename = getUniqueFilename('-with-images');
           sourcesFolder.file(withImagesFilename, source.versions.withImages);
           indexFiles.push({
@@ -3862,7 +3873,8 @@ async function exportSources(selectedSources) {
         }
 
         // 4. Plus metadata with images version: [filename]-plus-meta-with-images.md (with meta, with images)
-        if (settings.exportSourcePlusMetaWithImages) {
+        // Only create if setting enabled AND source actually has images
+        if (settings.exportSourcePlusMetaWithImages && source.hasImages && source.versions.plusMetaWithImages) {
           const plusMetaWithImagesFilename = getUniqueFilename('-plus-meta-with-images');
           sourcesFolder.file(plusMetaWithImagesFilename, source.versions.plusMetaWithImages);
           indexFiles.push({
@@ -3920,11 +3932,14 @@ async function exportSources(selectedSources) {
         readmeContent += '- No metadata (content only)\n';
         readmeContent += '- Self-contained, works offline\n';
         readmeContent += '- Larger file size due to embedded images\n';
-        readmeContent += '- Best for archival and complete backups\n\n';
+        readmeContent += '- Best for archival and complete backups\n';
+        readmeContent += '- **Note:** Only created for sources that contain images\n\n';
 
         if (stats.imagesFound > 0) {
-          readmeContent += `**Image Statistics:** ${stats.imagesFound} image(s) found, `;
+          readmeContent += `**Image Statistics:** ${stats.imagesFound} image(s) found across all sources, `;
           readmeContent += `${stats.imagesEmbedded} successfully embedded as base64.\n\n`;
+        } else {
+          readmeContent += '**Note:** No images were found in the exported sources.\n\n';
         }
         sectionNum++;
       }
@@ -3935,7 +3950,8 @@ async function exportSources(selectedSources) {
         readmeContent += '- **Complete version** - metadata + images\n';
         readmeContent += '- Largest file size\n';
         readmeContent += '- Best for comprehensive archival\n';
-        readmeContent += '- Self-contained with full context\n\n';
+        readmeContent += '- Self-contained with full context\n';
+        readmeContent += '- **Note:** Only created for sources that contain images\n\n';
         sectionNum++;
       }
 
