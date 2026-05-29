@@ -10,7 +10,9 @@ A Chrome extension for exporting all your content from Google's NotebookLM, incl
 - **Infographics** - Save visual summaries and diagrams
 - **Reports** - Download reports as formatted markdown with proper headings and tables
 - **Notes** - Export AI-generated notes as markdown with citations preserved
+- **Mindmaps** - Export as SVG, JSON, and an interactive HTML viewer
 - **Sources** - Download your uploaded source documents with full content extraction
+- **Chat History** - Export full conversation with NotebookLM as markdown
 
 ### Batch Operations
 - **Batch Download** - Select and download multiple artifacts at once
@@ -21,10 +23,16 @@ A Chrome extension for exporting all your content from Google's NotebookLM, incl
 ### Smart Features
 - **Citation Extraction** - Preserves all source citations and references in exported notes
 - **Markdown Conversion** - Converts HTML content to clean, readable markdown
+- **Math Equations** - Converts KaTeX-rendered math to LaTeX (`$...$` / `$$...$$`); reads the
+  original LaTeX from the MathML `<annotation>` tag when present, otherwise reconstructs from
+  KaTeX HTML (parens, sub/superscripts, fractions, named functions, big operators with limits)
 - **Table Support** - Properly formats tables in markdown exports
-- **Mindmap Export** - Exports mindmaps as SVG and JSON files
-- **Auto-Naming** - Intelligently names files based on content
-- **Tab Organization** - Clean interface with Sources, Notes, and Artifacts tabs
+- **OCR Cleanup** - Optionally strips common OCR garbage (`~~~`, `:~:`, etc.) from citation quotes
+- **Auto-Naming** - Intelligently names files based on the notebook project title
+- **Tab Organization** - Clean interface with **Sources**, **Notes**, **Artifacts**, **Chat**,
+  and an optional **Studio** tab
+- **DOM Health Check** - Built-in selector probe in the header diagnoses when NotebookLM ships
+  UI changes that the extension hasn't caught up to yet
 
 ## 📦 Installation
 
@@ -63,7 +71,8 @@ A Chrome extension for exporting all your content from Google's NotebookLM, incl
    - The sidebar will open on the right side of the page
 
 3. **Choose What to Export**
-   - Click the **Sources**, **Notes**, or **Artifacts** tab
+   - Click the **Sources**, **Notes**, **Artifacts**, or **Chat** tab
+   - (Optional) Enable the **Studio** tab in Settings for a unified per-item view
    - Select the items you want to export
    - Click the export button
 
@@ -135,6 +144,41 @@ Main content here with citation references[1](#src-1).
 - **Infographic** 📈 - Visual summaries and diagrams
 - **Report** 📄 - Detailed reports as markdown
 
+### Exporting Chat History
+
+**Chat** is your conversation with NotebookLM, including questions, answers, and citations.
+
+1. Click the **Chat** tab
+2. Click **Scan Chat** to load the conversation
+3. (Optional) Enable **Extract Full Citations** to include the quoted source text for each
+   citation marker (slower, useful for long chats)
+4. Click **Export Chat**
+5. Files download as `{project-name}-chat-{timestamp}.zip`
+
+**What's Included:**
+- Notebook title and (when present) the AI-generated summary
+- Every message pair (user → AI), preserving Markdown formatting and date separators
+- Citation markers linked to per-message source anchors
+- Multiple variants based on your Note settings (base, code-block citations, with images)
+
+### Studio Tab (Optional)
+
+The **Studio** tab is hidden by default. Enable it in Settings → General → **Show Studio tab**.
+When enabled, a fifth tab appears that mirrors NotebookLM's studio panel — a single flat list
+of every studio item (audio overviews, slides, infographics, reports, data tables, flowcharts,
+notes, and mindmaps) with per-row **Download** and **Delete** buttons.
+
+1. Click the **Studio** tab → **Scan Studio**
+2. For each row:
+   - **Download** drops the file individually (no ZIP). Notes export as `.md` with citations
+     intact, mindmaps as `.svg` + `.json` + interactive `.html`, everything else through its
+     normal pipeline.
+   - **Delete** opens NotebookLM's native confirmation dialog and auto-confirms it after a
+     sidebar prompt.
+3. Use the **Select all** checkbox + **Download Selected** / **Delete Selected** for bulk
+   actions. Bulk operations run sequentially with a settle delay so undo toasts dismiss
+   between items.
+
 ### Batch Download with ZIP
 
 1. Enable the **ZIP checkbox** in the Artifacts tab
@@ -156,37 +200,70 @@ When exporting many items:
 ### Sidebar Layout
 
 ```
-┌─────────────────────────────┐
-│  NotebookLM Takeout         │
-│  Export audio, slides, etc  │
-├─────────────────────────────┤
-│ Status: ⚫ Ready             │
-│ [🔄 Refresh] [Auto]         │
-├─────────────────────────────┤
-│ [Sources] [Notes] [Artifacts]│
-├─────────────────────────────┤
-│                             │
-│  □ Select All (10)          │
-│                             │
-│  □ Source 1.pdf             │
-│  □ Source 2.md              │
-│  ...                        │
-│                             │
-│  [Scan Sources]             │
-│  [Export Selected]          │
-│                             │
-├─────────────────────────────┤
-│ ⚙️ Settings                 │
-└─────────────────────────────┘
+┌─────────────────────────────────────────┐
+│        🩺  NotebookLM Takeout  ⚙️       │
+│       Export audio, slides, etc         │
+├─────────────────────────────────────────┤
+│ Status: ⚫ Ready                         │
+│ [🔄 Refresh] [☐ Auto]                   │
+├─────────────────────────────────────────┤
+│ [Sources][Notes][Artifacts][Chat][Studio]│
+├─────────────────────────────────────────┤
+│                                         │
+│  ☐ Select All (10)                      │
+│                                         │
+│  ☐ Source 1.pdf                         │
+│  ☐ Source 2.md                          │
+│  ...                                    │
+│                                         │
+│  [Scan Sources]                         │
+│  [Export Selected]                      │
+│                                         │
+└─────────────────────────────────────────┘
 ```
+
+The 🩺 icon in the header opens the **DOM Health Check** panel. The ⚙️ icon opens **Settings**.
 
 ### Settings
 
-Access settings via the ⚙️ icon:
+Access settings via the ⚙️ icon in the header.
 
-- **Always use ZIP for batch downloads** - Automatically create ZIP files
+**General**
 - **Show download notifications** - Display toast notifications
-- **Auto-refresh interval** - Set refresh rate (5-60 seconds)
+- **Auto-refresh interval** - Set refresh rate (5–60 seconds)
+- **Show Studio tab** - Adds the unified per-item Studio tab (off by default)
+
+**Export Format**
+- **Always use ZIP for batch downloads** - Default the Artifacts tab's ZIP toggle to on
+
+**Source Options** - choose any combination of:
+- Base version (text-only, no metadata)
+- With metadata (AI summary & key topics)
+- Each can additionally include images embedded as base64
+- Configurable batch size (sources per ZIP)
+
+**Note Options** - choose any combination of:
+- Base version (markdown citations)
+- Code-block citations (citations in code blocks)
+- Each can additionally include images embedded as base64
+- Configurable batch size (notes per ZIP)
+
+**Text Processing**
+- **Clean OCR artifacts from citations** - Strip `~~~`, `:~:`, and similar garbage from
+  citation quotes from poorly-OCR'd PDFs. Disable to preserve raw text.
+
+### DOM Health Check
+
+Click the 🩺 icon in the header to run a comprehensive selector probe across:
+
+- **General** - notebook project title detectable (used for export filenames)
+- **Notes** - artifact-library-note, content viewer (Tailwind / Quill / ProseMirror)
+- **Sources** - single-source containers, scroll area
+- **Chat** - chat panel, message pairs, user/AI containers
+- **Citations** - non-destructive hover test against a sample citation marker
+
+Failures point at exactly which selector broke and suggest next steps, so when Google ships a
+NotebookLM UI change you can tell quickly whether the extension needs an update.
 
 ## 🔧 Technical Details
 
@@ -446,7 +523,27 @@ const DEBUG = true;
 
 ## 📝 Version History
 
-### v1.0.0 (Current)
+See [CHANGELOG.md](CHANGELOG.md) for the per-version log. Highlights of recent work:
+
+### Recent
+
+- **Studio tab** (off by default) — unified flat list of every studio item with per-row
+  Download / Delete and bulk select. Notes export with citations intact; mindmaps drop SVG +
+  JSON + interactive HTML.
+- **Full KaTeX HTML conversion** — math without the MathML annotation tag now reconstructs
+  correctly: parens, sub/superscripts on plain variables, named functions (`\ln`, `\log`,
+  `\sin`, …), big operators with limits, punctuation.
+- **Studio-panel scoping** — fixed a regression where chat AI replies (now rendered via the
+  same `labs-tailwind-doc-viewer` component as notes) shadowed the note viewer and leaked
+  chat citations into note exports.
+- **ProseMirror editor support** — extraction now handles the new ProseMirror-based note
+  editor alongside the existing Tailwind and Quill viewers.
+- **Real chat filenames** — chat exports use the actual project title (e.g.
+  `The-Plasma-Universe-chat-{timestamp}.zip`) instead of `NotebookLM-Chat`.
+- **DOM health check** — new comprehensive selector probe with a "General" category covering
+  project-title detection.
+
+### v1.0.0
 - Initial release
 - Export sources, notes, and artifacts
 - Batch download with ZIP support
