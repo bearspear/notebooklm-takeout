@@ -42,6 +42,15 @@
     }
   };
 
+  // Google renamed NotebookLM to "Gemini Notebook" and moved it from
+  // notebooklm.google.com to notebook.google.com (Jul 2026). The old host 301s to
+  // the new one; keep both so users mid-rollout still work.
+  const NOTEBOOK_HOSTS = ['notebook.google.com', 'notebooklm.google.com'];
+
+  function isNotebookUrl(url) {
+    return !!url && NOTEBOOK_HOSTS.some(host => url.includes(host));
+  }
+
   // Track detected artifacts
   const detectedArtifacts = new Map();
 
@@ -2474,8 +2483,8 @@
       const currentUrl = window.location.href;
       console.log(`[NotebookLM Takeout] Current URL:`, currentUrl);
 
-      if (!currentUrl.includes('notebooklm.google.com')) {
-        throw new Error('Not on NotebookLM page');
+      if (!isNotebookUrl(currentUrl)) {
+        throw new Error('Not on Gemini Notebook page');
       }
 
       // Find all source containers - exactly like the working extension

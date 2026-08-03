@@ -1,5 +1,14 @@
 // NotebookLM Takeout - Background Service Worker
 
+// Google renamed NotebookLM to "Gemini Notebook" and moved it from
+// notebooklm.google.com to notebook.google.com (Jul 2026). The old host 301s to
+// the new one; keep both so users mid-rollout still work.
+const NOTEBOOK_HOSTS = ['notebook.google.com', 'notebooklm.google.com'];
+
+function isNotebookUrl(url) {
+  return !!url && NOTEBOOK_HOSTS.some(host => url.includes(host));
+}
+
 // Handle extension icon click - open sidebar
 chrome.action.onClicked.addListener(async (tab) => {
   // Open the side panel for the current window
@@ -8,7 +17,7 @@ chrome.action.onClicked.addListener(async (tab) => {
 
 // Enable sidebar on NotebookLM pages
 chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
-  if (info.status === 'complete' && tab.url?.includes('notebooklm.google.com')) {
+  if (info.status === 'complete' && isNotebookUrl(tab.url)) {
     await chrome.sidePanel.setOptions({
       tabId,
       path: 'sidebar.html',
@@ -262,9 +271,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Capture downloads as soon as they're created (backup method)
 chrome.downloads.onCreated.addListener((downloadItem) => {
-  const isFromNotebookLM = downloadItem.url?.includes('notebooklm') ||
+  // 'notebook' matches both the new host and the legacy 'notebooklm' URLs
+  const isFromNotebookLM = downloadItem.url?.includes('notebook') ||
                            downloadItem.url?.includes('googleusercontent') ||
-                           downloadItem.referrer?.includes('notebooklm');
+                           downloadItem.referrer?.includes('notebook');
 
   // Check if this download matches a pending intercept request
   const hasInterceptRequest = pendingDownloads.some(d => d.intercept);
@@ -441,8 +451,9 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
 // Intercept downloads from NotebookLM and rename them
 chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
   // Check if this download is from NotebookLM
-  const isFromNotebookLM = downloadItem.url?.includes('notebooklm') ||
-                           downloadItem.referrer?.includes('notebooklm') ||
+  // 'notebook' matches both the new host and the legacy 'notebooklm' URLs
+  const isFromNotebookLM = downloadItem.url?.includes('notebook') ||
+                           downloadItem.referrer?.includes('notebook') ||
                            downloadItem.finalUrl?.includes('googleusercontent');
 
   // Check if this download has redownload info in the Map

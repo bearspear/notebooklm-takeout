@@ -459,6 +459,15 @@ function convertKatexNodeToLatex(node) {
 
 // ==================== END KATEX → LATEX CONVERSION ====================
 
+// Google renamed NotebookLM to "Gemini Notebook" and moved it from
+// notebooklm.google.com to notebook.google.com (Jul 2026). The old host 301s to
+// the new one; keep both so users mid-rollout still work.
+const NOTEBOOK_HOSTS = ['notebook.google.com', 'notebooklm.google.com'];
+
+function isNotebookUrl(url) {
+  return !!url && NOTEBOOK_HOSTS.some(host => url.includes(host));
+}
+
 let currentTabId = null;
 let autoRefreshInterval = null;
 let settingsLoaded = false;
@@ -878,7 +887,7 @@ function startAutoRefresh() {
   const interval = settings.refreshInterval * 1000;
   autoRefreshInterval = setInterval(async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab && tab.url && tab.url.includes('notebooklm.google.com')) {
+    if (isNotebookUrl(tab?.url)) {
       await scanPage();
     }
   }, interval);
@@ -1357,7 +1366,7 @@ async function checkStatus() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     currentTabId = tab?.id;
 
-    if (tab && tab.url && tab.url.includes('notebooklm.google.com')) {
+    if (isNotebookUrl(tab?.url)) {
       statusDot.classList.remove('inactive');
       statusDot.classList.add('active');
       statusText.textContent = 'Connected to NotebookLM';
@@ -1382,7 +1391,7 @@ async function scanPage() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-    if (!tab || !tab.url?.includes('notebooklm.google.com')) {
+    if (!isNotebookUrl(tab?.url)) {
       resultsEl.innerHTML = '<p class="error">Please open NotebookLM first</p>';
       return;
     }
@@ -1538,7 +1547,7 @@ async function scanNotesPage() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-    if (!tab || !tab.url || !tab.url.includes('notebooklm.google.com')) {
+    if (!isNotebookUrl(tab?.url)) {
       notesResults.innerHTML = '<p class="empty-message">Please open NotebookLM first</p>';
       noteCount.textContent = '0';
       return;
@@ -3118,7 +3127,7 @@ function downloadBlob(blob, filename) {
  */
 async function exportSingleNote(note) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.url || !tab.url.includes('notebooklm.google.com')) {
+  if (!isNotebookUrl(tab?.url)) {
     throw new Error('NotebookLM tab not active');
   }
 
@@ -3503,7 +3512,7 @@ async function scanSourcesPage() {
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-  if (!tab || !tab.url?.includes('notebooklm.google.com')) {
+  if (!isNotebookUrl(tab?.url)) {
     showToast('Please open NotebookLM first', 'error');
     return;
   }
@@ -4507,7 +4516,7 @@ async function scanChatPage() {
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-  if (!tab || !tab.url?.includes('notebooklm.google.com')) {
+  if (!isNotebookUrl(tab?.url)) {
     showToast('Please open NotebookLM first', 'error');
     return;
   }
@@ -5628,7 +5637,7 @@ async function scanStudioPage() {
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab || !tab.url || !tab.url.includes('notebooklm.google.com')) {
+    if (!isNotebookUrl(tab?.url)) {
       resultsEl.innerHTML = '<p class="empty-message">Please open NotebookLM first.</p>';
       return;
     }
@@ -6166,7 +6175,7 @@ async function runHealthCheck() {
   try {
     // Get current tab
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab || !tab.url?.includes('notebooklm.google.com')) {
+    if (!isNotebookUrl(tab?.url)) {
       displayHealthCheckError('Please open NotebookLM first');
       return;
     }

@@ -15,10 +15,11 @@
   // Helper to check if URL is a NotebookLM download URL
   function isNotebookLMDownloadUrl(urlString) {
     if (!urlString) return false;
+    // 'notebook' matches both the new host and the legacy 'notebooklm' URLs
     return urlString.includes('contribution.usercontent.google.com') ||
-           urlString.includes('lh3.googleusercontent.com/notebooklm') ||
+           urlString.includes('lh3.googleusercontent.com/notebook') ||
            urlString.includes('googleusercontent.com/download') ||
-           urlString.includes('lh3.googleusercontent.com') && urlString.includes('notebooklm');
+           urlString.includes('lh3.googleusercontent.com') && urlString.includes('notebook');
   }
 
   // Intercept window.open to capture download URLs before tabs open
