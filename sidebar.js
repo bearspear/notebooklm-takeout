@@ -1189,17 +1189,9 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
       const filename = response.title || artifactName;
       const typePrefix = getArtifactTypePrefix(artifactType);
 
-      // Determine extension based on artifact type
-      const extensionMap = {
-        'Infographic': '.png',
-        'Slides': '.pdf',
-        'Audio Overview': '.m4a',
-        'Report': '.md',
-        'Data Table': '.zip'
-      };
-      const extension = extensionMap[artifactType] || '';
-
-      const fullFilename = `[${typePrefix}]_${sanitizeFilename(filename)}${extension}`;
+      // No extension here: background.js takes it from the actual download
+      // (Slides can be PDF or PPTX, and new types have no fixed format)
+      const fullFilename = `[${typePrefix}]_${sanitizeFilename(filename)}`;
 
       logger.info('Download', `URL intercepted (no tab), sending to background for download: ${fullFilename}`);
 
@@ -2815,7 +2807,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
     data: { type: 'notes' }
   });
 
-  if (!healthCheck.healthy) {
+  if (healthCheck && !healthCheck.healthy) {
     const proceed = await showDOMWarningDialog(healthCheck.issues);
     if (!proceed) {
       showToast('Export cancelled', 'info');
@@ -3684,7 +3676,7 @@ async function exportSources(selectedSources) {
     data: { type: 'sources' }
   });
 
-  if (!healthCheck.healthy) {
+  if (healthCheck && !healthCheck.healthy) {
     const proceed = await showDOMWarningDialog(healthCheck.issues);
     if (!proceed) {
       showToast('Export cancelled', 'info');
@@ -4776,7 +4768,7 @@ async function exportChat(chatData, extractFullCitations = false) {
             const fullCitationData = await chrome.tabs.sendMessage(tab.id, {
               type: 'EXTRACT_MESSAGE_CITATIONS',
               data: {
-                messageIndex: i,
+                messageIndex: pair.domIndex ?? i,
                 messageHTML: pair.aiResponseHTML,
                 sourceIndices: sourceIndices,
                 includeCitationImages: settings.includeCitationImages
@@ -5992,6 +5984,7 @@ async function downloadAllArtifacts(tabId, items) {
         if (cancelled) {
           console.log('[NotebookLM Takeout] ZIP download cancelled by user');
           clearInterval(pollStatus);
+          chrome.runtime.sendMessage({ type: 'CANCEL_BATCH_DOWNLOAD' }).catch(() => {});
           showToast('Download cancelled', 'warning');
 
           // Clean up overlay

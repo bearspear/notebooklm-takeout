@@ -474,7 +474,9 @@
       // Pre-export health check (basic version - use RUN_COMPREHENSIVE_HEALTH_CHECK for full check)
       const type = message.data?.type || 'notes';
       const checks = {
-        notes: ['artifact-library-note', '.artifact-library-container'],
+        // Only the studio list container is required: a notebook with no
+        // studio notes (or notes shown in the Sources panel) is not drift.
+        notes: ['.artifact-library-container'],
         sources: ['.single-source-container', '.scroll-area-desktop'],
         artifacts: ['artifact-library-item'],
         chat: ['.chat-message-pair', '.from-user-container', '.to-user-container']
@@ -2198,91 +2200,12 @@
 
     try {
       // First, verify no note viewer is open from a previous extraction
-      let existingViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer');
-      if (existingViewer) {
+      if (findOpenStudioViewer()) {
         console.warn('[NotebookLM Takeout] WARNING: Note viewer still open from previous extraction!');
         console.log('[NotebookLM Takeout] Attempting to force close it...');
 
-        // Try multiple methods to close it
-        for (let attempt = 0; attempt < 3; attempt++) {
-          console.log(`[NotebookLM Takeout] Close attempt ${attempt + 1}/3`);
-
-          // Method 1: ESC key
-          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
-          document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
-          await new Promise(resolve => setTimeout(resolve, 500));
-
-          // Check if closed
-          existingViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer');
-          if (!existingViewer) {
-            console.log('[NotebookLM Takeout] ✓ Viewer closed successfully');
-            break;
-          }
-
-          // Method 2: Find and click close button by aria-label (most reliable)
-          const closeNoteButton = document.querySelector('button[aria-label="Close note view"]');
-          if (closeNoteButton) {
-            console.log('[NotebookLM Takeout] Clicking "Close note view" button');
-            closeNoteButton.click();
-            await new Promise(resolve => setTimeout(resolve, 500));
-          }
-
-          // Check again
-          existingViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer');
-          if (!existingViewer) {
-            console.log('[NotebookLM Takeout] ✓ Viewer closed via Close note view button');
-            break;
-          }
-
-          // Method 3: Find and click collapse_content or arrow_back icon buttons
-          const closeIcons = Array.from(document.querySelectorAll('mat-icon')).filter(icon => {
-            const text = icon.textContent.trim();
-            return text === 'collapse_content' || text === 'arrow_back' || text === 'close';
-          });
-          for (const icon of closeIcons) {
-            const button = icon.closest('button');
-            if (button) {
-              console.log('[NotebookLM Takeout] Clicking close icon button:', icon.textContent.trim());
-              button.click();
-              await new Promise(resolve => setTimeout(resolve, 500));
-              // Check if closed after each click
-              existingViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer');
-              if (!existingViewer) {
-                console.log('[NotebookLM Takeout] ✓ Viewer closed via icon button');
-                break;
-              }
-            }
-          }
-
-          // Check again
-          existingViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer');
-          if (!existingViewer) {
-            break;
-          }
-
-          // Method 4: Panel header close button (fallback)
-          const panelHeaders = document.querySelectorAll('.panel-header');
-          for (const header of panelHeaders) {
-            const closeBtn = header.querySelector('button[aria-label*="Close"], button[aria-label*="close"]');
-            if (closeBtn) {
-              console.log('[NotebookLM Takeout] Clicking panel header close button');
-              closeBtn.click();
-              await new Promise(resolve => setTimeout(resolve, 500));
-              break;
-            }
-          }
-
-          // Final check
-          existingViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer');
-          if (!existingViewer) {
-            console.log('[NotebookLM Takeout] ✓ Viewer closed via panel header');
-            break;
-          }
-        }
-
-        // Final verification
-        existingViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer');
-        if (existingViewer) {
+        const closed = await closeStudioViewer(500);
+        if (!closed) {
           console.error('[NotebookLM Takeout] ERROR: Failed to close viewer after 3 attempts');
           DOMHealthTracker.track('stuck', 'button[aria-label="Close note view"]', 'Viewer close failed');
           // Don't throw - instead, warn and try to continue
@@ -3121,19 +3044,30 @@
     return markdown.trim();
   }
 
-  // Extract content from Tailwind viewer format
+  // Extract content from Tailwind viewer format. The overlay container is
+  // hidden during the citation hover loop and always restored, even on error,
+  // otherwise every menu and dialog in the page stays invisible.
   async function extractTailwindNoteContent(viewer) {
-    console.log('[NotebookLM Takeout] Extracting Tailwind format note...');
-
-    const sources = [];
-    const errors = [];
-
-    // Hide overlay if present
     const overlay = document.querySelector('.cdk-overlay-container');
     if (overlay) {
       overlay.style.visibility = 'hidden';
       overlay.style.pointerEvents = 'none';
     }
+    try {
+      return await extractTailwindNoteCitations(viewer);
+    } finally {
+      if (overlay) {
+        overlay.style.visibility = '';
+        overlay.style.pointerEvents = '';
+      }
+    }
+  }
+
+  async function extractTailwindNoteCitations(viewer) {
+    console.log('[NotebookLM Takeout] Extracting Tailwind format note...');
+
+    const sources = [];
+    const errors = [];
 
     // Step 1: Expand all collapsed citation groups
     console.log('[NotebookLM Takeout] Checking for collapsed citation groups...');
@@ -3445,12 +3379,6 @@
     if (errors.length > 0) {
       console.warn('[NotebookLM Takeout] Errors and warnings:');
       errors.forEach((err, i) => console.warn(`  ${i + 1}. ${err}`));
-    }
-
-    // Restore overlay
-    if (overlay) {
-      overlay.style.visibility = '';
-      overlay.style.pointerEvents = '';
     }
 
     const sourcesArray = Array.from(uniqueSources.values());
@@ -3959,105 +3887,113 @@
     }
   }
 
-  // Navigate back to notes list / close source panel
-  async function navigateBackToNotesList() {
-    console.log('[NotebookLM Takeout] Attempting to close panel/navigate back...');
+  // Studio viewers (notes, reports, tables, mind maps). Lookups are scoped to
+  // <studio-panel>: chat replies also render in labs-tailwind-doc-viewer, so a
+  // document-wide lookup reports a viewer as open whenever chat history exists.
+  const STUDIO_VIEWER_SELECTOR = 'rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer, table-viewer';
 
-    // Try multiple times with different methods
+  function findOpenStudioViewer() {
+    const studioPanel = document.querySelector('studio-panel');
+    return studioPanel ? studioPanel.querySelector(STUDIO_VIEWER_SELECTOR) : null;
+  }
+
+  // Close the open studio viewer. Only clicks controls inside <studio-panel>.
+  // Returns true once no studio viewer is open.
+  async function closeStudioViewer(delay = 800) {
     for (let attempt = 0; attempt < 3; attempt++) {
+      if (!findOpenStudioViewer()) return true;
       console.log(`[NotebookLM Takeout] Close attempt ${attempt + 1}/3`);
 
-      // Method 0: ESC key (most reliable for closing editors/panels)
-      console.log('[NotebookLM Takeout] Trying ESC key...');
+      // Method 1: ESC key
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
       document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
-      await new Promise(resolve => setTimeout(resolve, 800));
-
-      // Check if note viewer is gone
-      let noteViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer, table-viewer');
-      if (!noteViewer) {
-        console.log('[NotebookLM Takeout] ✓ Panel closed via ESC key');
-        return;
+      await new Promise(resolve => setTimeout(resolve, delay));
+      if (!findOpenStudioViewer()) {
+        console.log('[NotebookLM Takeout] ✓ Viewer closed via ESC key');
+        return true;
       }
 
-      // Method 1: Close note view button by aria-label (most reliable for notes)
-      console.log('[NotebookLM Takeout] Trying "Close note view" button...');
-      const closeNoteButton = document.querySelector('button[aria-label="Close note view"]');
+      const studioPanel = document.querySelector('studio-panel');
+      if (!studioPanel) return true;
+
+      // Method 2: "Close note view" button
+      const closeNoteButton = studioPanel.querySelector('button[aria-label="Close note view"]');
       if (closeNoteButton) {
         console.log('[NotebookLM Takeout] Clicking "Close note view" button');
         closeNoteButton.click();
-        await new Promise(resolve => setTimeout(resolve, 800));
-
-        noteViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer, table-viewer');
-        if (!noteViewer) {
-          console.log('[NotebookLM Takeout] ✓ Panel closed via "Close note view" button');
-          return;
+        await new Promise(resolve => setTimeout(resolve, delay));
+        if (!findOpenStudioViewer()) {
+          console.log('[NotebookLM Takeout] ✓ Viewer closed via "Close note view" button');
+          return true;
         }
       }
 
-      // Method 1b: collapse_content or arrow_back icon button (for notes/reports)
-      console.log('[NotebookLM Takeout] Trying collapse_content/arrow_back button...');
-      const closeIconButtons = Array.from(document.querySelectorAll('mat-icon')).filter(icon => {
+      // Method 3: collapse_content / arrow_back / close icon buttons in the studio panel
+      const closeIcons = Array.from(studioPanel.querySelectorAll('mat-icon')).filter(icon => {
         const text = icon.textContent.trim();
         return text === 'collapse_content' || text === 'arrow_back' || text === 'close';
       });
-      for (const icon of closeIconButtons) {
+      for (const icon of closeIcons) {
         const button = icon.closest('button');
-        if (button) {
-          console.log('[NotebookLM Takeout] Clicking close icon button:', icon.textContent.trim());
-          button.click();
-          await new Promise(resolve => setTimeout(resolve, 800));
+        if (!button) continue;
+        console.log('[NotebookLM Takeout] Clicking close icon button:', icon.textContent.trim());
+        button.click();
+        await new Promise(resolve => setTimeout(resolve, delay));
+        if (!findOpenStudioViewer()) {
+          console.log('[NotebookLM Takeout] ✓ Viewer closed via close icon');
+          return true;
         }
       }
+    }
+    return !findOpenStudioViewer();
+  }
 
-      // Check again
-      noteViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer, table-viewer');
-      if (!noteViewer) {
-        console.log('[NotebookLM Takeout] ✓ Panel closed via close icon');
-        return;
+  // Close the source viewer (sources panel). Kept separate from studio viewers:
+  // closing a source relies on ESC or the sources panel header button.
+  async function closeSourceViewer() {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (!document.querySelector('source-viewer')) return true;
+      console.log(`[NotebookLM Takeout] Source close attempt ${attempt + 1}/3`);
+
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+      document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+      await new Promise(resolve => setTimeout(resolve, 800));
+      if (!document.querySelector('source-viewer')) {
+        console.log('[NotebookLM Takeout] ✓ Source viewer closed via ESC key');
+        return true;
       }
 
-      // Method 2: Panel header approach (works for sources)
+      // Panel header approach (works for sources)
       const panelHeaders = document.querySelectorAll('.panel-header');
       if (panelHeaders.length > 0 && panelHeaders[0].children.length > 1) {
         console.log('[NotebookLM Takeout] Clicking panel header children[1]');
         panelHeaders[0].children[1].click();
         await new Promise(resolve => setTimeout(resolve, 800));
-
-        noteViewer = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer');
-        if (!noteViewer) {
-          console.log('[NotebookLM Takeout] ✓ Panel closed via panel header');
-          return;
-        }
       }
     }
+    return !document.querySelector('source-viewer');
+  }
 
-    // After all attempts, check one more time
-    const stillOpen = document.querySelector('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer');
-    if (!stillOpen) {
+  // Navigate back to notes list / close source panel
+  async function navigateBackToNotesList() {
+    console.log('[NotebookLM Takeout] Attempting to close panel/navigate back...');
+
+    const studioClosed = await closeStudioViewer();
+    const sourceClosed = await closeSourceViewer();
+    if (studioClosed && sourceClosed) {
       console.log('[NotebookLM Takeout] ✓ Panel closed successfully');
-      return;
-    }
-
-    // Last resort: Standard back/close buttons
-    const backButton = document.querySelector('button[aria-label*="Back"], button[aria-label*="Close"]');
-    if (backButton) {
-      console.log('[NotebookLM Takeout] Last resort: Clicking standard back button');
-      backButton.click();
-      await new Promise(resolve => setTimeout(resolve, 1000));
       return;
     }
 
     console.error('[NotebookLM Takeout] ERROR: Failed to close panel after all attempts!');
     DOMHealthTracker.track('stuck', null, 'Panel close failed');
+    const studioPanel = document.querySelector('studio-panel');
     console.log('[NotebookLM Takeout] Available elements:', {
+      studioPanel: !!studioPanel,
       panelHeaders: document.querySelectorAll('.panel-header').length,
-      backButtons: document.querySelectorAll('button[aria-label*="Back"]').length,
-      closeButtons: document.querySelectorAll('button[aria-label*="Close"]').length,
-      closeNoteViewButton: !!document.querySelector('button[aria-label="Close note view"]'),
-      collapseContentIcons: Array.from(document.querySelectorAll('mat-icon')).filter(i => i.textContent.trim() === 'collapse_content').length,
-      arrowBackIcons: Array.from(document.querySelectorAll('mat-icon')).filter(i => i.textContent.trim() === 'arrow_back').length,
-      noteViewers: document.querySelectorAll('rich-text-editor, markdown-editor-legacy, labs-tailwind-doc-viewer, mindmap-viewer, note-editor, report-viewer, table-viewer').length
+      closeNoteViewButton: !!(studioPanel && studioPanel.querySelector('button[aria-label="Close note view"]')),
+      studioViewers: studioPanel ? studioPanel.querySelectorAll(STUDIO_VIEWER_SELECTOR).length : 0,
+      sourceViewers: document.querySelectorAll('source-viewer').length
     });
   }
 
@@ -4925,6 +4861,9 @@
     // Extract date separators and message pairs
     const messagePairs = [];
     const elements = Array.from(chatPanel.children);
+    // Live DOM position of each pair, used later to find its citation buttons.
+    // Pairs that fail extraction are skipped, so the array index can't be used.
+    const livePairs = Array.from(chatPanel.querySelectorAll('.chat-message-pair'));
 
     let currentDate = null;
 
@@ -4942,6 +4881,7 @@
       if (el.classList.contains('chat-message-pair')) {
         const pair = extractMessagePair(el, currentDate);
         if (pair) {
+          pair.domIndex = livePairs.indexOf(el);
           messagePairs.push(pair);
         }
       }

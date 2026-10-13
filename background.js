@@ -46,6 +46,7 @@ let nextRequestId = 1;
 let batchDownloadMode = false;
 let capturedDownload = null;
 let batchStatus = '';
+let batchCancelRequested = false;
 
 // Track intercepted downloads by ID instead of global state
 const interceptedDownloads = new Map(); // downloadId -> {originalId, newId, filename, url}
@@ -222,6 +223,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
         });
       sendResponse({ started: true });
+      break;
+
+    case 'CANCEL_BATCH_DOWNLOAD':
+      // Checked between items; the item in progress finishes first
+      batchCancelRequested = true;
+      sendResponse({ success: true });
       break;
 
     case 'GET_BATCH_STATUS':
@@ -472,13 +479,13 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
     let filename = directInfo.filename;
     console.log('[Background] Direct download - using filename:', filename);
 
-    // If filename doesn't have an extension, extract from original
-    if (!filename.match(/\.[^.]+$/)) {
-      const originalExt = downloadItem.filename?.match(/\.[^.]+$/)?.[0] || '';
-      if (originalExt) {
-        filename = filename + originalExt;
-        console.log('[Background] Added extension:', originalExt);
-      }
+    // Take the extension from the actual download: server filename first,
+    // then MIME type, then a per-type default
+    if (!filename.match(/\.[a-z0-9]{2,5}$/i)) {
+      const originalExt = downloadItem.filename?.match(/\.[a-z0-9]{2,5}$/i)?.[0] || '';
+      const extension = originalExt || getExtensionFromMime(downloadItem.mime) || getExtensionFromType(directInfo.artifactType);
+      filename = filename + extension;
+      console.log('[Background] Added extension:', extension);
     }
 
     suggest({ filename: filename });
@@ -716,6 +723,7 @@ async function runBatchDownload(tabId, items) {
   console.log('[Background] Starting batch download for', items.length, 'items');
 
   batchDownloadMode = true;
+  batchCancelRequested = false;
   batchStatus = 'Starting...';
   const downloadedFiles = [];
   const errors = [];
@@ -726,34 +734,48 @@ async function runBatchDownload(tabId, items) {
   try {
 
   for (let i = 0; i < items.length; i++) {
+    if (batchCancelRequested) {
+      console.log('[Background] Batch download cancelled by user');
+      batchStatus = 'Cancelled';
+      return { success: false, cancelled: true, error: 'Cancelled', errors };
+    }
+
     const item = items[i];
     batchStatus = `Downloading ${i + 1}/${items.length}: ${item.label}`;
     console.log('[Background]', batchStatus);
 
     try {
-      // Add to pending downloads queue
-      const batchRequestId = nextRequestId++;
-      const batchPending = {
-        name: item.label,
-        type: item.type,
-        timestamp: Date.now(),
-        requestId: batchRequestId,
-        intercept: false
-      };
-      pendingDownloads.push(batchPending);
-      console.log('[Background] Batch download queued:', item.label, 'requestId:', batchRequestId);
-
+      // Use the same content-script path as single downloads: it resolves the
+      // item among artifact-library-item rows only, extracts Reports/Data Tables
+      // as HTML, and returns the CDN URL that injected.js intercepts from
+      // window.open (no Chrome download is created for those).
+      const extractable = item.type === 'Report' || item.type === 'Data Table';
       capturedDownload = null;
-
-      // Trigger the download via content script
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        func: clickDownloadForItemInPage,
-        args: [item.index]
+      const response = await chrome.tabs.sendMessage(tabId, {
+        type: 'DOWNLOAD_ARTIFACT',
+        data: {
+          artifactIndex: item.index,
+          artifactType: item.type,
+          artifactName: item.label,
+          skipMoreButton: extractable
+        }
       });
 
-      // Wait for download to be captured
-      const captured = await waitForCapture(8000);
+      if (!response || !response.success) {
+        throw new Error(response?.error || 'Download failed');
+      }
+
+      if (response.method === 'content_extraction') {
+        const data = utf8ToBase64(response.data || '');
+        const filename = sanitizeFilename(item.label) + '.html';
+        fileContents.push({ filename, data, size: data.length });
+        downloadedFiles.push(filename);
+        console.log('[Background] Added extracted content to collection:', filename);
+        continue;
+      }
+
+      // Intercepted URL, or (fallback) a real Chrome download captured in onCreated
+      const captured = response.url ? { url: response.url } : await waitForCapture(8000);
 
       if (captured && captured.url) {
         console.log('[Background] Captured URL:', captured.url.substring(0, 80));
@@ -956,34 +978,14 @@ function waitForCapture(timeout) {
   });
 }
 
-// Function to inject into page to click download
-function clickDownloadForItemInPage(itemIndex) {
-  const moreButtons = document.querySelectorAll('button[aria-label="More"]');
-  console.log('[NotebookLM Takeout] Clicking More button at index', itemIndex);
-
-  const btn = moreButtons[itemIndex];
-  if (!btn) {
-    console.error('[NotebookLM Takeout] Button not found at index', itemIndex);
-    return;
+// Base64-encode a string as UTF-8 (chunked to avoid call-stack limits)
+function utf8ToBase64(text) {
+  const bytes = new TextEncoder().encode(text);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
   }
-
-  btn.click();
-
-  // Wait for menu, then click Download
-  setTimeout(() => {
-    const menuItems = document.querySelectorAll('.mat-mdc-menu-item');
-    for (const item of menuItems) {
-      const textSpan = item.querySelector('.mat-mdc-menu-item-text');
-      const text = (textSpan?.textContent || '').trim().toLowerCase();
-      if (text === 'download') {
-        console.log('[NotebookLM Takeout] Clicking Download');
-        item.click();
-        return;
-      }
-    }
-    // Close menu if no download found
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-  }, 400);
+  return btoa(binary);
 }
 
 // Function to inject into page to fetch file with credentials
@@ -1031,20 +1033,33 @@ function getExtensionFromMime(mimeType) {
   const mimeMap = {
     'image/png': '.png',
     'image/jpeg': '.jpg',
+    'image/webp': '.webp',
     'image/svg+xml': '.svg',
     'application/pdf': '.pdf',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+    'application/json': '.json',
+    'text/csv': '.csv',
+    'text/markdown': '.md',
+    'text/plain': '.txt',
     'audio/wav': '.wav',
     'audio/mpeg': '.mp3',
-    'video/mp4': '.mp4'
+    'audio/mp4': '.m4a',
+    'audio/x-m4a': '.m4a',
+    'video/mp4': '.mp4',
+    'video/webm': '.webm'
   };
-  return mimeMap[mimeType] || '';
+  const baseType = (mimeType || '').split(';')[0].trim().toLowerCase();
+  return mimeMap[baseType] || '';
 }
 
 function getExtensionFromType(type) {
   const typeMap = {
     'Slides': '.pdf',
     'Infographic': '.png',
-    'Audio Overview': '.m4a'
+    'Audio Overview': '.m4a',
+    'Video Overview': '.mp4'
   };
   return typeMap[type] || '.bin';
 }
