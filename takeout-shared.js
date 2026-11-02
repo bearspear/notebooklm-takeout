@@ -74,7 +74,9 @@
   // marker number seen in the body, keyed by the ORIGINAL citation number so
   // body links and anchors always agree. Markers whose tooltip could not be
   // read get a placeholder instead of borrowing another source's number.
-  function buildCitationEntries(sources, markerIndices) {
+  // Pass { placeholders: false } when no citation extraction was attempted
+  // (reports, source content): markers then add no entries.
+  function buildCitationEntries(sources, markerIndices, { placeholders = true } = {}) {
     const byNumber = new Map();
     for (const s of sources || []) {
       const number = String(s.sourceIndex);
@@ -82,7 +84,7 @@
         byNumber.set(number, { number, text: s.text || '', quote: s.quote || '', missing: false });
       }
     }
-    for (const m of markerIndices || []) {
+    for (const m of placeholders ? (markerIndices || []) : []) {
       const number = String(m);
       if (!byNumber.has(number)) {
         byNumber.set(number, { number, text: '(citation details unavailable)', quote: '', missing: true });
@@ -136,7 +138,26 @@
     return preferred !== undefined ? preferred : candidates[0];
   }
 
+  // Make ZIP entry names unique: repeats get " (2)", " (3)"... before the
+  // extension, so artifacts with the same title don't overwrite each other.
+  function uniqueFilenames(names) {
+    const used = new Set();
+    return (names || []).map(name => {
+      let candidate = name;
+      if (used.has(candidate)) {
+        const dot = name.lastIndexOf('.');
+        const stem = dot > 0 ? name.slice(0, dot) : name;
+        const ext = dot > 0 ? name.slice(dot) : '';
+        let n = 2;
+        do { candidate = `${stem} (${n++})${ext}`; } while (used.has(candidate));
+      }
+      used.add(candidate);
+      return candidate;
+    });
+  }
+
   const NLME = {
+    uniqueFilenames,
     pickDownloadMenuIndex,
     countFailedExtractions,
     ISSUES_URL,

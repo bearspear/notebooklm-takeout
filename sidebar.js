@@ -1166,7 +1166,7 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
           logger.info('Download', `Converting HTML to markdown for: "${baseFilename}"`);
           // For Reports, skip adding title if it's already in the content (prevents duplicate H1)
           const skipTitle = (artifactType === 'Report');
-          markdownContent = convertToMarkdown(response.data, [], baseFilename, settings.citationsCodeBlock, skipTitle);
+          markdownContent = convertToMarkdown(response.data, [], baseFilename, settings.citationsCodeBlock, skipTitle, null, false);
         } else {
           // Already markdown
           markdownContent = response.data;
@@ -2206,7 +2206,9 @@ ${footnotesHTML}
 
 // ==================== MARKDOWN CONVERSION ====================
 
-function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock = true, skipTitleIfPresent = false, noteId = null) {
+// citationPlaceholders: false when no citation extraction ran (reports, source
+// content), so unread markers don't produce "(citation details unavailable)".
+function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock = true, skipTitleIfPresent = false, noteId = null, citationPlaceholders = true) {
   // Debug: Log what we're converting
   logger.info('Markdown', `Converting note: "${noteTitle}"`);
   logger.info('Markdown', `  - HTML content length: ${htmlContent.length} chars`);
@@ -2499,7 +2501,7 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
 
   // Sources section: extracted sources plus a placeholder for any marker
   // whose tooltip could not be read, all under their original numbers
-  const entries = NLME.buildCitationEntries(sources, [...citationOccurrences.keys()]);
+  const entries = NLME.buildCitationEntries(sources, [...citationOccurrences.keys()], { placeholders: citationPlaceholders });
   if (entries.length > 0) {
     markdown += '\n\n---\n\n## Sources\n\n';
 
@@ -3856,7 +3858,7 @@ async function exportSources(selectedSources) {
 
           // Add the main content
           md += `## Content\n\n`;
-          md += convertToMarkdown(sourceData.html, sourceData.sources || [], '', settings.citationsCodeBlock);
+          md += convertToMarkdown(sourceData.html, sourceData.sources || [], '', settings.citationsCodeBlock, false, null, false);
 
           return md;
         };

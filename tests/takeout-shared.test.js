@@ -123,3 +123,24 @@ test('pickDownloadMenuIndex falls back to the only Download item', () => {
 test('pickDownloadMenuIndex returns -1 without a Download item', () => {
   assert.equal(NLME.pickDownloadMenuIndex(['share Share'], 'pdf'), -1);
 });
+
+test('buildCitationEntries omits placeholders when citations were never extracted', () => {
+  const entries = NLME.buildCitationEntries([], ['1', '2'], { placeholders: false });
+  assert.deepEqual(entries, []);
+});
+
+test('buildCitationEntries without placeholders still lists extracted sources', () => {
+  const entries = NLME.buildCitationEntries([{ sourceIndex: '2', text: 'B' }], ['1', '2'], { placeholders: false });
+  assert.deepEqual(entries.map(e => e.number), ['2']);
+});
+
+test('uniqueFilenames suffixes repeated names before the extension', () => {
+  assert.deepEqual(
+    NLME.uniqueFilenames(['The-Electric-Universe.pdf', 'The-Electric-Universe.pdf', 'The-Electric-Universe.pdf']),
+    ['The-Electric-Universe.pdf', 'The-Electric-Universe (2).pdf', 'The-Electric-Universe (3).pdf']
+  );
+});
+
+test('uniqueFilenames leaves distinct names and extensionless names usable', () => {
+  assert.deepEqual(NLME.uniqueFilenames(['Map.svg', 'Map.json', 'README', 'README']), ['Map.svg', 'Map.json', 'README', 'README (2)']);
+});
