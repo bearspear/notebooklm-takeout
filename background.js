@@ -46,6 +46,16 @@ const pendingDownloads = []; // Array of {name, type, timestamp, requestId}
 let nextRequestId = 1;
 
 // Batch download mode - capture URLs instead of downloading
+// Names for downloads the extension starts itself (blob: / data: URLs).
+// Chrome drops the `filename` given to chrome.downloads.download whenever an
+// onDeterminingFilename listener exists and doesn't suggest a name, so the
+// listener applies these (url -> filename). Milestone 1, Task 8b.
+const namedDownloads = new Map();
+function nameNextDownload(url, filename) {
+  namedDownloads.set(url, filename);
+  setTimeout(() => namedDownloads.delete(url), 60000);
+}
+
 let batchDownloadMode = false;
 let lastBatchResult = null; // final {success, count, errors} of the last batch
 let capturedDownload = null;
@@ -245,6 +255,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'CANCEL_BATCH_DOWNLOAD':
       // Checked between items; the item in progress finishes first
       batchCancelRequested = true;
+      sendResponse({ success: true });
+      break;
+
+    case 'NAME_NEXT_DOWNLOAD':
+      nameNextDownload(message.url, message.filename);
       sendResponse({ success: true });
       break;
 
@@ -487,6 +502,14 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
   const isFromNotebookLM = downloadItem.url?.includes('notebook') ||
                            downloadItem.referrer?.includes('notebook') ||
                            downloadItem.finalUrl?.includes('googleusercontent');
+
+  // Extension-started downloads with a registered name (folder mode, batch ZIP)
+  const namedFile = namedDownloads.get(downloadItem.url) || namedDownloads.get(downloadItem.finalUrl);
+  if (namedFile) {
+    namedDownloads.delete(downloadItem.url);
+    suggest({ filename: namedFile, conflictAction: 'uniquify' });
+    return true;
+  }
 
   // Check if this download has redownload info in the Map
   const redownloadInfo = redownloadRequests.get(downloadItem.id);
@@ -880,9 +903,12 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 
       // Download the ZIP (awaited: a failure here is a failed batch)
+      const zipUrl = `data:application/zip;base64,${zipBase64}`;
+      const zipName = `notebooklm-export-${timestamp}.zip`;
+      nameNextDownload(zipUrl, zipName);
       await chrome.downloads.download({
-        url: `data:application/zip;base64,${zipBase64}`,
-        filename: `notebooklm-export-${timestamp}.zip`,
+        url: zipUrl,
+        filename: zipName,
         saveAs: true
       });
 
