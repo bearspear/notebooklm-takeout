@@ -276,6 +276,23 @@
     }
   }
 
+  // Condition waits instead of fixed sleeps (Milestone 1, Speed): resolve once
+  // the measured size stops changing; on timeout continue with what is there.
+  async function waitForStable(measure, { interval = 50, checks = 2, minLength = 1, timeout = 5000 } = {}) {
+    const tracker = NLME.createStabilityTracker({ checks, minLength });
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      if (tracker.push(measure())) return true;
+      await new Promise(resolve => setTimeout(resolve, interval));
+    }
+    console.warn('[NotebookLM Takeout] Content did not settle within', timeout, 'ms; continuing');
+    return false;
+  }
+
+  function waitForStableContent(el, options = {}) {
+    return waitForStable(() => (el && el.isConnected ? el.innerHTML.length : 0), options);
+  }
+
   function isExportCancelled() {
     return exportCancelled;
   }
@@ -2146,8 +2163,10 @@
           console.warn(`[NotebookLM Takeout] waitForElement attempt ${retry + 1} failed:`, e.message);
         }
 
-        // Small delay to let DOM stabilize after navigation
-        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        // Let a re-rendering list settle: note count unchanged across two
+        // 50 ms checks (was a fixed 500 ms per attempt)
+        await waitForStable(() => document.querySelectorAll('artifact-library-note').length,
+          { interval: 50, checks: 2, timeout: retryDelay * 2 });
 
         // Find all note elements (don't filter by visibility yet - we need to find ALL notes)
         allNoteElements = document.querySelectorAll('artifact-library-note');
@@ -2283,7 +2302,7 @@
     console.log('[NotebookLM Takeout] Content found:', content.tagName, content.className || '(no class)');
 
     // Wait a bit for content to fully render
-    await timePhase('note.content', () => new Promise(resolve => setTimeout(resolve, 1000)));
+    await timePhase('note.content', () => waitForStableContent(content, { interval: 50, checks: 3, minLength: 20, timeout: 5000 }));
 
     // Check if it's a mindmap viewer
     if (content.tagName.toLowerCase() === 'mindmap-viewer') {
@@ -3376,7 +3395,13 @@
 
   // Close the open studio viewer. Returns true once no studio viewer is open.
   async function closeStudioViewer(delay = 800) {
-    const settle = () => new Promise(resolve => setTimeout(resolve, delay));
+    // Poll for the viewer to disappear (50 ms) instead of always waiting `delay`
+    const settle = async () => {
+      for (let waited = 0; waited < delay; waited += 50) {
+        if (!findOpenStudioViewer()) return;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    };
     for (let attempt = 0; attempt < 3; attempt++) {
       if (!findOpenStudioViewer()) return true;
       console.log(`[NotebookLM Takeout] Close attempt ${attempt + 1}/3`);
@@ -3483,6 +3508,8 @@
     const sourceClosed = await closeSourceViewer();
     if (studioClosed && sourceClosed) {
       console.log('[NotebookLM Takeout] ✓ Panel closed successfully');
+      // Resolve once the Studio list is back, so the next note can start at once
+      await waitForElement('artifact-library-note', 3000).catch(() => null);
       return;
     }
 

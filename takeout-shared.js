@@ -434,7 +434,21 @@
     return clean ? `${clean}/${filename}` : filename;
   }
 
+  // Content is "ready" once its size stops changing: the last `checks`
+  // samples are equal and at least `minLength`. Replaces fixed sleeps.
+  function createStabilityTracker({ checks = 2, minLength = 1 } = {}) {
+    const recent = [];
+    return {
+      push(length) {
+        recent.push(length);
+        if (recent.length > checks) recent.shift();
+        return recent.length === checks && length >= minLength && recent.every(v => v === length);
+      }
+    };
+  }
+
   const NLME = {
+    createStabilityTracker,
     downloadFolderPath,
     extensionFromDownloadUrl,
     formatErrorsTxt,

@@ -2963,14 +2963,12 @@ async function exportNotesAsMarkdown(selectedNotes) {
           const backResponse = await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_BACK' });
           console.log('[NotebookLM Takeout] Navigate back response:', backResponse);
 
-          // Extra long delay between notes to ensure DOM fully stabilizes
-          console.log('[NotebookLM Takeout] Waiting for DOM to stabilize...');
-          await new Promise(resolve => setTimeout(resolve, 3000));
-          console.log('[NotebookLM Takeout] Ready for next note');
+          // NAVIGATE_BACK resolves once the viewer is closed and the list is
+          // back; the next EXTRACT_NOTE waits for a stable list itself
+          // (Milestone 1: was a fixed 3 s per note)
         } catch (backError) {
           console.error('[NotebookLM Takeout] Failed to navigate back:', backError);
-          // Try to continue anyway with even longer wait
-          await new Promise(resolve => setTimeout(resolve, 4000));
+          // Continue: EXTRACT_NOTE fails the next note cleanly if a viewer is stuck
         }
       }
     }

@@ -415,3 +415,16 @@ test('downloadFolderPath without a usable folder returns the bare filename', () 
   assert.equal(NLME.downloadFolderPath('', 'f.md'), 'f.md');
   assert.equal(NLME.downloadFolderPath(' .. ', 'f.md'), 'f.md');
 });
+
+test('stability tracker needs equal consecutive lengths', () => {
+  const t = NLME.createStabilityTracker({ checks: 2 });
+  assert.equal(t.push(10), false);
+  assert.equal(t.push(20), false);
+  assert.equal(t.push(20), true);
+});
+
+test('stability tracker never stable below minLength', () => {
+  const t = NLME.createStabilityTracker({ checks: 2, minLength: 50 });
+  assert.equal(t.push(10), false);
+  assert.equal(t.push(10), false);
+});
