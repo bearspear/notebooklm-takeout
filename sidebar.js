@@ -3789,7 +3789,12 @@ async function exportSources(selectedSources) {
           async () => {
             return await chrome.tabs.sendMessage(tab.id, {
               type: 'EXTRACT_SOURCE',
-              data: { sourceIndex: source.index, title: source.title }
+              data: {
+                sourceIndex: source.index,
+                title: source.title,
+                // Wait for the AI summary/guide only when a metadata version is exported
+                needsGuide: !!(settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages)
+              }
             });
           },
           2, // maxRetries
@@ -3812,7 +3817,6 @@ async function exportSources(selectedSources) {
           // Try to close panel before continuing
           try {
             await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_BACK' });
-            await new Promise(resolve => setTimeout(resolve, 1500));
           } catch (backError) {
             console.error('[NotebookLM Takeout] Failed to close panel after error:', backError);
           }
@@ -3885,8 +3889,11 @@ async function exportSources(selectedSources) {
         const baseMarkdownNoImages = stripImagesFromMarkdown(baseMarkdown);
 
         // 2. Plus-meta: with metadata, no images (conditional)
-        const plusMetaMarkdown = buildMarkdown(true);
-        const plusMetaMarkdownNoImages = stripImagesFromMarkdown(plusMetaMarkdown);
+        // Only when a metadata version is exported (avoids false "missing
+        // summary" errors when those versions are off)
+        const needsMeta = settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages;
+        const plusMetaMarkdown = needsMeta ? buildMarkdown(true) : null;
+        const plusMetaMarkdownNoImages = plusMetaMarkdown ? stripImagesFromMarkdown(plusMetaMarkdown) : null;
 
         // 3. With-images: no metadata, with images (conditional)
         // 4. Plus-meta-with-images: with metadata, with images (conditional)
@@ -3923,8 +3930,10 @@ async function exportSources(selectedSources) {
               baseMarkdownWithImages = baseEmbedded;
 
               // Also embed images in the plus-meta version
-              const { markdown: plusMetaEmbedded } = await embedImagesInMarkdown(plusMetaMarkdown, source.title);
-              plusMetaMarkdownWithImages = plusMetaEmbedded;
+              if (plusMetaMarkdown) {
+                const { markdown: plusMetaEmbedded } = await embedImagesInMarkdown(plusMetaMarkdown, source.title);
+                plusMetaMarkdownWithImages = plusMetaEmbedded;
+              }
 
               console.log(`[NotebookLM Takeout] "${source.title}": ${imagesFound} images found, creating image versions`);
             } else {
@@ -3966,8 +3975,8 @@ async function exportSources(selectedSources) {
         const backResponse = await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_BACK' });
         console.log('[NotebookLM Takeout] NAVIGATE_BACK response:', backResponse);
 
-        // Wait for panel to close and sources list to reappear
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        // NAVIGATE_BACK resolves once the viewer is closed (Milestone 1: no
+        // extra fixed 1.5 s)
 
       } catch (error) {
         console.error(`[NotebookLM Takeout] Error extracting source "${source.title}":`, error);
@@ -4001,7 +4010,6 @@ async function exportSources(selectedSources) {
         try {
           console.log('[NotebookLM Takeout] Attempting to close panel after error...');
           await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_BACK' });
-          await new Promise(resolve => setTimeout(resolve, 1500));
         } catch (backError) {
           console.error('[NotebookLM Takeout] Failed to close panel:', backError);
         }

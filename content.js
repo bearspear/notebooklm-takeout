@@ -289,10 +289,6 @@
     return false;
   }
 
-  function waitForStableContent(el, options = {}) {
-    return waitForStable(() => (el && el.isConnected ? el.innerHTML.length : 0), options);
-  }
-
   function isExportCancelled() {
     return exportCancelled;
   }
@@ -2337,7 +2333,10 @@
     console.log('[NotebookLM Takeout] Content found:', content.tagName, content.className || '(no class)');
 
     // Wait a bit for content to fully render
-    await timePhase('note.content', () => waitForStableContent(content, { interval: 50, checks: 3, minLength: 20, timeout: 5000 }));
+    // Measure the note's TEXT (markup can settle before text loads)
+    await timePhase('note.content', () => waitForStable(
+      () => (content.isConnected ? content.textContent.trim().length : 0),
+      { interval: 50, checks: 3, minLength: 20, timeout: 5000 }));
 
     // Check if it's a mindmap viewer
     if (content.tagName.toLowerCase() === 'mindmap-viewer') {
@@ -2489,7 +2488,7 @@
       // Scroll into view first
       requestTimer.start('source.open');
       clickTarget.scrollIntoView({ behavior: 'instant', block: 'center' });
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise(resolve => setTimeout(resolve, 50));
 
       console.log(`[NotebookLM Takeout] Executing click...`);
 
@@ -2506,7 +2505,8 @@
       }
 
       console.log(`[NotebookLM Takeout] Click executed, waiting 1.5 seconds for source to open...`);
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // (Milestone 1: no fixed 1.5 s here; the source-viewer wait below and
+      // the content-stability wait cover loading)
 
       console.log(`[NotebookLM Takeout] Checking DOM state...`);
       console.log(`[NotebookLM Takeout] source-viewer count:`, document.querySelectorAll('source-viewer').length);
@@ -2532,22 +2532,29 @@
 
       console.log(`[NotebookLM Takeout] source-viewer found`);
 
-      // Wait a bit for content to load
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Content ready: the source BODY text (not the viewer shell, which
+      // settles before the text arrives) is at least 50 chars and unchanged
+      // over four 50 ms checks; capped at 10 s for large sources
+      // (was a fixed 500 ms after a fixed 1.5 s)
+      const sourceBodyLength = () => {
+        const body = sourceViewer.querySelector('.scroll-container, labs-tailwind-doc-viewer, .ql-editor');
+        return body ? body.textContent.trim().length : 0;
+      };
+      await waitForStable(sourceBodyLength, { interval: 50, checks: 4, minLength: 50, timeout: 10000 });
 
       requestTimer.end('source.content');
       requestTimer.start('source.guide');
       // Try to wait for source-guide-container to load (optional, timeout after 3 seconds)
-      console.log(`[NotebookLM Takeout] Waiting for source-guide-container to load...`);
-      try {
-        await waitForElement('.source-guide-container', 3000);
+      // Only when a metadata version is exported (needsGuide), scoped to this viewer
+      if (needsGuide) try {
+        await waitForElement('.source-guide-container', 3000, sourceViewer);
         console.log(`[NotebookLM Takeout] source-guide-container found`);
 
         // NEW: Wait for summary content to be generated (10 second timeout)
         console.log(`[NotebookLM Takeout] Waiting for summary content to generate...`);
 
         const summaryTimeout = 10000; // 10 seconds
-        const pollInterval = 200; // Check every 200ms
+        const pollInterval = 50; // Check every 50ms
         const maxAttempts = summaryTimeout / pollInterval; // 50 attempts
 
         let summaryAppeared = false;
@@ -3503,7 +3510,13 @@
 
   // Close the source viewer (sources panel). Kept separate from studio viewers.
   async function closeSourceViewer() {
-    const settle = () => new Promise(resolve => setTimeout(resolve, 800));
+    // Poll for the viewer to disappear (50 ms) instead of always waiting 800 ms
+    const settle = async () => {
+      for (let waited = 0; waited < 800; waited += 50) {
+        if (!document.querySelector('source-viewer')) return;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    };
     for (let attempt = 0; attempt < 3; attempt++) {
       if (!document.querySelector('source-viewer')) return true;
       console.log(`[NotebookLM Takeout] Source close attempt ${attempt + 1}/3`);
