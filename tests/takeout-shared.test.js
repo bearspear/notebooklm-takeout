@@ -84,3 +84,23 @@ test('pickByIndexThenTitle returns -1 when nothing is usable', () => {
   assert.equal(NLME.pickByIndexThenTitle(['A'], 5, 'Z'), -1);
   assert.equal(NLME.pickByIndexThenTitle([], 0, 'A'), -1);
 });
+
+test('countFailedExtractions counts structured source errors by type', () => {
+  assert.equal(NLME.countFailedExtractions([
+    { type: 'extraction_failed' }, { type: 'missing_summary' }, { type: 'extraction_error' }
+  ]), 2);
+});
+
+test('countFailedExtractions counts note error strings by message', () => {
+  assert.equal(NLME.countFailedExtractions([
+    '[A] Failed to extract: x', '[B] Exception during extraction: y', '[C] Citation 2: timeout'
+  ]), 2);
+});
+
+test('countFailedExtractions handles no errors', () => {
+  assert.equal(NLME.countFailedExtractions([]), 0);
+});
+
+test('ISSUES_URL points at this project', () => {
+  assert.equal(NLME.ISSUES_URL, 'https://github.com/bearspear/notebooklm-takeout/issues');
+});

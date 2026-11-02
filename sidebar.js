@@ -2975,7 +2975,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
         if (allErrors.length > 0) {
           // Build detailed error message
           const errorCount = allErrors.length;
-          const failedNotes = allErrors.filter(e => e.includes('Extraction failed')).length;
+          const failedNotes = NLME.countFailedExtractions(allErrors);
 
           if (versionCount > 1) {
             successMsg = `Exported ${selectedNotes.length} notes in ${totalZips} ZIP(s) (${versionCount} versions) with ${errorCount} warning(s)`;
@@ -4272,7 +4272,7 @@ async function exportSources(selectedSources) {
           errorsContent += '- Some images could not be embedded as base64. They remain as external links but may require authentication to view.\n';
         }
         errorsContent += '\n- If issues persist, please report them at:\n';
-        errorsContent += '  https://github.com/anthropics/claude-code/issues\n';
+        errorsContent += `  ${NLME.ISSUES_URL}\n`;
 
         zip.file('errors.txt', errorsContent);
         indexFiles.push({ path: 'errors.txt', title: 'Export Error Report' });
@@ -4428,8 +4428,7 @@ async function exportSources(selectedSources) {
           // Last ZIP
           if (allErrors.length > 0) {
             const errorCount = allErrors.length;
-            const failedSources = allErrors.filter(e => e.includes('Extraction failed')).length;
-            const missingMetadata = allErrors.filter(e => e.includes('Missing')).length;
+            const failedSources = NLME.countFailedExtractions(allErrors);
 
             let errorSummary = `Exported ${selectedSources.length} source(s) in ${totalZips} ZIP(s) with ${errorCount} warning(s)`;
             if (failedSources > 0) {
@@ -5014,7 +5013,7 @@ async function exportChat(chatData, extractFullCitations = false) {
         errorsContent += '- Message processing errors occurred. Check the browser console for details.\n\n';
       }
       errorsContent += '- If you continue to experience issues, please report them at:\n';
-      errorsContent += '  https://github.com/anthropics/claude-code/issues\n\n';
+      errorsContent += `  ${NLME.ISSUES_URL}\n\n`;
 
       zip.file('errors.txt', errorsContent);
       indexFiles.push({ path: 'errors.txt', title: 'Export Error Report' });

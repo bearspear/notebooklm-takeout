@@ -110,7 +110,23 @@
     return inRange ? index : -1;
   }
 
+  // Export errors are objects ({type, ...}) in the Sources export and strings
+  // ("[title] Failed to extract: ...") in the Notes export.
+  const FAILED_TYPES = ['extraction_failed', 'extraction_error'];
+  const FAILED_PHRASES = ['Failed to extract', 'Exception during extraction'];
+
+  function countFailedExtractions(errors) {
+    return (errors || []).filter(err => {
+      if (typeof err === 'string') return FAILED_PHRASES.some(p => err.includes(p));
+      return !!err && FAILED_TYPES.includes(err.type);
+    }).length;
+  }
+
+  const ISSUES_URL = 'https://github.com/bearspear/notebooklm-takeout/issues';
+
   const NLME = {
+    countFailedExtractions,
+    ISSUES_URL,
     pickByIndexThenTitle,
     STUDIO_HEADER_CLOSE_SELECTOR,
     buildCitationEntries,
