@@ -1383,8 +1383,10 @@
       critical: true
     });
 
-    // Check for individual source items
-    const sourceItems = document.querySelectorAll('.single-source-container');
+    // Check for individual source items. Notes in the Sources panel's "Notes"
+    // group share the container class and are excluded (Nov 2026).
+    const sourceItems = Array.from(document.querySelectorAll('.single-source-container'))
+      .filter(container => !isNoteSourceContainer(container));
     const hasSources = sourceItems.length > 0;
     checks.push({
       name: 'Source items found',
