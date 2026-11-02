@@ -2032,19 +2032,46 @@
     };
 
     // The tooltip is a singleton overlay; reading before the previous one is
-    // gone returns the previous citation's text.
-    const waitForTooltipGone = async () => {
-      for (let i = 0; i < 20; i++) {
-        if (!document.querySelector(TOOLTIP)) return true;
-        await sleep(100);
-      }
-      return false;
+    // gone returns the previous citation's text. Resolve on the removal itself
+    // (MutationObserver) instead of polling every 100 ms (Milestone 1, Speed).
+    const waitForTooltipGone = (timeout = 2000) => new Promise(resolve => {
+      if (!document.querySelector(TOOLTIP)) { resolve(true); return; }
+      const observer = new MutationObserver(() => {
+        if (!document.querySelector(TOOLTIP)) {
+          observer.disconnect();
+          clearTimeout(timer);
+          resolve(true);
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      const timer = setTimeout(() => {
+        observer.disconnect();
+        resolve(!document.querySelector(TOOLTIP));
+      }, timeout);
+    });
+    // If it lingers, press Escape once more; if it still stays, the caller
+    // fails the citation rather than risk the next one reading this text.
+    const ensureTooltipGone = async () => {
+      if (await waitForTooltipGone()) return true;
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      return waitForTooltipGone(500);
+    };
+    // Skip scrolling when the marker is already fully visible
+    const isInView = () => {
+      const r = button.getBoundingClientRect();
+      if (r.width === 0 || r.top < 0 || r.bottom > window.innerHeight) return false;
+      const scroller = button.closest('.chat-panel-content, .scroll-container, .scroll-area-desktop');
+      if (!scroller) return true;
+      const c = scroller.getBoundingClientRect();
+      return r.top >= c.top && r.bottom <= c.bottom;
     };
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        button.scrollIntoView({ behavior: 'instant', block: 'center' });
-        await sleep(100);
+        if (!isInView()) {
+          button.scrollIntoView({ behavior: 'instant', block: 'center' });
+          await sleep(50);
+        }
 
         if (document.querySelector(TOOLTIP)) {
           document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -2066,14 +2093,20 @@
           continue;
         }
 
-        const maxContentAttempts = 15 + (attempt - 1) * 5;
+        // Accept once header and quote are present and the quote's length is
+        // stable across two 30 ms checks; opacity is only a fallback signal
+        const maxContentAttempts = 25 + (attempt - 1) * 8;
+        const quoteStable = NLME.createStabilityTracker({ checks: 2, minLength: 1 });
         let textEl = null;
         for (let contentAttempt = 0; contentAttempt < maxContentAttempts; contentAttempt++) {
           textEl = tooltip.querySelector('.citation-tooltip-text');
+          const hasHeader = !!tooltip.querySelector('.citation-tooltip-header');
+          const length = textEl ? textEl.textContent.trim().length : 0;
+          if (hasHeader && quoteStable.push(length)) break;
           const opacity = parseFloat(window.getComputedStyle(tooltip).opacity);
-          if (opacity > 0.5 && textEl && textEl.textContent.trim().length > 0) break;
+          if (!hasHeader && opacity > 0.5 && length > 0) break;
           textEl = null;
-          await sleep(50);
+          await sleep(30);
         }
 
         if (!textEl) {
@@ -2100,7 +2133,9 @@
         quoteMarkdown = quoteMarkdown.trim();
 
         leave();
-        await waitForTooltipGone();
+        if (!(await ensureTooltipGone())) {
+          return { success: false, error: `Citation ${spanIndex}: Popover did not close` };
+        }
 
         if (attempt > 1) {
           console.log(`[NotebookLM Takeout] Citation ${spanIndex}: Succeeded on attempt ${attempt}`);
@@ -4867,8 +4902,8 @@
           errors.push(result.error);
         }
 
-        // Add delay between citations to avoid overwhelming API
-        await sleep(150);
+        // No pacing sleep: hovers make no Gemini Notebook data requests
+        // (measured Nov 2026); ensureTooltipGone already orders them
       }
 
     } catch (error) {

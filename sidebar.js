@@ -4899,8 +4899,8 @@ async function exportChat(chatData, extractFullCitations = false) {
         });
       }
 
-      // Rate limiting between messages
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // No pacing sleep between messages (Milestone 1): citations are read
+      // from the page, not fetched
     }
 
     console.log(`[NotebookLM Takeout] Processing complete: ${processedMessages.length} messages`);
