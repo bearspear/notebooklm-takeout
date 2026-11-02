@@ -319,3 +319,37 @@ test('summarizeExportOutcome reports when nothing was exported', () => {
   assert.equal(r.level, 'error');
   assert.equal(r.message, 'No notes exported (10 failed, see errors.txt)');
 });
+
+const DL = 'https://contribution.usercontent.google.com/download?c=abc&filename=deck.pdf';
+
+test('shouldIntercept is false when not armed', () => {
+  const arm = NLME.createInterceptArm(3000);
+  assert.equal(arm.shouldIntercept(DL, 1000), false);
+});
+
+test('arm then shouldIntercept true once, then false', () => {
+  const arm = NLME.createInterceptArm(3000);
+  arm.arm(1000);
+  assert.equal(arm.shouldIntercept(DL, 1500), true);
+  assert.equal(arm.shouldIntercept(DL, 1600), false);
+});
+
+test('arm expires after windowMs', () => {
+  const arm = NLME.createInterceptArm(3000);
+  arm.arm(1000);
+  assert.equal(arm.shouldIntercept(DL, 4001), false);
+});
+
+test('non-download URL never intercepted even when armed', () => {
+  const arm = NLME.createInterceptArm(3000);
+  arm.arm(1000);
+  assert.equal(arm.shouldIntercept('https://notebook.google.com/notebook/x', 1100), false);
+  assert.equal(arm.shouldIntercept(DL, 1200), true);
+});
+
+test('isNotebookDownloadUrl rejects lookalike hosts', () => {
+  assert.equal(NLME.isNotebookDownloadUrl('https://evil.com/?q=contribution.usercontent.google.com'), false);
+  assert.equal(NLME.isNotebookDownloadUrl(DL), true);
+  assert.equal(NLME.isNotebookDownloadUrl('https://lh3.googleusercontent.com/notebooklm/abc=d'), true);
+  assert.equal(NLME.isNotebookDownloadUrl('not a url'), false);
+});

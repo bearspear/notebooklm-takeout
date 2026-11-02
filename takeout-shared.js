@@ -330,7 +330,40 @@
     return { level: 'success', message: `Exported ${exported} of ${selected} ${kind}`, partial: false };
   }
 
+  // Gemini Notebook's own download links (More → Download opens one via
+  // window.open). Hostname-based, so lookalike query strings don't match.
+  function isNotebookDownloadUrl(url) {
+    let u;
+    try { u = new URL(url); } catch { return false; }
+    if (u.protocol !== 'https:') return false;
+    const host = u.hostname;
+    if (host === 'contribution.usercontent.google.com') return true;
+    if (host === 'googleusercontent.com' || host.endsWith('.googleusercontent.com')) {
+      const path = u.pathname.toLowerCase();
+      return path.includes('notebook') || path.startsWith('/download') || host.includes('notebook');
+    }
+    return false;
+  }
+
+  // The page-world download hook intercepts only right after the extension's
+  // own Download click (armed via a DOM event), never the user's own clicks.
+  function createInterceptArm(windowMs = 3000) {
+    let armedAt = null;
+    return {
+      arm(now) { armedAt = now; },
+      shouldIntercept(url, now) {
+        if (armedAt === null) return false;
+        if (now - armedAt > windowMs) { armedAt = null; return false; }
+        if (!isNotebookDownloadUrl(url)) return false;
+        armedAt = null; // consumed by the first match
+        return true;
+      }
+    };
+  }
+
   const NLME = {
+    isNotebookDownloadUrl,
+    createInterceptArm,
     summarizeExportOutcome,
     createJobLock,
     createPhaseTimer,

@@ -1564,6 +1564,12 @@ async function ensureContentScriptLoaded(tabId) {
         target: { tabId: tabId },
         files: ['takeout-shared.js', 'mindmap-extract.js', 'content.js']
       });
+      // The page-world download hook too (guarded against double install)
+      await chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        world: 'MAIN',
+        files: ['takeout-shared.js', 'injected.js']
+      }).catch(err => console.warn('[NotebookLM Takeout] Download hook injection failed:', err.message));
       await new Promise(resolve => setTimeout(resolve, 500));
       return true;
     }

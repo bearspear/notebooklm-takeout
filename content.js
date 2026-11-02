@@ -101,14 +101,8 @@
   };
 
   // Inject the page script for deeper access
-  function injectPageScript() {
-    const script = document.createElement('script');
-    script.src = chrome.runtime.getURL('injected.js');
-    script.onload = function() {
-      this.remove();
-    };
-    (document.head || document.documentElement).appendChild(script);
-  }
+  // injected.js now runs as a MAIN-world content script (manifest), armed per
+  // click; it is no longer injected as a <script> tag (Milestone 1).
 
   // Listen for messages from injected script
   window.addEventListener('message', (event) => {
@@ -651,15 +645,6 @@
 
   function handleInjectedMessage(data) {
     switch (data.type) {
-      case 'NLME_AUDIO_DETECTED':
-        captureArtifact('audio', data.payload);
-        break;
-      case 'NLME_SLIDES_DETECTED':
-        captureArtifact('slides', data.payload);
-        break;
-      case 'NLME_INFOGRAPHIC_DETECTED':
-        captureArtifact('infographics', data.payload);
-        break;
       case 'NLME_DOWNLOAD_URL_INTERCEPTED':
         // URL intercepted from window.open - no tab will open
         console.log('[NotebookLM Takeout] Download URL intercepted:', data.payload.url?.substring(0, 100));
@@ -934,10 +919,8 @@
 
   // Initialize
   function init() {
-    // Inject page script for window.open download interception. The old
-    // MutationObserver/5 s artifact polling was removed (Nov 2026): it only
-    // fed the toolbar badge and logged every few seconds.
-    injectPageScript();
+    // The download hook (injected.js) runs as a MAIN-world content script.
+    // The old MutationObserver/5 s artifact polling was removed (Nov 2026).
     console.log('[NotebookLM Takeout] Ready');
   }
 
@@ -3704,6 +3687,8 @@
     }
 
     console.log('[NotebookLM Takeout] [Download] Found download button, clicking...');
+    // Arm the page-world hook for this click only (injected.js)
+    document.dispatchEvent(new CustomEvent('nlme-arm-intercept'));
     downloadButton.click();
 
     // Wait for intercepted URL (from window.open interception) or download initiation

@@ -48,17 +48,18 @@
         "content-styles.css"
       ],
       "run_at": "document_idle"
-    }
-  ],
-  "web_accessible_resources": [
+    },
     {
-      "resources": [
-        "injected.js"
-      ],
       "matches": [
         "https://notebook.google.com/*",
         "https://notebooklm.google.com/*"
-      ]
+      ],
+      "js": [
+        "takeout-shared.js",
+        "injected.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
     }
   ],
   "icons": {
