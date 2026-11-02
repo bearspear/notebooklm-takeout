@@ -6,7 +6,7 @@
 const NOTEBOOK_HOSTS = ['notebook.google.com', 'notebooklm.google.com'];
 
 // Shared DOM-free helpers (globalThis.NLME)
-importScripts('takeout-shared.js');
+importScripts('takeout-shared.js', 'jszip.min.js');
 
 function isNotebookUrl(url) {
   return !!url && NOTEBOOK_HOSTS.some(host => url.includes(host));
@@ -47,6 +47,7 @@ let nextRequestId = 1;
 
 // Batch download mode - capture URLs instead of downloading
 let batchDownloadMode = false;
+let lastBatchResult = null; // final {success, count, errors} of the last batch
 let capturedDownload = null;
 let batchStatus = '';
 let batchCancelRequested = false;
@@ -212,13 +213,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true; // Keep channel open for async
 
     case 'BATCH_DOWNLOAD_ALL':
+      lastBatchResult = null;
       if (batchDownloadMode) {
         sendResponse({ started: false, success: false, error: 'A batch download is already running' });
         break;
       }
       // Run batch download entirely in background (popup may close)
       runBatchDownload(message.tabId, message.items, message.downloadPreference || 'pdf')
+        .catch(error => ({ success: false, count: 0, error: error.message, errors: [error.message] }))
         .then(result => {
+          lastBatchResult = result;
           // Notify via notification since popup may be closed
           if (result.success) {
             chrome.notifications.create({
@@ -247,7 +251,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'GET_BATCH_STATUS':
       sendResponse({
         inProgress: batchDownloadMode,
-        status: batchStatus
+        status: batchStatus,
+        result: lastBatchResult
       });
       break;
 
@@ -864,18 +869,18 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
     const uniqueNames = NLME.uniqueFilenames(fileContents.map(f => f.filename));
     fileContents.forEach((f, i) => { f.filename = uniqueNames[i]; });
     try {
-      const zipBase64 = await createZipFromFiles(fileContents);
+      const zipBase64 = await createZipFromFiles(fileContents, errors);
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 
-      // Download the ZIP
-      chrome.downloads.download({
+      // Download the ZIP (awaited: a failure here is a failed batch)
+      await chrome.downloads.download({
         url: `data:application/zip;base64,${zipBase64}`,
         filename: `notebooklm-export-${timestamp}.zip`,
         saveAs: true
       });
 
       batchStatus = `Complete: ${downloadedFiles.length} files`;
-      return { success: true, count: downloadedFiles.length };
+      return { success: true, count: downloadedFiles.length, errors };
     } catch (zipError) {
       console.error('[Background] ZIP creation failed:', zipError);
       console.log('[Background] Falling back to individual file downloads...');
@@ -1129,145 +1134,20 @@ function getExtensionFromType(type) {
   return typeMap[type] || '.bin';
 }
 
-// Simple ZIP creation using only base64 (no external library needed in service worker)
-async function createZipFromFiles(files) {
-  // We need to create a ZIP file manually since we can't use JSZip in service worker
-  // Use a simple ZIP format
-
-  const encoder = new TextEncoder();
-  const chunks = [];
-
-  // Local file headers and data
-  const centralDirectory = [];
-  let offset = 0;
-
+// Batch ZIP via the bundled JSZip (Milestone 1): UTF-8 file names, real
+// dates, and errors.txt when any item failed. Replaces the hand-written
+// writer, which garbled non-ASCII names and zeroed all dates.
+async function createZipFromFiles(files, errors = []) {
+  const zip = new JSZip();
   for (const file of files) {
-    const filenameBytes = encoder.encode(file.filename);
-    const fileData = base64ToUint8Array(file.data);
-
-    // Local file header
-    const localHeader = new Uint8Array(30 + filenameBytes.length);
-    const view = new DataView(localHeader.buffer);
-
-    view.setUint32(0, 0x04034b50, true); // Local file header signature
-    view.setUint16(4, 20, true); // Version needed
-    view.setUint16(6, 0, true); // Flags
-    view.setUint16(8, 0, true); // Compression (store)
-    view.setUint16(10, 0, true); // Mod time
-    view.setUint16(12, 0, true); // Mod date
-    view.setUint32(14, crc32(fileData), true); // CRC-32
-    view.setUint32(18, fileData.length, true); // Compressed size
-    view.setUint32(22, fileData.length, true); // Uncompressed size
-    view.setUint16(26, filenameBytes.length, true); // Filename length
-    view.setUint16(28, 0, true); // Extra field length
-
-    localHeader.set(filenameBytes, 30);
-
-    chunks.push(localHeader);
-    chunks.push(fileData);
-
-    // Store info for central directory
-    centralDirectory.push({
-      filename: filenameBytes,
-      crc: crc32(fileData),
-      size: fileData.length,
-      offset: offset
-    });
-
-    offset += localHeader.length + fileData.length;
+    zip.file(file.filename, file.data, { base64: true });
   }
-
-  // Central directory
-  const centralStart = offset;
-  for (const entry of centralDirectory) {
-    const centralHeader = new Uint8Array(46 + entry.filename.length);
-    const view = new DataView(centralHeader.buffer);
-
-    view.setUint32(0, 0x02014b50, true); // Central directory signature
-    view.setUint16(4, 20, true); // Version made by
-    view.setUint16(6, 20, true); // Version needed
-    view.setUint16(8, 0, true); // Flags
-    view.setUint16(10, 0, true); // Compression
-    view.setUint16(12, 0, true); // Mod time
-    view.setUint16(14, 0, true); // Mod date
-    view.setUint32(16, entry.crc, true); // CRC-32
-    view.setUint32(20, entry.size, true); // Compressed size
-    view.setUint32(24, entry.size, true); // Uncompressed size
-    view.setUint16(28, entry.filename.length, true); // Filename length
-    view.setUint16(30, 0, true); // Extra field length
-    view.setUint16(32, 0, true); // Comment length
-    view.setUint16(34, 0, true); // Disk number
-    view.setUint16(36, 0, true); // Internal attributes
-    view.setUint32(38, 0, true); // External attributes
-    view.setUint32(42, entry.offset, true); // Offset
-
-    centralHeader.set(entry.filename, 46);
-    chunks.push(centralHeader);
-    offset += centralHeader.length;
+  if (errors.length > 0) {
+    zip.file('errors.txt', NLME.formatErrorsTxt({
+      title: 'Download All',
+      generatedAt: new Date().toLocaleString(),
+      errors
+    }));
   }
-
-  // End of central directory
-  const endRecord = new Uint8Array(22);
-  const endView = new DataView(endRecord.buffer);
-
-  endView.setUint32(0, 0x06054b50, true); // End signature
-  endView.setUint16(4, 0, true); // Disk number
-  endView.setUint16(6, 0, true); // Central directory disk
-  endView.setUint16(8, centralDirectory.length, true); // Entries on this disk
-  endView.setUint16(10, centralDirectory.length, true); // Total entries
-  endView.setUint32(12, offset - centralStart, true); // Central directory size
-  endView.setUint32(16, centralStart, true); // Central directory offset
-  endView.setUint16(20, 0, true); // Comment length
-
-  chunks.push(endRecord);
-
-  // Combine all chunks
-  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const zipData = new Uint8Array(totalLength);
-  let pos = 0;
-  for (const chunk of chunks) {
-    zipData.set(chunk, pos);
-    pos += chunk.length;
-  }
-
-  // Convert to base64
-  let binary = '';
-  for (let i = 0; i < zipData.length; i++) {
-    binary += String.fromCharCode(zipData[i]);
-  }
-  return btoa(binary);
-}
-
-function base64ToUint8Array(base64) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-// CRC-32 calculation
-function crc32(data) {
-  let crc = 0xFFFFFFFF;
-  const table = getCRC32Table();
-  for (let i = 0; i < data.length; i++) {
-    crc = (crc >>> 8) ^ table[(crc ^ data[i]) & 0xFF];
-  }
-  return (crc ^ 0xFFFFFFFF) >>> 0;
-}
-
-function getCRC32Table() {
-  if (!getCRC32Table.table) {
-    const table = new Uint32Array(256);
-    for (let i = 0; i < 256; i++) {
-      let c = i;
-      for (let j = 0; j < 8; j++) {
-        c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
-      }
-      table[i] = c;
-    }
-    getCRC32Table.table = table;
-  }
-  return getCRC32Table.table;
+  return zip.generateAsync({ type: 'base64' });
 }

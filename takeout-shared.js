@@ -402,7 +402,17 @@
     return fresh.reduce((a, b) => (b.timestamp >= a.timestamp ? b : a)).url;
   }
 
+  function formatErrorsTxt({ title = 'Export', generatedAt = '', errors = [] } = {}) {
+    const lines = [`# ${title} Error Report`, ''];
+    if (generatedAt) lines.push(`Generated: ${generatedAt}`, '');
+    lines.push(`Errors: ${errors.length}`, '');
+    for (const e of errors) lines.push(`- ${e}`);
+    lines.push('', `Report issues: ${ISSUES_URL}`);
+    return lines.join('\n') + '\n';
+  }
+
   const NLME = {
+    formatErrorsTxt,
     titlesMatch,
     pickByIndexThenTitleStrict,
     pickFreshIntercept,

@@ -383,3 +383,12 @@ test('pickFreshIntercept ignores URLs from before the click', () => {
   assert.equal(NLME.pickFreshIntercept(entries, 10), 'new');
   assert.equal(NLME.pickFreshIntercept(entries, 20), null);
 });
+
+test('formatErrorsTxt lists every error and the issues link', () => {
+  const txt = NLME.formatErrorsTxt({ title: 'Artifacts', generatedAt: '11/2/2026, 1:00 PM', errors: ['Deck A: Download was not captured', 'Map B: Item changed'] });
+  assert.match(txt, /^# Artifacts Error Report/);
+  assert.match(txt, /- Deck A: Download was not captured/);
+  assert.match(txt, /- Map B: Item changed/);
+  assert.match(txt, /11\/2\/2026, 1:00 PM/);
+  assert.ok(txt.includes(NLME.ISSUES_URL));
+});

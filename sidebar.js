@@ -5932,65 +5932,61 @@ async function downloadAllArtifacts(tabId, items) {
     progressText.textContent = 'Creating ZIP...';
     progressFill.style.width = '0%';
 
+    // Awaited (Milestone 1): the job lock is held until the batch really
+    // ends, and the toast reports the background's actual result.
     try {
-      await chrome.runtime.sendMessage({
+      const start = await chrome.runtime.sendMessage({
         type: 'BATCH_DOWNLOAD_ALL',
         tabId: tabId,
         items: items,
         downloadPreference: settings.slidesFormat
       });
+      if (start && start.started === false) {
+        throw new Error(start.error || 'Batch download could not start');
+      }
 
-      // Poll for status
-      const pollStatus = setInterval(async () => {
-        // Check for cancellation
-        if (cancelled) {
-          console.log('[NotebookLM Takeout] ZIP download cancelled by user');
-          clearInterval(pollStatus);
+      let result = null;
+      let cancelSent = false;
+      let idlePolls = 0;
+      while (true) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        if (cancelled && !cancelSent) {
+          cancelSent = true;
           chrome.runtime.sendMessage({ type: 'CANCEL_BATCH_DOWNLOAD' }).catch(() => {});
-          showToast('Download cancelled', 'warning');
-
-          // Clean up overlay
-          chrome.runtime.onMessage.removeListener(cancelListener);
-          await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
-          progressPanel.style.display = 'none';
-          if (downloadBtn) downloadBtn.disabled = false;
-          return;
         }
-
         const status = await chrome.runtime.sendMessage({ type: 'GET_BATCH_STATUS' });
         if (status && status.status) {
           progressText.textContent = status.status;
-
-          // Update page overlay
-          await chrome.tabs.sendMessage(tab.id, {
+          chrome.tabs.sendMessage(tab.id, {
             type: 'UPDATE_EXPORT_OVERLAY',
             message: status.status,
-            progress: 50 // Approximate progress for ZIP creation
-          });
-
-          if (!status.inProgress) {
-            clearInterval(pollStatus);
-
-            // Clean up
-            chrome.runtime.onMessage.removeListener(cancelListener);
-            await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
-            progressPanel.style.display = 'none';
-
-            if (settings.showNotifications) {
-              showToast('ZIP download complete!');
-            }
-          }
+            progress: 50
+          }).catch(() => {});
         }
-      }, 500);
+        if (status && !status.inProgress) {
+          if (status.result) { result = status.result; break; }
+          if (++idlePolls >= 10) break; // finished without a result (e.g. cancelled early)
+        }
+      }
 
+      const errors = (result && result.errors) || [];
+      const outcome = NLME.summarizeExportOutcome({
+        kind: 'artifacts',
+        selected: items.length,
+        exported: (result && result.count) || 0,
+        failed: errors.length,
+        cancelled
+      });
+      showToast(result && result.error && !result.count ? `Download All failed: ${result.error}` : outcome.message,
+        result && result.error && !result.count ? 'error' : outcome.level);
     } catch (error) {
-      console.error('Failed to start batch download:', error);
-      showToast('Failed to start download', 'error');
-
-      // Clean up on error
+      console.error('Batch download failed:', error);
+      showToast(`Download All failed: ${error.message}`, 'error');
+    } finally {
       chrome.runtime.onMessage.removeListener(cancelListener);
-      await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
+      await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' }).catch(() => {});
       progressPanel.style.display = 'none';
+      if (downloadBtn) downloadBtn.disabled = false;
     }
     return; // Early return for ZIP pathway
   } else {
