@@ -65,6 +65,16 @@
     return (ariaLabel || '').includes('additional citations');
   }
 
+  // A collapsed citation group still to be expanded. Once expanded the same
+  // button shows unfold_less / "Hide additional citations" (Nov 2026), and
+  // clicking it again would collapse the group.
+  function isCollapsedCitationGroup({ iconText, ariaLabel } = {}) {
+    const icon = (iconText || '').trim();
+    const label = (ariaLabel || '').trim().toLowerCase();
+    if (icon === 'unfold_less' || label.startsWith('hide')) return false;
+    return icon === 'more_horiz' || icon === '...' || label.startsWith('show additional citations');
+  }
+
   function parseCitationIndex(text) {
     const t = (text || '').trim();
     return /^[0-9]+$/.test(t) ? t : null;
@@ -171,6 +181,7 @@
   }
 
   const NLME = {
+    isCollapsedCitationGroup,
     renumberCitationAnchors,
     uniqueFilenames,
     pickDownloadMenuIndex,

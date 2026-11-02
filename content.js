@@ -4179,43 +4179,40 @@
       return;
     }
 
-    // Find all citation buttons with "..." or "more_horiz" text (collapsed indicators)
-    const allCitationButtons = chatPanel.querySelectorAll('button.citation-marker');
-    const collapsedButtons = Array.from(allCitationButtons).filter(button => {
-      // Check for mat-icon (new DOM) or span (old DOM)
+    // Only click groups that are still collapsed. Expanded groups show
+    // unfold_less / "Hide additional citations"; clicking those would
+    // collapse them again, e.g. when the chat is scanned a second time.
+    const findCollapsed = () => Array.from(chatPanel.querySelectorAll('button.citation-marker')).filter(button => {
       const icon = button.querySelector('mat-icon, span');
-      const text = icon?.textContent?.trim();
-      const ariaLabel = icon?.getAttribute('aria-label');
-      // Check for "..." or "more_horiz" text, or "Show additional citations" aria-label
-      return text === '...' || text === 'more_horiz' || ariaLabel?.includes('additional citations');
+      return NLME.isCollapsedCitationGroup({ iconText: icon?.textContent, ariaLabel: icon?.getAttribute('aria-label') });
     });
 
-    console.log(`[NotebookLM Takeout] Found ${collapsedButtons.length} collapsed citation indicators`);
+    let collapsedButtons = findCollapsed();
+    console.log(`[NotebookLM Takeout] Found ${collapsedButtons.length} collapsed citation groups`);
 
     if (collapsedButtons.length === 0) {
       console.log('[NotebookLM Takeout] No collapsed citations to expand');
       return;
     }
 
-    // Click each collapsed button to expand
-    for (let i = 0; i < collapsedButtons.length; i++) {
-      const button = collapsedButtons[i];
-
-      try {
-        console.log(`[NotebookLM Takeout] Expanding collapsed citation ${i + 1}/${collapsedButtons.length}...`);
-
-        // Scroll into view
-        button.scrollIntoView({ behavior: 'instant', block: 'center' });
-        await sleep(100);
-
-        // Click to expand
-        button.click();
-        await sleep(300); // Wait for expansion animation
-
-        console.log(`[NotebookLM Takeout] ✓ Expanded citation ${i + 1}/${collapsedButtons.length}`);
-      } catch (error) {
-        console.error(`[NotebookLM Takeout] Error expanding collapsed citation ${i + 1}:`, error);
+    // Re-scan after each pass: Angular may re-render a message and replace
+    // buttons that were collected before the first click.
+    for (let pass = 1; pass <= 3 && collapsedButtons.length > 0; pass++) {
+      for (let i = 0; i < collapsedButtons.length; i++) {
+        const button = collapsedButtons[i];
+        if (!button.isConnected) continue;
+        try {
+          button.scrollIntoView({ behavior: 'instant', block: 'center' });
+          await sleep(100);
+          button.click();
+          await sleep(300); // Wait for expansion animation
+        } catch (error) {
+          console.error(`[NotebookLM Takeout] Error expanding citation group ${i + 1}:`, error);
+        }
       }
+      await sleep(300);
+      collapsedButtons = findCollapsed();
+      console.log(`[NotebookLM Takeout] Expansion pass ${pass}: ${collapsedButtons.length} collapsed group(s) remain`);
     }
 
     // Final wait for all expansions to complete

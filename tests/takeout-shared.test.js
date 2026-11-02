@@ -163,3 +163,15 @@ test('renumberCitationAnchors leaves back-links in the Sources section untouched
   const md = '**[[3]](#msg-0-cite-ref-3-1)** Title';
   assert.equal(NLME.renumberCitationAnchors(md), md);
 });
+
+test('isCollapsedCitationGroup matches only groups that are still collapsed', () => {
+  assert.equal(NLME.isCollapsedCitationGroup({ iconText: 'more_horiz', ariaLabel: 'Show additional citations' }), true);
+  assert.equal(NLME.isCollapsedCitationGroup({ iconText: '...' }), true);
+  assert.equal(NLME.isCollapsedCitationGroup({ ariaLabel: 'Show additional citations' }), true);
+});
+
+test('isCollapsedCitationGroup never matches an expanded group (clicking it would collapse it)', () => {
+  assert.equal(NLME.isCollapsedCitationGroup({ iconText: 'unfold_less', ariaLabel: 'Hide additional citations' }), false);
+  assert.equal(NLME.isCollapsedCitationGroup({ ariaLabel: 'Hide additional citations' }), false);
+  assert.equal(NLME.isCollapsedCitationGroup({ iconText: '3' }), false);
+});
