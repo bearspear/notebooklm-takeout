@@ -361,7 +361,51 @@
     };
   }
 
+  // Title comparison for identity checks: whitespace- and ellipsis-tolerant,
+  // and a title truncated with an ellipsis matches its full form.
+  function normalizeTitle(t) {
+    return (t || '').replace(/\u2026/g, '...').replace(/\s+/g, ' ').trim();
+  }
+
+  function titlesMatch(a, b) {
+    const x = normalizeTitle(a);
+    const y = normalizeTitle(b);
+    if (!x || !y) return false;
+    if (x === y) return true;
+    const prefixMatch = (short, full) => {
+      if (!short.endsWith('...')) return false;
+      const stem = short.slice(0, -3).trim();
+      return stem.length > 0 && full.startsWith(stem);
+    };
+    return prefixMatch(x, y) || prefixMatch(y, x);
+  }
+
+  // Like pickByIndexThenTitle, but never falls back to an index whose title
+  // differs: the item the user picked must still be the item we open.
+  function pickByIndexThenTitleStrict(titles, index, title) {
+    const list = titles || [];
+    const inRange = Number.isInteger(index) && index >= 0 && index < list.length;
+    if (!normalizeTitle(title)) {
+      if (inRange) return index;
+      throw new Error(`Item changed: index ${index} is out of range`);
+    }
+    if (inRange && titlesMatch(list[index], title)) return index;
+    const byTitle = list.findIndex(t => titlesMatch(t, title));
+    if (byTitle !== -1) return byTitle;
+    throw new Error(`Item changed: expected "${title}"`);
+  }
+
+  // Newest intercepted download URL captured at or after the click.
+  function pickFreshIntercept(entries, since) {
+    const fresh = (entries || []).filter(e => e && e.url && e.timestamp >= since);
+    if (fresh.length === 0) return null;
+    return fresh.reduce((a, b) => (b.timestamp >= a.timestamp ? b : a)).url;
+  }
+
   const NLME = {
+    titlesMatch,
+    pickByIndexThenTitleStrict,
+    pickFreshIntercept,
     isNotebookDownloadUrl,
     createInterceptArm,
     summarizeExportOutcome,

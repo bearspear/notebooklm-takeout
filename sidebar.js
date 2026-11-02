@@ -1029,20 +1029,8 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
         }
       });
     } else {
-      // For non-Report artifacts: Click the More button in page context
-      logger.info('Download', `Clicking More button for artifact ${artifactIndex}...`);
-      const clickResult = await chrome.scripting.executeScript({
-        target: { tabId: tabId },
-        func: clickArtifactMoreButton,
-        args: [artifactIndex]
-      });
-
-      if (!clickResult || !clickResult[0]?.result?.success) {
-        throw new Error(clickResult[0]?.result?.error || 'Failed to click More button');
-      }
-
-      // Wait for menu to appear
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // The content script resolves the row by title and clicks its own More
+      // button (Milestone 1); no separate index-only click from here.
 
       // For non-extractable artifacts, enable intercept mode BEFORE clicking download button
       // This prevents tabs from opening for slides and infographics
@@ -1060,7 +1048,6 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
           artifactIndex: artifactIndex,
           artifactType: artifactType,
           artifactName: artifactName,
-          moreButtonAlreadyClicked: true,
           downloadPreference: settings.slidesFormat
         }
       });
@@ -1259,18 +1246,20 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
 
       logger.info('Download', `Waiting for background intercept to complete...`);
 
-      // Wait for interception to complete
-      await new Promise(resolve => setTimeout(resolve, 2500));
-
-      // Check if download was intercepted successfully
-      const result = await chrome.runtime.sendMessage({
-        type: 'GET_INTERCEPTED_DOWNLOAD'
-      });
-
+      // No intercepted URL came back: wait for the background to capture the
+      // download, and fail loudly if it never does (Milestone 1; this used to
+      // log a warning and report success).
+      let result = null;
+      for (let waited = 0; waited < 20000; waited += 250) {
+        result = await chrome.runtime.sendMessage({ type: 'GET_INTERCEPTED_DOWNLOAD' });
+        if (result && result.success) break;
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
       if (result && result.success) {
         logger.download(filename, 'success', `Downloaded without tab: ${result.filename}`);
       } else {
-        logger.warn('Download', 'Interception may have failed');
+        chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
+        throw new Error('Download was not captured');
       }
     }
 
@@ -3827,7 +3816,7 @@ async function exportSources(selectedSources) {
           async () => {
             return await chrome.tabs.sendMessage(tab.id, {
               type: 'EXTRACT_SOURCE',
-              data: { sourceIndex: source.index }
+              data: { sourceIndex: source.index, title: source.title }
             });
           },
           2, // maxRetries
@@ -5562,51 +5551,6 @@ function getIconForType(type) {
   return icons[type] || `<svg width="20" height="20" viewBox="0 0 24 24" fill="#5f6368">
     <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
   </svg>`;
-}
-
-// This runs in the page context to click artifact More button
-// Returns the artifact metadata needed for download
-function clickArtifactMoreButton(artifactIndex) {
-  console.log(`[NotebookLM Takeout] Clicking More button for artifact ${artifactIndex}`);
-
-  // Build array of More buttons ONLY from artifact-library-item (not from notes)
-  const artifactMoreButtons = [];
-  document.querySelectorAll('artifact-library-item').forEach(item => {
-    const btn = item.querySelector('button[aria-label="More"]');
-    if (btn) {
-      artifactMoreButtons.push(btn);
-    }
-  });
-
-  if (artifactIndex < 0 || artifactIndex >= artifactMoreButtons.length) {
-    throw new Error(`Artifact index ${artifactIndex} out of range (0-${artifactMoreButtons.length - 1})`);
-  }
-
-  const moreButton = artifactMoreButtons[artifactIndex];
-  const artifactItem = moreButton.closest('artifact-library-item');
-
-  if (!artifactItem) {
-    throw new Error('Could not find artifact-library-item parent');
-  }
-
-  // Get artifact metadata
-  const titleEl = artifactItem.querySelector('.artifact-title');
-  const title = titleEl?.textContent?.trim() || `Artifact ${artifactIndex + 1}`;
-
-  const mainButton = artifactItem.querySelector('button[aria-description]');
-  const type = mainButton?.getAttribute('aria-description') || '';
-
-  // Click the More button
-  moreButton.click();
-
-  console.log(`[NotebookLM Takeout] Clicked More button for: ${title} (${type})`);
-
-  return {
-    success: true,
-    title: title,
-    type: type,
-    index: artifactIndex
-  };
 }
 
 async function triggerItemDownload(tabId, itemIndex, artifactName, artifactType) {

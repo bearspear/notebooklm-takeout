@@ -353,3 +353,33 @@ test('isNotebookDownloadUrl rejects lookalike hosts', () => {
   assert.equal(NLME.isNotebookDownloadUrl('https://lh3.googleusercontent.com/notebooklm/abc=d'), true);
   assert.equal(NLME.isNotebookDownloadUrl('not a url'), false);
 });
+
+test('titlesMatch ignores whitespace and ellipsis style', () => {
+  assert.equal(NLME.titlesMatch('The  Electric…', 'The Electric...'), true);
+});
+
+test('titlesMatch accepts a truncated title ending in an ellipsis', () => {
+  assert.equal(NLME.titlesMatch('Halton Arp Quasar…', 'Halton Arp Quasar Model Verified'), true);
+});
+
+test('titlesMatch rejects different titles', () => {
+  assert.equal(NLME.titlesMatch('A', 'B'), false);
+});
+
+test('pickByIndexThenTitleStrict keeps the index when it matches', () => {
+  assert.equal(NLME.pickByIndexThenTitleStrict(['A', 'B', 'A'], 2, 'A'), 2);
+});
+
+test('pickByIndexThenTitleStrict follows the title when the list shifted', () => {
+  assert.equal(NLME.pickByIndexThenTitleStrict(['X', 'A', 'B'], 0, 'A'), 1);
+});
+
+test('pickByIndexThenTitleStrict throws when the title is gone', () => {
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(['A', 'B'], 1, 'Z'), /Item changed/);
+});
+
+test('pickFreshIntercept ignores URLs from before the click', () => {
+  const entries = [{ url: 'old', timestamp: 5 }, { url: 'new', timestamp: 12 }];
+  assert.equal(NLME.pickFreshIntercept(entries, 10), 'new');
+  assert.equal(NLME.pickFreshIntercept(entries, 20), null);
+});

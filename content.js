@@ -354,7 +354,7 @@
       return true;
     } else if (message.type === 'EXTRACT_SOURCE') {
       // Extract source content
-      withRequestTiming(() => extractSourceContent(message.data.sourceIndex))
+      withRequestTiming(() => extractSourceContent(message.data.sourceIndex, message.data.title || '', message.data.needsGuide !== false))
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ error: error.message }));
       return true;
@@ -424,7 +424,6 @@
       handleArtifactDownload(
         message.data.artifactIndex,
         message.data.artifactType,
-        message.data.moreButtonAlreadyClicked || false,
         message.data.skipMoreButton || false,
         message.data.artifactName || null,
         message.data.downloadPreference || 'pdf'
@@ -640,50 +639,46 @@
   }
 
   // Store for intercepted download URLs (from window.open interception)
-  let lastInterceptedDownloadUrl = null;
-  let downloadUrlResolvers = []; // Callbacks waiting for intercepted URLs
+  // Intercepted download URLs with their page timestamps; an item accepts
+  // only URLs captured at or after its own click (NLME.pickFreshIntercept).
+  const interceptedDownloads = [];
+  let downloadUrlResolvers = []; // { since, resolve } waiting for a fresh URL
 
   function handleInjectedMessage(data) {
     switch (data.type) {
-      case 'NLME_DOWNLOAD_URL_INTERCEPTED':
-        // URL intercepted from window.open - no tab will open
-        console.log('[NotebookLM Takeout] Download URL intercepted:', data.payload.url?.substring(0, 100));
-        lastInterceptedDownloadUrl = data.payload.url;
-        // Resolve any waiting promises
-        while (downloadUrlResolvers.length > 0) {
-          const resolver = downloadUrlResolvers.shift();
-          resolver(data.payload.url);
-        }
+      case 'NLME_DOWNLOAD_URL_INTERCEPTED': {
+        const entry = { url: data.payload?.url, timestamp: data.payload?.timestamp || Date.now() };
+        console.log('[NotebookLM Takeout] Download URL intercepted:', entry.url?.substring(0, 100));
+        interceptedDownloads.push(entry);
+        if (interceptedDownloads.length > 10) interceptedDownloads.shift();
+        downloadUrlResolvers = downloadUrlResolvers.filter(waiter => {
+          if (entry.timestamp >= waiter.since) {
+            waiter.resolve(entry.url);
+            return false;
+          }
+          return true;
+        });
         break;
+      }
     }
   }
 
   /**
-   * Wait for an intercepted download URL (with timeout)
+   * Wait for a download URL intercepted at or after `since` (with timeout).
    */
-  function waitForInterceptedUrl(timeoutMs = 3000) {
+  function waitForInterceptedUrl(since, timeoutMs = 25000) {
     return new Promise((resolve) => {
-      // Check if we already have a recent URL
-      if (lastInterceptedDownloadUrl) {
-        const url = lastInterceptedDownloadUrl;
-        lastInterceptedDownloadUrl = null; // Consume it
-        resolve(url);
+      const already = NLME.pickFreshIntercept(interceptedDownloads, since);
+      if (already) {
+        resolve(already);
         return;
       }
-
-      // Set up timeout
-      const timeout = setTimeout(() => {
-        const index = downloadUrlResolvers.indexOf(resolverFn);
-        if (index > -1) downloadUrlResolvers.splice(index, 1);
-        resolve(null); // Timeout - no URL intercepted
+      const waiter = { since, resolve: (url) => { clearTimeout(timer); resolve(url); } };
+      const timer = setTimeout(() => {
+        downloadUrlResolvers = downloadUrlResolvers.filter(w => w !== waiter);
+        resolve(null);
       }, timeoutMs);
-
-      // Add resolver to wait list
-      const resolverFn = (url) => {
-        clearTimeout(timeout);
-        resolve(url);
-      };
-      downloadUrlResolvers.push(resolverFn);
+      downloadUrlResolvers.push(waiter);
     });
   }
 
@@ -2326,7 +2321,7 @@
    * @param {number} sourceIndex - Index of the source in the list
    * @returns {Promise<Object>} - { html, sources, title }
    */
-  async function extractSourceContent(sourceIndex) {
+  async function extractSourceContent(sourceIndex, expectedTitle = '', needsGuide = true) {
     console.log(`[NotebookLM Takeout] Extracting source content for index ${sourceIndex}...`);
 
     const startTime = Date.now();
@@ -2349,11 +2344,19 @@
         throw new Error(`No source containers found. Make sure you're on the Sources page in NotebookLM. Current URL: ${currentUrl}`);
       }
 
-      if (sourceIndex >= sourceContainers.length) {
+      // Identity check (Milestone 1): the scanned index is used only while its
+      // title still matches; otherwise follow the title, else fail the item.
+      // Note containers map to '' and can never match a source title.
+      const containerTitles = Array.from(sourceContainers).map(c =>
+        isNoteSourceContainer(c) ? '' : getSourceContainerTitle(c));
+      const resolvedIndex = expectedTitle
+        ? NLME.pickByIndexThenTitleStrict(containerTitles, sourceIndex, expectedTitle)
+        : sourceIndex;
+      if (resolvedIndex >= sourceContainers.length) {
         throw new Error(`Source index ${sourceIndex} out of range (total: ${sourceContainers.length})`);
       }
 
-      const container = sourceContainers[sourceIndex];
+      const container = sourceContainers[resolvedIndex];
       if (isNoteSourceContainer(container)) {
         throw new Error('This item is a note; export it from the Notes tab');
       }
@@ -3454,7 +3457,7 @@
    * Main handler for artifact downloads via message passing
    * Coordinates the download process with proper error handling and metadata
    */
-  async function handleArtifactDownload(artifactIndex, artifactType, moreButtonAlreadyClicked = false, skipMoreButton = false, artifactName = null, downloadPreference = 'pdf') {
+  async function handleArtifactDownload(artifactIndex, artifactType, skipMoreButton = false, artifactName = null, downloadPreference = 'pdf') {
     console.log(`[NotebookLM Takeout] [Download] Starting download for artifact ${artifactIndex} (${artifactType})`);
     const startTime = Date.now();
 
@@ -3510,24 +3513,19 @@
       }
 
       // For other artifacts, find by index (original logic)
-      if (!moreButtonAlreadyClicked) {
-        // Build array of More buttons ONLY from artifact-library-item (not from notes)
-        // Same index space as SCAN_STUDIO_ITEMS moreIndex
-        const artifactMoreButtons = getArtifactItemsWithMore()
-          .map(item => item.querySelector('button[aria-label="More"]'));
-
-        if (artifactIndex < 0 || artifactIndex >= artifactMoreButtons.length) {
-          throw new Error(`Artifact index ${artifactIndex} out of range (0-${artifactMoreButtons.length - 1})`);
-        }
-
-        const moreButton = artifactMoreButtons[artifactIndex];
-        artifactItem = moreButton.closest('artifact-library-item');
-        if (!artifactItem) {
-          throw new Error('Could not find artifact-library-item parent');
-        }
-      } else {
-        console.log('[NotebookLM Takeout] [Download] More button already clicked, waiting for menu...');
+      // Identity check (Milestone 1): the scanned index is used only while its
+      // title still matches, else the title is followed, else the item fails.
+      // The row is resolved here and its own More button clicked below; the
+      // old sidebar-side More click by index alone could open the wrong menu.
+      const rows = getArtifactItemsWithMore();
+      const rowTitles = rows.map(item => item.querySelector('.artifact-title')?.textContent?.trim() || '');
+      const pick = artifactName
+        ? NLME.pickByIndexThenTitleStrict(rowTitles, artifactIndex, artifactName)
+        : artifactIndex;
+      if (pick < 0 || pick >= rows.length) {
+        throw new Error(`Artifact index ${artifactIndex} out of range (0-${rows.length - 1})`);
       }
+      artifactItem = rows[pick];
 
       // Detect artifact type from icon if artifactItem is available (fallback for DOM changes)
       if (artifactItem) {
@@ -3596,32 +3594,30 @@
         console.log(`[NotebookLM Takeout] [Download] ${artifactType} extraction failed, falling back to button click`);
       }
 
-      // Try infographic extraction first (tiered fallback: SVG → Canvas → Button)
-      if (artifactType === 'Infographic' && artifactItem) {
-        console.log('[NotebookLM Takeout] [Download] Attempting infographic extraction...');
-        const extractResult = await tryExtractInfographic(artifactItem);
-
-        if (extractResult.success) {
-          const duration = Date.now() - startTime;
-          console.log(`[NotebookLM Takeout] [Download] ✓ Infographic extracted via ${extractResult.method} (${duration}ms)`);
-          return {
-            success: true,
-            method: extractResult.method,
-            data: extractResult.data,
-            format: extractResult.format,
-            dimensions: extractResult.dimensions,
-            title: artifactTitle, // Include extracted title
-            duration: duration
-          };
+      // Download through the item's own More menu. Infographics keep their
+      // original file this way; capturing the rendered SVG/canvas is only a
+      // fallback when the menu has no Download item (Milestone 1).
+      let buttonResult;
+      try {
+        buttonResult = await clickArtifactDownloadButton(artifactItem.querySelector('button[aria-label="More"]'), downloadPreference);
+      } catch (error) {
+        if (artifactType === 'Infographic' && /Download button not found/.test(error.message)) {
+          console.log('[NotebookLM Takeout] [Download] No Download item; capturing the rendered infographic...');
+          const extractResult = await tryExtractInfographic(artifactItem);
+          if (extractResult.success) {
+            return {
+              success: true,
+              method: extractResult.method,
+              data: extractResult.data,
+              format: extractResult.format,
+              dimensions: extractResult.dimensions,
+              title: artifactTitle,
+              duration: Date.now() - startTime
+            };
+          }
         }
-
-        // Fall through to button click if extraction failed
-        console.log('[NotebookLM Takeout] [Download] Extraction failed, falling back to button click');
+        throw error;
       }
-
-      // For all other artifacts (or infographic fallback), click download button
-      console.log('[NotebookLM Takeout] [Download] Attempting download button click...');
-      const buttonResult = await clickArtifactDownloadButton(moreButtonAlreadyClicked ? null : artifactItem?.querySelector('button[aria-label="More"]'), artifactItem, moreButtonAlreadyClicked, downloadPreference);
 
       const duration = Date.now() - startTime;
 
@@ -3662,17 +3658,14 @@
    * Uses MutationObserver to detect UI state changes instead of hard-coded delays
    * Now also captures intercepted download URLs from window.open
    */
-  async function clickArtifactDownloadButton(moreButton, artifactItem, moreButtonAlreadyClicked = false, downloadPreference = 'pdf') {
-    // Clear any previous intercepted URL
-    lastInterceptedDownloadUrl = null;
-
-    // Click the More button to open menu (unless already clicked)
-    if (!moreButtonAlreadyClicked && moreButton) {
-      console.log('[NotebookLM Takeout] [Download] Clicking More button...');
-      moreButton.click();
-    } else {
-      console.log('[NotebookLM Takeout] [Download] More button already clicked, skipping...');
+  async function clickArtifactDownloadButton(moreButton, downloadPreference = 'pdf') {
+    if (!moreButton) {
+      throw new Error('More button not found for this item');
     }
+    // URLs intercepted before this moment belong to an earlier item
+    const clickedAt = Date.now();
+    console.log('[NotebookLM Takeout] [Download] Clicking More button...');
+    moreButton.click();
 
     // Wait for menu to appear with adaptive waiting
     console.log('[NotebookLM Takeout] [Download] Waiting for menu to appear...');
@@ -3693,7 +3686,7 @@
 
     // Wait for intercepted URL (from window.open interception) or download initiation
     console.log('[NotebookLM Takeout] [Download] Waiting for intercepted URL...');
-    const interceptedUrl = await waitForInterceptedUrl(2000);
+    const interceptedUrl = await waitForInterceptedUrl(clickedAt, 25000);
 
     if (interceptedUrl) {
       console.log('[NotebookLM Takeout] [Download] Got intercepted URL (no tab opened):', interceptedUrl.substring(0, 100));
