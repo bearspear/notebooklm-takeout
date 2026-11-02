@@ -2859,6 +2859,9 @@ async function exportNotesAsMarkdown(selectedNotes) {
 
   const allErrors = [];
   let cancelled = false;
+  let exportedCount = 0;
+  let attemptedCount = 0;
+  let errorsWritten = false;
   let userAcknowledgedWarning = false; // Track if user already acknowledged DOM issues
 
   // Listen for cancellation
@@ -2881,7 +2884,6 @@ async function exportNotesAsMarkdown(selectedNotes) {
     for (let zipIndex = 0; zipIndex < totalZips; zipIndex++) {
       if (cancelled) {
         console.log('[NotebookLM Takeout] Export cancelled by user');
-        showToast('Export cancelled', 'warning');
         break;
       }
 
@@ -2897,11 +2899,11 @@ async function exportNotesAsMarkdown(selectedNotes) {
       // Check for cancellation
       if (cancelled) {
         console.log('[NotebookLM Takeout] Export cancelled by user');
-        showToast('Export cancelled', 'warning');
         break;
       }
 
       const note = batchNotes[i];
+      attemptedCount++;
       const overallIndex = startIdx + i;
       const progress = ((overallIndex + 1) / selectedNotes.length) * 100;
 
@@ -3021,38 +3023,12 @@ async function exportNotesAsMarkdown(selectedNotes) {
       console.log(`[NotebookLM Takeout] Creating ZIP ${zipIndex + 1}/${totalZips} with ${exportedNotes.length} notes from this batch`);
       progressText.textContent = `Creating ZIP ${zipIndex + 1}/${totalZips}...`;
       progressFill.style.width = '100%';
-      // Create ZIP for this batch (pass ALL errors only to LAST batch so errors.txt contains everything)
-      const batchErrors = (zipIndex === totalZips - 1) ? allErrors : [];
-      const versionCount = await createNotesZip(exportedNotes, batchErrors, zipIndex + 1, totalZips, projectName, timestamp);
-
-      // Show toast only on last batch
-      if (zipIndex === totalZips - 1) {
-        let successMsg;
-        if (allErrors.length > 0) {
-          // Build detailed error message
-          const errorCount = allErrors.length;
-          const failedNotes = NLME.countFailedExtractions(allErrors);
-
-          if (versionCount > 1) {
-            successMsg = `Exported ${selectedNotes.length} notes in ${totalZips} ZIP(s) (${versionCount} versions) with ${errorCount} warning(s)`;
-          } else {
-            successMsg = `Exported ${selectedNotes.length} notes in ${totalZips} ZIP(s) with ${errorCount} warning(s)`;
-          }
-
-          if (failedNotes > 0) {
-            successMsg += ` (${failedNotes} failed to extract)`;
-          }
-          successMsg += '. See errors.txt in last ZIP for details.';
-        } else {
-          // Success message
-          if (versionCount > 1) {
-            successMsg = `Successfully exported ${selectedNotes.length} notes in ${totalZips} ZIP(s) (${versionCount} versions)`;
-          } else {
-            successMsg = `Successfully exported ${selectedNotes.length} notes in ${totalZips} ZIP(s)`;
-          }
-        }
-        showToast(successMsg, allErrors.length > 0 ? 'warning' : 'success');
-      }
+      // errors.txt goes into the last ZIP this run writes: the final batch, or
+      // the batch the user cancelled in. A cancelled run is named -PARTIAL.
+      const isLastZip = zipIndex === totalZips - 1 || cancelled;
+      exportedCount += exportedNotes.length;
+      await createNotesZip(exportedNotes, isLastZip ? allErrors : [], zipIndex + 1, totalZips, projectName, timestamp, cancelled ? '-PARTIAL' : '');
+      if (isLastZip && allErrors.length > 0) errorsWritten = true;
 
       // CRITICAL: Clear memory after each ZIP to prevent crashes
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -3075,6 +3051,21 @@ async function exportNotesAsMarkdown(selectedNotes) {
       }
     } // End of "if exportedNotes.length > 0"
     } // End of batch loop
+
+    // Never lose errors: if no ZIP carried them (all of the last batch failed,
+    // or the run stopped before writing), write an errors-only ZIP.
+    if (allErrors.length > 0 && !errorsWritten) {
+      await createNotesZip([], allErrors, totalZips, totalZips, projectName, timestamp, cancelled ? '-PARTIAL' : '');
+    }
+
+    const outcome = NLME.summarizeExportOutcome({
+      kind: 'notes',
+      selected: selectedNotes.length,
+      exported: exportedCount,
+      failed: Math.max(0, attemptedCount - exportedCount),
+      cancelled
+    });
+    showToast(outcome.message, outcome.level);
 
   } catch (error) {
     console.error('Export failed:', error);
@@ -3232,7 +3223,7 @@ async function exportSingleNote(note) {
   return { success: true, filesWritten };
 }
 
-async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches = 1, projectName = 'NotebookLM', timestamp = null) {
+async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches = 1, projectName = 'NotebookLM', timestamp = null, nameSuffix = '') {
   const zip = new JSZip();
   const indexFiles = []; // Track all files for _index.md
   let versionCount = 0; // Track number of versions created
@@ -3242,8 +3233,9 @@ async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches =
     timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
   }
 
-  // Add errors.txt if there are any errors (only in LAST batch so it contains ALL errors)
-  if (errors.length > 0 && batchIndex === totalBatches) {
+  // Add errors.txt when the caller passes errors (it passes ALL errors to the
+  // last ZIP the run writes: the final batch, or the one it was cancelled in)
+  if (errors.length > 0) {
     let errorsContent = '# NotebookLM Export Errors\n\n';
     errorsContent += `Total Errors: ${errors.length}\n`;
     errorsContent += `Generated: ${new Date().toLocaleString()}\n\n`;
@@ -3519,9 +3511,9 @@ async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches =
     const sanitizedProjectName = sanitizeFilename(projectName);
     let filename;
     if (totalBatches > 1) {
-      filename = `${sanitizedProjectName}-notes-${timestamp}-part${batchIndex}of${totalBatches}.zip`;
+      filename = `${sanitizedProjectName}-notes-${timestamp}${nameSuffix}-part${batchIndex}of${totalBatches}.zip`;
     } else {
-      filename = `${sanitizedProjectName}-notes-${timestamp}.zip`;
+      filename = `${sanitizedProjectName}-notes-${timestamp}${nameSuffix}.zip`;
     }
 
     const a = document.createElement('a');
@@ -3752,6 +3744,9 @@ async function exportSources(selectedSources) {
 
   const allErrors = [];
   let cancelled = false;
+  let exportedCount = 0;
+  let attemptedCount = 0;
+  let errorsWritten = false;
   let userAcknowledgedWarning = false; // Track if user already acknowledged DOM issues
 
   // Track statistics for error reporting
@@ -3784,7 +3779,6 @@ async function exportSources(selectedSources) {
     for (let zipIndex = 0; zipIndex < totalZips; zipIndex++) {
       if (cancelled) {
         console.log('[NotebookLM Takeout] Export cancelled by user');
-        showToast('Export cancelled', 'warning');
         break;
       }
 
@@ -3800,11 +3794,11 @@ async function exportSources(selectedSources) {
       // Check for cancellation
       if (cancelled) {
         console.log('[NotebookLM Takeout] Export cancelled by user');
-        showToast('Export cancelled', 'warning');
         break;
       }
 
       const source = batchSources[i];
+      attemptedCount++;
       const overallIndex = startIdx + i;
       const progress = ((overallIndex + 1) / selectedSources.length) * 100;
 
@@ -4048,6 +4042,7 @@ async function exportSources(selectedSources) {
 
     // Now create ZIP for this batch and download it immediately
     if (exportedSources.length > 0) {
+      exportedCount += exportedSources.length;
       console.log(`[NotebookLM Takeout] Creating ZIP ${zipIndex + 1}/${totalZips} with ${exportedSources.length} sources from this batch`);
 
       // Update progress
@@ -4225,7 +4220,10 @@ async function exportSources(selectedSources) {
 
       // Add detailed error report if there are any issues
       // Include errors.txt in the LAST ZIP so it contains ALL errors from all batches
-      if ((zipIndex === totalZips - 1) && allErrors.length > 0) {
+      // errors.txt goes into the last ZIP this run writes: the final batch,
+      // or the batch the user cancelled in
+      if ((zipIndex === totalZips - 1 || cancelled) && allErrors.length > 0) {
+        errorsWritten = true;
         let errorsContent = '# Source Export Error Report\n\n';
         errorsContent += `Generated: ${new Date().toLocaleString()}\n\n`;
         errorsContent += '---\n\n';
@@ -4467,9 +4465,9 @@ async function exportSources(selectedSources) {
         const sanitizedProjectName = sanitizeFilename(projectName);
         let filename;
         if (totalZips > 1) {
-          filename = `${sanitizedProjectName}-sources-${timestamp}-part${zipIndex + 1}of${totalZips}.zip`;
+          filename = `${sanitizedProjectName}-sources-${timestamp}${cancelled ? '-PARTIAL' : ''}-part${zipIndex + 1}of${totalZips}.zip`;
         } else {
-          filename = `${sanitizedProjectName}-sources-${timestamp}.zip`;
+          filename = `${sanitizedProjectName}-sources-${timestamp}${cancelled ? '-PARTIAL' : ''}.zip`;
         }
 
         const a = document.createElement('a');
@@ -4481,22 +4479,6 @@ async function exportSources(selectedSources) {
 
         console.log(`[NotebookLM Takeout] Downloaded ZIP ${zipIndex + 1}/${totalZips}: ${filename}`);
 
-        // Show toast for each ZIP (or final toast at the end)
-        if (zipIndex === totalZips - 1) {
-          // Last ZIP
-          if (allErrors.length > 0) {
-            const errorCount = allErrors.length;
-            const failedSources = NLME.countFailedExtractions(allErrors);
-
-            let errorSummary = `Exported ${selectedSources.length} source(s) in ${totalZips} ZIP(s) with ${errorCount} warning(s)`;
-            if (failedSources > 0) {
-              errorSummary += ` (${failedSources} failed to extract)`;
-            }
-            showToast(errorSummary + '. See errors.txt in last ZIP for details.', 'warning');
-          } else {
-            showToast(`Successfully exported ${selectedSources.length} source(s) in ${totalZips} ZIP(s)`, 'success');
-          }
-        }
       } finally {
         URL.revokeObjectURL(url);
       }
@@ -4525,6 +4507,23 @@ async function exportSources(selectedSources) {
       }
     } // End of "if exportedSources.length > 0"
     } // End of batch loop
+
+    // Never lose errors: write an errors-only ZIP if no source ZIP carried them
+    if (allErrors.length > 0 && !errorsWritten) {
+      const errZip = new JSZip();
+      const lines = allErrors.map((e, idx) => `${idx + 1}. ${typeof e === 'string' ? e : `${e.source || e.title || ''} ${e.type || ''}: ${e.message || e.error || ''}`.trim()}`);
+      errZip.file('errors.txt', `# Source Export Error Report\n\nGenerated: ${new Date().toLocaleString()}\n\n---\n\n${lines.join('\n')}\n`);
+      downloadBlob(await generateZipTimed(errZip), `${sanitizeFilename(projectName)}-sources-${timestamp}${cancelled ? '-PARTIAL' : ''}-errors.zip`);
+    }
+
+    const outcome = NLME.summarizeExportOutcome({
+      kind: 'sources',
+      selected: selectedSources.length,
+      exported: exportedCount,
+      failed: Math.max(0, attemptedCount - exportedCount),
+      cancelled
+    });
+    showToast(outcome.message, outcome.level);
 
   } catch (error) {
     console.error('[NotebookLM Takeout] Export failed:', error);
@@ -4699,6 +4698,19 @@ async function exportChat(chatData, extractFullCitations = false) {
   progressFill.style.width = '0%';
 
   let cancelled = false;
+  let processedCount = 0;
+  // One truthful end-of-export toast (cancel no longer overwritten by success)
+  const showChatOutcome = (errorCount) => {
+    const outcome = NLME.summarizeExportOutcome({
+      kind: 'messages',
+      selected: chatData.messagePairs.length,
+      exported: processedCount,
+      failed: 0,
+      cancelled
+    });
+    const extra = !cancelled && errorCount > 0 ? ` (${errorCount} citation error(s), see errors.txt)` : '';
+    showToast(outcome.message + extra, extra ? 'warning' : outcome.level);
+  };
 
   // Listen for cancellation
   const cancelListener = (message) => {
@@ -4730,11 +4742,11 @@ async function exportChat(chatData, extractFullCitations = false) {
     for (let i = 0; i < messagePairs.length; i++) {
       if (cancelled) {
         console.log('[NotebookLM Takeout] Export cancelled by user');
-        showToast('Export cancelled', 'warning');
         break;
       }
 
       const pair = messagePairs[i];
+      processedCount++;
       const progress = ((i + 1) / messagePairs.length) * 100;
 
       // Update progress
@@ -5123,7 +5135,7 @@ async function exportChat(chatData, extractFullCitations = false) {
       const blob = await generateZipTimed(zip);
       const url = URL.createObjectURL(blob);
       try {
-        const zipFilename = `${sanitizeFilename(chatData.notebookTitle)}-chat-${timestamp}.zip`;
+        const zipFilename = `${sanitizeFilename(chatData.notebookTitle)}-chat-${timestamp}${cancelled ? '-PARTIAL' : ''}.zip`;
 
         const a = document.createElement('a');
         a.href = url;
@@ -5132,15 +5144,7 @@ async function exportChat(chatData, extractFullCitations = false) {
         a.click();
         document.body.removeChild(a);
 
-        let errorMsg;
-        if (versions.length > 1) {
-          errorMsg = `Exported ${versions.length} versions. ${allErrors.length > 0 ? `${allErrors.length} errors (see errors.txt)` : ''}`;
-        } else if (stats.extractFullCitations) {
-          errorMsg = `Exported chat: ${stats.successfulExtractions}/${stats.totalCitationsFound} citations extracted successfully. ${allErrors.length > 0 ? `${allErrors.length} errors (see errors.txt)` : ''}`;
-        } else {
-          errorMsg = `Exported chat${allErrors.length > 0 ? ` with ${allErrors.length} errors (see errors.txt)` : ''}`;
-        }
-        showToast(errorMsg, allErrors.length > 0 ? 'warning' : 'success');
+        showChatOutcome(allErrors.length);
       } finally {
         URL.revokeObjectURL(url);
       }
@@ -5157,7 +5161,7 @@ async function exportChat(chatData, extractFullCitations = false) {
         a.click();
         document.body.removeChild(a);
 
-        showToast('Successfully exported chat', 'success');
+        showChatOutcome(0);
       } finally {
         URL.revokeObjectURL(url);
       }

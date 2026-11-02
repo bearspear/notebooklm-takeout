@@ -294,3 +294,28 @@ test('createJobLock ignores release by a non-owner', () => {
   lock.release('chat');
   assert.equal(lock.current(), 'notes');
 });
+
+test('summarizeExportOutcome reports a full success', () => {
+  assert.deepEqual(NLME.summarizeExportOutcome({ kind: 'notes', selected: 10, exported: 10, failed: 0, cancelled: false }),
+    { level: 'success', message: 'Exported 10 of 10 notes', partial: false });
+});
+
+test('summarizeExportOutcome reports partial failures', () => {
+  const r = NLME.summarizeExportOutcome({ kind: 'notes', selected: 10, exported: 7, failed: 3, cancelled: false });
+  assert.equal(r.level, 'warning');
+  assert.equal(r.message, 'Exported 7 of 10 notes (3 failed, see errors.txt)');
+  assert.equal(r.partial, false);
+});
+
+test('summarizeExportOutcome reports a cancelled export as partial', () => {
+  const r = NLME.summarizeExportOutcome({ kind: 'notes', selected: 10, exported: 4, failed: 0, cancelled: true });
+  assert.equal(r.level, 'warning');
+  assert.equal(r.message, 'Cancelled: exported 4 of 10 notes');
+  assert.equal(r.partial, true);
+});
+
+test('summarizeExportOutcome reports when nothing was exported', () => {
+  const r = NLME.summarizeExportOutcome({ kind: 'notes', selected: 10, exported: 0, failed: 10, cancelled: false });
+  assert.equal(r.level, 'error');
+  assert.equal(r.message, 'No notes exported (10 failed, see errors.txt)');
+});

@@ -316,7 +316,22 @@
     };
   }
 
+  // One truthful end-of-export message for notes, sources, chat and artifacts.
+  function summarizeExportOutcome({ kind, selected = 0, exported = 0, failed = 0, cancelled = false } = {}) {
+    if (cancelled) {
+      return { level: 'warning', message: `Cancelled: exported ${exported} of ${selected} ${kind}`, partial: true };
+    }
+    if (exported === 0 && selected > 0) {
+      return { level: 'error', message: `No ${kind} exported (${failed} failed, see errors.txt)`, partial: false };
+    }
+    if (failed > 0) {
+      return { level: 'warning', message: `Exported ${exported} of ${selected} ${kind} (${failed} failed, see errors.txt)`, partial: false };
+    }
+    return { level: 'success', message: `Exported ${exported} of ${selected} ${kind}`, partial: false };
+  }
+
   const NLME = {
+    summarizeExportOutcome,
     createJobLock,
     createPhaseTimer,
     formatTimingSummary,

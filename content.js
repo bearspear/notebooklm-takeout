@@ -3047,6 +3047,7 @@
     // Step 3: hover each marker and read its tooltip
     const sources = [];
     for (const [index, button] of buttonsByIndex) {
+      if (isExportCancelled()) break; // stop within one citation of Cancel
       const result = await extractSingleCitationWithRetry(button, index, includeCitationImages, 2);
       if (!result.success) {
         errors.push(result.error);
@@ -4798,6 +4799,7 @@
 
       // Extract from matched live buttons with retry logic
       for (const [sourceIndex, button] of buttonsToExtract.entries()) {
+        if (isExportCancelled()) break; // stop within one citation of Cancel
         console.log(`[NotebookLM Takeout] Extracting source ${sourceIndex} from live button...`);
 
         // Use retry helper for citation extraction
