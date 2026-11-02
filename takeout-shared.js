@@ -91,7 +91,13 @@
     return [...byNumber.values()].sort((a, b) => (parseInt(a.number, 10) || 0) - (parseInt(b.number, 10) || 0));
   }
 
+  // Viewer close button in the Studio panel header, outside <studio-panel>.
+  // Labels vary ("Close web page viewer", "Close report viewer", "Close table",
+  // "Close note view"); "Collapse studio panel" must never match (Nov 2026).
+  const STUDIO_HEADER_CLOSE_SELECTOR = 'section.studio-panel .panel-header button[aria-label^="Close"]';
+
   const NLME = {
+    STUDIO_HEADER_CLOSE_SELECTOR,
     buildCitationEntries,
     ICON_TO_TYPE,
     NOTE_ICONS,

@@ -2418,19 +2418,9 @@
       console.log(`[NotebookLM Takeout] Existing source-viewer count before click:`, existingViewers.length);
 
       if (existingViewers.length > 0) {
+        // A leftover viewer would be picked up by the wait below as the new source
         console.log(`[NotebookLM Takeout] Closing existing source viewer(s)...`);
-        // Look for close button in the viewer or press Escape
-        const closeButtons = document.querySelectorAll('button[aria-label="Close"], .close-button, button[title="Close"]');
-        if (closeButtons.length > 0) {
-          console.log(`[NotebookLM Takeout] Found ${closeButtons.length} close button(s), clicking last one`);
-          closeButtons[closeButtons.length - 1].click();
-          await new Promise(resolve => setTimeout(resolve, 500));
-        } else {
-          // Try pressing Escape key
-          console.log(`[NotebookLM Takeout] No close button found, pressing Escape key`);
-          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27 }));
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
+        await closeSourceViewer();
       }
 
       // Scroll into view first
@@ -3344,31 +3334,54 @@
       .find(el => el.getClientRects().length > 0) || null;
   }
 
-  // Close the open studio viewer. Only clicks controls inside <studio-panel>.
-  // Returns true once no studio viewer is open.
+  // Studio viewers close from the panel header since the Nov 2026 redesign;
+  // Escape no longer closes artifact-viewer or source-viewer.
+  function findStudioHeaderCloseButton() {
+    const labelled = document.querySelector(NLME.STUDIO_HEADER_CLOSE_SELECTOR);
+    if (labelled) return labelled;
+    return Array.from(document.querySelectorAll('section.studio-panel .panel-header button'))
+      .find(b => b.querySelector('mat-icon')?.textContent.trim() === 'collapse_content' &&
+                 !(b.getAttribute('aria-label') || '').startsWith('Collapse')) || null;
+  }
+
+  function findSourceHeaderCloseButton() {
+    return Array.from(document.querySelectorAll('.panel-header button'))
+      .find(b => !b.closest('section.studio-panel') &&
+                 b.querySelector('mat-icon')?.textContent.trim() === 'collapse_content') || null;
+  }
+
+  function pressEscape() {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+  }
+
+  // Close the open studio viewer. Returns true once no studio viewer is open.
   async function closeStudioViewer(delay = 800) {
+    const settle = () => new Promise(resolve => setTimeout(resolve, delay));
     for (let attempt = 0; attempt < 3; attempt++) {
       if (!findOpenStudioViewer()) return true;
       console.log(`[NotebookLM Takeout] Close attempt ${attempt + 1}/3`);
 
-      // Method 1: ESC key
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
-      document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
-      await new Promise(resolve => setTimeout(resolve, delay));
-      if (!findOpenStudioViewer()) {
-        console.log('[NotebookLM Takeout] ✓ Viewer closed via ESC key');
-        return true;
+      // Method 1: panel header close button
+      const headerClose = findStudioHeaderCloseButton();
+      if (headerClose) {
+        console.log(`[NotebookLM Takeout] Clicking header button "${headerClose.getAttribute('aria-label') || 'collapse_content'}"`);
+        headerClose.click();
+        await settle();
+        if (!findOpenStudioViewer()) {
+          console.log('[NotebookLM Takeout] ✓ Viewer closed via header button');
+          return true;
+        }
       }
 
       const studioPanel = document.querySelector('studio-panel');
       if (!studioPanel) return true;
 
-      // Method 2: "Close note view" button
+      // Method 2: "Close note view" inside the panel (older layouts)
       const closeNoteButton = studioPanel.querySelector('button[aria-label="Close note view"]');
       if (closeNoteButton) {
-        console.log('[NotebookLM Takeout] Clicking "Close note view" button');
         closeNoteButton.click();
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await settle();
         if (!findOpenStudioViewer()) {
           console.log('[NotebookLM Takeout] ✓ Viewer closed via "Close note view" button');
           return true;
@@ -3390,39 +3403,54 @@
       for (const icon of closeIcons) {
         const button = icon.closest('button');
         if (!button) continue;
-        console.log('[NotebookLM Takeout] Clicking close icon button:', icon.textContent.trim());
         button.click();
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await settle();
         if (!findOpenStudioViewer()) {
           console.log('[NotebookLM Takeout] ✓ Viewer closed via close icon');
           return true;
         }
       }
+
+      // Method 4: Escape (pre-2026 layouts)
+      pressEscape();
+      await settle();
+      if (!findOpenStudioViewer()) {
+        console.log('[NotebookLM Takeout] ✓ Viewer closed via ESC key');
+        return true;
+      }
     }
     return !findOpenStudioViewer();
   }
 
-  // Close the source viewer (sources panel). Kept separate from studio viewers:
-  // closing a source relies on ESC or the sources panel header button.
+  // Close the source viewer (sources panel). Kept separate from studio viewers.
   async function closeSourceViewer() {
+    const settle = () => new Promise(resolve => setTimeout(resolve, 800));
     for (let attempt = 0; attempt < 3; attempt++) {
       if (!document.querySelector('source-viewer')) return true;
       console.log(`[NotebookLM Takeout] Source close attempt ${attempt + 1}/3`);
 
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
-      document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
-      await new Promise(resolve => setTimeout(resolve, 800));
+      const headerClose = findSourceHeaderCloseButton();
+      if (headerClose) {
+        headerClose.click();
+        await settle();
+        if (!document.querySelector('source-viewer')) {
+          console.log('[NotebookLM Takeout] ✓ Source viewer closed via header button');
+          return true;
+        }
+      }
+
+      pressEscape();
+      await settle();
       if (!document.querySelector('source-viewer')) {
         console.log('[NotebookLM Takeout] ✓ Source viewer closed via ESC key');
         return true;
       }
 
-      // Panel header approach (works for sources)
+      // Older layout: second child of the first panel header
       const panelHeaders = document.querySelectorAll('.panel-header');
       if (panelHeaders.length > 0 && panelHeaders[0].children.length > 1) {
-        console.log('[NotebookLM Takeout] Clicking panel header children[1]');
         panelHeaders[0].children[1].click();
-        await new Promise(resolve => setTimeout(resolve, 800));
+        await settle();
       }
     }
     return !document.querySelector('source-viewer');
