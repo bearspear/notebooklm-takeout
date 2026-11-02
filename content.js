@@ -318,7 +318,9 @@
       return true; // Keep channel open for async
     } else if (message.type === 'EXTRACT_NOTE') {
       // Extract note content
-      extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages)
+      (typeof message.data.sourceIndex === 'number'
+        ? extractSourcesPanelNote(message.data.sourceIndex, message.data.noteTitle, message.data.includeCitationImages)
+        : extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages))
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ error: error.message || 'Extraction failed' }));
       return true; // Keep channel open for async
@@ -1211,6 +1213,19 @@
       console.log(`[NotebookLM Takeout] Note ${idx}: "${title}" (${noteType}, icon: ${iconType})`);
     });
 
+    // Notes in the Sources panel's "Notes" group are not in the Studio list
+    document.querySelectorAll('.single-source-container').forEach((container, sourceIndex) => {
+      if (!isNoteSourceContainer(container)) return;
+      notes.push({
+        index: -1,
+        sourceIndex,
+        title: getSourceContainerTitle(container) || `Note ${notes.length + 1}`,
+        type: 'Note (Sources panel)',
+        iconType: container.querySelector('.source-item-source-icon')?.textContent?.trim() || '',
+        elementType: 'source-note'
+      });
+    });
+
     return notes;
   }
 
@@ -1226,12 +1241,17 @@
 
     if (sourceContainers.length === 0) {
       console.log('[NotebookLM Takeout] No sources found');
-      return { sources: [] };
+      return { sources: [], skippedNotes: 0 };
     }
 
     const sources = [];
 
+    let skippedNotes = 0;
     sourceContainers.forEach((container, index) => {
+      if (isNoteSourceContainer(container)) {
+        skippedNotes++;
+        return;
+      }
       // Get source title
       const titleEl = container.querySelector('.source-title');
       const title = titleEl?.textContent?.trim() || `Source ${index + 1}`;
@@ -1257,8 +1277,8 @@
       }
     });
 
-    console.log(`[NotebookLM Takeout] Total sources found: ${sources.length}`);
-    return { sources: sources };
+    console.log(`[NotebookLM Takeout] Total sources found: ${sources.length} (${skippedNotes} note(s) skipped)`);
+    return { sources: sources, skippedNotes };
   }
 
   // Helper function to wait for an element
@@ -2300,53 +2320,100 @@
       console.log('[NotebookLM Takeout] Clicking note button...');
       button.click();
 
-      // Wait for content to load (editor or mindmap viewer).
-      // Scope to <studio-panel> so we don't accidentally pick up the chat panel's
-      // labs-tailwind-doc-viewer (used to render AI replies). When the chat
-      // panel is in DOM order, an unscoped lookup grabs the chat viewer and
-      // every citation hover ends up reading chat sources instead of the note's.
-      console.log('[NotebookLM Takeout] Waiting for content...');
-      const studioPanel = document.querySelector('studio-panel') || document;
-      const content = await raceWithCleanup([
-        waitForElement('rich-text-editor .ql-editor', 5000, studioPanel),
-        waitForElement('rich-text-editor .ProseMirror', 5000, studioPanel),
-        waitForElement('markdown-editor-legacy .ql-editor', 5000, studioPanel),
-        waitForElement('labs-tailwind-doc-viewer', 5000, studioPanel),
-        waitForElement('mindmap-viewer', 5000, studioPanel)
-      ]).catch(() => null);
-
-      if (!content) {
-        throw new Error('Content not found (no editor or mindmap viewer)');
-      }
-
-      console.log('[NotebookLM Takeout] Content found:', content.tagName, content.className || '(no class)');
-
-      // Wait a bit for content to fully render
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // Check if it's a mindmap viewer
-      if (content.tagName.toLowerCase() === 'mindmap-viewer') {
-        console.log('[NotebookLM Takeout] Mindmap detected, extracting SVG...');
-        return await globalThis.__nlmeMindmap.extractMindmapSVG(content);
-      }
-
-      // Check if it's a Tailwind viewer (new format with sources)
-      if (content.tagName.toLowerCase() === 'labs-tailwind-doc-viewer') {
-        console.log('[NotebookLM Takeout] Tailwind viewer detected, extracting with citations...');
-        return await extractTailwindNoteContent(content);
-      } else {
-        // Old format - just grab HTML
-        console.log('[NotebookLM Takeout] Legacy editor format, no citations');
-        return {
-          html: content.innerHTML,
-          sources: []
-        };
-      }
+      return await readOpenStudioNote();
 
     } catch (error) {
       console.error('[NotebookLM Takeout] Extraction error:', error);
       throw error;
     }
+  }
+
+  // Read the note that was just opened in the Studio panel (editor, Tailwind
+  // viewer with citations, or legacy mindmap viewer).
+  async function readOpenStudioNote() {
+    // Wait for content to load (editor or mindmap viewer).
+    // Scope to <studio-panel> so we don't accidentally pick up the chat panel's
+    // labs-tailwind-doc-viewer (used to render AI replies). When the chat
+    // panel is in DOM order, an unscoped lookup grabs the chat viewer and
+    // every citation hover ends up reading chat sources instead of the note's.
+    console.log('[NotebookLM Takeout] Waiting for content...');
+    const studioPanel = document.querySelector('studio-panel') || document;
+    const content = await raceWithCleanup([
+      waitForElement('rich-text-editor .ql-editor', 5000, studioPanel),
+      waitForElement('rich-text-editor .ProseMirror', 5000, studioPanel),
+      waitForElement('markdown-editor-legacy .ql-editor', 5000, studioPanel),
+      waitForElement('labs-tailwind-doc-viewer', 5000, studioPanel),
+      waitForElement('mindmap-viewer', 5000, studioPanel)
+    ]).catch(() => null);
+
+    if (!content) {
+      throw new Error('Content not found (no editor or mindmap viewer)');
+    }
+
+    console.log('[NotebookLM Takeout] Content found:', content.tagName, content.className || '(no class)');
+
+    // Wait a bit for content to fully render
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // Check if it's a mindmap viewer
+    if (content.tagName.toLowerCase() === 'mindmap-viewer') {
+      console.log('[NotebookLM Takeout] Mindmap detected, extracting SVG...');
+      return await globalThis.__nlmeMindmap.extractMindmapSVG(content);
+    }
+
+    // Check if it's a Tailwind viewer (new format with sources)
+    if (content.tagName.toLowerCase() === 'labs-tailwind-doc-viewer') {
+      console.log('[NotebookLM Takeout] Tailwind viewer detected, extracting with citations...');
+      return await extractTailwindNoteContent(content);
+    } else {
+      // Old format - just grab HTML
+      console.log('[NotebookLM Takeout] Legacy editor format, no citations');
+      return {
+        html: content.innerHTML,
+        sources: []
+      };
+    }
+
+  }
+
+  // Notes listed in the Sources panel's "Notes" group (Nov 2026). They are not
+  // in the Studio list; clicking one opens the same note-editor in <studio-panel>.
+  function isNoteSourceContainer(container) {
+    const panel = container.closest('mat-expansion-panel');
+    if (!panel) return false;
+    if (panel.classList.contains('notes-category-panel')) return true;
+    const header = panel.querySelector('mat-expansion-panel-header');
+    if (!header) return false;
+    const clone = header.cloneNode(true);
+    clone.querySelectorAll('mat-icon').forEach(icon => icon.remove());
+    return clone.textContent.trim().startsWith('Notes');
+  }
+
+  function getSourceContainerTitle(container) {
+    return container.querySelector('.source-title')?.textContent?.trim() ||
+      container.querySelector('button.source-stretched-button')?.getAttribute('aria-label') || '';
+  }
+
+  // Open and read a Sources-panel note. sourceIndex is its position among all
+  // .single-source-container elements; the title confirms it.
+  async function extractSourcesPanelNote(sourceIndex, noteTitle, includeImages = false) {
+    includeCitationImages = includeImages;
+    if (findOpenStudioViewer()) await closeStudioViewer(500);
+
+    const containers = Array.from(document.querySelectorAll('.single-source-container'));
+    let container = containers[sourceIndex];
+    if (!container || !isNoteSourceContainer(container) || (noteTitle && getSourceContainerTitle(container) !== noteTitle)) {
+      container = containers.find(c => isNoteSourceContainer(c) && getSourceContainerTitle(c) === noteTitle) || null;
+    }
+    if (!container) {
+      throw new Error(`Note not found in Sources panel: "${noteTitle}"`);
+    }
+
+    const button = container.querySelector('button.source-stretched-button') || container.querySelector('button');
+    if (!button) throw new Error('Could not find button for note');
+    button.scrollIntoView({ behavior: 'instant', block: 'center' });
+    button.click();
+    return await readOpenStudioNote();
   }
 
   /**
@@ -2384,6 +2451,9 @@
       }
 
       const container = sourceContainers[sourceIndex];
+      if (isNoteSourceContainer(container)) {
+        throw new Error('This item is a note; export it from the Notes tab');
+      }
 
       // Get source title before clicking
       const titleEl = container.querySelector('.source-title');

@@ -2875,6 +2875,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
           data: {
             noteIndex: note.index,
             noteTitle: note.title,
+            sourceIndex: note.sourceIndex,
             includeCitationImages: needsImages
           }
         });
@@ -3133,6 +3134,7 @@ async function exportSingleNote(note) {
       data: {
         noteIndex: note.index,
         noteTitle: note.title,
+        sourceIndex: note.sourceIndex,
         includeCitationImages: needsImages
       }
     });
@@ -3512,7 +3514,7 @@ async function scanSourcesPage() {
 
     console.log(`[NotebookLM Takeout] Found ${sources.length} sources`);
 
-    renderSourcesList(sources);
+    renderSourcesList(sources, response.skippedNotes || 0);
   } catch (error) {
     console.error('[NotebookLM Takeout] Scan error:', error);
     showToast('Failed to scan sources', 'error');
@@ -3522,15 +3524,20 @@ async function scanSourcesPage() {
 /**
  * Render the list of sources with checkboxes and download buttons
  */
-function renderSourcesList(sources) {
+function renderSourcesList(sources, skippedNotes = 0) {
   const resultsDiv = document.getElementById('sources-scan-results');
   const countBadge = document.getElementById('sources-count');
   const exportBtn = document.getElementById('export-sources-btn');
 
   countBadge.textContent = sources.length;
 
+  // Notes shown in NotebookLM's Sources panel are exported from the Notes tab
+  const notesHint = skippedNotes > 0
+    ? `<p class="hint">${skippedNotes} note(s) in the Sources panel were skipped — export them from the Notes tab.</p>`
+    : '';
+
   if (sources.length === 0) {
-    resultsDiv.innerHTML = '<p class="empty-message">No sources found. Add source materials to your notebook.</p>';
+    resultsDiv.innerHTML = notesHint + '<p class="empty-message">No sources found. Add source materials to your notebook.</p>';
     exportBtn.style.display = 'none';
     return;
   }
@@ -3539,7 +3546,7 @@ function renderSourcesList(sources) {
   window._currentSources = sources;
 
   // Create list of sources with checkboxes (similar to notes)
-  let html = '<div class="source-scan-list">';
+  let html = notesHint + '<div class="source-scan-list">';
 
   // Select all checkbox
   html += `
