@@ -603,19 +603,8 @@ function handleArtifactDetected(data) {
         capturedAt: Date.now()
       });
 
-      // Update badge
-      updateBadge();
-
-      // Store in chrome.storage for persistence
-      chrome.storage.local.set({ capturedArtifacts });
     }
   }
-}
-
-function updateBadge() {
-  const total = Object.values(capturedArtifacts).reduce((sum, arr) => sum + arr.length, 0);
-  chrome.action.setBadgeText({ text: total > 0 ? String(total) : '' });
-  chrome.action.setBadgeBackgroundColor({ color: '#4285f4' });
 }
 
 async function downloadArtifact(data) {
@@ -712,17 +701,12 @@ function clearArtifacts() {
   capturedArtifacts.slides = [];
   capturedArtifacts.infographics = [];
   capturedArtifacts.notebooks = [];
-  chrome.storage.local.set({ capturedArtifacts });
-  updateBadge();
 }
 
-// Restore artifacts from storage on startup
-chrome.storage.local.get(['capturedArtifacts'], (result) => {
-  if (result.capturedArtifacts) {
-    Object.assign(capturedArtifacts, result.capturedArtifacts);
-    updateBadge();
-  }
-});
+// The toolbar badge counted artifacts found by the removed page polling
+// (Nov 2026). Clear what earlier versions stored so no stale count remains.
+chrome.storage.local.remove('capturedArtifacts');
+chrome.action.setBadgeText({ text: '' });
 
 // Run batch download entirely in background
 async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {

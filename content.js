@@ -308,7 +308,7 @@
       debugPageStructure();
       sendResponse({ success: true });
     } else if (message.type === 'SCAN_ARTIFACTS') {
-      scanForArtifacts();
+      // Legacy message; artifacts are listed via SCAN_STUDIO_ITEMS
       sendResponse({ success: true });
     } else if (message.type === 'FETCH_FILE') {
       // Fetch file with page credentials - used by batch download
@@ -636,9 +636,6 @@
       case 'NLME_INFOGRAPHIC_DETECTED':
         captureArtifact('infographics', data.payload);
         break;
-      case 'NLME_NETWORK_RESPONSE':
-        parseNetworkResponse(data.payload);
-        break;
       case 'NLME_DOWNLOAD_URL_INTERCEPTED':
         // URL intercepted from window.open - no tab will open
         console.log('[NotebookLM Takeout] Download URL intercepted:', data.payload.url?.substring(0, 100));
@@ -911,141 +908,12 @@
     }, 3000);
   }
 
-  // Monitor DOM for new artifacts
-  function setupMutationObserver() {
-    let debounceTimer;
-
-    const observer = new MutationObserver((mutations) => {
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        scanForArtifacts();
-      }, CONFIG.observerDebounce);
-    });
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
-  }
-
-  function scanForArtifacts() {
-    console.log('[NotebookLM Takeout] Scanning for artifacts...');
-
-    // Scan for audio elements
-    const audioElements = document.querySelectorAll('audio');
-    audioElements.forEach((el, index) => {
-      if (el.src) {
-        console.log(`[NotebookLM Takeout] Found audio: ${el.src.substring(0, 50)}...`);
-        captureArtifact('audio', {
-          id: `audio-${index}`,
-          src: el.src,
-          title: getNotebookTitle() + ' - Audio Overview'
-        });
-      }
-    });
-
-    // Scan for audio containers (may not have <audio> element yet)
-    const audioContainers = document.querySelectorAll(CONFIG.selectors.audioContainer);
-    audioContainers.forEach((el, index) => {
-      const hasMoreButton = el.querySelector(CONFIG.selectors.moreOptionsButton);
-      if (hasMoreButton) {
-        captureArtifact('audio', {
-          id: `audio-container-${index}`,
-          element: el,
-          moreButton: hasMoreButton,
-          title: getNotebookTitle() + ' - Audio Overview'
-        });
-      }
-    });
-
-    // Scan for slide containers
-    const slideContainers = document.querySelectorAll(CONFIG.selectors.slideContainer);
-    slideContainers.forEach((el, index) => {
-      // Check if it's a meaningful slide container (not just any element with "slide" in class)
-      const hasContent = el.querySelector('img, canvas, svg, [class*="content"]');
-      const hasMoreButton = el.querySelector(CONFIG.selectors.moreOptionsButton);
-      if (hasContent || hasMoreButton) {
-        captureArtifact('slides', {
-          id: `slides-${index}`,
-          element: el,
-          moreButton: hasMoreButton,
-          title: getNotebookTitle() + ' - Slides'
-        });
-      }
-    });
-
-    // Scan for infographic containers
-    const infographicContainers = document.querySelectorAll(CONFIG.selectors.infographicContainer);
-    infographicContainers.forEach((el, index) => {
-      const hasCanvas = el.querySelector('canvas');
-      const hasSvg = el.querySelector('svg');
-      const hasMoreButton = el.querySelector(CONFIG.selectors.moreOptionsButton);
-      if (hasCanvas || hasSvg || hasMoreButton) {
-        captureArtifact('infographics', {
-          id: `infographic-${index}`,
-          element: el,
-          moreButton: hasMoreButton,
-          title: getNotebookTitle() + ' - Infographic'
-        });
-      }
-    });
-
-    // Also scan for any "three-dot" more menus in the Studio panel area
-    scanStudioPanel();
-  }
-
-  function scanStudioPanel() {
-    // Look for the Studio panel
-    const studioPanels = document.querySelectorAll(CONFIG.selectors.studioPanel);
-    studioPanels.forEach(panel => {
-      // Find all "more options" buttons within studio
-      const moreButtons = panel.querySelectorAll(CONFIG.selectors.moreOptionsButton);
-      moreButtons.forEach((btn, index) => {
-        // Try to determine what type of artifact this button is for
-        const container = btn.closest('[class*="audio"], [class*="slide"], [class*="infographic"], [class*="overview"], [class*="deck"]');
-        if (container) {
-          const className = container.className.toLowerCase();
-          let type = 'unknown';
-          if (className.includes('audio') || className.includes('overview') || className.includes('podcast')) {
-            type = 'audio';
-          } else if (className.includes('slide') || className.includes('deck') || className.includes('presentation')) {
-            type = 'slides';
-          } else if (className.includes('infographic') || className.includes('visual')) {
-            type = 'infographics';
-          }
-
-          if (type !== 'unknown') {
-            captureArtifact(type, {
-              id: `studio-${type}-${index}`,
-              element: container,
-              moreButton: btn,
-              title: getNotebookTitle() + ' - ' + type
-            });
-          }
-        }
-      });
-    });
-  }
-
   // Initialize
   function init() {
-    console.log('[NotebookLM Takeout] Initializing...');
-
-    // Inject page script for XHR/fetch interception
+    // Inject page script for window.open download interception. The old
+    // MutationObserver/5 s artifact polling was removed (Nov 2026): it only
+    // fed the toolbar badge and logged every few seconds.
     injectPageScript();
-
-    // Setup mutation observer
-    setupMutationObserver();
-
-    // Initial scan
-    setTimeout(scanForArtifacts, 1000);
-
-    // Periodic rescan
-    setInterval(scanForArtifacts, 5000);
-
-    // Debug: Log page structure
-    setTimeout(debugPageStructure, 2000);
-
     console.log('[NotebookLM Takeout] Ready');
   }
 
@@ -4063,8 +3931,15 @@
   async function tryExtractInfographic(artifactElement) {
     console.log('[NotebookLM Takeout] [Download] Trying infographic extraction (tiered fallback)...');
 
+    // Only a rendered infographic qualifies; icons or thumbnails in the list
+    // row would otherwise replace the real download
+    const isLarge = (el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.width >= 200 && rect.height >= 200;
+    };
+
     // TIER 1: Try SVG extraction (vector format - best quality)
-    const svg = artifactElement.querySelector('svg');
+    const svg = Array.from(artifactElement.querySelectorAll('svg')).find(isLarge);
     if (svg) {
       console.log('[NotebookLM Takeout] [Download] Found SVG, attempting extraction...');
       try {
@@ -4079,7 +3954,7 @@
     }
 
     // TIER 2: Try Canvas export (PNG raster)
-    const canvas = artifactElement.querySelector('canvas');
+    const canvas = Array.from(artifactElement.querySelectorAll('canvas')).find(isLarge);
     if (canvas) {
       console.log('[NotebookLM Takeout] [Download] Found canvas, attempting export...');
       try {
@@ -4151,7 +4026,7 @@
         method: 'svg_extract',
         data: dataUrl,
         format: 'svg',
-        dimensions: { width, height }
+        dimensions: { width: viewBoxWidth, height: viewBoxHeight }
       };
     } catch (error) {
       return { success: false, error: error.message };
