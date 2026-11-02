@@ -392,3 +392,13 @@ test('formatErrorsTxt lists every error and the issues link', () => {
   assert.match(txt, /11\/2\/2026, 1:00 PM/);
   assert.ok(txt.includes(NLME.ISSUES_URL));
 });
+
+test('extensionFromDownloadUrl reads the filename parameter', () => {
+  assert.equal(NLME.extensionFromDownloadUrl('https://contribution.usercontent.google.com/download?c=x&filename=Testing_Cosmology.pptx&opi=1'), '.pptx');
+  assert.equal(NLME.extensionFromDownloadUrl('https://contribution.usercontent.google.com/download?filename=Deck.pdf'), '.pdf');
+});
+
+test('extensionFromDownloadUrl returns empty when the URL names no file', () => {
+  assert.equal(NLME.extensionFromDownloadUrl('https://lh3.googleusercontent.com/notebooklm/abc=d'), '');
+  assert.equal(NLME.extensionFromDownloadUrl('not a url'), '');
+});

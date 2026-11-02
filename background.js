@@ -264,6 +264,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           console.log('[Background] Direct download requested:', message.filename);
           console.log('[Background] URL:', message.url?.substring(0, 100));
 
+          // The URL names the real file (e.g. .pptx vs .pdf); without this the
+          // name fell back to the artifact type's default (.pdf for slides)
+          let directFilename = message.filename;
+          if (!/\.[a-z0-9]{2,5}$/i.test(directFilename)) {
+            directFilename += NLME.extensionFromDownloadUrl(message.url);
+          }
+
           // Start the download
           const downloadId = await chrome.downloads.download({
             url: message.url,
@@ -274,7 +281,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
           // Store filename for onDeterminingFilename to use
           directDownloads.set(downloadId, {
-            filename: message.filename,
+            filename: directFilename,
             artifactType: message.artifactType
           });
 
@@ -833,7 +840,7 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
         }
 
         if (fetchResult.success) {
-          const extension = getExtensionFromMime(fetchResult.mime) || getExtensionFromType(item.type);
+          const extension = NLME.extensionFromDownloadUrl(captured.url) || getExtensionFromMime(fetchResult.mime) || getExtensionFromType(item.type);
           const filename = sanitizeFilename(item.label) + extension;
 
           fileContents.push({

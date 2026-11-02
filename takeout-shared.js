@@ -411,7 +411,18 @@
     return lines.join('\n') + '\n';
   }
 
+  // Gemini Notebook download URLs name the real file (filename=Deck.pptx);
+  // the extension from there beats guessing from MIME type or artifact type.
+  function extensionFromDownloadUrl(url) {
+    let u;
+    try { u = new URL(url); } catch { return ''; }
+    const name = u.searchParams.get('filename') || u.searchParams.get('name') || '';
+    const m = name.match(/\.([a-z0-9]{2,5})$/i);
+    return m ? `.${m[1].toLowerCase()}` : '';
+  }
+
   const NLME = {
+    extensionFromDownloadUrl,
     formatErrorsTxt,
     titlesMatch,
     pickByIndexThenTitleStrict,
