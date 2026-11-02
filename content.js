@@ -408,7 +408,8 @@
         message.data.artifactType,
         message.data.moreButtonAlreadyClicked || false,
         message.data.skipMoreButton || false,
-        message.data.artifactName || null
+        message.data.artifactName || null,
+        message.data.downloadPreference || 'pdf'
       )
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ success: false, error: error.message || 'Download failed' }));
@@ -3514,7 +3515,7 @@
    * Main handler for artifact downloads via message passing
    * Coordinates the download process with proper error handling and metadata
    */
-  async function handleArtifactDownload(artifactIndex, artifactType, moreButtonAlreadyClicked = false, skipMoreButton = false, artifactName = null) {
+  async function handleArtifactDownload(artifactIndex, artifactType, moreButtonAlreadyClicked = false, skipMoreButton = false, artifactName = null, downloadPreference = 'pdf') {
     console.log(`[NotebookLM Takeout] [Download] Starting download for artifact ${artifactIndex} (${artifactType})`);
     const startTime = Date.now();
 
@@ -3681,7 +3682,7 @@
 
       // For all other artifacts (or infographic fallback), click download button
       console.log('[NotebookLM Takeout] [Download] Attempting download button click...');
-      const buttonResult = await clickArtifactDownloadButton(moreButtonAlreadyClicked ? null : artifactItem?.querySelector('button[aria-label="More"]'), artifactItem, moreButtonAlreadyClicked);
+      const buttonResult = await clickArtifactDownloadButton(moreButtonAlreadyClicked ? null : artifactItem?.querySelector('button[aria-label="More"]'), artifactItem, moreButtonAlreadyClicked, downloadPreference);
 
       const duration = Date.now() - startTime;
 
@@ -3722,7 +3723,7 @@
    * Uses MutationObserver to detect UI state changes instead of hard-coded delays
    * Now also captures intercepted download URLs from window.open
    */
-  async function clickArtifactDownloadButton(moreButton, artifactItem, moreButtonAlreadyClicked = false) {
+  async function clickArtifactDownloadButton(moreButton, artifactItem, moreButtonAlreadyClicked = false, downloadPreference = 'pdf') {
     // Clear any previous intercepted URL
     lastInterceptedDownloadUrl = null;
 
@@ -3739,7 +3740,7 @@
     await waitForElement('.mat-mdc-menu-panel, .cdk-overlay-pane', 2000);
 
     // Find download button with multiple selector attempts
-    const downloadButton = await findDownloadButton();
+    const downloadButton = await findDownloadButton(downloadPreference);
     if (!downloadButton) {
       // Close menu before throwing error
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
@@ -3783,15 +3784,17 @@
   }
 
   /**
-   * Find the Download menu item in the currently open more-menu.
-   * Thin wrapper around findMenuItemByText — preserves the old call site.
+   * Find the Download item in the open More menu. Slide decks offer PDF and
+   * PowerPoint (Nov 2026); preference picks between them.
+   * @param {'pdf'|'pptx'} preference
    */
-  async function findDownloadButton() {
-    const button = findMenuItemByText('download');
-    if (button) {
-      console.log('[NotebookLM Takeout] [Download] Found download menu item via text search');
+  async function findDownloadButton(preference = 'pdf') {
+    const items = Array.from(document.querySelectorAll('.mat-mdc-menu-item, [role="menuitem"]'));
+    const index = NLME.pickDownloadMenuIndex(items.map(item => item.textContent || ''), preference);
+    if (index !== -1) {
+      console.log(`[NotebookLM Takeout] [Download] Menu item: "${items[index].textContent.trim()}"`);
     }
-    return button;
+    return index === -1 ? null : items[index];
   }
 
   // ==================== STUDIO TAB (unified list) ====================

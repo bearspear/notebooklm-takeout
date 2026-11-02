@@ -210,7 +210,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'BATCH_DOWNLOAD_ALL':
       // Run batch download entirely in background (popup may close)
-      runBatchDownload(message.tabId, message.items)
+      runBatchDownload(message.tabId, message.items, message.downloadPreference || 'pdf')
         .then(result => {
           // Notify via notification since popup may be closed
           if (result.success) {
@@ -725,7 +725,7 @@ chrome.storage.local.get(['capturedArtifacts'], (result) => {
 });
 
 // Run batch download entirely in background
-async function runBatchDownload(tabId, items) {
+async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
   console.log('[Background] Starting batch download for', items.length, 'items');
 
   batchDownloadMode = true;
@@ -763,7 +763,8 @@ async function runBatchDownload(tabId, items) {
           artifactIndex: item.index,
           artifactType: item.type,
           artifactName: item.label,
-          skipMoreButton: extractable
+          skipMoreButton: extractable,
+          downloadPreference
         }
       });
 

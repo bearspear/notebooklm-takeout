@@ -491,7 +491,9 @@ let settings = {
   // Text cleanup
   cleanOCRArtifacts: true, // Clean OCR garbage (~~~, :~:, etc.) from citation quotes
   // Interface
-  showStudioTab: false // Show the Studio tab (unified per-item list with delete)
+  showStudioTab: false, // Show the Studio tab (unified per-item list with delete)
+  // Slide deck download format offered by the More menu ('pdf' | 'pptx')
+  slidesFormat: 'pdf'
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -629,6 +631,7 @@ async function loadSettings() {
 
   // Interface
   document.getElementById('show-studio-tab-checkbox').checked = settings.showStudioTab;
+  document.getElementById('slides-format-select').value = settings.slidesFormat;
   applyStudioTabVisibility();
 }
 
@@ -685,6 +688,7 @@ async function saveSettings() {
 
   // Interface
   settings.showStudioTab = document.getElementById('show-studio-tab-checkbox').checked;
+  settings.slidesFormat = document.getElementById('slides-format-select').value === 'pptx' ? 'pptx' : 'pdf';
   applyStudioTabVisibility();
 
   await chrome.storage.local.set({ settings });
@@ -728,7 +732,7 @@ function setupEventListeners() {
   });
 
   // Settings inputs
-  document.querySelectorAll('#settings-panel input').forEach(input => {
+  document.querySelectorAll('#settings-panel input, #settings-panel select').forEach(input => {
     input.addEventListener('change', saveSettings);
   });
 
@@ -1036,7 +1040,8 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
           artifactIndex: artifactIndex,
           artifactType: artifactType,
           artifactName: artifactName,
-          moreButtonAlreadyClicked: true
+          moreButtonAlreadyClicked: true,
+          downloadPreference: settings.slidesFormat
         }
       });
     }
@@ -5913,7 +5918,8 @@ async function downloadAllArtifacts(tabId, items) {
       await chrome.runtime.sendMessage({
         type: 'BATCH_DOWNLOAD_ALL',
         tabId: tabId,
-        items: items
+        items: items,
+        downloadPreference: settings.slidesFormat
       });
 
       // Poll for status

@@ -124,7 +124,20 @@
 
   const ISSUES_URL = 'https://github.com/bearspear/notebooklm-takeout/issues';
 
+  // Pick the More-menu item to download. Slide decks offer "Download PDF
+  // Document (.pdf)" and "Download PowerPoint (.pptx)" (Nov 2026); other
+  // types have a single "Download". -1 when the menu has no download item.
+  function pickDownloadMenuIndex(labels, preference) {
+    const lower = (labels || []).map(l => (l || '').toLowerCase());
+    const candidates = lower.map((l, i) => (l.includes('download') ? i : -1)).filter(i => i !== -1);
+    if (candidates.length === 0) return -1;
+    const wanted = preference === 'pptx' ? ['powerpoint', '.pptx'] : preference === 'pdf' ? ['pdf'] : [];
+    const preferred = candidates.find(i => wanted.some(w => lower[i].includes(w)));
+    return preferred !== undefined ? preferred : candidates[0];
+  }
+
   const NLME = {
+    pickDownloadMenuIndex,
     countFailedExtractions,
     ISSUES_URL,
     pickByIndexThenTitle,

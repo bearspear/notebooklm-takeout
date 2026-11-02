@@ -104,3 +104,22 @@ test('countFailedExtractions handles no errors', () => {
 test('ISSUES_URL points at this project', () => {
   assert.equal(NLME.ISSUES_URL, 'https://github.com/bearspear/notebooklm-takeout/issues');
 });
+
+const slideMenu = ['share Share', 'edit Rename', 'drive_pdfDownload PDF Document (.pdf)', 'drive_ms_powerpointDownload PowerPoint (.pptx)', 'play_arrowStart slideshow', 'delete Delete'];
+const audioMenu = ['share Share', 'edit Rename', 'save_alt Download', 'delete Delete'];
+
+test('pickDownloadMenuIndex honours the PowerPoint preference', () => {
+  assert.equal(NLME.pickDownloadMenuIndex(slideMenu, 'pptx'), 3);
+});
+
+test('pickDownloadMenuIndex honours the PDF preference', () => {
+  assert.equal(NLME.pickDownloadMenuIndex(slideMenu, 'pdf'), 2);
+});
+
+test('pickDownloadMenuIndex falls back to the only Download item', () => {
+  assert.equal(NLME.pickDownloadMenuIndex(audioMenu, 'pptx'), 2);
+});
+
+test('pickDownloadMenuIndex returns -1 without a Download item', () => {
+  assert.equal(NLME.pickDownloadMenuIndex(['share Share'], 'pdf'), -1);
+});
