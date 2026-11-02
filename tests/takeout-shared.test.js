@@ -402,3 +402,16 @@ test('extensionFromDownloadUrl returns empty when the URL names no file', () => 
   assert.equal(NLME.extensionFromDownloadUrl('https://lh3.googleusercontent.com/notebooklm/abc=d'), '');
   assert.equal(NLME.extensionFromDownloadUrl('not a url'), '');
 });
+
+test('downloadFolderPath joins folder and filename', () => {
+  assert.equal(NLME.downloadFolderPath('New Physics', '[slides]_Deck.pptx'), 'New Physics/[slides]_Deck.pptx');
+});
+
+test('downloadFolderPath strips characters a folder name cannot hold', () => {
+  assert.equal(NLME.downloadFolderPath('A/B: C*?"<>|', 'f.md'), 'A B C/f.md');
+});
+
+test('downloadFolderPath without a usable folder returns the bare filename', () => {
+  assert.equal(NLME.downloadFolderPath('', 'f.md'), 'f.md');
+  assert.equal(NLME.downloadFolderPath(' .. ', 'f.md'), 'f.md');
+});

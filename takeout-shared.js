@@ -421,7 +421,21 @@
     return m ? `.${m[1].toLowerCase()}` : '';
   }
 
+  // "<Notebook>/<file>" for chrome.downloads, which saves into subfolders of
+  // Downloads. Folder names drop characters filesystems reject.
+  function downloadFolderPath(folder, filename) {
+    const clean = (folder || '')
+      .replace(/[\/\\:*?"<>|\u0000-\u001f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/^[.\s]+|[.\s]+$/g, '')
+      .slice(0, 80)
+      .trim();
+    return clean ? `${clean}/${filename}` : filename;
+  }
+
   const NLME = {
+    downloadFolderPath,
     extensionFromDownloadUrl,
     formatErrorsTxt,
     titlesMatch,

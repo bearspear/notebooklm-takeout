@@ -1128,37 +1128,12 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
             zip.file('references.txt', footnotes);
           }
 
-          zip.generateAsync({ type: 'blob' }).then(zipBlob => {
-            const url = URL.createObjectURL(zipBlob);
-            try {
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `[${typePrefix}]_${sanitizedName}.zip`;
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-
-              logger.download(baseFilename, 'success', `Downloaded as ZIP with CSV, HTML, JSON, and references`);
-            } finally {
-              URL.revokeObjectURL(url);
-            }
-          });
+          await downloadBlob(await zip.generateAsync({ type: 'blob' }), `[${typePrefix}]_${sanitizedName}.zip`);
+          logger.download(baseFilename, 'success', `Downloaded as ZIP with CSV, HTML, JSON, and references`);
         } else {
           // No footnotes or structured data - just download CSV
-          const blob = new Blob([csvContent], { type: 'text/csv' });
-          const url = URL.createObjectURL(blob);
-          try {
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `[${typePrefix}]_${sanitizeFilename(baseFilename)}.csv`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-
-            logger.download(baseFilename, 'success', `Downloaded as CSV (${csvContent.length} chars)`);
-          } finally {
-            URL.revokeObjectURL(url);
-          }
+          await downloadBlob(new Blob([csvContent], { type: 'text/csv' }), `[${typePrefix}]_${sanitizeFilename(baseFilename)}.csv`);
+          logger.download(baseFilename, 'success', `Downloaded as CSV (${csvContent.length} chars)`);
         }
 
         // Cancel intercept mode (wasn't needed)
@@ -1179,24 +1154,9 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
           markdownContent = response.data;
         }
 
-        // Create markdown blob and download
-        const blob = new Blob([markdownContent], { type: 'text/markdown' });
-        const url = URL.createObjectURL(blob);
-        try {
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `[${typePrefix}]_${sanitizeFilename(baseFilename)}.md`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-
-          // Cancel intercept mode (wasn't needed)
-          chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
-
-          logger.download(baseFilename, 'success', `Downloaded as markdown (${markdownContent.length} chars)`);
-        } finally {
-          URL.revokeObjectURL(url);
-        }
+        await downloadBlob(new Blob([markdownContent], { type: 'text/markdown' }), `[${typePrefix}]_${sanitizeFilename(baseFilename)}.md`);
+        chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
+        logger.download(baseFilename, 'success', `Downloaded as markdown (${markdownContent.length} chars)`);
       }
     } else if (response.method === 'svg_extract' || response.method === 'canvas_export') {
       // Direct extraction - download the data URL
@@ -1227,7 +1187,7 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
         const result = await chrome.runtime.sendMessage({
           type: 'DIRECT_DOWNLOAD_URL',
           url: response.url,
-          filename: fullFilename,
+          filename: NLME.downloadFolderPath(activeDownloadFolder, fullFilename),
           artifactType: artifactType
         });
 
@@ -1302,7 +1262,7 @@ async function handleSVGDownload(dataUrl, filename, format, artifactType = 'Info
 
       await chrome.downloads.download({
         url: url,
-        filename: sanitizedFilename,
+        filename: NLME.downloadFolderPath(activeDownloadFolder, sanitizedFilename),
         saveAs: false
       });
 
@@ -3111,7 +3071,21 @@ function getEnabledNoteVersions() {
 /**
  * Trigger a download of a blob as a single file (no ZIP, no user save-as dialog).
  */
+// Download All without ZIP saves each file into Downloads/<Notebook>/
+// (Milestone 1, Task 8b). Set for the duration of that job only; the job lock
+// guarantees no other export runs meanwhile.
+let activeDownloadFolder = '';
+
 function downloadBlob(blob, filename) {
+  if (activeDownloadFolder) {
+    const folderUrl = URL.createObjectURL(blob);
+    return chrome.downloads.download({
+      url: folderUrl,
+      filename: NLME.downloadFolderPath(activeDownloadFolder, filename),
+      conflictAction: 'uniquify',
+      saveAs: false
+    }).finally(() => setTimeout(() => URL.revokeObjectURL(folderUrl), 60000));
+  }
   const url = URL.createObjectURL(blob);
   try {
     const a = document.createElement('a');
@@ -3152,9 +3126,9 @@ async function downloadMindmapFiles(svgContent, treeData, title, { zipped = fals
   if (zipped) {
     const zip = new JSZip();
     for (const [filename, blob] of files) zip.file(filename, blob);
-    downloadBlob(await zip.generateAsync({ type: 'blob' }), `${base}.zip`);
+    await downloadBlob(await zip.generateAsync({ type: 'blob' }), `${base}.zip`);
   } else {
-    for (const [filename, blob] of files) downloadBlob(blob, filename);
+    for (const [filename, blob] of files) await downloadBlob(blob, filename);
   }
   return files.length;
 }
@@ -5990,8 +5964,14 @@ async function downloadAllArtifacts(tabId, items) {
     }
     return; // Early return for ZIP pathway
   } else {
-    // Individual downloads with progress
-    await downloadItemsSequentially(tabId, items, progressFill, progressText, () => cancelled);
+    // Individual downloads into Downloads/<Notebook>/ (Milestone 1, Task 8b):
+    // each file streams to disk, so there is no size limit
+    activeDownloadFolder = (await getProjectName(tabId)) || 'NotebookLM';
+    try {
+      await downloadItemsSequentially(tabId, items, progressFill, progressText, () => cancelled);
+    } finally {
+      activeDownloadFolder = '';
+    }
   }
 
   // Remove cancellation listener
@@ -6019,6 +5999,7 @@ async function downloadAllArtifacts(tabId, items) {
 async function downloadItemsSequentially(tabId, items, progressFill, progressText, isCancelled) {
   let successCount = 0;
   let failureCount = 0;
+  let wasCancelled = false;
   let skippedCount = 0;
 
   logger.info('Batch Download', `Starting batch download of ${items.length} items`);
@@ -6027,7 +6008,7 @@ async function downloadItemsSequentially(tabId, items, progressFill, progressTex
     // Check for cancellation
     if (isCancelled && isCancelled()) {
       console.log('[NotebookLM Takeout] Batch download cancelled by user');
-      showToast('Download cancelled', 'warning');
+      wasCancelled = true;
       break;
     }
 
@@ -6071,19 +6052,17 @@ async function downloadItemsSequentially(tabId, items, progressFill, progressTex
     }
   }
 
-  // Show summary toast
-  const summary = [];
-  if (successCount > 0) summary.push(`${successCount} succeeded`);
-  if (failureCount > 0) summary.push(`${failureCount} failed`);
-  if (skippedCount > 0) summary.push(`${skippedCount} skipped`);
-
-  const message = `Download complete: ${summary.join(', ')}`;
-  logger.info('Batch Download', message);
-
-  if (settings.showNotifications) {
-    const toastType = failureCount > 0 ? 'warning' : 'success';
-    showToast(message, toastType);
-  }
+  // One truthful summary (Milestone 1), naming the folder the files went to
+  const outcome = NLME.summarizeExportOutcome({
+    kind: 'artifacts',
+    selected: items.length,
+    exported: successCount,
+    failed: failureCount,
+    cancelled: wasCancelled
+  });
+  const where = activeDownloadFolder ? ` into Downloads/${NLME.downloadFolderPath(activeDownloadFolder, '').replace(/\/$/, '')}` : '';
+  logger.info('Batch Download', outcome.message);
+  showToast(outcome.message.replace(/see errors\.txt/, 'see the side panel log') + where, outcome.level);
 }
 
 function showToast(message, type = 'success') {
