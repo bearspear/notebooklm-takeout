@@ -220,3 +220,217 @@ test('mathSourceHealth passes with nothing to check when the page has no formula
   assert.equal(r.passed, true);
   assert.match(r.note, /No formulas/);
 });
+
+test('cleanOcrArtifacts keeps paragraph breaks and list lines', () => {
+  const t = 'Para one.\n\nPara two.\n- a\n- b';
+  assert.equal(NLME.cleanOcrArtifacts(t), t);
+});
+
+test('cleanOcrArtifacts keeps markdown tables', () => {
+  const t = '| a | b |\n|---|---|\n| 1 | 2 |';
+  assert.equal(NLME.cleanOcrArtifacts(t), t);
+});
+
+test('cleanOcrArtifacts leaves fenced code untouched', () => {
+  const t = '```\nx  =  1 ~~~\n```';
+  assert.equal(NLME.cleanOcrArtifacts(t), t);
+});
+
+test('cleanOcrArtifacts keeps ~~strikethrough~~', () => {
+  assert.equal(NLME.cleanOcrArtifacts('a ~~b~~ c'), 'a ~~b~~ c');
+});
+
+test('cleanOcrArtifacts strips OCR tildes', () => {
+  assert.equal(NLME.cleanOcrArtifacts('word ~~~ next :~: end =~ x'), 'word next end x');
+});
+
+test('cleanOcrArtifacts collapses horizontal runs and 3+ newlines', () => {
+  assert.equal(NLME.cleanOcrArtifacts('a  \t b\n\n\n\nc'), 'a b\n\nc');
+});
+
+function fakeClock(times) {
+  let i = 0;
+  return () => times[i++];
+}
+
+test('createPhaseTimer sums repeated phases', () => {
+  const t = NLME.createPhaseTimer(fakeClock([0, 10, 10, 40]));
+  t.start('a'); t.end('a');
+  t.start('a'); t.end('a');
+  assert.deepEqual(t.totals().a, { count: 2, ms: 40 });
+});
+
+test('createPhaseTimer merge adds totals from another context', () => {
+  const t = NLME.createPhaseTimer(fakeClock([0, 5]));
+  t.start('a'); t.end('a');
+  t.merge({ a: { count: 3, ms: 30 }, b: { count: 1, ms: 7 } });
+  assert.deepEqual(t.totals(), { a: { count: 4, ms: 35 }, b: { count: 1, ms: 7 } });
+});
+
+test('formatTimingSummary lists phases and total', () => {
+  const md = NLME.formatTimingSummary({ a: { count: 2, ms: 3000 } }, 192000);
+  assert.match(md, /^## Export statistics/);
+  assert.match(md, /a: 2 × 1\.50 s avg/);
+  assert.match(md, /Total: 3 m 12 s/);
+});
+
+test('createJobLock allows one job at a time', () => {
+  const lock = NLME.createJobLock();
+  assert.equal(lock.tryAcquire('notes'), true);
+  assert.equal(lock.tryAcquire('chat'), false);
+  assert.equal(lock.current(), 'notes');
+});
+
+test('createJobLock release frees the lock', () => {
+  const lock = NLME.createJobLock();
+  lock.tryAcquire('notes');
+  lock.release('notes');
+  assert.equal(lock.tryAcquire('chat'), true);
+});
+
+test('createJobLock ignores release by a non-owner', () => {
+  const lock = NLME.createJobLock();
+  lock.tryAcquire('notes');
+  lock.release('chat');
+  assert.equal(lock.current(), 'notes');
+});
+
+test('summarizeExportOutcome reports a full success', () => {
+  assert.deepEqual(NLME.summarizeExportOutcome({ kind: 'notes', selected: 10, exported: 10, failed: 0, cancelled: false }),
+    { level: 'success', message: 'Exported 10 of 10 notes', partial: false });
+});
+
+test('summarizeExportOutcome reports partial failures', () => {
+  const r = NLME.summarizeExportOutcome({ kind: 'notes', selected: 10, exported: 7, failed: 3, cancelled: false });
+  assert.equal(r.level, 'warning');
+  assert.equal(r.message, 'Exported 7 of 10 notes (3 failed, see errors.txt)');
+  assert.equal(r.partial, false);
+});
+
+test('summarizeExportOutcome reports a cancelled export as partial', () => {
+  const r = NLME.summarizeExportOutcome({ kind: 'notes', selected: 10, exported: 4, failed: 0, cancelled: true });
+  assert.equal(r.level, 'warning');
+  assert.equal(r.message, 'Cancelled: exported 4 of 10 notes');
+  assert.equal(r.partial, true);
+});
+
+test('summarizeExportOutcome reports when nothing was exported', () => {
+  const r = NLME.summarizeExportOutcome({ kind: 'notes', selected: 10, exported: 0, failed: 10, cancelled: false });
+  assert.equal(r.level, 'error');
+  assert.equal(r.message, 'No notes exported (10 failed, see errors.txt)');
+});
+
+const DL = 'https://contribution.usercontent.google.com/download?c=abc&filename=deck.pdf';
+
+test('shouldIntercept is false when not armed', () => {
+  const arm = NLME.createInterceptArm(3000);
+  assert.equal(arm.shouldIntercept(DL, 1000), false);
+});
+
+test('arm then shouldIntercept true once, then false', () => {
+  const arm = NLME.createInterceptArm(3000);
+  arm.arm(1000);
+  assert.equal(arm.shouldIntercept(DL, 1500), true);
+  assert.equal(arm.shouldIntercept(DL, 1600), false);
+});
+
+test('arm expires after windowMs', () => {
+  const arm = NLME.createInterceptArm(3000);
+  arm.arm(1000);
+  assert.equal(arm.shouldIntercept(DL, 4001), false);
+});
+
+test('non-download URL never intercepted even when armed', () => {
+  const arm = NLME.createInterceptArm(3000);
+  arm.arm(1000);
+  assert.equal(arm.shouldIntercept('https://notebook.google.com/notebook/x', 1100), false);
+  assert.equal(arm.shouldIntercept(DL, 1200), true);
+});
+
+test('isNotebookDownloadUrl rejects lookalike hosts', () => {
+  assert.equal(NLME.isNotebookDownloadUrl('https://evil.com/?q=contribution.usercontent.google.com'), false);
+  assert.equal(NLME.isNotebookDownloadUrl(DL), true);
+  assert.equal(NLME.isNotebookDownloadUrl('https://lh3.googleusercontent.com/notebooklm/abc=d'), true);
+  assert.equal(NLME.isNotebookDownloadUrl('not a url'), false);
+});
+
+test('titlesMatch ignores whitespace and ellipsis style', () => {
+  assert.equal(NLME.titlesMatch('The  Electric…', 'The Electric...'), true);
+});
+
+test('titlesMatch accepts a truncated title ending in an ellipsis', () => {
+  assert.equal(NLME.titlesMatch('Halton Arp Quasar…', 'Halton Arp Quasar Model Verified'), true);
+});
+
+test('titlesMatch rejects different titles', () => {
+  assert.equal(NLME.titlesMatch('A', 'B'), false);
+});
+
+test('pickByIndexThenTitleStrict keeps the index when it matches', () => {
+  assert.equal(NLME.pickByIndexThenTitleStrict(['A', 'B', 'A'], 2, 'A'), 2);
+});
+
+test('pickByIndexThenTitleStrict follows the title when the list shifted', () => {
+  assert.equal(NLME.pickByIndexThenTitleStrict(['X', 'A', 'B'], 0, 'A'), 1);
+});
+
+test('pickByIndexThenTitleStrict throws when the title is gone', () => {
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(['A', 'B'], 1, 'Z'), /Item changed/);
+});
+
+test('pickFreshIntercept ignores URLs from before the click', () => {
+  const entries = [{ url: 'old', timestamp: 5 }, { url: 'new', timestamp: 12 }];
+  assert.equal(NLME.pickFreshIntercept(entries, 10), 'new');
+  assert.equal(NLME.pickFreshIntercept(entries, 20), null);
+});
+
+test('formatErrorsTxt lists every error and the issues link', () => {
+  const txt = NLME.formatErrorsTxt({ title: 'Artifacts', generatedAt: '11/2/2026, 1:00 PM', errors: ['Deck A: Download was not captured', 'Map B: Item changed'] });
+  assert.match(txt, /^# Artifacts Error Report/);
+  assert.match(txt, /- Deck A: Download was not captured/);
+  assert.match(txt, /- Map B: Item changed/);
+  assert.match(txt, /11\/2\/2026, 1:00 PM/);
+  assert.ok(txt.includes(NLME.ISSUES_URL));
+});
+
+test('extensionFromDownloadUrl reads the filename parameter', () => {
+  assert.equal(NLME.extensionFromDownloadUrl('https://contribution.usercontent.google.com/download?c=x&filename=Testing_Cosmology.pptx&opi=1'), '.pptx');
+  assert.equal(NLME.extensionFromDownloadUrl('https://contribution.usercontent.google.com/download?filename=Deck.pdf'), '.pdf');
+});
+
+test('extensionFromDownloadUrl returns empty when the URL names no file', () => {
+  assert.equal(NLME.extensionFromDownloadUrl('https://lh3.googleusercontent.com/notebooklm/abc=d'), '');
+  assert.equal(NLME.extensionFromDownloadUrl('not a url'), '');
+});
+
+test('downloadFolderPath joins folder and filename', () => {
+  assert.equal(NLME.downloadFolderPath('New Physics', '[slides]_Deck.pptx'), 'New Physics/[slides]_Deck.pptx');
+});
+
+test('downloadFolderPath strips characters a folder name cannot hold', () => {
+  assert.equal(NLME.downloadFolderPath('A/B: C*?"<>|', 'f.md'), 'A B C/f.md');
+});
+
+test('downloadFolderPath without a usable folder returns the bare filename', () => {
+  assert.equal(NLME.downloadFolderPath('', 'f.md'), 'f.md');
+  assert.equal(NLME.downloadFolderPath(' .. ', 'f.md'), 'f.md');
+});
+
+test('stability tracker needs equal consecutive lengths', () => {
+  const t = NLME.createStabilityTracker({ checks: 2 });
+  assert.equal(t.push(10), false);
+  assert.equal(t.push(20), false);
+  assert.equal(t.push(20), true);
+});
+
+test('stability tracker never stable below minLength', () => {
+  const t = NLME.createStabilityTracker({ checks: 2, minLength: 50 });
+  assert.equal(t.push(10), false);
+  assert.equal(t.push(10), false);
+});
+
+test('cancellationNote says how far the export got and what is missing', () => {
+  const note = NLME.cancellationNote({ kind: 'messages', done: 4, total: 17 });
+  assert.match(note, /Cancelled by user after 4 of 17 messages/);
+  assert.match(note, /not exported/);
+});

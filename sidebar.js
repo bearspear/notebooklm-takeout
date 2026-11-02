@@ -711,7 +711,8 @@ async function saveSettings() {
 }
 
 function setupEventListeners() {
-  document.getElementById('rescan-btn').addEventListener('click', scanPage);
+  document.getElementById('rescan-btn').addEventListener('click', () => { if (!jobLock.current()) scanPage(); });
+  document.getElementById('cancel-download-btn')?.addEventListener('click', requestCancel);
 
   document.getElementById('auto-refresh-checkbox').addEventListener('change', (e) => {
     if (e.target.checked) {
@@ -841,7 +842,7 @@ function setupEventListeners() {
   // Chat scan button
   const scanChatBtn = document.getElementById('scan-chat-btn');
   if (scanChatBtn) {
-    scanChatBtn.addEventListener('click', scanChatPage);
+    scanChatBtn.addEventListener('click', () => runExclusive('Chat scan', scanChatPage));
   }
 
   // Dismiss warning banner button
@@ -857,11 +858,11 @@ function setupEventListeners() {
   }
   const studioDownloadSelectedBtn = document.getElementById('studio-download-selected-btn');
   if (studioDownloadSelectedBtn) {
-    studioDownloadSelectedBtn.addEventListener('click', handleStudioBulkDownload);
+    studioDownloadSelectedBtn.addEventListener('click', () => runExclusive('Studio download', handleStudioBulkDownload));
   }
   const studioDeleteSelectedBtn = document.getElementById('studio-delete-selected-btn');
   if (studioDeleteSelectedBtn) {
-    studioDeleteSelectedBtn.addEventListener('click', handleStudioBulkDelete);
+    studioDeleteSelectedBtn.addEventListener('click', () => runExclusive('Studio delete', handleStudioBulkDelete));
   }
 }
 
@@ -886,8 +887,10 @@ function setupTabSwitching() {
         }
       });
 
-      // Trigger scan for the active tab
-      if (targetTab === 'notes') {
+      // Trigger scan for the active tab (not while a job runs)
+      if (jobLock.current()) {
+        // skip
+      } else if (targetTab === 'notes') {
         await scanNotesPage();
       } else if (targetTab === 'artifacts') {
         await scanPage();
@@ -906,6 +909,7 @@ function startAutoRefresh() {
 
   const interval = settings.refreshInterval * 1000;
   autoRefreshInterval = setInterval(async () => {
+    if (jobLock.current()) return; // never rescan during a job
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (isNotebookUrl(tab?.url)) {
       await scanPage();
@@ -923,7 +927,7 @@ function stopAutoRefresh() {
 async function handleTabChange(activeInfo) {
   currentTabId = activeInfo.tabId;
   await checkStatus();
-  await scanPage();
+  if (!jobLock.current()) await scanPage();
 }
 
 async function handleTabUpdate(tabId, changeInfo, tab) {
@@ -932,7 +936,7 @@ async function handleTabUpdate(tabId, changeInfo, tab) {
   if (activeTab && activeTab.id === tabId) {
     if (changeInfo.status === 'complete') {
       await checkStatus();
-      await scanPage();
+      if (!jobLock.current()) await scanPage();
     }
   }
 }
@@ -1025,20 +1029,8 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
         }
       });
     } else {
-      // For non-Report artifacts: Click the More button in page context
-      logger.info('Download', `Clicking More button for artifact ${artifactIndex}...`);
-      const clickResult = await chrome.scripting.executeScript({
-        target: { tabId: tabId },
-        func: clickArtifactMoreButton,
-        args: [artifactIndex]
-      });
-
-      if (!clickResult || !clickResult[0]?.result?.success) {
-        throw new Error(clickResult[0]?.result?.error || 'Failed to click More button');
-      }
-
-      // Wait for menu to appear
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // The content script resolves the row by title and clicks its own More
+      // button (Milestone 1); no separate index-only click from here.
 
       // For non-extractable artifacts, enable intercept mode BEFORE clicking download button
       // This prevents tabs from opening for slides and infographics
@@ -1056,7 +1048,6 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
           artifactIndex: artifactIndex,
           artifactType: artifactType,
           artifactName: artifactName,
-          moreButtonAlreadyClicked: true,
           downloadPreference: settings.slidesFormat
         }
       });
@@ -1137,37 +1128,12 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
             zip.file('references.txt', footnotes);
           }
 
-          zip.generateAsync({ type: 'blob' }).then(zipBlob => {
-            const url = URL.createObjectURL(zipBlob);
-            try {
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `[${typePrefix}]_${sanitizedName}.zip`;
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-
-              logger.download(baseFilename, 'success', `Downloaded as ZIP with CSV, HTML, JSON, and references`);
-            } finally {
-              URL.revokeObjectURL(url);
-            }
-          });
+          await downloadBlob(await zip.generateAsync({ type: 'blob' }), `[${typePrefix}]_${sanitizedName}.zip`);
+          logger.download(baseFilename, 'success', `Downloaded as ZIP with CSV, HTML, JSON, and references`);
         } else {
           // No footnotes or structured data - just download CSV
-          const blob = new Blob([csvContent], { type: 'text/csv' });
-          const url = URL.createObjectURL(blob);
-          try {
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `[${typePrefix}]_${sanitizeFilename(baseFilename)}.csv`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-
-            logger.download(baseFilename, 'success', `Downloaded as CSV (${csvContent.length} chars)`);
-          } finally {
-            URL.revokeObjectURL(url);
-          }
+          await downloadBlob(new Blob([csvContent], { type: 'text/csv' }), `[${typePrefix}]_${sanitizeFilename(baseFilename)}.csv`);
+          logger.download(baseFilename, 'success', `Downloaded as CSV (${csvContent.length} chars)`);
         }
 
         // Cancel intercept mode (wasn't needed)
@@ -1188,24 +1154,9 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
           markdownContent = response.data;
         }
 
-        // Create markdown blob and download
-        const blob = new Blob([markdownContent], { type: 'text/markdown' });
-        const url = URL.createObjectURL(blob);
-        try {
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `[${typePrefix}]_${sanitizeFilename(baseFilename)}.md`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-
-          // Cancel intercept mode (wasn't needed)
-          chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
-
-          logger.download(baseFilename, 'success', `Downloaded as markdown (${markdownContent.length} chars)`);
-        } finally {
-          URL.revokeObjectURL(url);
-        }
+        await downloadBlob(new Blob([markdownContent], { type: 'text/markdown' }), `[${typePrefix}]_${sanitizeFilename(baseFilename)}.md`);
+        chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
+        logger.download(baseFilename, 'success', `Downloaded as markdown (${markdownContent.length} chars)`);
       }
     } else if (response.method === 'svg_extract' || response.method === 'canvas_export') {
       // Direct extraction - download the data URL
@@ -1236,7 +1187,7 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
         const result = await chrome.runtime.sendMessage({
           type: 'DIRECT_DOWNLOAD_URL',
           url: response.url,
-          filename: fullFilename,
+          filename: NLME.downloadFolderPath(activeDownloadFolder, fullFilename),
           artifactType: artifactType
         });
 
@@ -1255,18 +1206,20 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
 
       logger.info('Download', `Waiting for background intercept to complete...`);
 
-      // Wait for interception to complete
-      await new Promise(resolve => setTimeout(resolve, 2500));
-
-      // Check if download was intercepted successfully
-      const result = await chrome.runtime.sendMessage({
-        type: 'GET_INTERCEPTED_DOWNLOAD'
-      });
-
+      // No intercepted URL came back: wait for the background to capture the
+      // download, and fail loudly if it never does (Milestone 1; this used to
+      // log a warning and report success).
+      let result = null;
+      for (let waited = 0; waited < 20000; waited += 250) {
+        result = await chrome.runtime.sendMessage({ type: 'GET_INTERCEPTED_DOWNLOAD' });
+        if (result && result.success) break;
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
       if (result && result.success) {
         logger.download(filename, 'success', `Downloaded without tab: ${result.filename}`);
       } else {
-        logger.warn('Download', 'Interception may have failed');
+        chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
+        throw new Error('Download was not captured');
       }
     }
 
@@ -1274,6 +1227,9 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
 
   } catch (error) {
     logger.error('Download', `Failed to download ${artifactName}`, error);
+    // A queued intercept request would otherwise rename the next unrelated
+    // download (even the user's own) as this item for up to 20 s
+    chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
     throw error;
   }
 }
@@ -1307,9 +1263,11 @@ async function handleSVGDownload(dataUrl, filename, format, artifactType = 'Info
 
       logger.info('Download', `Sanitized filename: "${sanitizedFilename}"`);
 
+      const svgTarget = NLME.downloadFolderPath(activeDownloadFolder, sanitizedFilename);
+      await chrome.runtime.sendMessage({ type: 'NAME_NEXT_DOWNLOAD', url, filename: svgTarget });
       await chrome.downloads.download({
         url: url,
-        filename: sanitizedFilename,
+        filename: svgTarget,
         saveAs: false
       });
 
@@ -1495,7 +1453,7 @@ async function scanPage() {
         }
 
         try {
-          await triggerItemDownload(tab.id, idx, item.label, item.type);
+          await runExclusive('Artifact download', () => triggerItemDownload(tab.id, idx, item.label, item.type));
 
           // Show success status
           if (statusSpan) {
@@ -1535,7 +1493,7 @@ async function scanPage() {
     const downloadAllBtn = document.getElementById('download-all-btn');
     if (downloadAllBtn) {
       downloadAllBtn.addEventListener('click', async () => {
-        await downloadAllArtifacts(tab.id, enabledItems);
+        await runExclusive('Download All', () => downloadAllArtifacts(tab.id, enabledItems));
       });
     }
 
@@ -1560,6 +1518,12 @@ async function ensureContentScriptLoaded(tabId) {
         target: { tabId: tabId },
         files: ['takeout-shared.js', 'mindmap-extract.js', 'content.js']
       });
+      // The page-world download hook too (guarded against double install)
+      await chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        world: 'MAIN',
+        files: ['takeout-shared.js', 'injected.js']
+      }).catch(err => console.warn('[NotebookLM Takeout] Download hook injection failed:', err.message));
       await new Promise(resolve => setTimeout(resolve, 500));
       return true;
     }
@@ -1720,7 +1684,7 @@ function renderNotesList(notes) {
       e.stopPropagation();
       const idx = parseInt(btn.dataset.index);
       const note = notes[idx];
-      await exportNotesAsMarkdown([note]);
+      await runExclusive('Notes export', () => exportNotesAsMarkdown([note]));
     });
   });
 
@@ -1734,7 +1698,7 @@ function renderNotesList(notes) {
       return;
     }
 
-    await exportNotesAsMarkdown(selected);
+    await runExclusive('Notes export', () => exportNotesAsMarkdown(selected));
   });
 }
 
@@ -2570,49 +2534,81 @@ function escapeMarkdownInQuote(text) {
  * @param {boolean} options.markUnclear - If true, mark unclear sections with [OCR?]
  * @returns {string} - Cleaned text
  */
+// Export-wide phase timing (Milestone 1, Task 2). Content-script responses
+// carry `timing` totals that are merged here; each export's _index.md ends
+// with an "Export statistics" block and the same summary is logged.
+let exportTimer = null;
+let exportStartedAt = 0;
+let lastChatScanTiming = null;
+
+function startExportTiming() {
+  exportTimer = NLME.createPhaseTimer();
+  exportStartedAt = performance.now();
+}
+
+function mergeTiming(response) {
+  if (exportTimer && response && response.timing) exportTimer.merge(response.timing);
+}
+
+function timingSummary() {
+  if (!exportTimer) return '';
+  const summary = NLME.formatTimingSummary(exportTimer.totals(), performance.now() - exportStartedAt);
+  console.log('[NotebookLM Takeout][timing]\n' + summary);
+  return '\n' + summary;
+}
+
+async function generateZipTimed(zip) {
+  exportTimer?.start('zip.build');
+  try {
+    return await zip.generateAsync({ type: 'blob' });
+  } finally {
+    exportTimer?.end('zip.build');
+  }
+}
+
+// One export/scan/download job at a time (Milestone 1, Task 3). While a job
+// runs, controls in the tabs are disabled via body.job-running, auto-refresh
+// and tab-switch rescans are skipped, and Cancel reaches the running job.
+const jobLock = NLME.createJobLock();
+let jobTabId = null;
+
+async function runExclusive(name, fn) {
+  if (!jobLock.tryAcquire(name)) {
+    showToast(`${jobLock.current()} is still running`, 'warning');
+    return undefined;
+  }
+  document.body.classList.add('job-running');
+  try {
+    // Remember the job's tab: Cancel must reach it even after a tab switch
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      jobTabId = tab?.id ?? null;
+    } catch (e) {
+      jobTabId = null;
+    }
+    return await fn();
+  } finally {
+    jobLock.release(name);
+    jobTabId = null;
+    document.body.classList.remove('job-running');
+  }
+}
+
+// Same path as the page overlay's Cancel button: the content script flags the
+// export as cancelled and broadcasts CANCEL_EXPORT to every running exporter.
+async function requestCancel() {
+  if (!jobLock.current()) return;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await chrome.tabs.sendMessage(jobTabId || currentTabId || tab?.id, { type: 'REQUEST_EXPORT_CANCEL' });
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Cancel request failed:', error.message);
+  }
+}
+
 function cleanOCRArtifacts(text) {
-  if (!text) return '';
-
-  let cleaned = text
-    // Remove sequences of 3+ tildes (common OCR failure pattern)
-    .replace(/~{3,}/g, '')
-
-    // Clean tilde-colon patterns: :~:, ~:~, :~~:, etc.
-    .replace(/[:;]+~+[:;]*/g, '')
-    .replace(/~+[:;]+~*/g, '')
-
-    // Clean equals-tilde patterns: =~, ~=
-    .replace(/[=]+~+/g, '')
-    .replace(/~+[=]+/g, '')
-
-    // Clean exclamation/semicolon noise: ;!, !;, ;!~
-    .replace(/[;!]{2,}/g, '')
-    .replace(/[;!]~+[;!]*/g, '')
-
-    // Clean isolated tildes around single characters: ~a~ -> a
-    .replace(/~([a-zA-ZäöüÄÖÜß])~/g, '$1')
-
-    // Clean tilde at word boundaries: word~ -> word, ~word -> word
-    .replace(/~+(\s)/g, '$1')
-    .replace(/(\s)~+/g, '$1')
-
-    // Clean double tildes: ~~ -> (nothing)
-    .replace(/~~/g, '')
-
-    // Clean remaining isolated tildes between letters (likely OCR errors)
-    // e.g., "Gru~d" -> "Grund" (but be conservative)
-    .replace(/([a-zA-ZäöüÄÖÜß])~([a-zA-ZäöüÄÖÜß])/g, '$1$2')
-
-    // Clean up multiple spaces left behind
-    .replace(/\s{2,}/g, ' ')
-
-    // Clean up spaces before punctuation
-    .replace(/\s+([.,;:!?])/g, '$1')
-
-    // Trim
-    .trim();
-
-  return cleaned;
+  // Shared, unit-tested implementation (keeps paragraphs, tables, fences, ~~strike~~)
+  return NLME.cleanOcrArtifacts(text);
 }
 
 function sanitizeFilename(filename) {
@@ -2791,6 +2787,7 @@ async function getProjectName(tabId) {
 }
 
 async function exportNotesAsMarkdown(selectedNotes) {
+  startExportTiming();
   console.log('[NotebookLM Takeout] Starting export for notes:', selectedNotes.length);
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -2831,6 +2828,10 @@ async function exportNotesAsMarkdown(selectedNotes) {
 
   const allErrors = [];
   let cancelled = false;
+  let cancelNoted = false;
+  let exportedCount = 0;
+  let attemptedCount = 0;
+  let errorsWritten = false;
   let userAcknowledgedWarning = false; // Track if user already acknowledged DOM issues
 
   // Listen for cancellation
@@ -2853,7 +2854,10 @@ async function exportNotesAsMarkdown(selectedNotes) {
     for (let zipIndex = 0; zipIndex < totalZips; zipIndex++) {
       if (cancelled) {
         console.log('[NotebookLM Takeout] Export cancelled by user');
-        showToast('Export cancelled', 'warning');
+        if (!cancelNoted) {
+          cancelNoted = true;
+          allErrors.push(NLME.cancellationNote({ kind: 'notes', done: attemptedCount, total: selectedNotes.length }));
+        }
         break;
       }
 
@@ -2869,11 +2873,15 @@ async function exportNotesAsMarkdown(selectedNotes) {
       // Check for cancellation
       if (cancelled) {
         console.log('[NotebookLM Takeout] Export cancelled by user');
-        showToast('Export cancelled', 'warning');
+        if (!cancelNoted) {
+          cancelNoted = true;
+          allErrors.push(NLME.cancellationNote({ kind: 'notes', done: attemptedCount, total: selectedNotes.length }));
+        }
         break;
       }
 
       const note = batchNotes[i];
+      attemptedCount++;
       const overallIndex = startIdx + i;
       const progress = ((overallIndex + 1) / selectedNotes.length) * 100;
 
@@ -2884,11 +2892,11 @@ async function exportNotesAsMarkdown(selectedNotes) {
       progressText.textContent = `Batch ${zipIndex + 1}/${totalZips}: Processing ${i + 1}/${batchNotes.length}: ${note.title}`;
 
       // Update page overlay
-      await chrome.tabs.sendMessage(tab.id, {
+      chrome.tabs.sendMessage(tab.id, {
         type: 'UPDATE_EXPORT_OVERLAY',
         message: `Batch ${zipIndex + 1}/${totalZips}: Processing ${i + 1}/${batchNotes.length}: ${note.title}`,
         progress: progress
-      });
+      }).catch(() => {}); // overlay is cosmetic; never abort the job
 
       try {
         // Extract note content via content script
@@ -2908,6 +2916,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
         });
 
         console.log('[NotebookLM Takeout] Note data received:', noteData);
+        mergeTiming(noteData);
 
         if (noteData && !noteData.error) {
           // Collect errors from this note
@@ -2975,14 +2984,12 @@ async function exportNotesAsMarkdown(selectedNotes) {
           const backResponse = await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_BACK' });
           console.log('[NotebookLM Takeout] Navigate back response:', backResponse);
 
-          // Extra long delay between notes to ensure DOM fully stabilizes
-          console.log('[NotebookLM Takeout] Waiting for DOM to stabilize...');
-          await new Promise(resolve => setTimeout(resolve, 3000));
-          console.log('[NotebookLM Takeout] Ready for next note');
+          // NAVIGATE_BACK resolves once the viewer is closed and the list is
+          // back; the next EXTRACT_NOTE waits for a stable list itself
+          // (Milestone 1: was a fixed 3 s per note)
         } catch (backError) {
           console.error('[NotebookLM Takeout] Failed to navigate back:', backError);
-          // Try to continue anyway with even longer wait
-          await new Promise(resolve => setTimeout(resolve, 4000));
+          // Continue: EXTRACT_NOTE fails the next note cleanly if a viewer is stuck
         }
       }
     }
@@ -2992,38 +2999,12 @@ async function exportNotesAsMarkdown(selectedNotes) {
       console.log(`[NotebookLM Takeout] Creating ZIP ${zipIndex + 1}/${totalZips} with ${exportedNotes.length} notes from this batch`);
       progressText.textContent = `Creating ZIP ${zipIndex + 1}/${totalZips}...`;
       progressFill.style.width = '100%';
-      // Create ZIP for this batch (pass ALL errors only to LAST batch so errors.txt contains everything)
-      const batchErrors = (zipIndex === totalZips - 1) ? allErrors : [];
-      const versionCount = await createNotesZip(exportedNotes, batchErrors, zipIndex + 1, totalZips, projectName, timestamp);
-
-      // Show toast only on last batch
-      if (zipIndex === totalZips - 1) {
-        let successMsg;
-        if (allErrors.length > 0) {
-          // Build detailed error message
-          const errorCount = allErrors.length;
-          const failedNotes = NLME.countFailedExtractions(allErrors);
-
-          if (versionCount > 1) {
-            successMsg = `Exported ${selectedNotes.length} notes in ${totalZips} ZIP(s) (${versionCount} versions) with ${errorCount} warning(s)`;
-          } else {
-            successMsg = `Exported ${selectedNotes.length} notes in ${totalZips} ZIP(s) with ${errorCount} warning(s)`;
-          }
-
-          if (failedNotes > 0) {
-            successMsg += ` (${failedNotes} failed to extract)`;
-          }
-          successMsg += '. See errors.txt in last ZIP for details.';
-        } else {
-          // Success message
-          if (versionCount > 1) {
-            successMsg = `Successfully exported ${selectedNotes.length} notes in ${totalZips} ZIP(s) (${versionCount} versions)`;
-          } else {
-            successMsg = `Successfully exported ${selectedNotes.length} notes in ${totalZips} ZIP(s)`;
-          }
-        }
-        showToast(successMsg, allErrors.length > 0 ? 'warning' : 'success');
-      }
+      // errors.txt goes into the last ZIP this run writes: the final batch, or
+      // the batch the user cancelled in. A cancelled run is named -PARTIAL.
+      const isLastZip = zipIndex === totalZips - 1 || cancelled;
+      exportedCount += exportedNotes.length;
+      await createNotesZip(exportedNotes, isLastZip ? allErrors : [], zipIndex + 1, totalZips, projectName, timestamp, cancelled ? '-PARTIAL' : '');
+      if (isLastZip && allErrors.length > 0) errorsWritten = true;
 
       // CRITICAL: Clear memory after each ZIP to prevent crashes
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -3046,6 +3027,21 @@ async function exportNotesAsMarkdown(selectedNotes) {
       }
     } // End of "if exportedNotes.length > 0"
     } // End of batch loop
+
+    // Never lose errors: if no ZIP carried them (all of the last batch failed,
+    // or the run stopped before writing), write an errors-only ZIP.
+    if (allErrors.length > 0 && !errorsWritten) {
+      await createNotesZip([], allErrors, totalZips, totalZips, projectName, timestamp, cancelled ? '-PARTIAL' : '');
+    }
+
+    const outcome = NLME.summarizeExportOutcome({
+      kind: 'notes',
+      selected: selectedNotes.length,
+      exported: exportedCount,
+      failed: Math.max(0, attemptedCount - exportedCount),
+      cancelled
+    });
+    showToast(outcome.message, outcome.level);
 
   } catch (error) {
     console.error('Export failed:', error);
@@ -3096,7 +3092,20 @@ function getEnabledNoteVersions() {
 /**
  * Trigger a download of a blob as a single file (no ZIP, no user save-as dialog).
  */
+// Download All without ZIP saves each file into Downloads/<Notebook>/
+// (Milestone 1, Task 8b). Set for the duration of that job only; the job lock
+// guarantees no other export runs meanwhile.
+let activeDownloadFolder = '';
+
 function downloadBlob(blob, filename) {
+  if (activeDownloadFolder) {
+    const folderUrl = URL.createObjectURL(blob);
+    const target = NLME.downloadFolderPath(activeDownloadFolder, filename);
+    // Register the name first: the background's filename listener applies it
+    return chrome.runtime.sendMessage({ type: 'NAME_NEXT_DOWNLOAD', url: folderUrl, filename: target })
+      .then(() => chrome.downloads.download({ url: folderUrl, filename: target, conflictAction: 'uniquify', saveAs: false }))
+      .finally(() => setTimeout(() => URL.revokeObjectURL(folderUrl), 60000));
+  }
   const url = URL.createObjectURL(blob);
   try {
     const a = document.createElement('a');
@@ -3137,9 +3146,9 @@ async function downloadMindmapFiles(svgContent, treeData, title, { zipped = fals
   if (zipped) {
     const zip = new JSZip();
     for (const [filename, blob] of files) zip.file(filename, blob);
-    downloadBlob(await zip.generateAsync({ type: 'blob' }), `${base}.zip`);
+    await downloadBlob(await zip.generateAsync({ type: 'blob' }), `${base}.zip`);
   } else {
-    for (const [filename, blob] of files) downloadBlob(blob, filename);
+    for (const [filename, blob] of files) await downloadBlob(blob, filename);
   }
   return files.length;
 }
@@ -3203,7 +3212,7 @@ async function exportSingleNote(note) {
   return { success: true, filesWritten };
 }
 
-async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches = 1, projectName = 'NotebookLM', timestamp = null) {
+async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches = 1, projectName = 'NotebookLM', timestamp = null, nameSuffix = '') {
   const zip = new JSZip();
   const indexFiles = []; // Track all files for _index.md
   let versionCount = 0; // Track number of versions created
@@ -3213,8 +3222,9 @@ async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches =
     timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
   }
 
-  // Add errors.txt if there are any errors (only in LAST batch so it contains ALL errors)
-  if (errors.length > 0 && batchIndex === totalBatches) {
+  // Add errors.txt when the caller passes errors (it passes ALL errors to the
+  // last ZIP the run writes: the final batch, or the one it was cancelled in)
+  if (errors.length > 0) {
     let errorsContent = '# NotebookLM Export Errors\n\n';
     errorsContent += `Total Errors: ${errors.length}\n`;
     errorsContent += `Generated: ${new Date().toLocaleString()}\n\n`;
@@ -3480,19 +3490,19 @@ async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches =
     }
   }
 
-  zip.file('_index.md', indexContent);
+  zip.file('_index.md', indexContent + timingSummary());
 
   // Generate and download ZIP
-  const blob = await zip.generateAsync({ type: 'blob' });
+  const blob = await generateZipTimed(zip);
   const url = URL.createObjectURL(blob);
 
   try {
     const sanitizedProjectName = sanitizeFilename(projectName);
     let filename;
     if (totalBatches > 1) {
-      filename = `${sanitizedProjectName}-notes-${timestamp}-part${batchIndex}of${totalBatches}.zip`;
+      filename = `${sanitizedProjectName}-notes-${timestamp}${nameSuffix}-part${batchIndex}of${totalBatches}.zip`;
     } else {
-      filename = `${sanitizedProjectName}-notes-${timestamp}.zip`;
+      filename = `${sanitizedProjectName}-notes-${timestamp}${nameSuffix}.zip`;
     }
 
     const a = document.createElement('a');
@@ -3647,7 +3657,7 @@ function setupSourcesEventListeners(sources) {
       e.stopPropagation();
       const idx = parseInt(btn.dataset.index);
       const source = sources[idx];
-      await exportSources([source]);
+      await runExclusive('Sources export', () => exportSources([source]));
     });
   });
 
@@ -3671,7 +3681,7 @@ function setupSourcesEventListeners(sources) {
         return;
       }
 
-      await exportSources(selected);
+      await runExclusive('Sources export', () => exportSources(selected));
     });
   }
 }
@@ -3681,6 +3691,7 @@ function setupSourcesEventListeners(sources) {
  * Reuses the same pattern as notes export
  */
 async function exportSources(selectedSources) {
+  startExportTiming();
   console.log(`[NotebookLM Takeout] Exporting ${selectedSources.length} sources...`);
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -3722,6 +3733,10 @@ async function exportSources(selectedSources) {
 
   const allErrors = [];
   let cancelled = false;
+  let cancelNoted = false;
+  let exportedCount = 0;
+  let attemptedCount = 0;
+  let errorsWritten = false;
   let userAcknowledgedWarning = false; // Track if user already acknowledged DOM issues
 
   // Track statistics for error reporting
@@ -3754,7 +3769,10 @@ async function exportSources(selectedSources) {
     for (let zipIndex = 0; zipIndex < totalZips; zipIndex++) {
       if (cancelled) {
         console.log('[NotebookLM Takeout] Export cancelled by user');
-        showToast('Export cancelled', 'warning');
+        if (!cancelNoted) {
+          cancelNoted = true;
+          allErrors.push(NLME.cancellationNote({ kind: 'sources', done: attemptedCount, total: selectedSources.length }));
+        }
         break;
       }
 
@@ -3770,11 +3788,15 @@ async function exportSources(selectedSources) {
       // Check for cancellation
       if (cancelled) {
         console.log('[NotebookLM Takeout] Export cancelled by user');
-        showToast('Export cancelled', 'warning');
+        if (!cancelNoted) {
+          cancelNoted = true;
+          allErrors.push(NLME.cancellationNote({ kind: 'sources', done: attemptedCount, total: selectedSources.length }));
+        }
         break;
       }
 
       const source = batchSources[i];
+      attemptedCount++;
       const overallIndex = startIdx + i;
       const progress = ((overallIndex + 1) / selectedSources.length) * 100;
 
@@ -3783,11 +3805,11 @@ async function exportSources(selectedSources) {
       progressText.textContent = `Batch ${zipIndex + 1}/${totalZips}: Extracting ${i + 1}/${batchSources.length}: ${source.title}`;
 
       // Update page overlay
-      await chrome.tabs.sendMessage(tab.id, {
+      chrome.tabs.sendMessage(tab.id, {
         type: 'UPDATE_EXPORT_OVERLAY',
         message: `Batch ${zipIndex + 1}/${totalZips}: Extracting ${i + 1}/${batchSources.length}: ${source.title}`,
         progress: progress
-      });
+      }).catch(() => {}); // overlay is cosmetic; never abort the job
 
       console.log(`[NotebookLM Takeout] Extracting source: "${source.title}"`);
 
@@ -3797,13 +3819,19 @@ async function exportSources(selectedSources) {
           async () => {
             return await chrome.tabs.sendMessage(tab.id, {
               type: 'EXTRACT_SOURCE',
-              data: { sourceIndex: source.index }
+              data: {
+                sourceIndex: source.index,
+                title: source.title,
+                // Wait for the AI summary/guide only when a metadata version is exported
+                needsGuide: !!(settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages)
+              }
             });
           },
           2, // maxRetries
           1500, // baseDelay (1.5s)
           `Extract source "${source.title}"`
         );
+        mergeTiming(sourceData);
 
         if (sourceData.error) {
           console.error(`[NotebookLM Takeout] Failed to extract "${source.title}":`, sourceData.error);
@@ -3819,7 +3847,6 @@ async function exportSources(selectedSources) {
           // Try to close panel before continuing
           try {
             await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_BACK' });
-            await new Promise(resolve => setTimeout(resolve, 1500));
           } catch (backError) {
             console.error('[NotebookLM Takeout] Failed to close panel after error:', backError);
           }
@@ -3892,8 +3919,11 @@ async function exportSources(selectedSources) {
         const baseMarkdownNoImages = stripImagesFromMarkdown(baseMarkdown);
 
         // 2. Plus-meta: with metadata, no images (conditional)
-        const plusMetaMarkdown = buildMarkdown(true);
-        const plusMetaMarkdownNoImages = stripImagesFromMarkdown(plusMetaMarkdown);
+        // Only when a metadata version is exported (avoids false "missing
+        // summary" errors when those versions are off)
+        const needsMeta = settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages;
+        const plusMetaMarkdown = needsMeta ? buildMarkdown(true) : null;
+        const plusMetaMarkdownNoImages = plusMetaMarkdown ? stripImagesFromMarkdown(plusMetaMarkdown) : null;
 
         // 3. With-images: no metadata, with images (conditional)
         // 4. Plus-meta-with-images: with metadata, with images (conditional)
@@ -3930,8 +3960,10 @@ async function exportSources(selectedSources) {
               baseMarkdownWithImages = baseEmbedded;
 
               // Also embed images in the plus-meta version
-              const { markdown: plusMetaEmbedded } = await embedImagesInMarkdown(plusMetaMarkdown, source.title);
-              plusMetaMarkdownWithImages = plusMetaEmbedded;
+              if (plusMetaMarkdown) {
+                const { markdown: plusMetaEmbedded } = await embedImagesInMarkdown(plusMetaMarkdown, source.title);
+                plusMetaMarkdownWithImages = plusMetaEmbedded;
+              }
 
               console.log(`[NotebookLM Takeout] "${source.title}": ${imagesFound} images found, creating image versions`);
             } else {
@@ -3973,8 +4005,8 @@ async function exportSources(selectedSources) {
         const backResponse = await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_BACK' });
         console.log('[NotebookLM Takeout] NAVIGATE_BACK response:', backResponse);
 
-        // Wait for panel to close and sources list to reappear
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        // NAVIGATE_BACK resolves once the viewer is closed (Milestone 1: no
+        // extra fixed 1.5 s)
 
       } catch (error) {
         console.error(`[NotebookLM Takeout] Error extracting source "${source.title}":`, error);
@@ -4008,7 +4040,6 @@ async function exportSources(selectedSources) {
         try {
           console.log('[NotebookLM Takeout] Attempting to close panel after error...');
           await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_BACK' });
-          await new Promise(resolve => setTimeout(resolve, 1500));
         } catch (backError) {
           console.error('[NotebookLM Takeout] Failed to close panel:', backError);
         }
@@ -4017,6 +4048,7 @@ async function exportSources(selectedSources) {
 
     // Now create ZIP for this batch and download it immediately
     if (exportedSources.length > 0) {
+      exportedCount += exportedSources.length;
       console.log(`[NotebookLM Takeout] Creating ZIP ${zipIndex + 1}/${totalZips} with ${exportedSources.length} sources from this batch`);
 
       // Update progress
@@ -4194,7 +4226,10 @@ async function exportSources(selectedSources) {
 
       // Add detailed error report if there are any issues
       // Include errors.txt in the LAST ZIP so it contains ALL errors from all batches
-      if ((zipIndex === totalZips - 1) && allErrors.length > 0) {
+      // errors.txt goes into the last ZIP this run writes: the final batch,
+      // or the batch the user cancelled in
+      if ((zipIndex === totalZips - 1 || cancelled) && allErrors.length > 0) {
+        errorsWritten = true;
         let errorsContent = '# Source Export Error Report\n\n';
         errorsContent += `Generated: ${new Date().toLocaleString()}\n\n`;
         errorsContent += '---\n\n';
@@ -4426,19 +4461,19 @@ async function exportSources(selectedSources) {
       });
 
       // Move _index.md to sources/ folder
-      sourcesFolder.file('_index.md', indexContent);
+      sourcesFolder.file('_index.md', indexContent + timingSummary());
 
       // Generate ZIP
       console.log(`[NotebookLM Takeout] Generating ZIP ${zipIndex + 1}/${totalZips}...`);
-      const blob = await zip.generateAsync({ type: 'blob' });
+      const blob = await generateZipTimed(zip);
       const url = URL.createObjectURL(blob);
       try {
         const sanitizedProjectName = sanitizeFilename(projectName);
         let filename;
         if (totalZips > 1) {
-          filename = `${sanitizedProjectName}-sources-${timestamp}-part${zipIndex + 1}of${totalZips}.zip`;
+          filename = `${sanitizedProjectName}-sources-${timestamp}${cancelled ? '-PARTIAL' : ''}-part${zipIndex + 1}of${totalZips}.zip`;
         } else {
-          filename = `${sanitizedProjectName}-sources-${timestamp}.zip`;
+          filename = `${sanitizedProjectName}-sources-${timestamp}${cancelled ? '-PARTIAL' : ''}.zip`;
         }
 
         const a = document.createElement('a');
@@ -4450,22 +4485,6 @@ async function exportSources(selectedSources) {
 
         console.log(`[NotebookLM Takeout] Downloaded ZIP ${zipIndex + 1}/${totalZips}: ${filename}`);
 
-        // Show toast for each ZIP (or final toast at the end)
-        if (zipIndex === totalZips - 1) {
-          // Last ZIP
-          if (allErrors.length > 0) {
-            const errorCount = allErrors.length;
-            const failedSources = NLME.countFailedExtractions(allErrors);
-
-            let errorSummary = `Exported ${selectedSources.length} source(s) in ${totalZips} ZIP(s) with ${errorCount} warning(s)`;
-            if (failedSources > 0) {
-              errorSummary += ` (${failedSources} failed to extract)`;
-            }
-            showToast(errorSummary + '. See errors.txt in last ZIP for details.', 'warning');
-          } else {
-            showToast(`Successfully exported ${selectedSources.length} source(s) in ${totalZips} ZIP(s)`, 'success');
-          }
-        }
       } finally {
         URL.revokeObjectURL(url);
       }
@@ -4494,6 +4513,23 @@ async function exportSources(selectedSources) {
       }
     } // End of "if exportedSources.length > 0"
     } // End of batch loop
+
+    // Never lose errors: write an errors-only ZIP if no source ZIP carried them
+    if (allErrors.length > 0 && !errorsWritten) {
+      const errZip = new JSZip();
+      const lines = allErrors.map((e, idx) => `${idx + 1}. ${typeof e === 'string' ? e : `${e.source || e.title || ''} ${e.type || ''}: ${e.message || e.error || ''}`.trim()}`);
+      errZip.file('errors.txt', `# Source Export Error Report\n\nGenerated: ${new Date().toLocaleString()}\n\n---\n\n${lines.join('\n')}\n`);
+      downloadBlob(await generateZipTimed(errZip), `${sanitizeFilename(projectName)}-sources-${timestamp}${cancelled ? '-PARTIAL' : ''}-errors.zip`);
+    }
+
+    const outcome = NLME.summarizeExportOutcome({
+      kind: 'sources',
+      selected: selectedSources.length,
+      exported: exportedCount,
+      failed: Math.max(0, attemptedCount - exportedCount),
+      cancelled
+    });
+    showToast(outcome.message, outcome.level);
 
   } catch (error) {
     console.error('[NotebookLM Takeout] Export failed:', error);
@@ -4550,7 +4586,9 @@ async function scanChatPage() {
     });
 
     // Trigger auto-scroll and scan
+    const scanStartedAt = performance.now();
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_CHAT' });
+    lastChatScanTiming = { 'chat.scan': { count: 1, ms: Math.round(performance.now() - scanStartedAt) } };
 
     // Hide overlay
     await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
@@ -4636,7 +4674,7 @@ function renderChatSummary(chatData) {
 
   newExportBtn.addEventListener('click', async () => {
     const extractFullCitations = document.getElementById('extract-full-citations-checkbox')?.checked || false;
-    await exportChat(chatData, extractFullCitations);
+    await runExclusive('Chat export', () => exportChat(chatData, extractFullCitations));
   });
 }
 
@@ -4644,6 +4682,8 @@ function renderChatSummary(chatData) {
  * Export chat as markdown file
  */
 async function exportChat(chatData, extractFullCitations = false) {
+  startExportTiming();
+  exportTimer.merge(lastChatScanTiming);
   console.log('[NotebookLM Takeout] Starting chat export...');
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -4664,6 +4704,20 @@ async function exportChat(chatData, extractFullCitations = false) {
   progressFill.style.width = '0%';
 
   let cancelled = false;
+  let cancelNoted = false;
+  let processedCount = 0;
+  // One truthful end-of-export toast (cancel no longer overwritten by success)
+  const showChatOutcome = (errorCount) => {
+    const outcome = NLME.summarizeExportOutcome({
+      kind: 'messages',
+      selected: chatData.messagePairs.length,
+      exported: processedCount,
+      failed: 0,
+      cancelled
+    });
+    const extra = !cancelled && errorCount > 0 ? ` (${errorCount} citation error(s), see errors.txt)` : '';
+    showToast(outcome.message + extra, extra ? 'warning' : outcome.level);
+  };
 
   // Listen for cancellation
   const cancelListener = (message) => {
@@ -4695,22 +4749,26 @@ async function exportChat(chatData, extractFullCitations = false) {
     for (let i = 0; i < messagePairs.length; i++) {
       if (cancelled) {
         console.log('[NotebookLM Takeout] Export cancelled by user');
-        showToast('Export cancelled', 'warning');
+        if (!cancelNoted) {
+          cancelNoted = true;
+          allErrors.push(NLME.cancellationNote({ kind: 'messages', done: processedCount, total: chatData.messagePairs.length }));
+        }
         break;
       }
 
       const pair = messagePairs[i];
+      processedCount++;
       const progress = ((i + 1) / messagePairs.length) * 100;
 
       // Update progress
       progressFill.style.width = `${progress}%`;
       progressText.textContent = `Processing message ${i + 1}/${messagePairs.length}`;
 
-      await chrome.tabs.sendMessage(tab.id, {
+      chrome.tabs.sendMessage(tab.id, {
         type: 'UPDATE_EXPORT_OVERLAY',
         message: `Processing message ${i + 1}/${messagePairs.length}`,
         progress: progress
-      });
+      }).catch(() => {}); // overlay is cosmetic; never abort the job
 
       console.log(`[NotebookLM Takeout] Message ${i + 1}: Processing...`);
 
@@ -4775,11 +4833,11 @@ async function exportChat(chatData, extractFullCitations = false) {
           progressFill.style.width = `${extractProgress}%`;
           progressText.textContent = `Message ${i + 1}/${messagePairs.length}: Extracting ${messageSources.size} quotes...`;
 
-          await chrome.tabs.sendMessage(tab.id, {
+          chrome.tabs.sendMessage(tab.id, {
             type: 'UPDATE_EXPORT_OVERLAY',
             message: `Message ${i + 1}/${messagePairs.length}: Extracting ${messageSources.size} quotes (this may take a minute)...`,
             progress: extractProgress
-          });
+          }).catch(() => {}); // overlay is cosmetic; never abort the job
 
           try {
             // Get source indices to extract
@@ -4787,6 +4845,7 @@ async function exportChat(chatData, extractFullCitations = false) {
             console.log(`[NotebookLM Takeout] Message ${i + 1}: Extracting sourceIndices:`, sourceIndices);
 
             // Call content script to extract citations by temporarily inserting HTML
+            exportTimer?.start('chat.citations');
             const fullCitationData = await chrome.tabs.sendMessage(tab.id, {
               type: 'EXTRACT_MESSAGE_CITATIONS',
               data: {
@@ -4798,6 +4857,8 @@ async function exportChat(chatData, extractFullCitations = false) {
             });
 
             console.log(`[NotebookLM Takeout] Message ${i + 1}: Received citation data:`, fullCitationData);
+            exportTimer?.end('chat.citations');
+            mergeTiming(fullCitationData);
 
             // Merge quotes into messageSources
             if (fullCitationData && fullCitationData.sourcesByIndex) {
@@ -4881,8 +4942,8 @@ async function exportChat(chatData, extractFullCitations = false) {
         });
       }
 
-      // Rate limiting between messages
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // No pacing sleep between messages (Milestone 1): citations are read
+      // from the page, not fetched
     }
 
     console.log(`[NotebookLM Takeout] Processing complete: ${processedMessages.length} messages`);
@@ -5080,12 +5141,12 @@ async function exportChat(chatData, extractFullCitations = false) {
         }
       }
 
-      zip.file('_index.md', indexContent);
+      zip.file('_index.md', indexContent + timingSummary());
 
-      const blob = await zip.generateAsync({ type: 'blob' });
+      const blob = await generateZipTimed(zip);
       const url = URL.createObjectURL(blob);
       try {
-        const zipFilename = `${sanitizeFilename(chatData.notebookTitle)}-chat-${timestamp}.zip`;
+        const zipFilename = `${sanitizeFilename(chatData.notebookTitle)}-chat-${timestamp}${cancelled ? '-PARTIAL' : ''}.zip`;
 
         const a = document.createElement('a');
         a.href = url;
@@ -5094,15 +5155,7 @@ async function exportChat(chatData, extractFullCitations = false) {
         a.click();
         document.body.removeChild(a);
 
-        let errorMsg;
-        if (versions.length > 1) {
-          errorMsg = `Exported ${versions.length} versions. ${allErrors.length > 0 ? `${allErrors.length} errors (see errors.txt)` : ''}`;
-        } else if (stats.extractFullCitations) {
-          errorMsg = `Exported chat: ${stats.successfulExtractions}/${stats.totalCitationsFound} citations extracted successfully. ${allErrors.length > 0 ? `${allErrors.length} errors (see errors.txt)` : ''}`;
-        } else {
-          errorMsg = `Exported chat${allErrors.length > 0 ? ` with ${allErrors.length} errors (see errors.txt)` : ''}`;
-        }
-        showToast(errorMsg, allErrors.length > 0 ? 'warning' : 'success');
+        showChatOutcome(allErrors.length);
       } finally {
         URL.revokeObjectURL(url);
       }
@@ -5119,7 +5172,7 @@ async function exportChat(chatData, extractFullCitations = false) {
         a.click();
         document.body.removeChild(a);
 
-        showToast('Successfully exported chat', 'success');
+        showChatOutcome(0);
       } finally {
         URL.revokeObjectURL(url);
       }
@@ -5516,51 +5569,6 @@ function getIconForType(type) {
   </svg>`;
 }
 
-// This runs in the page context to click artifact More button
-// Returns the artifact metadata needed for download
-function clickArtifactMoreButton(artifactIndex) {
-  console.log(`[NotebookLM Takeout] Clicking More button for artifact ${artifactIndex}`);
-
-  // Build array of More buttons ONLY from artifact-library-item (not from notes)
-  const artifactMoreButtons = [];
-  document.querySelectorAll('artifact-library-item').forEach(item => {
-    const btn = item.querySelector('button[aria-label="More"]');
-    if (btn) {
-      artifactMoreButtons.push(btn);
-    }
-  });
-
-  if (artifactIndex < 0 || artifactIndex >= artifactMoreButtons.length) {
-    throw new Error(`Artifact index ${artifactIndex} out of range (0-${artifactMoreButtons.length - 1})`);
-  }
-
-  const moreButton = artifactMoreButtons[artifactIndex];
-  const artifactItem = moreButton.closest('artifact-library-item');
-
-  if (!artifactItem) {
-    throw new Error('Could not find artifact-library-item parent');
-  }
-
-  // Get artifact metadata
-  const titleEl = artifactItem.querySelector('.artifact-title');
-  const title = titleEl?.textContent?.trim() || `Artifact ${artifactIndex + 1}`;
-
-  const mainButton = artifactItem.querySelector('button[aria-description]');
-  const type = mainButton?.getAttribute('aria-description') || '';
-
-  // Click the More button
-  moreButton.click();
-
-  console.log(`[NotebookLM Takeout] Clicked More button for: ${title} (${type})`);
-
-  return {
-    success: true,
-    title: title,
-    type: type,
-    index: artifactIndex
-  };
-}
-
 async function triggerItemDownload(tabId, itemIndex, artifactName, artifactType) {
   try {
     logger.info('Download', `Triggering download for ${artifactName}`, { itemIndex, artifactType });
@@ -5691,7 +5699,7 @@ function renderStudioList(items) {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const idx = parseInt(btn.dataset.idx, 10);
-      handleStudioDownloadRow(idx, btn);
+      runExclusive('Studio download', () => handleStudioDownloadRow(idx, btn));
     });
   });
 
@@ -5940,70 +5948,82 @@ async function downloadAllArtifacts(tabId, items) {
     progressText.textContent = 'Creating ZIP...';
     progressFill.style.width = '0%';
 
+    // Awaited (Milestone 1): the job lock is held until the batch really
+    // ends, and the toast reports the background's actual result.
     try {
-      await chrome.runtime.sendMessage({
+      const start = await chrome.runtime.sendMessage({
         type: 'BATCH_DOWNLOAD_ALL',
         tabId: tabId,
         items: items,
         downloadPreference: settings.slidesFormat
       });
+      if (start && start.started === false) {
+        throw new Error(start.error || 'Batch download could not start');
+      }
 
-      // Poll for status
-      const pollStatus = setInterval(async () => {
-        // Check for cancellation
-        if (cancelled) {
-          console.log('[NotebookLM Takeout] ZIP download cancelled by user');
-          clearInterval(pollStatus);
+      let result = null;
+      let cancelSent = false;
+      let idlePolls = 0;
+      while (true) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        if (cancelled && !cancelSent) {
+          cancelSent = true;
           chrome.runtime.sendMessage({ type: 'CANCEL_BATCH_DOWNLOAD' }).catch(() => {});
-          showToast('Download cancelled', 'warning');
-
-          // Clean up overlay
-          chrome.runtime.onMessage.removeListener(cancelListener);
-          await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
-          progressPanel.style.display = 'none';
-          if (downloadBtn) downloadBtn.disabled = false;
-          return;
         }
-
         const status = await chrome.runtime.sendMessage({ type: 'GET_BATCH_STATUS' });
         if (status && status.status) {
           progressText.textContent = status.status;
-
-          // Update page overlay
-          await chrome.tabs.sendMessage(tab.id, {
+          chrome.tabs.sendMessage(tab.id, {
             type: 'UPDATE_EXPORT_OVERLAY',
             message: status.status,
-            progress: 50 // Approximate progress for ZIP creation
-          });
-
-          if (!status.inProgress) {
-            clearInterval(pollStatus);
-
-            // Clean up
-            chrome.runtime.onMessage.removeListener(cancelListener);
-            await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
-            progressPanel.style.display = 'none';
-
-            if (settings.showNotifications) {
-              showToast('ZIP download complete!');
-            }
-          }
+            progress: 50
+          }).catch(() => {});
         }
-      }, 500);
+        if (status && !status.inProgress) {
+          if (status.result) { result = status.result; break; }
+          if (++idlePolls >= 10) break; // finished without a result (e.g. cancelled early)
+        }
+      }
 
+      const errors = (result && result.errors) || [];
+      const outcome = NLME.summarizeExportOutcome({
+        kind: 'artifacts',
+        selected: items.length,
+        exported: (result && result.count) || 0,
+        failed: errors.length,
+        cancelled
+      });
+      // A cancel is reported as "Cancelled: X of Y", not as a failure
+      const wasCancelled = cancelled || (result && result.cancelled);
+      const hardFailure = result && result.error && !result.count && !wasCancelled;
+      const shown = wasCancelled
+        ? NLME.summarizeExportOutcome({ kind: 'artifacts', selected: items.length, exported: (result && result.count) || 0, failed: 0, cancelled: true })
+        : outcome;
+      showToast(hardFailure ? `Download All failed: ${result.error} (see errors.txt)` : shown.message,
+        hardFailure ? 'error' : shown.level);
     } catch (error) {
-      console.error('Failed to start batch download:', error);
-      showToast('Failed to start download', 'error');
-
-      // Clean up on error
+      console.error('Batch download failed:', error);
+      showToast(`Download All failed: ${error.message}`, 'error');
+    } finally {
       chrome.runtime.onMessage.removeListener(cancelListener);
-      await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
+      await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' }).catch(() => {});
       progressPanel.style.display = 'none';
+      if (downloadBtn) downloadBtn.disabled = false;
     }
     return; // Early return for ZIP pathway
   } else {
-    // Individual downloads with progress
-    await downloadItemsSequentially(tabId, items, progressFill, progressText, () => cancelled);
+    // Individual downloads into Downloads/<Notebook>/ (Milestone 1, Task 8b):
+    // each file streams to disk, so there is no size limit
+    try {
+      activeDownloadFolder = (await getProjectName(tabId)) || 'NotebookLM';
+      await downloadItemsSequentially(tabId, items, progressFill, progressText, () => cancelled);
+    } catch (error) {
+      // Fall through to the cleanup below (overlay, panel, button) either way
+      console.error('[NotebookLM Takeout] Download All failed:', error);
+      showToast(`Download All failed: ${error.message}`, 'error');
+    } finally {
+      activeDownloadFolder = '';
+    }
   }
 
   // Remove cancellation listener
@@ -6031,6 +6051,7 @@ async function downloadAllArtifacts(tabId, items) {
 async function downloadItemsSequentially(tabId, items, progressFill, progressText, isCancelled) {
   let successCount = 0;
   let failureCount = 0;
+  let wasCancelled = false;
   let skippedCount = 0;
 
   logger.info('Batch Download', `Starting batch download of ${items.length} items`);
@@ -6039,7 +6060,7 @@ async function downloadItemsSequentially(tabId, items, progressFill, progressTex
     // Check for cancellation
     if (isCancelled && isCancelled()) {
       console.log('[NotebookLM Takeout] Batch download cancelled by user');
-      showToast('Download cancelled', 'warning');
+      wasCancelled = true;
       break;
     }
 
@@ -6050,13 +6071,12 @@ async function downloadItemsSequentially(tabId, items, progressFill, progressTex
     progressFill.style.width = `${progress}%`;
     progressText.textContent = `Downloading ${i + 1}/${items.length}: ${item.label}`;
 
-    // Update page overlay
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    await chrome.tabs.sendMessage(tab.id, {
+    // Update page overlay on the job's own tab (the active tab may have changed)
+    chrome.tabs.sendMessage(tabId, {
       type: 'UPDATE_EXPORT_OVERLAY',
       message: `Downloading ${i + 1}/${items.length}: ${item.label}`,
       progress: progress
-    });
+    }).catch(() => {}); // overlay is cosmetic; never abort the job
 
     logger.download(item.label, 'progress', `Item ${i + 1}/${items.length}`);
 
@@ -6083,19 +6103,17 @@ async function downloadItemsSequentially(tabId, items, progressFill, progressTex
     }
   }
 
-  // Show summary toast
-  const summary = [];
-  if (successCount > 0) summary.push(`${successCount} succeeded`);
-  if (failureCount > 0) summary.push(`${failureCount} failed`);
-  if (skippedCount > 0) summary.push(`${skippedCount} skipped`);
-
-  const message = `Download complete: ${summary.join(', ')}`;
-  logger.info('Batch Download', message);
-
-  if (settings.showNotifications) {
-    const toastType = failureCount > 0 ? 'warning' : 'success';
-    showToast(message, toastType);
-  }
+  // One truthful summary (Milestone 1), naming the folder the files went to
+  const outcome = NLME.summarizeExportOutcome({
+    kind: 'artifacts',
+    selected: items.length,
+    exported: successCount,
+    failed: failureCount,
+    cancelled: wasCancelled
+  });
+  const where = activeDownloadFolder ? ` into Downloads/${NLME.downloadFolderPath(activeDownloadFolder, '').replace(/\/$/, '')}` : '';
+  logger.info('Batch Download', outcome.message);
+  showToast(outcome.message.replace(/see errors\.txt/, 'see the side panel log') + where, outcome.level);
 }
 
 function showToast(message, type = 'success') {

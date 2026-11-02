@@ -115,7 +115,11 @@ The quoted passage from the source…
 ### Artifacts
 
 1. **Artifacts** tab lists everything in the Studio panel.
-2. Click **Download** on a row, or **Download All**. Turn on **ZIP** to get one archive.
+2. Click **Download** on a row, or **Download All**.
+   - With **ZIP off** (recommended for whole notebooks), every file is saved into
+     `Downloads/<Notebook name>/`, one file at a time, so even large audio and video overviews work.
+   - With **ZIP on**, everything is packed into one archive in memory. That suits a handful of
+     documents and slide decks, but a full notebook with audio/video can be too large.
 3. Slide decks download as PDF or PowerPoint depending on **Settings → Slide deck format**.
 
 ### Studio tab (optional)
@@ -127,7 +131,13 @@ Gemini Notebook's own dialog.
 ### Cancelling
 
 Long exports show an overlay on the notebook page with progress and a **Cancel Export**
-button. Anything already exported is kept.
+button; the side panel's progress area has a Cancel button too. Cancelling stops within one
+citation. Everything exported so far is saved as `…-PARTIAL.zip`, with `errors.txt` when
+anything failed, and the message says how many items were exported (e.g. "Cancelled:
+exported 4 of 10 notes").
+
+Only one export, scan or download runs at a time. While one runs, the panel's other buttons
+are disabled and a second click shows "… is still running".
 
 ## Settings (⚙️)
 
@@ -178,12 +188,17 @@ All lines start with `[NotebookLM Takeout]`.
 
 ## How long exports take
 
-Exports drive the page the way you would, one item at a time.
+Exports drive the page the way you would, one item at a time, and continue as soon as the
+page is ready (no fixed waits). Measured on a real notebook with version 1.2.0:
 
-- Artifacts: a few seconds each.
-- Notes: a few seconds each, plus about 0.3–1 s per citation when reading quotes.
-- Chat with full citations: about 0.5 s per distinct citation per answer. A 200-message chat
-  with ~1,400 citations takes roughly 10–15 minutes.
+| Export | Time |
+|---|---|
+| 10 notes with full citations (154 citations) | 49 s |
+| 5 sources with summaries | 8 s |
+| Chat with full citations (17 answers, 134 citations) | 30 s |
+| One citation | about 0.2 s |
+
+Each export's `_index.md` ends with an "Export statistics" block showing where the time went.
 
 Reading a citation only opens its popup. The citation text is already in the page, so it
 causes no extra requests to Gemini Notebook.
@@ -232,6 +247,20 @@ DOM behaviour is verified in Chrome with the health check and real exports.
 contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
+
+**1.2.0 (Nov 2026)**: trustworthy and faster exports.
+- Every item is checked by title before it is saved, so a list that changes mid-export can't
+  save one item's content under another's name.
+- Honest results: "Exported 7 of 10 notes (3 failed)", `-PARTIAL` ZIPs on cancel, and
+  `errors.txt` is never lost.
+- Your own Download clicks in Gemini Notebook work again (the download hook only acts on the
+  extension's own clicks).
+- Download All saves into a per-notebook folder; the ZIP uses proper UTF-8 names and
+  includes `errors.txt`; PowerPoint decks keep their `.pptx` extension.
+- Citation quotes keep their paragraphs, lists, tables and code.
+- Much faster: fixed waits replaced by readiness checks, and `_index.md` reports per-phase
+  timing.
+- One export at a time, with a working Cancel button.
 
 **1.1.0 (Nov 2026)**: adapted to the November 2026 Gemini Notebook redesign.
 - Citations work with the new popup, and their numbers stay stable.

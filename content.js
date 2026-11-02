@@ -101,14 +101,8 @@
   };
 
   // Inject the page script for deeper access
-  function injectPageScript() {
-    const script = document.createElement('script');
-    script.src = chrome.runtime.getURL('injected.js');
-    script.onload = function() {
-      this.remove();
-    };
-    (document.head || document.documentElement).appendChild(script);
-  }
+  // injected.js now runs as a MAIN-world content script (manifest), armed per
+  // click; it is no longer injected as a <script> tag (Milestone 1).
 
   // Listen for messages from injected script
   window.addEventListener('message', (event) => {
@@ -264,6 +258,37 @@
     exportOverlay = null;
   }
 
+  // Per-request phase timing (Task 2): reset per EXTRACT_* request, returned
+  // to the sidebar as `timing` and merged into the export's statistics.
+  let requestTimer = NLME.createPhaseTimer();
+  function withRequestTiming(run) {
+    requestTimer = NLME.createPhaseTimer();
+    return run().then(result => (result && typeof result === 'object'
+      ? { ...result, timing: requestTimer.totals() }
+      : result));
+  }
+  async function timePhase(phase, fn) {
+    requestTimer.start(phase);
+    try {
+      return await fn();
+    } finally {
+      requestTimer.end(phase);
+    }
+  }
+
+  // Condition waits instead of fixed sleeps (Milestone 1, Speed): resolve once
+  // the measured size stops changing; on timeout continue with what is there.
+  async function waitForStable(measure, { interval = 50, checks = 2, minLength = 1, timeout = 5000 } = {}) {
+    const tracker = NLME.createStabilityTracker({ checks, minLength });
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      if (tracker.push(measure())) return true;
+      await new Promise(resolve => setTimeout(resolve, interval));
+    }
+    console.warn('[NotebookLM Takeout] Content did not settle within', timeout, 'ms; continuing');
+    return false;
+  }
+
   function isExportCancelled() {
     return exportCancelled;
   }
@@ -316,11 +341,17 @@
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ success: false, error: error.message }));
       return true; // Keep channel open for async
+    } else if (message.type === 'REQUEST_EXPORT_CANCEL') {
+      // Side panel Cancel button: same effect as the overlay's Cancel
+      exportCancelled = true;
+      chrome.runtime.sendMessage({ type: 'CANCEL_EXPORT' }).catch(() => {});
+      removeExportOverlay();
+      sendResponse({ success: true });
     } else if (message.type === 'EXTRACT_NOTE') {
       // Extract note content
-      (typeof message.data.sourceIndex === 'number'
+      withRequestTiming(() => (typeof message.data.sourceIndex === 'number'
         ? extractSourcesPanelNote(message.data.sourceIndex, message.data.noteTitle, message.data.includeCitationImages)
-        : extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages))
+        : extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages)))
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ error: error.message || 'Extraction failed' }));
       return true; // Keep channel open for async
@@ -336,7 +367,7 @@
       return true;
     } else if (message.type === 'EXTRACT_SOURCE') {
       // Extract source content
-      extractSourceContent(message.data.sourceIndex)
+      withRequestTiming(() => extractSourceContent(message.data.sourceIndex, message.data.title || '', message.data.needsGuide !== false))
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ error: error.message }));
       return true;
@@ -406,7 +437,6 @@
       handleArtifactDownload(
         message.data.artifactIndex,
         message.data.artifactType,
-        message.data.moreButtonAlreadyClicked || false,
         message.data.skipMoreButton || false,
         message.data.artifactName || null,
         message.data.downloadPreference || 'pdf'
@@ -451,12 +481,12 @@
       console.log('[NotebookLM Takeout] Include citation images:', message.data.includeCitationImages);
 
       try {
-        extractMessageCitations(
+        withRequestTiming(() => extractMessageCitations(
           message.data.messageIndex,
           message.data.messageHTML,
           message.data.sourceIndices,
           message.data.includeCitationImages || false
-        )
+        ))
           .then(result => {
             console.log('[NotebookLM Takeout] ====== Message citations extracted ======');
             console.log('[NotebookLM Takeout] Result:', result);
@@ -622,59 +652,46 @@
   }
 
   // Store for intercepted download URLs (from window.open interception)
-  let lastInterceptedDownloadUrl = null;
-  let downloadUrlResolvers = []; // Callbacks waiting for intercepted URLs
+  // Intercepted download URLs with their page timestamps; an item accepts
+  // only URLs captured at or after its own click (NLME.pickFreshIntercept).
+  const interceptedDownloads = [];
+  let downloadUrlResolvers = []; // { since, resolve } waiting for a fresh URL
 
   function handleInjectedMessage(data) {
     switch (data.type) {
-      case 'NLME_AUDIO_DETECTED':
-        captureArtifact('audio', data.payload);
+      case 'NLME_DOWNLOAD_URL_INTERCEPTED': {
+        const entry = { url: data.payload?.url, timestamp: data.payload?.timestamp || Date.now() };
+        console.log('[NotebookLM Takeout] Download URL intercepted:', entry.url?.substring(0, 100));
+        interceptedDownloads.push(entry);
+        if (interceptedDownloads.length > 10) interceptedDownloads.shift();
+        downloadUrlResolvers = downloadUrlResolvers.filter(waiter => {
+          if (entry.timestamp >= waiter.since) {
+            waiter.resolve(entry.url);
+            return false;
+          }
+          return true;
+        });
         break;
-      case 'NLME_SLIDES_DETECTED':
-        captureArtifact('slides', data.payload);
-        break;
-      case 'NLME_INFOGRAPHIC_DETECTED':
-        captureArtifact('infographics', data.payload);
-        break;
-      case 'NLME_DOWNLOAD_URL_INTERCEPTED':
-        // URL intercepted from window.open - no tab will open
-        console.log('[NotebookLM Takeout] Download URL intercepted:', data.payload.url?.substring(0, 100));
-        lastInterceptedDownloadUrl = data.payload.url;
-        // Resolve any waiting promises
-        while (downloadUrlResolvers.length > 0) {
-          const resolver = downloadUrlResolvers.shift();
-          resolver(data.payload.url);
-        }
-        break;
+      }
     }
   }
 
   /**
-   * Wait for an intercepted download URL (with timeout)
+   * Wait for a download URL intercepted at or after `since` (with timeout).
    */
-  function waitForInterceptedUrl(timeoutMs = 3000) {
+  function waitForInterceptedUrl(since, timeoutMs = 25000) {
     return new Promise((resolve) => {
-      // Check if we already have a recent URL
-      if (lastInterceptedDownloadUrl) {
-        const url = lastInterceptedDownloadUrl;
-        lastInterceptedDownloadUrl = null; // Consume it
-        resolve(url);
+      const already = NLME.pickFreshIntercept(interceptedDownloads, since);
+      if (already) {
+        resolve(already);
         return;
       }
-
-      // Set up timeout
-      const timeout = setTimeout(() => {
-        const index = downloadUrlResolvers.indexOf(resolverFn);
-        if (index > -1) downloadUrlResolvers.splice(index, 1);
-        resolve(null); // Timeout - no URL intercepted
+      const waiter = { since, resolve: (url) => { clearTimeout(timer); resolve(url); } };
+      const timer = setTimeout(() => {
+        downloadUrlResolvers = downloadUrlResolvers.filter(w => w !== waiter);
+        resolve(null);
       }, timeoutMs);
-
-      // Add resolver to wait list
-      const resolverFn = (url) => {
-        clearTimeout(timeout);
-        resolve(url);
-      };
-      downloadUrlResolvers.push(resolverFn);
+      downloadUrlResolvers.push(waiter);
     });
   }
 
@@ -910,10 +927,8 @@
 
   // Initialize
   function init() {
-    // Inject page script for window.open download interception. The old
-    // MutationObserver/5 s artifact polling was removed (Nov 2026): it only
-    // fed the toolbar badge and logged every few seconds.
-    injectPageScript();
+    // The download hook (injected.js) runs as a MAIN-world content script.
+    // The old MutationObserver/5 s artifact polling was removed (Nov 2026).
     console.log('[NotebookLM Takeout] Ready');
   }
 
@@ -1151,19 +1166,28 @@
   }
 
   // Helper function to wait for an element
-  function waitForElement(selector, timeout = 5000, parent = document) {
+  // options.exclude: elements to ignore (e.g. viewers open before a click);
+  // options.visible: only accept rendered elements. Used so a newly opened
+  // viewer is never confused with one already in the DOM (Milestone 1).
+  function waitForElement(selector, timeout = 5000, parent = document, options = {}) {
     let observer = null;
     let timeoutId = null;
+    const { exclude = null, visible = false } = options;
+    const find = () => {
+      if (!exclude && !visible) return parent.querySelector(selector);
+      return Array.from(parent.querySelectorAll(selector)).find(el =>
+        (!exclude || !exclude.has(el)) && (!visible || el.getClientRects().length > 0)) || null;
+    };
 
     const promise = new Promise((resolve, reject) => {
-      const existingEl = parent.querySelector(selector);
+      const existingEl = find();
       if (existingEl) {
         resolve(existingEl);
         return;
       }
 
       observer = new MutationObserver((mutations, obs) => {
-        const el = parent.querySelector(selector);
+        const el = find();
         if (el) {
           obs.disconnect();
           if (timeoutId) clearTimeout(timeoutId);
@@ -1173,7 +1197,8 @@
 
       observer.observe(parent, {
         childList: true,
-        subtree: true
+        subtree: true,
+        attributes: visible
       });
 
       timeoutId = setTimeout(() => {
@@ -1989,7 +2014,11 @@
    * @param {number} maxRetries - Maximum retry attempts (default: 3)
    * @returns {Promise<{success: boolean, data?: object, error?: string}>}
    */
-  async function extractSingleCitationWithRetry(button, spanIndex, includeImages = false, maxRetries = 3) {
+  function extractSingleCitationWithRetry(button, spanIndex, includeImages = false, maxRetries = 3) {
+    return timePhase('citation.hover', () => extractSingleCitationWithRetryInner(button, spanIndex, includeImages, maxRetries));
+  }
+
+  async function extractSingleCitationWithRetryInner(button, spanIndex, includeImages = false, maxRetries = 3) {
     let lastError = null;
     const TOOLTIP = NLME.CITATION_TOOLTIP_SELECTOR;
 
@@ -1999,19 +2028,46 @@
     };
 
     // The tooltip is a singleton overlay; reading before the previous one is
-    // gone returns the previous citation's text.
-    const waitForTooltipGone = async () => {
-      for (let i = 0; i < 20; i++) {
-        if (!document.querySelector(TOOLTIP)) return true;
-        await sleep(100);
-      }
-      return false;
+    // gone returns the previous citation's text. Resolve on the removal itself
+    // (MutationObserver) instead of polling every 100 ms (Milestone 1, Speed).
+    const waitForTooltipGone = (timeout = 2000) => new Promise(resolve => {
+      if (!document.querySelector(TOOLTIP)) { resolve(true); return; }
+      const observer = new MutationObserver(() => {
+        if (!document.querySelector(TOOLTIP)) {
+          observer.disconnect();
+          clearTimeout(timer);
+          resolve(true);
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      const timer = setTimeout(() => {
+        observer.disconnect();
+        resolve(!document.querySelector(TOOLTIP));
+      }, timeout);
+    });
+    // If it lingers, press Escape once more; if it still stays, the caller
+    // fails the citation rather than risk the next one reading this text.
+    const ensureTooltipGone = async () => {
+      if (await waitForTooltipGone()) return true;
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      return waitForTooltipGone(500);
+    };
+    // Skip scrolling when the marker is already fully visible
+    const isInView = () => {
+      const r = button.getBoundingClientRect();
+      if (r.width === 0 || r.top < 0 || r.bottom > window.innerHeight) return false;
+      const scroller = button.closest('.chat-panel-content, .scroll-container, .scroll-area-desktop');
+      if (!scroller) return true;
+      const c = scroller.getBoundingClientRect();
+      return r.top >= c.top && r.bottom <= c.bottom;
     };
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        button.scrollIntoView({ behavior: 'instant', block: 'center' });
-        await sleep(100);
+        if (!isInView()) {
+          button.scrollIntoView({ behavior: 'instant', block: 'center' });
+          await sleep(50);
+        }
 
         if (document.querySelector(TOOLTIP)) {
           document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -2033,14 +2089,20 @@
           continue;
         }
 
-        const maxContentAttempts = 15 + (attempt - 1) * 5;
+        // Accept once header and quote are present and the quote's length is
+        // stable across two 30 ms checks; opacity is only a fallback signal
+        const maxContentAttempts = 25 + (attempt - 1) * 8;
+        const quoteStable = NLME.createStabilityTracker({ checks: 2, minLength: 1 });
         let textEl = null;
         for (let contentAttempt = 0; contentAttempt < maxContentAttempts; contentAttempt++) {
           textEl = tooltip.querySelector('.citation-tooltip-text');
+          const hasHeader = !!tooltip.querySelector('.citation-tooltip-header');
+          const length = textEl ? textEl.textContent.trim().length : 0;
+          if (hasHeader && quoteStable.push(length)) break;
           const opacity = parseFloat(window.getComputedStyle(tooltip).opacity);
-          if (opacity > 0.5 && textEl && textEl.textContent.trim().length > 0) break;
+          if (!hasHeader && opacity > 0.5 && length > 0) break;
           textEl = null;
-          await sleep(50);
+          await sleep(30);
         }
 
         if (!textEl) {
@@ -2067,7 +2129,9 @@
         quoteMarkdown = quoteMarkdown.trim();
 
         leave();
-        await waitForTooltipGone();
+        if (!(await ensureTooltipGone())) {
+          return { success: false, error: `Citation ${spanIndex}: Popover did not close` };
+        }
 
         if (attempt > 1) {
           console.log(`[NotebookLM Takeout] Citation ${spanIndex}: Succeeded on attempt ${attempt}`);
@@ -2106,13 +2170,13 @@
         console.warn('[NotebookLM Takeout] WARNING: Note viewer still open from previous extraction!');
         console.log('[NotebookLM Takeout] Attempting to force close it...');
 
-        const closed = await closeStudioViewer(500);
+        const closed = await timePhase('note.close', () => closeStudioViewer(500));
         if (!closed) {
           console.error('[NotebookLM Takeout] ERROR: Failed to close viewer after 3 attempts');
           DOMHealthTracker.track('stuck', 'button[aria-label="Close note view"]', 'Viewer close failed');
-          // Don't throw - instead, warn and try to continue
-          console.warn('[NotebookLM Takeout] Attempting to continue anyway...');
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          // Reading on would return the still-open item's content under this
+          // note's title (Milestone 1: fail instead of continuing)
+          throw new Error('Previous viewer could not be closed');
         }
       }
 
@@ -2130,8 +2194,10 @@
           console.warn(`[NotebookLM Takeout] waitForElement attempt ${retry + 1} failed:`, e.message);
         }
 
-        // Small delay to let DOM stabilize after navigation
-        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        // Let a re-rendering list settle: note count unchanged across two
+        // 50 ms checks (was a fixed 500 ms per attempt)
+        await waitForStable(() => document.querySelectorAll('artifact-library-note').length,
+          { interval: 50, checks: 2, timeout: retryDelay * 2 });
 
         // Find all note elements (don't filter by visibility yet - we need to find ALL notes)
         allNoteElements = document.querySelectorAll('artifact-library-note');
@@ -2180,7 +2246,13 @@
       // titles export the row that was clicked (titles can repeat)
       const noteElements = Array.from(allNoteElements);
       const noteTitles = noteElements.map(el => el.querySelector('.artifact-title, .note-title')?.textContent?.trim() || '');
-      const pick = NLME.pickByIndexThenTitle(noteTitles, noteIndex, noteTitle);
+      // Strict: never fall back to an index whose title differs (Milestone 1)
+      let pick = -1;
+      try {
+        pick = NLME.pickByIndexThenTitleStrict(noteTitles, noteIndex, noteTitle);
+      } catch (e) {
+        pick = -1;
+      }
       const noteEl = pick === -1 ? null : noteElements[pick];
       console.log(`[NotebookLM Takeout] Resolved note "${noteTitle}" (index ${noteIndex}) to position ${pick}`);
 
@@ -2210,9 +2282,10 @@
       }
 
       console.log('[NotebookLM Takeout] Clicking note button...');
+      const viewersBefore = snapshotStudioViewers();
       button.click();
 
-      return await readOpenStudioNote();
+      return await readOpenStudioNote(noteTitle, viewersBefore);
 
     } catch (error) {
       console.error('[NotebookLM Takeout] Extraction error:', error);
@@ -2222,7 +2295,16 @@
 
   // Read the note that was just opened in the Studio panel (editor, Tailwind
   // viewer with citations, or legacy mindmap viewer).
-  async function readOpenStudioNote() {
+  // Viewer elements present before a click; the wait after the click accepts
+  // only a new, rendered viewer (Milestone 1).
+  function snapshotStudioViewers() {
+    const studioPanel = document.querySelector('studio-panel') || document;
+    return new Set(studioPanel.querySelectorAll(
+      'rich-text-editor .ql-editor, rich-text-editor .ProseMirror, markdown-editor-legacy .ql-editor, labs-tailwind-doc-viewer, mindmap-viewer'));
+  }
+
+  async function readOpenStudioNote(expectedTitle = '', viewersBefore = null) {
+    const fresh = { exclude: viewersBefore, visible: true };
     // Wait for content to load (editor or mindmap viewer).
     // Scope to <studio-panel> so we don't accidentally pick up the chat panel's
     // labs-tailwind-doc-viewer (used to render AI replies). When the chat
@@ -2230,22 +2312,31 @@
     // every citation hover ends up reading chat sources instead of the note's.
     console.log('[NotebookLM Takeout] Waiting for content...');
     const studioPanel = document.querySelector('studio-panel') || document;
-    const content = await raceWithCleanup([
-      waitForElement('rich-text-editor .ql-editor', 5000, studioPanel),
-      waitForElement('rich-text-editor .ProseMirror', 5000, studioPanel),
-      waitForElement('markdown-editor-legacy .ql-editor', 5000, studioPanel),
-      waitForElement('labs-tailwind-doc-viewer', 5000, studioPanel),
-      waitForElement('mindmap-viewer', 5000, studioPanel)
-    ]).catch(() => null);
+    const content = await timePhase('note.open', () => raceWithCleanup([
+      waitForElement('rich-text-editor .ql-editor', 5000, studioPanel, fresh),
+      waitForElement('rich-text-editor .ProseMirror', 5000, studioPanel, fresh),
+      waitForElement('markdown-editor-legacy .ql-editor', 5000, studioPanel, fresh),
+      waitForElement('labs-tailwind-doc-viewer', 5000, studioPanel, fresh),
+      waitForElement('mindmap-viewer', 5000, studioPanel, fresh)
+    ]).catch(() => null));
 
     if (!content) {
       throw new Error('Content not found (no editor or mindmap viewer)');
     }
 
+    // The opened note must be the requested one (Milestone 1)
+    const openedTitle = studioPanel.querySelector('input.note-header__editable-title')?.value?.trim();
+    if (expectedTitle && openedTitle && !NLME.titlesMatch(openedTitle, expectedTitle)) {
+      throw new Error(`Opened "${openedTitle}" instead of "${expectedTitle}"`);
+    }
+
     console.log('[NotebookLM Takeout] Content found:', content.tagName, content.className || '(no class)');
 
     // Wait a bit for content to fully render
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    // Measure the note's TEXT (markup can settle before text loads)
+    await timePhase('note.content', () => waitForStable(
+      () => (content.isConnected ? content.textContent.trim().length : 0),
+      { interval: 50, checks: 3, minLength: 20, timeout: 5000 }));
 
     // Check if it's a mindmap viewer
     if (content.tagName.toLowerCase() === 'mindmap-viewer') {
@@ -2256,7 +2347,7 @@
     // Check if it's a Tailwind viewer (new format with sources)
     if (content.tagName.toLowerCase() === 'labs-tailwind-doc-viewer') {
       console.log('[NotebookLM Takeout] Tailwind viewer detected, extracting with citations...');
-      return await extractTailwindNoteContent(content);
+      return await timePhase('note.citations', () => extractTailwindNoteContent(content));
     } else {
       // Old format - just grab HTML
       console.log('[NotebookLM Takeout] Legacy editor format, no citations');
@@ -2304,8 +2395,9 @@
     const button = container.querySelector('button.source-stretched-button') || container.querySelector('button');
     if (!button) throw new Error('Could not find button for note');
     button.scrollIntoView({ behavior: 'instant', block: 'center' });
+    const viewersBefore = snapshotStudioViewers();
     button.click();
-    return await readOpenStudioNote();
+    return await readOpenStudioNote(noteTitle, viewersBefore);
   }
 
   /**
@@ -2315,7 +2407,7 @@
    * @param {number} sourceIndex - Index of the source in the list
    * @returns {Promise<Object>} - { html, sources, title }
    */
-  async function extractSourceContent(sourceIndex) {
+  async function extractSourceContent(sourceIndex, expectedTitle = '', needsGuide = true) {
     console.log(`[NotebookLM Takeout] Extracting source content for index ${sourceIndex}...`);
 
     const startTime = Date.now();
@@ -2338,11 +2430,19 @@
         throw new Error(`No source containers found. Make sure you're on the Sources page in NotebookLM. Current URL: ${currentUrl}`);
       }
 
-      if (sourceIndex >= sourceContainers.length) {
+      // Identity check (Milestone 1): the scanned index is used only while its
+      // title still matches; otherwise follow the title, else fail the item.
+      // Note containers map to '' and can never match a source title.
+      const containerTitles = Array.from(sourceContainers).map(c =>
+        isNoteSourceContainer(c) ? '' : getSourceContainerTitle(c));
+      const resolvedIndex = expectedTitle
+        ? NLME.pickByIndexThenTitleStrict(containerTitles, sourceIndex, expectedTitle)
+        : sourceIndex;
+      if (resolvedIndex >= sourceContainers.length) {
         throw new Error(`Source index ${sourceIndex} out of range (total: ${sourceContainers.length})`);
       }
 
-      const container = sourceContainers[sourceIndex];
+      const container = sourceContainers[resolvedIndex];
       if (isNoteSourceContainer(container)) {
         throw new Error('This item is a note; export it from the Notes tab');
       }
@@ -2386,8 +2486,9 @@
       }
 
       // Scroll into view first
+      requestTimer.start('source.open');
       clickTarget.scrollIntoView({ behavior: 'instant', block: 'center' });
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise(resolve => setTimeout(resolve, 50));
 
       console.log(`[NotebookLM Takeout] Executing click...`);
 
@@ -2404,7 +2505,8 @@
       }
 
       console.log(`[NotebookLM Takeout] Click executed, waiting 1.5 seconds for source to open...`);
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // (Milestone 1: no fixed 1.5 s here; the source-viewer wait below and
+      // the content-stability wait cover loading)
 
       console.log(`[NotebookLM Takeout] Checking DOM state...`);
       console.log(`[NotebookLM Takeout] source-viewer count:`, document.querySelectorAll('source-viewer').length);
@@ -2425,23 +2527,34 @@
         });
         throw new Error('source-viewer not found - the source may not have opened');
       }
+      requestTimer.end('source.open');
+      requestTimer.start('source.content');
 
       console.log(`[NotebookLM Takeout] source-viewer found`);
 
-      // Wait a bit for content to load
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Content ready: the source BODY text (not the viewer shell, which
+      // settles before the text arrives) is at least 50 chars and unchanged
+      // over four 50 ms checks; capped at 10 s for large sources
+      // (was a fixed 500 ms after a fixed 1.5 s)
+      const sourceBodyLength = () => {
+        const body = sourceViewer.querySelector('.scroll-container, labs-tailwind-doc-viewer, .ql-editor');
+        return body ? body.textContent.trim().length : 0;
+      };
+      await waitForStable(sourceBodyLength, { interval: 50, checks: 4, minLength: 50, timeout: 10000 });
 
+      requestTimer.end('source.content');
+      requestTimer.start('source.guide');
       // Try to wait for source-guide-container to load (optional, timeout after 3 seconds)
-      console.log(`[NotebookLM Takeout] Waiting for source-guide-container to load...`);
-      try {
-        await waitForElement('.source-guide-container', 3000);
+      // Only when a metadata version is exported (needsGuide), scoped to this viewer
+      if (needsGuide) try {
+        await waitForElement('.source-guide-container', 3000, sourceViewer);
         console.log(`[NotebookLM Takeout] source-guide-container found`);
 
         // NEW: Wait for summary content to be generated (10 second timeout)
         console.log(`[NotebookLM Takeout] Waiting for summary content to generate...`);
 
         const summaryTimeout = 10000; // 10 seconds
-        const pollInterval = 200; // Check every 200ms
+        const pollInterval = 50; // Check every 50ms
         const maxAttempts = summaryTimeout / pollInterval; // 50 attempts
 
         let summaryAppeared = false;
@@ -2468,6 +2581,7 @@
       } catch (e) {
         console.log(`[NotebookLM Takeout] source-guide-container not found (optional, continuing anyway)`);
       }
+      requestTimer.end('source.guide');
 
       // Try to find content container within source-viewer
       let contentElement = null;
@@ -3013,6 +3127,7 @@
     // Step 3: hover each marker and read its tooltip
     const sources = [];
     for (const [index, button] of buttonsByIndex) {
+      if (isExportCancelled()) break; // stop within one citation of Cancel
       const result = await extractSingleCitationWithRetry(button, index, includeCitationImages, 2);
       if (!result.success) {
         errors.push(result.error);
@@ -3049,8 +3164,10 @@
   function resolveArtifactItem(title, artifactIndex) {
     const items = getArtifactItemsWithMore();
     const titles = items.map(item => item.querySelector('.artifact-title')?.textContent?.trim() || '');
-    const pick = NLME.pickByIndexThenTitle(titles, artifactIndex, title);
-    return pick === -1 ? null : items[pick];
+    // Strict (Milestone 1): throws "Item changed" instead of falling back to
+    // an index whose title differs
+    const pick = title ? NLME.pickByIndexThenTitleStrict(titles, artifactIndex, title) : artifactIndex;
+    return items[pick] || null;
   }
 
   /**
@@ -3074,11 +3191,17 @@
       }
 
       console.log('[NotebookLM Takeout] Clicking Report button to open report-viewer...');
+      // Close whatever is open, then accept only a newly opened viewer
+      // (Milestone 1): an old viewer would be read under this title
+      if (findOpenStudioViewer() && !(await closeStudioViewer(500))) {
+        throw new Error('Previous viewer could not be closed');
+      }
+      const viewersBefore = new Set(document.querySelectorAll('report-viewer'));
       reportButton.click();
 
       // Wait for report-viewer to appear in the DOM
       console.log('[NotebookLM Takeout] Waiting for report-viewer...');
-      const reportViewer = await waitForElement('report-viewer', 5000);
+      const reportViewer = await waitForElement('report-viewer', 5000, document, { exclude: viewersBefore, visible: true });
 
       if (!reportViewer) {
         throw new Error('report-viewer did not appear');
@@ -3212,11 +3335,17 @@
       }
 
       console.log('[NotebookLM Takeout] Clicking Data Table button to open table-viewer...');
+      // Close whatever is open, then accept only a newly opened viewer
+      // (Milestone 1): an old viewer would be read under this title
+      if (findOpenStudioViewer() && !(await closeStudioViewer(500))) {
+        throw new Error('Previous viewer could not be closed');
+      }
+      const viewersBefore = new Set(document.querySelectorAll('table-viewer'));
       tableButton.click();
 
       // Wait for table-viewer to appear in the DOM
       console.log('[NotebookLM Takeout] Waiting for table-viewer...');
-      const tableViewer = await waitForElement('table-viewer', 5000);
+      const tableViewer = await waitForElement('table-viewer', 5000, document, { exclude: viewersBefore, visible: true });
 
       if (!tableViewer) {
         throw new Error('table-viewer did not appear');
@@ -3308,7 +3437,13 @@
 
   // Close the open studio viewer. Returns true once no studio viewer is open.
   async function closeStudioViewer(delay = 800) {
-    const settle = () => new Promise(resolve => setTimeout(resolve, delay));
+    // Poll for the viewer to disappear (50 ms) instead of always waiting `delay`
+    const settle = async () => {
+      for (let waited = 0; waited < delay; waited += 50) {
+        if (!findOpenStudioViewer()) return;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    };
     for (let attempt = 0; attempt < 3; attempt++) {
       if (!findOpenStudioViewer()) return true;
       console.log(`[NotebookLM Takeout] Close attempt ${attempt + 1}/3`);
@@ -3375,7 +3510,13 @@
 
   // Close the source viewer (sources panel). Kept separate from studio viewers.
   async function closeSourceViewer() {
-    const settle = () => new Promise(resolve => setTimeout(resolve, 800));
+    // Poll for the viewer to disappear (50 ms) instead of always waiting 800 ms
+    const settle = async () => {
+      for (let waited = 0; waited < 800; waited += 50) {
+        if (!document.querySelector('source-viewer')) return;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    };
     for (let attempt = 0; attempt < 3; attempt++) {
       if (!document.querySelector('source-viewer')) return true;
       console.log(`[NotebookLM Takeout] Source close attempt ${attempt + 1}/3`);
@@ -3411,10 +3552,17 @@
   async function navigateBackToNotesList() {
     console.log('[NotebookLM Takeout] Attempting to close panel/navigate back...');
 
+    // Only a closed Studio viewer brings the notes list back; after a source
+    // (or with no notes at all) there is nothing to wait for
+    const studioViewerWasOpen = !!findOpenStudioViewer();
     const studioClosed = await closeStudioViewer();
     const sourceClosed = await closeSourceViewer();
     if (studioClosed && sourceClosed) {
       console.log('[NotebookLM Takeout] ✓ Panel closed successfully');
+      // Resolve once the Studio list is back, so the next note can start at once
+      if (studioViewerWasOpen) {
+        await waitForElement('artifact-library-note', 3000).catch(() => null);
+      }
       return;
     }
 
@@ -3436,7 +3584,7 @@
    * Main handler for artifact downloads via message passing
    * Coordinates the download process with proper error handling and metadata
    */
-  async function handleArtifactDownload(artifactIndex, artifactType, moreButtonAlreadyClicked = false, skipMoreButton = false, artifactName = null, downloadPreference = 'pdf') {
+  async function handleArtifactDownload(artifactIndex, artifactType, skipMoreButton = false, artifactName = null, downloadPreference = 'pdf') {
     console.log(`[NotebookLM Takeout] [Download] Starting download for artifact ${artifactIndex} (${artifactType})`);
     const startTime = Date.now();
 
@@ -3492,24 +3640,19 @@
       }
 
       // For other artifacts, find by index (original logic)
-      if (!moreButtonAlreadyClicked) {
-        // Build array of More buttons ONLY from artifact-library-item (not from notes)
-        // Same index space as SCAN_STUDIO_ITEMS moreIndex
-        const artifactMoreButtons = getArtifactItemsWithMore()
-          .map(item => item.querySelector('button[aria-label="More"]'));
-
-        if (artifactIndex < 0 || artifactIndex >= artifactMoreButtons.length) {
-          throw new Error(`Artifact index ${artifactIndex} out of range (0-${artifactMoreButtons.length - 1})`);
-        }
-
-        const moreButton = artifactMoreButtons[artifactIndex];
-        artifactItem = moreButton.closest('artifact-library-item');
-        if (!artifactItem) {
-          throw new Error('Could not find artifact-library-item parent');
-        }
-      } else {
-        console.log('[NotebookLM Takeout] [Download] More button already clicked, waiting for menu...');
+      // Identity check (Milestone 1): the scanned index is used only while its
+      // title still matches, else the title is followed, else the item fails.
+      // The row is resolved here and its own More button clicked below; the
+      // old sidebar-side More click by index alone could open the wrong menu.
+      const rows = getArtifactItemsWithMore();
+      const rowTitles = rows.map(item => item.querySelector('.artifact-title')?.textContent?.trim() || '');
+      const pick = artifactName
+        ? NLME.pickByIndexThenTitleStrict(rowTitles, artifactIndex, artifactName)
+        : artifactIndex;
+      if (pick < 0 || pick >= rows.length) {
+        throw new Error(`Artifact index ${artifactIndex} out of range (0-${rows.length - 1})`);
       }
+      artifactItem = rows[pick];
 
       // Detect artifact type from icon if artifactItem is available (fallback for DOM changes)
       if (artifactItem) {
@@ -3578,32 +3721,30 @@
         console.log(`[NotebookLM Takeout] [Download] ${artifactType} extraction failed, falling back to button click`);
       }
 
-      // Try infographic extraction first (tiered fallback: SVG → Canvas → Button)
-      if (artifactType === 'Infographic' && artifactItem) {
-        console.log('[NotebookLM Takeout] [Download] Attempting infographic extraction...');
-        const extractResult = await tryExtractInfographic(artifactItem);
-
-        if (extractResult.success) {
-          const duration = Date.now() - startTime;
-          console.log(`[NotebookLM Takeout] [Download] ✓ Infographic extracted via ${extractResult.method} (${duration}ms)`);
-          return {
-            success: true,
-            method: extractResult.method,
-            data: extractResult.data,
-            format: extractResult.format,
-            dimensions: extractResult.dimensions,
-            title: artifactTitle, // Include extracted title
-            duration: duration
-          };
+      // Download through the item's own More menu. Infographics keep their
+      // original file this way; capturing the rendered SVG/canvas is only a
+      // fallback when the menu has no Download item (Milestone 1).
+      let buttonResult;
+      try {
+        buttonResult = await clickArtifactDownloadButton(artifactItem.querySelector('button[aria-label="More"]'), downloadPreference);
+      } catch (error) {
+        if (artifactType === 'Infographic' && /Download button not found/.test(error.message)) {
+          console.log('[NotebookLM Takeout] [Download] No Download item; capturing the rendered infographic...');
+          const extractResult = await tryExtractInfographic(artifactItem);
+          if (extractResult.success) {
+            return {
+              success: true,
+              method: extractResult.method,
+              data: extractResult.data,
+              format: extractResult.format,
+              dimensions: extractResult.dimensions,
+              title: artifactTitle,
+              duration: Date.now() - startTime
+            };
+          }
         }
-
-        // Fall through to button click if extraction failed
-        console.log('[NotebookLM Takeout] [Download] Extraction failed, falling back to button click');
+        throw error;
       }
-
-      // For all other artifacts (or infographic fallback), click download button
-      console.log('[NotebookLM Takeout] [Download] Attempting download button click...');
-      const buttonResult = await clickArtifactDownloadButton(moreButtonAlreadyClicked ? null : artifactItem?.querySelector('button[aria-label="More"]'), artifactItem, moreButtonAlreadyClicked, downloadPreference);
 
       const duration = Date.now() - startTime;
 
@@ -3644,17 +3785,14 @@
    * Uses MutationObserver to detect UI state changes instead of hard-coded delays
    * Now also captures intercepted download URLs from window.open
    */
-  async function clickArtifactDownloadButton(moreButton, artifactItem, moreButtonAlreadyClicked = false, downloadPreference = 'pdf') {
-    // Clear any previous intercepted URL
-    lastInterceptedDownloadUrl = null;
-
-    // Click the More button to open menu (unless already clicked)
-    if (!moreButtonAlreadyClicked && moreButton) {
-      console.log('[NotebookLM Takeout] [Download] Clicking More button...');
-      moreButton.click();
-    } else {
-      console.log('[NotebookLM Takeout] [Download] More button already clicked, skipping...');
+  async function clickArtifactDownloadButton(moreButton, downloadPreference = 'pdf') {
+    if (!moreButton) {
+      throw new Error('More button not found for this item');
     }
+    // URLs intercepted before this moment belong to an earlier item
+    const clickedAt = Date.now();
+    console.log('[NotebookLM Takeout] [Download] Clicking More button...');
+    moreButton.click();
 
     // Wait for menu to appear with adaptive waiting
     console.log('[NotebookLM Takeout] [Download] Waiting for menu to appear...');
@@ -3669,11 +3807,13 @@
     }
 
     console.log('[NotebookLM Takeout] [Download] Found download button, clicking...');
+    // Arm the page-world hook for this click only (injected.js)
+    document.dispatchEvent(new CustomEvent('nlme-arm-intercept'));
     downloadButton.click();
 
     // Wait for intercepted URL (from window.open interception) or download initiation
     console.log('[NotebookLM Takeout] [Download] Waiting for intercepted URL...');
-    const interceptedUrl = await waitForInterceptedUrl(2000);
+    const interceptedUrl = await waitForInterceptedUrl(clickedAt, 25000);
 
     if (interceptedUrl) {
       console.log('[NotebookLM Takeout] [Download] Got intercepted URL (no tab opened):', interceptedUrl.substring(0, 100));
@@ -4764,6 +4904,7 @@
 
       // Extract from matched live buttons with retry logic
       for (const [sourceIndex, button] of buttonsToExtract.entries()) {
+        if (isExportCancelled()) break; // stop within one citation of Cancel
         console.log(`[NotebookLM Takeout] Extracting source ${sourceIndex} from live button...`);
 
         // Use retry helper for citation extraction
@@ -4779,8 +4920,8 @@
           errors.push(result.error);
         }
 
-        // Add delay between citations to avoid overwhelming API
-        await sleep(150);
+        // No pacing sleep: hovers make no Gemini Notebook data requests
+        // (measured Nov 2026); ensureTooltipGone already orders them
       }
 
     } catch (error) {

@@ -1633,3 +1633,12 @@ footer {
 .studio-info {
   margin-bottom: 10px;
 }
+
+/* One job at a time (Milestone 1): controls in the tabs are inert while an
+   export, scan or download runs. The Cancel button stays usable. */
+body.job-running .tab-content button,
+body.job-running .tab-content input,
+body.job-running #rescan-btn {
+  pointer-events: none;
+  opacity: 0.5;
+}

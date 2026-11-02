@@ -219,7 +219,256 @@
     };
   }
 
+  // Strip OCR noise (~~~, :~:, =~, ;!) from citation quotes without flattening
+  // their structure: only horizontal whitespace is collapsed, fenced code is
+  // left alone and ~~strikethrough~~ spans are kept.
+  function cleanOcrSegment(text) {
+    const kept = [];
+    const protectedText = text.replace(/~~([^~\n]+?)~~/g, (m) => {
+      kept.push(m);
+      return `\u0000${kept.length - 1}\u0000`;
+    });
+    return protectedText
+      .replace(/~{3,}/g, '')
+      .replace(/[:;]+~+[:;]*/g, '')
+      .replace(/~+[:;]+~*/g, '')
+      .replace(/[=]+~+/g, '')
+      .replace(/~+[=]+/g, '')
+      .replace(/[;!]{2,}/g, '')
+      .replace(/[;!]~+[;!]*/g, '')
+      .replace(/~([a-zA-ZäöüÄÖÜß])~/g, '$1')
+      .replace(/~+([ \t\n])/g, '$1')
+      .replace(/([ \t\n])~+/g, '$1')
+      .replace(/([a-zA-ZäöüÄÖÜß])~([a-zA-ZäöüÄÖÜß])/g, '$1$2')
+      .replace(/[ \t]{2,}/g, ' ')
+      .replace(/[ \t]+([.,;:!?])/g, '$1')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/\u0000(\d+)\u0000/g, (_m, i) => kept[Number(i)]);
+  }
+
+  function cleanOcrArtifacts(text) {
+    if (!text) return '';
+    return text
+      .split(/(```[\s\S]*?```)/)
+      .map((part, i) => (i % 2 === 1 ? part : cleanOcrSegment(part)))
+      .join('')
+      .trim();
+  }
+
+  // Per-phase export timing. Phases may repeat (one per note/citation); totals
+  // can be merged across contexts (content-script responses into the sidebar).
+  function createPhaseTimer(now = () => (globalThis.performance ? globalThis.performance.now() : Date.now())) {
+    const totals = {};
+    const open = {};
+    const add = (phase, count, ms) => {
+      const t = totals[phase] || (totals[phase] = { count: 0, ms: 0 });
+      t.count += count;
+      t.ms += ms;
+    };
+    return {
+      start(phase) { open[phase] = now(); },
+      end(phase) {
+        if (open[phase] === undefined) return;
+        add(phase, 1, now() - open[phase]);
+        delete open[phase];
+      },
+      totals() {
+        const copy = {};
+        for (const [k, v] of Object.entries(totals)) copy[k] = { count: v.count, ms: Math.round(v.ms) };
+        return copy;
+      },
+      merge(other) {
+        for (const [k, v] of Object.entries(other || {})) add(k, v.count || 0, v.ms || 0);
+      }
+    };
+  }
+
+  function formatDuration(ms) {
+    const s = ms / 1000;
+    if (s < 60) return `${s.toFixed(1)} s`;
+    const m = Math.floor(s / 60);
+    return `${m} m ${Math.round(s - m * 60)} s`;
+  }
+
+  function formatTimingSummary(totals, wallMs) {
+    const lines = ['## Export statistics', ''];
+    for (const [phase, t] of Object.entries(totals || {})) {
+      const avg = t.count ? (t.ms / t.count / 1000).toFixed(2) : '0.00';
+      lines.push(`- ${phase}: ${t.count} × ${avg} s avg (${formatDuration(t.ms)})`);
+    }
+    lines.push(`- Total: ${formatDuration(wallMs || 0)}`);
+    return lines.join('\n') + '\n';
+  }
+
+  // One export/scan/download job at a time in the side panel.
+  function createJobLock() {
+    let owner = null;
+    return {
+      tryAcquire(name) {
+        if (owner !== null) return false;
+        owner = name;
+        return true;
+      },
+      release(name) {
+        if (owner === name) owner = null;
+      },
+      current() { return owner; }
+    };
+  }
+
+  // One truthful end-of-export message for notes, sources, chat and artifacts.
+  function summarizeExportOutcome({ kind, selected = 0, exported = 0, failed = 0, cancelled = false } = {}) {
+    if (cancelled) {
+      return { level: 'warning', message: `Cancelled: exported ${exported} of ${selected} ${kind}`, partial: true };
+    }
+    if (exported === 0 && selected > 0) {
+      return { level: 'error', message: `No ${kind} exported (${failed} failed, see errors.txt)`, partial: false };
+    }
+    if (failed > 0) {
+      return { level: 'warning', message: `Exported ${exported} of ${selected} ${kind} (${failed} failed, see errors.txt)`, partial: false };
+    }
+    return { level: 'success', message: `Exported ${exported} of ${selected} ${kind}`, partial: false };
+  }
+
+  // Gemini Notebook's own download links (More → Download opens one via
+  // window.open). Hostname-based, so lookalike query strings don't match.
+  function isNotebookDownloadUrl(url) {
+    let u;
+    try { u = new URL(url); } catch { return false; }
+    if (u.protocol !== 'https:') return false;
+    const host = u.hostname;
+    if (host === 'contribution.usercontent.google.com') return true;
+    if (host === 'googleusercontent.com' || host.endsWith('.googleusercontent.com')) {
+      const path = u.pathname.toLowerCase();
+      return path.includes('notebook') || path.startsWith('/download') || host.includes('notebook');
+    }
+    return false;
+  }
+
+  // The page-world download hook intercepts only right after the extension's
+  // own Download click (armed via a DOM event), never the user's own clicks.
+  function createInterceptArm(windowMs = 3000) {
+    let armedAt = null;
+    return {
+      arm(now) { armedAt = now; },
+      shouldIntercept(url, now) {
+        if (armedAt === null) return false;
+        if (now - armedAt > windowMs) { armedAt = null; return false; }
+        if (!isNotebookDownloadUrl(url)) return false;
+        armedAt = null; // consumed by the first match
+        return true;
+      }
+    };
+  }
+
+  // Title comparison for identity checks: whitespace- and ellipsis-tolerant,
+  // and a title truncated with an ellipsis matches its full form.
+  function normalizeTitle(t) {
+    return (t || '').replace(/\u2026/g, '...').replace(/\s+/g, ' ').trim();
+  }
+
+  function titlesMatch(a, b) {
+    const x = normalizeTitle(a);
+    const y = normalizeTitle(b);
+    if (!x || !y) return false;
+    if (x === y) return true;
+    const prefixMatch = (short, full) => {
+      if (!short.endsWith('...')) return false;
+      const stem = short.slice(0, -3).trim();
+      return stem.length > 0 && full.startsWith(stem);
+    };
+    return prefixMatch(x, y) || prefixMatch(y, x);
+  }
+
+  // Like pickByIndexThenTitle, but never falls back to an index whose title
+  // differs: the item the user picked must still be the item we open.
+  function pickByIndexThenTitleStrict(titles, index, title) {
+    const list = titles || [];
+    const inRange = Number.isInteger(index) && index >= 0 && index < list.length;
+    if (!normalizeTitle(title)) {
+      if (inRange) return index;
+      throw new Error(`Item changed: index ${index} is out of range`);
+    }
+    if (inRange && titlesMatch(list[index], title)) return index;
+    const byTitle = list.findIndex(t => titlesMatch(t, title));
+    if (byTitle !== -1) return byTitle;
+    throw new Error(`Item changed: expected "${title}"`);
+  }
+
+  // Newest intercepted download URL captured at or after the click.
+  function pickFreshIntercept(entries, since) {
+    const fresh = (entries || []).filter(e => e && e.url && e.timestamp >= since);
+    if (fresh.length === 0) return null;
+    return fresh.reduce((a, b) => (b.timestamp >= a.timestamp ? b : a)).url;
+  }
+
+  function formatErrorsTxt({ title = 'Export', generatedAt = '', errors = [] } = {}) {
+    const lines = [`# ${title} Error Report`, ''];
+    if (generatedAt) lines.push(`Generated: ${generatedAt}`, '');
+    lines.push(`Errors: ${errors.length}`, '');
+    for (const e of errors) lines.push(`- ${e}`);
+    lines.push('', `Report issues: ${ISSUES_URL}`);
+    return lines.join('\n') + '\n';
+  }
+
+  // Gemini Notebook download URLs name the real file (filename=Deck.pptx);
+  // the extension from there beats guessing from MIME type or artifact type.
+  function extensionFromDownloadUrl(url) {
+    let u;
+    try { u = new URL(url); } catch { return ''; }
+    const name = u.searchParams.get('filename') || u.searchParams.get('name') || '';
+    const m = name.match(/\.([a-z0-9]{2,5})$/i);
+    return m ? `.${m[1].toLowerCase()}` : '';
+  }
+
+  // "<Notebook>/<file>" for chrome.downloads, which saves into subfolders of
+  // Downloads. Folder names drop characters filesystems reject.
+  function downloadFolderPath(folder, filename) {
+    const clean = (folder || '')
+      .replace(/[\/\\:*?"<>|\u0000-\u001f]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/^[.\s]+|[.\s]+$/g, '')
+      .slice(0, 80)
+      .trim();
+    return clean ? `${clean}/${filename}` : filename;
+  }
+
+  // Content is "ready" once its size stops changing: the last `checks`
+  // samples are equal and at least `minLength`. Replaces fixed sleeps.
+  function createStabilityTracker({ checks = 2, minLength = 1 } = {}) {
+    const recent = [];
+    return {
+      push(length) {
+        recent.push(length);
+        if (recent.length > checks) recent.shift();
+        return recent.length === checks && length >= minLength && recent.every(v => v === length);
+      }
+    };
+  }
+
+  // errors.txt line for a cancelled run; it also forces the ZIP (and so the
+  // -PARTIAL name) for exports that otherwise write a single file.
+  function cancellationNote({ kind, done = 0, total = 0 } = {}) {
+    return `Cancelled by user after ${done} of ${total} ${kind}; the last one may have incomplete citations and the rest were not exported`;
+  }
+
   const NLME = {
+    cancellationNote,
+    createStabilityTracker,
+    downloadFolderPath,
+    extensionFromDownloadUrl,
+    formatErrorsTxt,
+    titlesMatch,
+    pickByIndexThenTitleStrict,
+    pickFreshIntercept,
+    isNotebookDownloadUrl,
+    createInterceptArm,
+    summarizeExportOutcome,
+    createJobLock,
+    createPhaseTimer,
+    formatTimingSummary,
+    cleanOcrArtifacts,
     mathSourceHealth,
     mathSourceToMarkdown,
     classifyKatexScript,
