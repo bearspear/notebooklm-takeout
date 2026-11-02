@@ -7,7 +7,7 @@ the table of contents to jump.
 - Repo root: `/Users/mbehringer/Downloads/notebooklm-exporter`
 - Remote: `git@github.com-personal:bearspear/notebooklm-takeout.git`
 - Manifest: V3 Chrome extension, no build step
-- Latest meaningful commit: `a75f5c7` (README update for Studio + KaTeX + drift fixes)
+- Latest meaningful work: branch `fix/dom-drift-2026-11` (Nov 2026 Gemini Notebook DOM drift fixes)
 - Branch: `main`
 
 ## Table of contents
@@ -43,7 +43,8 @@ files. Five user-facing surfaces: Sources, Notes, Artifacts, Chat, and the optio
 tab. The Studio tab gives a unified flat list with per-item Download / Delete; everything
 else uses tab-specific batch exports producing ZIPs.
 
-No backend, no build, no tests. All work happens client-side. The hard parts are:
+No backend, no build. Unit tests cover the DOM-free helpers in `takeout-shared.js`
+(`node --test tests/`); everything DOM-related is verified by hand. The hard parts are:
 
 - **DOM scraping against a moving target.** Google reorganises NotebookLM's DOM regularly.
   Recent drift events: studio-card render changes, ProseMirror replacing Quill in note
@@ -57,8 +58,10 @@ No backend, no build, no tests. All work happens client-side. The hard parts are
   via NotebookLM's "More → Download" menu, which calls `window.open` to a Google CDN URL.
   We override `window.open` in `injected.js` and route the URL back through the extension's
   `chrome.downloads` API so no tab opens.
-- **KaTeX math.** Notes often render math via KaTeX. The MathML `<annotation>` tag (verbatim
-  LaTeX) is preferred; when missing we reconstruct LaTeX from the `.katex-html` tree.
+- **KaTeX math.** Notes and chat render math via KaTeX. The model's original LaTeX sits on
+  the host span as `data-math` (Nov 2026) and is exported verbatim; then the MathML
+  `<annotation>`; only when both are missing do we reconstruct LaTeX from `.katex-html`.
+  The health check's "Formulas carry LaTeX source" line warns when formulas lack a source.
 
 ## How to load and iterate
 
@@ -75,9 +78,12 @@ No backend, no build, no tests. All work happens client-side. The hard parts are
 All log lines are prefixed `[NotebookLM Takeout]`. The codebase has a `logger` helper
 (`logger.info` / `logger.warn` / `logger.error` / `logger.download`) defined in `sidebar.js`.
 
-No package.json, no lint config, no formatter. `node --check sidebar.js` and
-`node --check content.js` are the only sanity checks; they catch syntax errors. Run them
-after every edit.
+No package.json, no lint config, no formatter. After every edit run `node --check` on each
+touched file and `node --test tests/` (Node 20 built-in runner, no npm packages).
+
+After any manifest change or new content-script file, toggle the extension off/on in
+`chrome://extensions/` — the reload icon alone does not apply them. A stale install keeps
+running pre-pull code (seen Nov 2026: the console showed old line numbers).
 
 ## Architecture: four execution contexts
 
@@ -117,13 +123,18 @@ sendResponse later).
 ```
 notebooklm-exporter/
 ├── manifest.json           — V3 manifest, permissions, side_panel, content_scripts
-├── sidebar.html  ( 414)    — Side panel UI: tabs, controls, settings/health panels
-├── sidebar.js    (6456)    — UI logic, export orchestration, KaTeX, mindmap helpers
+├── takeout-shared.js (157) — Selectors + DOM-free helpers (NLME global); content script,
+│                             sidebar and Node tests all load it
+├── tests/                  — node:test unit tests for takeout-shared.js
+├── sidebar.html  ( 423)    — Side panel UI: tabs, controls, settings/health panels
+├── sidebar.js    (6402)    — UI logic, export orchestration, KaTeX, mindmap helpers
 ├── styles.css    (1635)    — Side panel styles
-├── content.js    (5617)    — DOM scraping + extraction, runs on NotebookLM
+├── content.js    (4887)    — DOM scraping + extraction, runs on NotebookLM
+├── mindmap-extract.js (325) — Mind map SVG/tree extraction; content script and injected
+│                             by background into the *.scf.usercontent.goog app frame
 ├── content-styles.css (57) — Page overlay styles (export progress overlay)
-├── background.js (1182)    — Service worker, download interception, message routing
-├── injected.js   ( 305)    — Page-world hooks for window.open + link-click interception
+├── background.js (1263)    — Service worker, download interception, batch ZIP, frame extraction
+├── injected.js   ( 306)    — Page-world hooks for window.open + link-click interception
 ├── mindmap-template.html (371) — Standalone interactive mindmap viewer (used as template)
 ├── jszip.min.js  (  12)    — Bundled JSZip
 ├── turndown.min.js (973)   — Bundled Turndown (HTML → Markdown)
@@ -193,6 +204,9 @@ Storage: `chrome.storage.local`, single key `settings`. Defaults at `sidebar.js:
 
   // Interface
   showStudioTab: false,                      // gate the optional Studio tab
+
+  // Downloads
+  slidesFormat: 'pdf',                       // 'pdf' | 'pptx' — slide deck More-menu item
 }
 ```
 
@@ -264,9 +278,9 @@ respond synchronously (and `return true` is omitted) or asynchronously (must
 | `DEBUG_PAGE` | — | dumps DOM structure to console |
 | `SCAN_ARTIFACTS` | — | `{success}`; later sends per-artifact via `ARTIFACT_DETECTED` |
 | `FETCH_FILE` | `{url}` | `{success, content?}` — fetches with page credentials |
-| `EXTRACT_NOTE` | `{noteIndex, noteTitle, includeCitationImages}` | `{html, sources, errors}` or `{isMindmap, svgContent, treeData}` |
-| `SCAN_NOTES` | — | `{notes: [{index, title, type, iconType}]}` |
-| `SCAN_SOURCES` | — | `{sources, errors?}` |
+| `EXTRACT_NOTE` | `{noteIndex, noteTitle, sourceIndex?, includeCitationImages}` | `{html, sources, errors}` or `{isMindmap, svgContent, treeData}`. With `sourceIndex` the note is opened from the Sources panel "Notes" group |
+| `SCAN_NOTES` | — | `{notes: [{index, title, type, iconType, sourceIndex?}]}` — Sources-panel notes have `index: -1`, `type: 'Note (Sources panel)'` |
+| `SCAN_SOURCES` | — | `{sources, skippedNotes}` — Sources-panel notes are skipped |
 | `EXTRACT_SOURCE` | `{sourceIndex}` | `{html, sources, title, ...}` |
 | `NAVIGATE_BACK` | — | `{success}` — closes open note/source viewer |
 | `SHOW_EXPORT_OVERLAY` | `{message}` | `{success}` — page overlay on NotebookLM |
@@ -274,7 +288,7 @@ respond synchronously (and `return true` is omitted) or asynchronously (must
 | `HIDE_EXPORT_OVERLAY` | — | `{success}` |
 | `CHECK_EXPORT_CANCELLED` | — | `{cancelled}` |
 | `DEBUG_NOTES` | — | diagnostic — list of titles |
-| `DOWNLOAD_ARTIFACT` | `{artifactIndex, artifactType, artifactName, moreButtonAlreadyClicked, skipMoreButton}` | various — see `downloadArtifact` callsite |
+| `DOWNLOAD_ARTIFACT` | `{artifactIndex, artifactType, artifactName, moreButtonAlreadyClicked, skipMoreButton, downloadPreference}` | `method`: `content_extraction` / `mindmap_extraction` / `mindmap_app_frame` / `url_intercepted` / `button_click` / `svg_extract` / `canvas_export`. `artifactIndex` = index among `artifact-library-item`s with a More button |
 | `SCAN_CHAT` | — | `{notebookTitle, notebookSummary, messagePairs, dateRange}` |
 | `EXTRACT_ALL_CHAT_CITATIONS` | — | `{sourcesByIndex, errors}` |
 | `EXTRACT_MESSAGE_CITATIONS` | `{messageIndex, messageHTML, sourceIndices, includeCitationImages}` | `{sourcesByIndex, errors}` |
@@ -282,7 +296,7 @@ respond synchronously (and `return true` is omitted) or asynchronously (must
 | `GET_DOM_ERRORS` | — | `{shouldWarn, issues}` |
 | `RESET_DOM_TRACKER` | — | `{success}` |
 | `RUN_COMPREHENSIVE_HEALTH_CHECK` | `{fastMode, skipCitations}` | full results object |
-| `SCAN_STUDIO_ITEMS` | — | `{items: [{combinedIndex, kindIndex, kind, label, type, details, hasMoreButton}]}` |
+| `SCAN_STUDIO_ITEMS` | — | `{items: [{combinedIndex, kindIndex, moreIndex, kind, label, type, details, downloadable, hasMoreButton}]}` — also feeds the Artifacts tab |
 | `DELETE_STUDIO_ITEM` | `{label?, combinedIndex?}` | `{success, error?}` |
 
 ### Sidebar → background (`background.js`)
@@ -297,7 +311,9 @@ respond synchronously (and `return true` is omitted) or asynchronously (must
 | `END_BATCH_DOWNLOAD` | Stop batch capture |
 | `GET_CAPTURED_DOWNLOAD` | Pull a captured URL out of batch state |
 | `FETCH_FILE_CONTENT` | Fetch a URL with credentials (background context) |
-| `BATCH_DOWNLOAD_ALL` | Dispatch a batch ZIP build |
+| `BATCH_DOWNLOAD_ALL` | Dispatch a batch ZIP build (`{tabId, items, downloadPreference}`) |
+| `CANCEL_BATCH_DOWNLOAD` | Stop the batch between items |
+| `EXTRACT_MINDMAP_FRAME` | Inject `mindmap-extract.js` into the mind map app iframe, extract, close viewer |
 | `GET_BATCH_STATUS` | Poll batch progress |
 | `DIRECT_DOWNLOAD_URL` | Hand a finalised URL + filename to background to call `chrome.downloads.download` |
 | `ARTIFACT_DETECTED` | Internal — content adds to `capturedArtifacts` map |
@@ -366,18 +382,17 @@ Citation handling in chat uses message-scoped anchors: `msg-{messageIndex}-cite-
 
 ### Artifacts
 
-1. `scanPage` (artifacts) injects `scanPageForItems` via `chrome.scripting.executeScript`
-   (legacy pattern — predates content-script messaging). Lists `artifact-library-item`
-   elements (NOT `artifact-library-note`).
-2. Type mapping by `mat-icon` text content:
+1. `scanPage` (artifacts) sends `SCAN_STUDIO_ITEMS` and keeps `kind === 'artifact'`
+   rows (`index` = `moreIndex`). Flashcards and Quiz rows are disabled (no Download).
+2. Type = `NLME.resolveArtifactType({iconText, buttonLabel})`: the stretched button's
+   aria-label when it names a type ("Data Table", "Report", …; "Artifact" is ignored),
+   else the icon:
    ```
-   auto_tab_group → Report
-   tablet         → Slides
-   stacked_bar_chart → Infographic
-   table_view     → Data Table
-   flowchart      → Flowchart
-   headphones     → Audio Overview
-   audio_magic_eraser → Audio Overview
+   auto_tab_group → Report            tablet → Slides
+   stacked_bar_chart → Infographic    table_view / format_list_bulleted → Data Table
+   flowchart → Mind Map               headphones / audio_magic_eraser / audio_spark → Audio Overview
+   videocam → Video Overview          copy → Flashcards (not downloadable)
+   quiz → Quiz (not downloadable)
    ```
 3. Each row renders with a per-item Download button. Bulk: `Download All` with optional ZIP
    toggle.
@@ -462,14 +477,14 @@ shadowing bug.
 |---|---|
 | `artifact-library-item` | Audio / slides / infographic / report / data table / flowchart |
 | `artifact-library-note` | Notes and mindmaps |
-| `.artifact-title` | Title text |
+| `.artifact-title` | Title text (titles can repeat — resolve with `NLME.pickByIndexThenTitle`) |
 | `.artifact-details` | Subtitle (source count, age) |
 | `mat-icon.artifact-icon` | Icon, textContent identifies kind |
 | `button[aria-label="More"]` | Per-item three-dot menu |
 
 Icon textContent → kind:
-- Notes/mindmaps (inside `artifact-library-note`): `sticky_note_2` → Note,
-  `flowchart` → Mindmap.
+- Notes (inside `artifact-library-note`): `article` (Nov 2026) / `sticky_note_2` → Note.
+  Mind maps are now `artifact-library-item`s (`flowchart`), not notes.
 - Artifacts (inside `artifact-library-item`): see the [Artifacts pipeline](#artifacts)
   mapping table.
 
@@ -477,6 +492,7 @@ Icon textContent → kind:
 
 | Element | Content type | Notes |
 |---|---|---|
+| `artifact-viewer` | Dialog wrapper for mind maps, reports, tables (Nov 2026) | Mind maps render in `artifact-viewer app-viewer iframe` (`*.scf.usercontent.goog`) |
 | `labs-tailwind-doc-viewer` | Tailwind-rendered notes/sources | **Also used by chat — always scope** |
 | `rich-text-editor .ProseMirror` | New ProseMirror note editor | Recent migration |
 | `rich-text-editor .ql-editor` | Older Quill editor | Still in some accounts |
@@ -493,18 +509,19 @@ Icon textContent → kind:
 | `studio-panel note-editor` | Detect "viewing a note" state |
 | `input.note-header__editable-title` | Note title |
 | `button[aria-label="Close note view"]` | Close button (used by NAVIGATE_BACK) |
+| `section.studio-panel .panel-header button[aria-label^="Close"]` | **Studio viewer close (Nov 2026)**, outside `<studio-panel>`. Labels: "Close web page viewer", "Close report viewer", "Close table", "Close note view". Never click "Collapse studio panel". Escape no longer closes viewers |
 
 ### Citations
 
 | Selector | Element |
 |---|---|
-| `button.citation-marker.xap-inline-dialog` | Citation marker (the "[1]" buttons) |
-| Inner `span[aria-label]` | Source-index text + source-title aria |
-| Inner `mat-icon[aria-label="Show additional citations"]` | Collapsed-citation expand button (more_horiz) |
-| `xap-inline-dialog-container[role="dialog"][aria-label="Citation Details"]` | Hover tooltip (singleton in cdk-overlay-container) |
-| `.citation-tooltip-header` | Source filename in tooltip |
-| `.citation-tooltip-text` | Quote text in tooltip |
-| `.citation-tooltip-footer` | (Legacy) source location |
+| `button.citation-marker` (class `chat-bidi-enabled`, no `ng-star-inserted` since Nov 2026) | Citation marker (the "[1]" buttons) |
+| Inner `span[aria-label="1: Source title"]` | Citation number text + source-title aria |
+| Inner `mat-icon` `more_horiz` / aria "Show additional citations" | Collapsed-citation expand button (`NLME.isCitationExpander`) |
+| `NLME.CITATION_TOOLTIP_SELECTOR` | Hover tooltip: `.cdk-overlay-pane.citation-tooltip-panel` > `nb-popover-container` > `div.popover-card[aria-label="Citation Details"]` (Nov 2026); legacy `xap-inline-dialog-container[role="dialog"]` |
+| `.citation-tooltip-header` | Source title in tooltip |
+| `.citation-tooltip-text` | Quote: `div.paragraph` children or `labs-tailwind-structural-element-view-v2` wrappers (both seen) |
+| `.citation-tooltip-footer` | "View source" button |
 | `.mat-mdc-menu-panel` / `.cdk-overlay-pane` | Open menu / popup overlay |
 
 ### Chat
@@ -523,6 +540,7 @@ Icon textContent → kind:
 | Selector | Used for |
 |---|---|
 | `.single-source-container` | Each source row |
+| `mat-expansion-panel.notes-category-panel` | "Notes" group inside the Sources panel (Nov 2026). Its rows are notes (open `note-editor`), not in the Studio list — `isNoteSourceContainer` |
 | `.scroll-area-desktop` | Scroll container (used in DOM health check) |
 
 ### Studio item more-menu items
@@ -535,20 +553,22 @@ The "Delete note?" popup is a **custom card** rendered inside `.cdk-overlay-pane
 Reading citation source + quote text requires hovering each marker and scraping the tooltip.
 The tooltip is a singleton attached to `.cdk-overlay-container`. Multiple hovers race.
 
-Single citation flow (`content.js:~3199` in `extractTailwindNoteContent`):
+Single citation flow — `extractSingleCitationWithRetry`, the only hover routine (notes,
+chat-wide and per-message chat extraction all call it):
 
 ```
 1. scrollIntoView({behavior: 'instant', block: 'center'})
-2. dispatchEvent('mouseenter', {bubbles, cancelable})
-3. waitForElement('xap-inline-dialog-container[role="dialog"][aria-label="Citation Details"]', 2000)
-   — fall back to lighter selectors if the aria-label isn't set yet
-4. Wait for opacity > 0.5 AND content present (poll 50ms × 12)
-5. Read .citation-tooltip-header → sourceTitle
-   Read .citation-tooltip-text → quote (Turndown → markdown, preserves bold/italic/links)
-6. dispatchEvent('mouseleave')
-7. Wait for tooltip removal OR opacity < 0.1 + no content (poll 100ms × 15)
-8. Store in uniqueSources keyed by sourceIndex (the "[1]" number)
+2. dispatch mouseenter + pointerenter (non-bubbling) — opens the popover
+3. waitForElement(NLME.CITATION_TOOLTIP_SELECTOR)
+4. Wait for opacity > 0.5 AND .citation-tooltip-text content
+5. Read .citation-tooltip-header → source title, .citation-tooltip-text → quote markdown
+6. dispatch mouseleave + mouseout
+7. Wait until NLME.CITATION_TOOLTIP_SELECTOR matches nothing (100 ms × 20) — prevents
+   the next citation reading the previous quote
 ```
+
+Markdown keeps NotebookLM's citation numbers; `NLME.buildCitationEntries` builds the
+Sources section from extracted sources plus a placeholder for markers that failed.
 
 Common failures:
 - Tooltip never appears → marker is in a collapsed group, click the `more_horiz` expand
@@ -568,17 +588,22 @@ Turndown rules (notes/sources rule and chat rule), both filter on
 `SPAN.classList.contains('katex')`.
 
 ```
-1. Look for <annotation encoding="application/x-tex">.
-   If present, use textContent verbatim. Done.
+1. Exact source via NLME.mathSourceToMarkdown(): the host span's data-math
+   (Gemini Notebook keeps the model's original LaTeX there, Nov 2026), else
+   <annotation encoding="application/x-tex">. Verbatim. Done.
 2. Otherwise, walk .katex-html recursively via katexRenderInline(el).
+   Best effort: cannot recover \text{}, matrices, alignments exactly.
 3. If walker returns empty, last-resort: textContent + unicodeToLatex map.
 ```
+
+Gemini prefixes some KaTeX classes: `katex-base`, `katex-strut`, `katex-sizing`
+(Nov 2026). The walker accepts both spellings.
 
 `katexRenderInline` handles, by KaTeX class:
 
 | Class | Handling |
 |---|---|
-| `strut` / `pstrut` / `vlist-s` | Skip (spacing artifacts) |
+| `strut` / `katex-strut` / `pstrut` / `vlist-s` | Skip (spacing artifacts) |
 | `mfrac` | `\frac{num}{den}` — sub-render each from `.vlist` children by `top` |
 | `sqrt` | `\sqrt{radicand}` |
 | `mop` (named function) | `\ln` / `\log` / `\sin` / `\cos` / `\tan` / `\exp` / `\lim` / `\max` / `\min` / + 24 others |
@@ -587,10 +612,10 @@ Turndown rules (notes/sources rule and chat rule), both filter on
 | `mbin` / `mrel` | Binary operator / relation → `unicodeToLatex(textContent)` with surrounding spaces |
 | `mopen` / `mclose` | Parens, brackets → preserve textContent. If wraps `+msupsub`, recurse |
 | `mpunct` | Commas, periods → preserve textContent |
-| `mord` / `minner` | Variable / number. If has `.msupsub` child, recurse to attach scripts |
+| `mord` / `minner` | Variable / number. Recurse if it has a `.msupsub` child or wraps `.mfrac` / `.sqrt` |
 | `mspace` | Single space |
-| `msupsub` | Sub/super attached to previous atom. Extract from `.vlist` by `top` sign (more negative = sup) |
-| `base` | Recurse |
+| `msupsub` | Sub/super attached to previous atom. Two scripts: more negative `top` = sup. One script: `top + pstrut height` < 0 = sup (`NLME.classifyKatexScript`) |
+| `base` / `katex-base` | Recurse |
 
 `KATEX_UNICODE_MAP` covers 47 symbols (Greek, set theory, logic, arrows, basic ops). Single
 source of truth for both Turndown rules.
@@ -765,6 +790,18 @@ similar, look here first.
 - **Note**: adding `host_permissions` to an installed unpacked extension requires
   toggling it off/on in `chrome://extensions/` — the reload icon alone does not grant them.
 
+### 8. Popover citations, header close, Sources-panel notes (Nov 2026)
+
+- **Changed**: citation markers lost `ng-star-inserted`/`xap-inline-dialog`; the tooltip
+  became an `nb-popover` in `.citation-tooltip-panel`; mind maps/reports/tables open in
+  `artifact-viewer`, which Escape no longer closes — the close button moved to the Studio
+  panel header; notes use the `article` icon; mind maps became Studio artifacts; a "Notes"
+  group appeared in the Sources panel; new types Flashcards (`copy`) and Quiz (`quiz`);
+  slide decks offer PDF and PowerPoint downloads.
+- **Symptom**: notes exported with no citations, viewers stayed open after mind map /
+  report / table exports, Sources export timed out on notes, unknown artifact types.
+- **Fix**: `takeout-shared.js` selectors/helpers + branch `fix/dom-drift-2026-11`.
+
 ### Spotting drift early
 
 - If every tab says "Please open NotebookLM first" → the host gates are stale; check
@@ -783,15 +820,13 @@ similar, look here first.
 These are deliberate non-fixes or known limitations. Don't "fix" them without checking the
 chat history for context — the fix often introduces a different regression.
 
-### 1. Duplicate-named items resolve to the first match
+### 1. Duplicate-named items: delete still resolves to the first match
 
-When two notes share a title (or a Note and a Mindmap share a title), the title-first
-lookup in `extractNoteContent` and the label-first lookup in `deleteStudioItem` both return
-the topmost match. Consequence: exporting/deleting the second item silently hits the first.
-
-Fix discussed in conversation history (Jun 4). The change is small but adds index-mismatch
-handling that needs careful testing in the bulk-delete path. **Was tried and reverted at the
-user's request** — re-do only after talking with them.
+Exports are fixed (Nov 2026): notes, reports, tables and mind maps resolve with
+`NLME.pickByIndexThenTitle` (scanned index while its title matches, else title).
+`deleteStudioItem` / bulk delete still resolve by label, so deleting the second of two
+same-titled items hits the first. A fix covering delete was tried in June and **reverted at
+the user's request** — re-do only after talking with them.
 
 ### 2. Citation extraction limited to Tailwind viewer
 
@@ -824,6 +859,11 @@ heavy load, bump to 1500ms.
 The Notes tab bundles mindmaps inside the `mindmaps/` folder of the notes ZIP. The Studio
 tab exports each mindmap as 3 loose files (SVG + JSON + HTML). This asymmetry is intentional
 (matches "no ZIP" Studio contract) but worth knowing.
+
+### 7. Flashcards and Quiz are not exportable
+
+They have no Download item in the More menu. They are listed but disabled in the
+Artifacts tab.
 
 ## Recipes
 
@@ -919,22 +959,21 @@ No automated tests. Two manual checklists.
 6. Bulk delete 2–3 items. Confirm 1s settle delay between deletes.
 7. Disable Show Studio tab. Confirm the tab disappears and a non-studio tab activates.
 
-### Syntax
+### Syntax and unit tests
 
 ```bash
-node --check sidebar.js
-node --check content.js
-node --check background.js
-node --check injected.js
+for f in sidebar.js content.js background.js injected.js mindmap-extract.js takeout-shared.js; do node --check "$f"; done
+node --test tests/
 ```
 
-All four should print no output and exit 0.
+`node --check` prints nothing and exits 0; `node --test` reports `# fail 0`.
 
 ## Conventions in this codebase
 
 - **No build step.** Plain ES2020+ JS. Don't introduce TypeScript or bundlers without
   user discussion.
-- **No tests.** Manual smoke checks only.
+- **Tests**: DOM-free logic goes in `takeout-shared.js` with a `node:test` test in
+  `tests/`; DOM behaviour gets manual smoke checks.
 - **Logger**: `logger.info/warn/error/download` in sidebar.js. Content uses raw `console.log`
   with `[NotebookLM Takeout]` prefix.
 - **Filenames**: `[{PREFIX}]_{sanitized-title}.{ext}` for individual files,
@@ -973,6 +1012,6 @@ All four should print no output and exit 0.
 
 ---
 
-**Last refreshed**: 2026-06-04. After significant drift events or pipeline rewrites, update
+**Last refreshed**: 2026-11-02. After significant drift events or pipeline rewrites, update
 this file. It is the single document an agent should read before doing anything in this
 repo.

@@ -238,9 +238,16 @@ function katexExtractSupSub(supsubEl) {
   };
 
   if (items.length === 1) {
-    const top = parseFloat(items[0].style.top) || 0;
+    // `top` is relative to the .pstrut spacer, not the baseline, so a
+    // subscript (top -2.55em, pstrut 2.7em) is still negative (Nov 2026)
     const text = itemText(items[0]);
-    return top < -1 ? { sub: '', sup: text } : { sub: text, sup: '' };
+    const pstrut = items[0].querySelector('.pstrut');
+    const kind = NLME.classifyKatexScript({
+      top: parseFloat(items[0].style.top),
+      pstrutHeight: pstrut ? parseFloat(pstrut.style.height) : NaN,
+      hasDepth: !!supsubEl.querySelector('.vlist-t2')
+    });
+    return kind === 'sup' ? { sub: '', sup: text } : { sub: text, sup: '' };
   }
 
   // Two or more: sort by top, most negative first → superscript.
@@ -286,8 +293,9 @@ function katexRenderInline(el) {
 
   const cls = el.classList;
 
-  // Skip spacing artifacts.
-  if (cls.contains('strut') || cls.contains('pstrut') || cls.contains('vlist-s')) return '';
+  // Skip spacing artifacts. Gemini Notebook prefixes some KaTeX classes
+  // (katex-strut, katex-base, katex-sizing; Nov 2026).
+  if (cls.contains('strut') || cls.contains('katex-strut') || cls.contains('pstrut') || cls.contains('vlist-s')) return '';
 
   // Skip ARIA-only mirrors.
   if (el.tagName === 'SPAN' && el.getAttribute('aria-hidden') === 'true' && cls.length === 0) {
@@ -321,7 +329,7 @@ function katexRenderInline(el) {
     const child = children[i];
     const cc = child.classList;
 
-    if (cc.contains('strut') || cc.contains('pstrut') || cc.contains('vlist-s')) continue;
+    if (cc.contains('strut') || cc.contains('katex-strut') || cc.contains('pstrut') || cc.contains('vlist-s')) continue;
 
     if (cc.contains('msupsub')) {
       const { sub, sup } = katexExtractSupSub(child);
@@ -371,8 +379,11 @@ function katexRenderInline(el) {
     }
 
     if (cc.contains('mord') || cc.contains('minner')) {
-      // If the mord wraps a base + msupsub, recurse so the msupsub handler runs.
-      if (Array.from(child.children).some(c => c.classList.contains('msupsub'))) {
+      // Recurse when the mord holds structure: a trailing msupsub, a fraction
+      // wrapper (mord > mfrac) or a root. Its flat textContent would run the
+      // denominator and numerator together ("1−p1" for 1/(1−p)).
+      if (Array.from(child.children).some(c => c.classList.contains('msupsub')) ||
+          cc.contains('sqrt') || child.querySelector(':scope > .mfrac, :scope > .sqrt')) {
         out += katexRenderInline(child);
       } else {
         out += katexUnicodeToLatex(child.textContent.trim());
@@ -385,7 +396,7 @@ function katexRenderInline(el) {
       continue;
     }
 
-    if (cc.contains('base')) {
+    if (cc.contains('base') || cc.contains('katex-base')) {
       out += katexRenderInline(child) + ' ';
       continue;
     }
@@ -441,14 +452,19 @@ function convertKatexNodeToLatex(node) {
   const isDisplay = node.closest('.katex-display') !== null;
   const delim = isDisplay ? '$$' : '$';
 
-  const annotation = node.querySelector('annotation[encoding="application/x-tex"]');
-  if (annotation && annotation.textContent && annotation.textContent.trim()) {
-    return `${delim}${annotation.textContent.trim()}${delim}`;
-  }
+  // Exact source first: the model's original LaTeX on the host span
+  // (data-math, Nov 2026), else KaTeX's annotation. Rebuilding from the
+  // rendered layout below is only a fallback.
+  const exact = NLME.mathSourceToMarkdown({
+    dataMath: node.closest('[data-math]')?.getAttribute('data-math'),
+    annotation: node.querySelector('annotation[encoding="application/x-tex"]')?.textContent,
+    display: isDisplay
+  });
+  if (exact) return exact;
 
   const katexHtml = node.querySelector('.katex-html');
   if (katexHtml) {
-    const latex = katexRenderInline(katexHtml).replace(/\s+/g, ' ').trim();
+    const latex = katexRenderInline(katexHtml).replace(/\u200b/g, '').replace(/\s+/g, ' ').trim();
     if (latex) return `${delim}${latex}${delim}`;
   }
 
@@ -491,7 +507,9 @@ let settings = {
   // Text cleanup
   cleanOCRArtifacts: true, // Clean OCR garbage (~~~, :~:, etc.) from citation quotes
   // Interface
-  showStudioTab: false // Show the Studio tab (unified per-item list with delete)
+  showStudioTab: false, // Show the Studio tab (unified per-item list with delete)
+  // Slide deck download format offered by the More menu ('pdf' | 'pptx')
+  slidesFormat: 'pdf'
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -629,6 +647,7 @@ async function loadSettings() {
 
   // Interface
   document.getElementById('show-studio-tab-checkbox').checked = settings.showStudioTab;
+  document.getElementById('slides-format-select').value = settings.slidesFormat;
   applyStudioTabVisibility();
 }
 
@@ -685,6 +704,7 @@ async function saveSettings() {
 
   // Interface
   settings.showStudioTab = document.getElementById('show-studio-tab-checkbox').checked;
+  settings.slidesFormat = document.getElementById('slides-format-select').value === 'pptx' ? 'pptx' : 'pdf';
   applyStudioTabVisibility();
 
   await chrome.storage.local.set({ settings });
@@ -728,7 +748,7 @@ function setupEventListeners() {
   });
 
   // Settings inputs
-  document.querySelectorAll('#settings-panel input').forEach(input => {
+  document.querySelectorAll('#settings-panel input, #settings-panel select').forEach(input => {
     input.addEventListener('change', saveSettings);
   });
 
@@ -1036,7 +1056,8 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
           artifactIndex: artifactIndex,
           artifactType: artifactType,
           artifactName: artifactName,
-          moreButtonAlreadyClicked: true
+          moreButtonAlreadyClicked: true,
+          downloadPreference: settings.slidesFormat
         }
       });
     }
@@ -1161,7 +1182,7 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
           logger.info('Download', `Converting HTML to markdown for: "${baseFilename}"`);
           // For Reports, skip adding title if it's already in the content (prevents duplicate H1)
           const skipTitle = (artifactType === 'Report');
-          markdownContent = convertToMarkdown(response.data, [], baseFilename, settings.citationsCodeBlock, skipTitle);
+          markdownContent = convertToMarkdown(response.data, [], baseFilename, settings.citationsCodeBlock, skipTitle, null, false);
         } else {
           // Already markdown
           markdownContent = response.data;
@@ -1400,12 +1421,17 @@ async function scanPage() {
       return;
     }
 
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: scanPageForItems
-    });
-
-    const items = results[0]?.result || [];
+    await ensureContentScriptLoaded(tab.id);
+    const scan = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_STUDIO_ITEMS' });
+    const items = (scan?.items || [])
+      .filter(item => item.kind === 'artifact')
+      .map(item => ({
+        index: item.moreIndex,
+        label: item.label,
+        type: item.type,
+        details: item.details,
+        disabled: !item.downloadable
+      }));
 
     if (items.length === 0) {
       resultsEl.innerHTML = '<p class="empty-message">No downloadable artifacts found.<br><span class="hint">Make sure you have generated content in Studio.</span></p>';
@@ -1425,7 +1451,7 @@ async function scanPage() {
             <strong>${escapeHtml(item.label)}</strong>
             <small>${escapeHtml(item.type)}${item.details ? ' · ' + escapeHtml(item.details) : ''}</small>
           </div>
-          <button class="btn-icon download-single-btn" data-index="${item.index}" data-item-idx="${idx}" ${item.disabled ? 'disabled title="Study Guides not supported yet"' : `title="Download ${escapeHtml(item.label)}"`}>
+          <button class="btn-icon download-single-btn" data-index="${item.index}" data-item-idx="${idx}" ${item.disabled ? `disabled title="${escapeHtml(item.type)} export not supported yet"` :`title="Download ${escapeHtml(item.label)}"`}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
               <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
             </svg>
@@ -1532,7 +1558,7 @@ async function ensureContentScriptLoaded(tabId) {
       console.log('[NotebookLM Takeout] Content script not loaded, injecting...');
       await chrome.scripting.executeScript({
         target: { tabId: tabId },
-        files: ['mindmap-extract.js', 'content.js']
+        files: ['takeout-shared.js', 'mindmap-extract.js', 'content.js']
       });
       await new Promise(resolve => setTimeout(resolve, 500));
       return true;
@@ -2196,7 +2222,9 @@ ${footnotesHTML}
 
 // ==================== MARKDOWN CONVERSION ====================
 
-function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock = true, skipTitleIfPresent = false, noteId = null) {
+// citationPlaceholders: false when no citation extraction ran (reports, source
+// content), so unread markers don't produce "(citation details unavailable)".
+function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock = true, skipTitleIfPresent = false, noteId = null, citationPlaceholders = true) {
   // Debug: Log what we're converting
   logger.info('Markdown', `Converting note: "${noteTitle}"`);
   logger.info('Markdown', `  - HTML content length: ${htmlContent.length} chars`);
@@ -2209,20 +2237,6 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
 
   // Create anchor prefix for combined notes (prevents ID collisions)
   const anchorPrefix = noteId ? `note-${noteId}-` : '';
-
-  // Create a mapping from original sourceIndex to sequential display number
-  // The HTML buttons show sequential numbers, but sources have original IDs
-  const sourceIndexToDisplayNumber = new Map();
-  const displayNumberToSource = new Map();
-
-  if (sources && sources.length > 0) {
-    sources.forEach((source, idx) => {
-      const displayNumber = (idx + 1).toString();
-      sourceIndexToDisplayNumber.set(source.sourceIndex, displayNumber);
-      displayNumberToSource.set(source.sourceIndex, source);
-      logger.info('Markdown', `  - Mapping: original ID ${source.sourceIndex} -> display #${displayNumber}`);
-    });
-  }
 
   // Initialize TurndownService with standardized configuration
   const turndownService = createTurndownService();
@@ -2401,7 +2415,9 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
         }
       }
 
-      if (node.nodeName === 'BUTTON' && node.classList.contains('ng-star-inserted')) {
+      // Markers are button.citation-marker; they lost ng-star-inserted in Nov 2026
+      if (node.nodeName === 'BUTTON' &&
+          (node.classList.contains('citation-marker') || node.classList.contains('ng-star-inserted'))) {
         return true;
       }
       if (node.nodeName === 'A' && node.getAttribute('href')?.startsWith('#cite')) {
@@ -2424,13 +2440,11 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
                                 node.getAttribute('href')?.replace('#cite-', '');
 
       if (!originalSourceIndex && node.nodeName === 'BUTTON') {
-        // Try mat-icon first (new DOM), then span (old DOM)
-        const matIcon = node.querySelector('mat-icon');
-        const span = node.querySelector('span');
-        const textSource = matIcon || span;
-        if (textSource) {
-          originalSourceIndex = textSource.textContent.trim();
-          logger.info('Citation', `  - extracted from BUTTON ${matIcon ? 'mat-icon' : 'span'}: "${originalSourceIndex}"`);
+        // The number is the span text; a mat-icon only appears on expanders
+        originalSourceIndex = NLME.parseCitationIndex(node.querySelector('span')?.textContent) || '';
+        if (!originalSourceIndex) {
+          // Not a numbered citation (e.g. an unrecognised button) — drop it
+          return '';
         }
       }
 
@@ -2441,16 +2455,9 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
 
       logger.info('Citation', `  - original sourceIndex: "${originalSourceIndex}"`);
 
-      // Map original source ID to sequential display number
-      let displayNumber = sourceIndexToDisplayNumber.get(originalSourceIndex);
-
-      if (!displayNumber) {
-        // Source not found in our extracted sources - use original number
-        logger.info('Citation', `  - WARNING: Source ID ${originalSourceIndex} not found in sources, using original`);
-        displayNumber = originalSourceIndex;
-      } else {
-        logger.info('Citation', `  - mapped to display number: ${displayNumber}`);
-      }
+      // Original citation numbers everywhere so body links and the Sources
+      // section always agree (buildCitationEntries)
+      const displayNumber = originalSourceIndex;
 
       if (!citationOccurrences.has(displayNumber)) {
         citationOccurrences.set(displayNumber, 0);
@@ -2508,44 +2515,25 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
   // Clean up excessive newlines (more than 2 consecutive)
   markdown = markdown.replace(/\n{3,}/g, '\n\n');
 
-  // Append sources section if present
-  if (sources && sources.length > 0) {
+  // Fix occurrence numbers skipped by rules that convert a subtree twice
+  // (lists), so every Sources back-link to "-1" has a target
+  markdown = NLME.renumberCitationAnchors(markdown);
+
+  // Sources section: extracted sources plus a placeholder for any marker
+  // whose tooltip could not be read, all under their original numbers
+  const entries = NLME.buildCitationEntries(sources, [...citationOccurrences.keys()], { placeholders: citationPlaceholders });
+  if (entries.length > 0) {
     markdown += '\n\n---\n\n## Sources\n\n';
 
-    // Deduplicate sources by sourceIndex
-    const uniqueSources = new Map();
-    sources.forEach(source => {
-      if (!uniqueSources.has(source.sourceIndex)) {
-        uniqueSources.set(source.sourceIndex, source);
-      }
-    });
+    entries.forEach(entry => {
+      const n = entry.number;
+      markdown += `<a id="${anchorPrefix}src-${n}"></a>\n`;
+      // Source number links back to its first citation in the body
+      markdown += `**[[${n}]](#${anchorPrefix}cite-ref-${n}-1)** ${entry.text}\n\n`;
 
-    logger.info('Markdown', `  - Unique sources after dedup: ${uniqueSources.size}`);
-
-    // Sort by source number
-    const sortedSources = Array.from(uniqueSources.values()).sort((a, b) => {
-      const numA = parseInt(a.sourceIndex) || 0;
-      const numB = parseInt(b.sourceIndex) || 0;
-      return numA - numB;
-    });
-
-    logger.info('Markdown', `  - Sorted source indices: [${sortedSources.map(s => s.sourceIndex).join(', ')}]`);
-
-    // Write sources with display numbers (1, 2, 3...) instead of original IDs
-    sortedSources.forEach((source, idx) => {
-      const displayNumber = (idx + 1).toString(); // Sequential: 1, 2, 3...
-      const originalId = source.sourceIndex;
-
-      logger.info('Markdown', `  - Writing source: #${displayNumber} (original ID: ${originalId})`);
-      markdown += `<a id="${anchorPrefix}src-${displayNumber}"></a>\n`;
-
-      // Make source number clickable to jump back to first citation
-      markdown += `**[[${displayNumber}]](#${anchorPrefix}cite-ref-${displayNumber}-1)** ${source.text}\n\n`;
-
-      // Include the quote if available
-      if (source.quote && source.quote.length > 0) {
+      if (!entry.missing && entry.quote && entry.quote.length > 0) {
         // Optionally clean OCR artifacts, then escape markdown
-        const cleanedQuote = settings.cleanOCRArtifacts ? cleanOCRArtifacts(source.quote) : source.quote;
+        const cleanedQuote = settings.cleanOCRArtifacts ? cleanOCRArtifacts(entry.quote) : entry.quote;
         if (citationsCodeBlock) {
           // Wrap in markdown code block for data separation
           markdown += `\`\`\`markdown\n${cleanedQuote}\n\`\`\`\n\n`;
@@ -2914,6 +2902,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
           data: {
             noteIndex: note.index,
             noteTitle: note.title,
+            sourceIndex: note.sourceIndex,
             includeCitationImages: needsImages
           }
         });
@@ -3013,7 +3002,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
         if (allErrors.length > 0) {
           // Build detailed error message
           const errorCount = allErrors.length;
-          const failedNotes = allErrors.filter(e => e.includes('Extraction failed')).length;
+          const failedNotes = NLME.countFailedExtractions(allErrors);
 
           if (versionCount > 1) {
             successMsg = `Exported ${selectedNotes.length} notes in ${totalZips} ZIP(s) (${versionCount} versions) with ${errorCount} warning(s)`;
@@ -3172,6 +3161,7 @@ async function exportSingleNote(note) {
       data: {
         noteIndex: note.index,
         noteTitle: note.title,
+        sourceIndex: note.sourceIndex,
         includeCitationImages: needsImages
       }
     });
@@ -3551,7 +3541,7 @@ async function scanSourcesPage() {
 
     console.log(`[NotebookLM Takeout] Found ${sources.length} sources`);
 
-    renderSourcesList(sources);
+    renderSourcesList(sources, response.skippedNotes || 0);
   } catch (error) {
     console.error('[NotebookLM Takeout] Scan error:', error);
     showToast('Failed to scan sources', 'error');
@@ -3561,15 +3551,20 @@ async function scanSourcesPage() {
 /**
  * Render the list of sources with checkboxes and download buttons
  */
-function renderSourcesList(sources) {
+function renderSourcesList(sources, skippedNotes = 0) {
   const resultsDiv = document.getElementById('sources-scan-results');
   const countBadge = document.getElementById('sources-count');
   const exportBtn = document.getElementById('export-sources-btn');
 
   countBadge.textContent = sources.length;
 
+  // Notes shown in NotebookLM's Sources panel are exported from the Notes tab
+  const notesHint = skippedNotes > 0
+    ? `<p class="hint">${skippedNotes} note(s) in the Sources panel were skipped — export them from the Notes tab.</p>`
+    : '';
+
   if (sources.length === 0) {
-    resultsDiv.innerHTML = '<p class="empty-message">No sources found. Add source materials to your notebook.</p>';
+    resultsDiv.innerHTML = notesHint + '<p class="empty-message">No sources found. Add source materials to your notebook.</p>';
     exportBtn.style.display = 'none';
     return;
   }
@@ -3578,7 +3573,7 @@ function renderSourcesList(sources) {
   window._currentSources = sources;
 
   // Create list of sources with checkboxes (similar to notes)
-  let html = '<div class="source-scan-list">';
+  let html = notesHint + '<div class="source-scan-list">';
 
   // Select all checkbox
   html += `
@@ -3883,7 +3878,7 @@ async function exportSources(selectedSources) {
 
           // Add the main content
           md += `## Content\n\n`;
-          md += convertToMarkdown(sourceData.html, sourceData.sources || [], '', settings.citationsCodeBlock);
+          md += convertToMarkdown(sourceData.html, sourceData.sources || [], '', settings.citationsCodeBlock, false, null, false);
 
           return md;
         };
@@ -4304,7 +4299,7 @@ async function exportSources(selectedSources) {
           errorsContent += '- Some images could not be embedded as base64. They remain as external links but may require authentication to view.\n';
         }
         errorsContent += '\n- If issues persist, please report them at:\n';
-        errorsContent += '  https://github.com/anthropics/claude-code/issues\n';
+        errorsContent += `  ${NLME.ISSUES_URL}\n`;
 
         zip.file('errors.txt', errorsContent);
         indexFiles.push({ path: 'errors.txt', title: 'Export Error Report' });
@@ -4460,8 +4455,7 @@ async function exportSources(selectedSources) {
           // Last ZIP
           if (allErrors.length > 0) {
             const errorCount = allErrors.length;
-            const failedSources = allErrors.filter(e => e.includes('Extraction failed')).length;
-            const missingMetadata = allErrors.filter(e => e.includes('Missing')).length;
+            const failedSources = NLME.countFailedExtractions(allErrors);
 
             let errorSummary = `Exported ${selectedSources.length} source(s) in ${totalZips} ZIP(s) with ${errorCount} warning(s)`;
             if (failedSources > 0) {
@@ -4733,7 +4727,9 @@ async function exportChat(chatData, extractFullCitations = false) {
 
         if (citationButtons.length > 0) {
           stats.messagesWithCitations++;
-          stats.totalCitationsFound += citationButtons.length;
+          // Count numbered citations only, not the expand/collapse group buttons
+          stats.totalCitationsFound += Array.from(citationButtons)
+            .filter(b => NLME.parseCitationIndex(b.querySelector('span')?.textContent)).length;
           citationButtons.forEach((button) => {
             const span = button.querySelector('span');
             const sourceIndex = span?.textContent?.trim();
@@ -5046,7 +5042,7 @@ async function exportChat(chatData, extractFullCitations = false) {
         errorsContent += '- Message processing errors occurred. Check the browser console for details.\n\n';
       }
       errorsContent += '- If you continue to experience issues, please report them at:\n';
-      errorsContent += '  https://github.com/anthropics/claude-code/issues\n\n';
+      errorsContent += `  ${NLME.ISSUES_URL}\n\n`;
 
       zip.file('errors.txt', errorsContent);
       indexFiles.push({ path: 'errors.txt', title: 'Export Error Report' });
@@ -5199,6 +5195,8 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
 
     // Convert AI response HTML to markdown
     let aiResponseMarkdown = turndownService.turndown(msg.aiResponseHTML);
+    // Fix occurrence numbers skipped by rules that convert a subtree twice
+    aiResponseMarkdown = NLME.renumberCitationAnchors(aiResponseMarkdown);
 
     // Clean up: Merge consecutive footnote references into a single <sup> tag
     // Pattern: <sup>...[1]...</sup>,<sup>...[2]...</sup> → <sup>...[1]... ...[2]...</sup>
@@ -5563,71 +5561,6 @@ function clickArtifactMoreButton(artifactIndex) {
   };
 }
 
-// This runs in the page context to find downloadable items
-function scanPageForItems() {
-  const items = [];
-
-  // Only scan artifact-library-item elements (not artifact-library-note)
-  const artifactItems = document.querySelectorAll('artifact-library-item');
-
-  // Build array of More buttons ONLY from artifact-library-item (not from notes)
-  const artifactMoreButtons = [];
-  document.querySelectorAll('artifact-library-item').forEach(item => {
-    const btn = item.querySelector('button[aria-label="More"]');
-    if (btn) {
-      artifactMoreButtons.push(btn);
-    }
-  });
-
-  // Icon to artifact type mapping
-  const iconToType = {
-    'auto_tab_group': 'Report',
-    'tablet': 'Slides',
-    'stacked_bar_chart': 'Infographic',
-    'table_view': 'Data Table',
-    'format_list_bulleted': 'Data Table', // icon since 2026 redesign
-    'flowchart': 'Mind Map',
-    'headphones': 'Audio Overview',
-    'audio_magic_eraser': 'Audio Overview',
-    'audio_spark': 'Audio Overview',
-    'videocam': 'Video Overview'
-  };
-
-  artifactItems.forEach((item, idx) => {
-    // Get the type from icon text content (aria-description now contains title, not type)
-    const icon = item.querySelector('mat-icon');
-    const iconText = icon?.textContent?.trim() || '';
-    const type = iconToType[iconText] || iconText || 'Unknown';
-
-    // Get the title from .artifact-title
-    const titleEl = item.querySelector('.artifact-title');
-    const artifactTitle = titleEl?.textContent?.trim() || `Artifact ${idx + 1}`;
-
-    // Get details from .artifact-details
-    const detailsEl = item.querySelector('.artifact-details');
-    const artifactDetails = detailsEl?.textContent?.trim() || '';
-
-    // Get the More button
-    const moreButton = item.querySelector('button[aria-label="More"]');
-
-    // Find this button's index in artifact More buttons (for clicking later)
-    let globalIndex = -1;
-    artifactMoreButtons.forEach((b, i) => {
-      if (b === moreButton) globalIndex = i;
-    });
-
-    items.push({
-      index: globalIndex,
-      label: artifactTitle,
-      type: type,
-      details: artifactDetails,
-      disabled: false
-    });
-  });
-
-  return items;
-}
-
 async function triggerItemDownload(tabId, itemIndex, artifactName, artifactType) {
   try {
     logger.info('Download', `Triggering download for ${artifactName}`, { itemIndex, artifactType });
@@ -5804,7 +5737,8 @@ async function handleStudioDownloadRow(idx, btn) {
   setStudioRowStatus(btn, 'pending');
   try {
     if (item.kind === 'artifact') {
-      await downloadArtifact(_studioTabId, item.kindIndex, item.type, item.label);
+      // moreIndex: same index space as the Artifacts tab and DOWNLOAD_ARTIFACT
+      await downloadArtifact(_studioTabId, item.moreIndex, item.type, item.label);
     } else {
       // kind === 'note' — regular note or mindmap
       await exportSingleNote({ index: item.kindIndex, title: item.label, type: item.type });
@@ -6010,7 +5944,8 @@ async function downloadAllArtifacts(tabId, items) {
       await chrome.runtime.sendMessage({
         type: 'BATCH_DOWNLOAD_ALL',
         tabId: tabId,
-        items: items
+        items: items,
+        downloadPreference: settings.slidesFormat
       });
 
       // Poll for status
@@ -6431,6 +6366,8 @@ function generateHealthReport(results) {
         let icon;
         if (check.passed) {
           icon = '[OK]';
+        } else if (check.warning) {
+          icon = '[WARN]'; // Non-critical, but exports lose fidelity
         } else if (check.critical === false) {
           icon = '[INFO]'; // Non-critical - informational only
         } else {

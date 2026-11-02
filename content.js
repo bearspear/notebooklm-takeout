@@ -308,7 +308,7 @@
       debugPageStructure();
       sendResponse({ success: true });
     } else if (message.type === 'SCAN_ARTIFACTS') {
-      scanForArtifacts();
+      // Legacy message; artifacts are listed via SCAN_STUDIO_ITEMS
       sendResponse({ success: true });
     } else if (message.type === 'FETCH_FILE') {
       // Fetch file with page credentials - used by batch download
@@ -318,7 +318,9 @@
       return true; // Keep channel open for async
     } else if (message.type === 'EXTRACT_NOTE') {
       // Extract note content
-      extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages)
+      (typeof message.data.sourceIndex === 'number'
+        ? extractSourcesPanelNote(message.data.sourceIndex, message.data.noteTitle, message.data.includeCitationImages)
+        : extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages))
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ error: error.message || 'Extraction failed' }));
       return true; // Keep channel open for async
@@ -379,7 +381,7 @@
         const noteParents = [];
         noteIcons.forEach(icon => {
           const iconText = icon.textContent.trim();
-          if (iconText === 'sticky_note_2' || iconText === 'flowchart') {
+          if (NLME.NOTE_ICONS.includes(iconText) || iconText === 'flowchart') {
             const noteEl = icon.closest('artifact-library-note');
             if (noteEl && !noteParents.includes(noteEl)) {
               noteParents.push(noteEl);
@@ -406,7 +408,8 @@
         message.data.artifactType,
         message.data.moreButtonAlreadyClicked || false,
         message.data.skipMoreButton || false,
-        message.data.artifactName || null
+        message.data.artifactName || null,
+        message.data.downloadPreference || 'pdf'
       )
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ success: false, error: error.message || 'Download failed' }));
@@ -632,9 +635,6 @@
         break;
       case 'NLME_INFOGRAPHIC_DETECTED':
         captureArtifact('infographics', data.payload);
-        break;
-      case 'NLME_NETWORK_RESPONSE':
-        parseNetworkResponse(data.payload);
         break;
       case 'NLME_DOWNLOAD_URL_INTERCEPTED':
         // URL intercepted from window.open - no tab will open
@@ -908,141 +908,12 @@
     }, 3000);
   }
 
-  // Monitor DOM for new artifacts
-  function setupMutationObserver() {
-    let debounceTimer;
-
-    const observer = new MutationObserver((mutations) => {
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        scanForArtifacts();
-      }, CONFIG.observerDebounce);
-    });
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
-  }
-
-  function scanForArtifacts() {
-    console.log('[NotebookLM Takeout] Scanning for artifacts...');
-
-    // Scan for audio elements
-    const audioElements = document.querySelectorAll('audio');
-    audioElements.forEach((el, index) => {
-      if (el.src) {
-        console.log(`[NotebookLM Takeout] Found audio: ${el.src.substring(0, 50)}...`);
-        captureArtifact('audio', {
-          id: `audio-${index}`,
-          src: el.src,
-          title: getNotebookTitle() + ' - Audio Overview'
-        });
-      }
-    });
-
-    // Scan for audio containers (may not have <audio> element yet)
-    const audioContainers = document.querySelectorAll(CONFIG.selectors.audioContainer);
-    audioContainers.forEach((el, index) => {
-      const hasMoreButton = el.querySelector(CONFIG.selectors.moreOptionsButton);
-      if (hasMoreButton) {
-        captureArtifact('audio', {
-          id: `audio-container-${index}`,
-          element: el,
-          moreButton: hasMoreButton,
-          title: getNotebookTitle() + ' - Audio Overview'
-        });
-      }
-    });
-
-    // Scan for slide containers
-    const slideContainers = document.querySelectorAll(CONFIG.selectors.slideContainer);
-    slideContainers.forEach((el, index) => {
-      // Check if it's a meaningful slide container (not just any element with "slide" in class)
-      const hasContent = el.querySelector('img, canvas, svg, [class*="content"]');
-      const hasMoreButton = el.querySelector(CONFIG.selectors.moreOptionsButton);
-      if (hasContent || hasMoreButton) {
-        captureArtifact('slides', {
-          id: `slides-${index}`,
-          element: el,
-          moreButton: hasMoreButton,
-          title: getNotebookTitle() + ' - Slides'
-        });
-      }
-    });
-
-    // Scan for infographic containers
-    const infographicContainers = document.querySelectorAll(CONFIG.selectors.infographicContainer);
-    infographicContainers.forEach((el, index) => {
-      const hasCanvas = el.querySelector('canvas');
-      const hasSvg = el.querySelector('svg');
-      const hasMoreButton = el.querySelector(CONFIG.selectors.moreOptionsButton);
-      if (hasCanvas || hasSvg || hasMoreButton) {
-        captureArtifact('infographics', {
-          id: `infographic-${index}`,
-          element: el,
-          moreButton: hasMoreButton,
-          title: getNotebookTitle() + ' - Infographic'
-        });
-      }
-    });
-
-    // Also scan for any "three-dot" more menus in the Studio panel area
-    scanStudioPanel();
-  }
-
-  function scanStudioPanel() {
-    // Look for the Studio panel
-    const studioPanels = document.querySelectorAll(CONFIG.selectors.studioPanel);
-    studioPanels.forEach(panel => {
-      // Find all "more options" buttons within studio
-      const moreButtons = panel.querySelectorAll(CONFIG.selectors.moreOptionsButton);
-      moreButtons.forEach((btn, index) => {
-        // Try to determine what type of artifact this button is for
-        const container = btn.closest('[class*="audio"], [class*="slide"], [class*="infographic"], [class*="overview"], [class*="deck"]');
-        if (container) {
-          const className = container.className.toLowerCase();
-          let type = 'unknown';
-          if (className.includes('audio') || className.includes('overview') || className.includes('podcast')) {
-            type = 'audio';
-          } else if (className.includes('slide') || className.includes('deck') || className.includes('presentation')) {
-            type = 'slides';
-          } else if (className.includes('infographic') || className.includes('visual')) {
-            type = 'infographics';
-          }
-
-          if (type !== 'unknown') {
-            captureArtifact(type, {
-              id: `studio-${type}-${index}`,
-              element: container,
-              moreButton: btn,
-              title: getNotebookTitle() + ' - ' + type
-            });
-          }
-        }
-      });
-    });
-  }
-
   // Initialize
   function init() {
-    console.log('[NotebookLM Takeout] Initializing...');
-
-    // Inject page script for XHR/fetch interception
+    // Inject page script for window.open download interception. The old
+    // MutationObserver/5 s artifact polling was removed (Nov 2026): it only
+    // fed the toolbar badge and logged every few seconds.
     injectPageScript();
-
-    // Setup mutation observer
-    setupMutationObserver();
-
-    // Initial scan
-    setTimeout(scanForArtifacts, 1000);
-
-    // Periodic rescan
-    setInterval(scanForArtifacts, 5000);
-
-    // Debug: Log page structure
-    setTimeout(debugPageStructure, 2000);
-
     console.log('[NotebookLM Takeout] Ready');
   }
 
@@ -1166,8 +1037,8 @@
       const noteParents = [];
       noteIcons.forEach(icon => {
         const iconText = icon.textContent.trim();
-        // Notes use sticky_note_2, Mindmaps use flowchart
-        if (iconText === 'sticky_note_2' || iconText === 'flowchart') {
+        // Notes use article (Nov 2026) / sticky_note_2; legacy mindmaps use flowchart
+        if (NLME.NOTE_ICONS.includes(iconText) || iconText === 'flowchart') {
           const noteEl = icon.closest('artifact-library-note');
           if (noteEl && !noteParents.includes(noteEl)) {
             noteParents.push(noteEl);
@@ -1193,7 +1064,7 @@
       let noteType = 'Note';
       if (iconType === 'flowchart') {
         noteType = 'Mindmap';
-      } else if (iconType === 'description' || iconType === 'note') {
+      } else if (NLME.NOTE_ICONS.includes(iconType)) {
         noteType = 'Note';
       } else {
         // Unknown icon type - log it for debugging
@@ -1211,6 +1082,19 @@
       console.log(`[NotebookLM Takeout] Note ${idx}: "${title}" (${noteType}, icon: ${iconType})`);
     });
 
+    // Notes in the Sources panel's "Notes" group are not in the Studio list
+    document.querySelectorAll('.single-source-container').forEach((container, sourceIndex) => {
+      if (!isNoteSourceContainer(container)) return;
+      notes.push({
+        index: -1,
+        sourceIndex,
+        title: getSourceContainerTitle(container) || `Note ${notes.length + 1}`,
+        type: 'Note (Sources panel)',
+        iconType: container.querySelector('.source-item-source-icon')?.textContent?.trim() || '',
+        elementType: 'source-note'
+      });
+    });
+
     return notes;
   }
 
@@ -1226,12 +1110,17 @@
 
     if (sourceContainers.length === 0) {
       console.log('[NotebookLM Takeout] No sources found');
-      return { sources: [] };
+      return { sources: [], skippedNotes: 0 };
     }
 
     const sources = [];
 
+    let skippedNotes = 0;
     sourceContainers.forEach((container, index) => {
+      if (isNoteSourceContainer(container)) {
+        skippedNotes++;
+        return;
+      }
       // Get source title
       const titleEl = container.querySelector('.source-title');
       const title = titleEl?.textContent?.trim() || `Source ${index + 1}`;
@@ -1257,8 +1146,8 @@
       }
     });
 
-    console.log(`[NotebookLM Takeout] Total sources found: ${sources.length}`);
-    return { sources: sources };
+    console.log(`[NotebookLM Takeout] Total sources found: ${sources.length} (${skippedNotes} note(s) skipped)`);
+    return { sources: sources, skippedNotes };
   }
 
   // Helper function to wait for an element
@@ -1390,6 +1279,21 @@
         note: closeButton ? 'Close button found' : 'Close button missing'
       });
 
+      // Citation markers must yield a number (markers changed shape in Nov 2026)
+      const markers = Array.from(noteViewer.querySelectorAll('button.citation-marker'))
+        .filter(btn => !btn.querySelector('mat-icon'));
+      const parsedMarkers = markers.filter(btn => NLME.parseCitationIndex(btn.querySelector('span')?.textContent));
+      checks.push({
+        name: 'Citation markers parse',
+        selector: 'button.citation-marker > span',
+        passed: markers.length === 0 || parsedMarkers.length > 0,
+        critical: true,
+        count: parsedMarkers.length,
+        note: markers.length === 0
+          ? 'No citations in this note'
+          : `${parsedMarkers.length}/${markers.length} marker(s) yield a citation number`
+      });
+
       // Check for citations in note (non-critical)
       const citations = noteViewer.querySelectorAll('button.citation-marker');
       checks.push({
@@ -1479,8 +1383,10 @@
       critical: true
     });
 
-    // Check for individual source items
-    const sourceItems = document.querySelectorAll('.single-source-container');
+    // Check for individual source items. Notes in the Sources panel's "Notes"
+    // group share the container class and are excluded (Nov 2026).
+    const sourceItems = Array.from(document.querySelectorAll('.single-source-container'))
+      .filter(container => !isNoteSourceContainer(container));
     const hasSources = sourceItems.length > 0;
     checks.push({
       name: 'Source items found',
@@ -1586,6 +1492,42 @@
       });
     }
 
+    // Studio viewers close from the panel header since Nov 2026
+    const viewerOpen = !!findOpenStudioViewer();
+    const headerClose = document.querySelectorAll(NLME.STUDIO_HEADER_CLOSE_SELECTOR);
+    checks.push({
+      name: 'Studio header close control',
+      selector: NLME.STUDIO_HEADER_CLOSE_SELECTOR,
+      passed: viewerOpen ? headerClose.length === 1 : true,
+      critical: false,
+      count: headerClose.length,
+      note: viewerOpen
+        ? (headerClose.length === 1
+            ? `Found "${headerClose[0].getAttribute('aria-label')}"`
+            : 'Viewer open but no header close button — viewers may stay open after export')
+        : 'Open a studio item to verify (expected 1 match)'
+    });
+
+    // Formulas are exported from their original LaTeX (data-math, Nov 2026).
+    // Warn if Gemini stops providing it and exports fall back to rebuilding.
+    const formulas = Array.from(document.querySelectorAll('.katex'));
+    const mathHealth = NLME.mathSourceHealth({
+      total: formulas.length,
+      withSource: formulas.filter(k =>
+        (k.closest('[data-math]')?.getAttribute('data-math') || '').trim() ||
+        (k.querySelector('annotation[encoding="application/x-tex"]')?.textContent || '').trim()
+      ).length
+    });
+    checks.push({
+      name: 'Formulas carry LaTeX source',
+      selector: '[data-math] .katex',
+      passed: mathHealth.passed,
+      critical: false,
+      warning: true,
+      count: formulas.length,
+      note: mathHealth.note
+    });
+
     const healthy = checks.every(c => !c.critical || c.passed);
     return { healthy, checks };
   }
@@ -1661,7 +1603,7 @@
   async function checkCitationWorkflow() {
     const checks = [];
 
-    // Find citation buttons - they have class "citation-marker" and "xap-inline-dialog"
+    // Citation markers: button.citation-marker (lost xap-inline-dialog in Nov 2026)
     // Can be in chat (.model-response) or in notes (note-editor, labs-tailwind-doc-viewer)
     const citationButtons = document.querySelectorAll(
       'button.citation-marker, ' +
@@ -1684,10 +1626,9 @@
 
     // Filter to visible citation buttons only (not the "more_horiz" expand buttons)
     const visibleButtons = Array.from(citationButtons).filter(btn => {
-      // Skip "show more citations" buttons (they have mat-icon inside)
+      // Skip "show more citations" expander buttons
       if (btn.querySelector('mat-icon')) return false;
-      // Must have dialoglabel attribute (real citation buttons have this)
-      if (!btn.hasAttribute('dialoglabel')) return false;
+      if (!NLME.parseCitationIndex(btn.querySelector('span')?.textContent)) return false;
       // Check visibility
       return isElementVisible(btn);
     });
@@ -1715,7 +1656,7 @@
 
       try {
         // Close any existing tooltip first
-        const existingTooltip = document.querySelector('xap-inline-dialog-container[role="dialog"]');
+        const existingTooltip = document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
         if (existingTooltip) {
           existingTooltip.remove();
           await sleep(100);
@@ -1762,30 +1703,22 @@
         await sleep(600);
 
         // Check for tooltip
-        let tooltip = document.querySelector('xap-inline-dialog-container[role="dialog"]') ||
-                      document.querySelector('xap-inline-dialog-container') ||
-                      document.querySelector('.citation-tooltip');
+        let tooltip = document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
 
         // If hover didn't work, try click (some UIs require click for dialogs)
         if (!tooltip) {
           testButton.click();
           await sleep(500);
-          tooltip = document.querySelector('xap-inline-dialog-container[role="dialog"]') ||
-                    document.querySelector('xap-inline-dialog-container') ||
-                    document.querySelector('.citation-tooltip');
+          tooltip = document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
         }
 
         // If still no tooltip, try waiting longer with waitForElement
         if (!tooltip) {
-          tooltip = await raceWithCleanup([
-            waitForElement('xap-inline-dialog-container[role="dialog"]', 2000),
-            waitForElement('xap-inline-dialog-container', 2000),
-            waitForElement('.citation-tooltip', 2000)
-          ]).catch(() => null);
+          tooltip = await waitForElement(NLME.CITATION_TOOLTIP_SELECTOR, 2000).catch(() => null);
         }
 
         // Debug: Check what dialogs/tooltips exist
-        const anyDialog = document.querySelector('xap-inline-dialog-container');
+        const anyDialog = document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
         const anyTooltip = document.querySelector('[role="dialog"]');
         console.log(`[NotebookLM Takeout] Tooltip attempt ${attempt + 1}: found=${!!tooltip}, anyDialog=${!!anyDialog}, anyRoleDialog=${!!anyTooltip}`);
         if (anyDialog && !tooltip) {
@@ -1809,32 +1742,32 @@
           await sleep(150);
 
           // Method 2: Click elsewhere
-          let stillOpen = document.querySelector('xap-inline-dialog-container[role="dialog"]');
+          let stillOpen = document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
           if (stillOpen) {
             document.body.click();
             await sleep(150);
           }
 
           // Method 3: Escape key
-          stillOpen = document.querySelector('xap-inline-dialog-container[role="dialog"]');
+          stillOpen = document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
           if (stillOpen) {
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
             await sleep(150);
           }
 
           // Method 4: Remove directly as last resort (cleanup)
-          stillOpen = document.querySelector('xap-inline-dialog-container[role="dialog"]');
+          stillOpen = document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
           if (stillOpen) {
             stillOpen.remove();
             await sleep(50);
           }
 
-          tooltipClosed = !document.querySelector('xap-inline-dialog-container[role="dialog"]');
+          tooltipClosed = !document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
         }
       } catch (error) {
         console.warn(`[NotebookLM Takeout] Citation workflow test attempt ${attempt + 1} error:`, error);
         // Cleanup on error
-        const leftoverTooltip = document.querySelector('xap-inline-dialog-container[role="dialog"]');
+        const leftoverTooltip = document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
         if (leftoverTooltip) leftoverTooltip.remove();
       }
     } // end for loop
@@ -1843,7 +1776,7 @@
     if (visibleButtons.length === 0) {
       checks.push({
         name: 'Tooltip appears on hover',
-        selector: 'xap-inline-dialog-container[role="dialog"]',
+        selector: NLME.CITATION_TOOLTIP_SELECTOR,
         passed: true, // Can't test, but not a failure
         critical: false,
         note: 'No testable citation buttons visible (all may be "show more" buttons)'
@@ -1856,7 +1789,7 @@
     // This limitation doesn't affect real exports which use click interactions.
     checks.push({
       name: 'Tooltip hover test (informational)',
-      selector: 'xap-inline-dialog-container[role="dialog"]',
+      selector: NLME.CITATION_TOOLTIP_SELECTOR,
       passed: tooltipAppeared,
       critical: false, // Not critical - synthetic events often fail but real exports work
       note: tooltipAppeared
@@ -2058,132 +1991,101 @@
    */
   async function extractSingleCitationWithRetry(button, spanIndex, includeImages = false, maxRetries = 3) {
     let lastError = null;
+    const TOOLTIP = NLME.CITATION_TOOLTIP_SELECTOR;
+
+    const leave = () => {
+      button.dispatchEvent(new MouseEvent('mouseleave', { view: window, bubbles: false, cancelable: true }));
+      button.dispatchEvent(new MouseEvent('mouseout', { view: window, bubbles: true, cancelable: true }));
+    };
+
+    // The tooltip is a singleton overlay; reading before the previous one is
+    // gone returns the previous citation's text.
+    const waitForTooltipGone = async () => {
+      for (let i = 0; i < 20; i++) {
+        if (!document.querySelector(TOOLTIP)) return true;
+        await sleep(100);
+      }
+      return false;
+    };
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        // Scroll button into view
         button.scrollIntoView({ behavior: 'instant', block: 'center' });
         await sleep(100);
 
-        // Close any existing tooltip first
-        const existingTooltip = document.querySelector('xap-inline-dialog-container[role="dialog"]');
-        if (existingTooltip) {
+        if (document.querySelector(TOOLTIP)) {
           document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-          await sleep(200);
+          await waitForTooltipGone();
         }
 
-        // Simulate hover on the button
-        button.dispatchEvent(new MouseEvent('mouseenter', {
-          view: window,
-          bubbles: true,
-          cancelable: true
-        }));
+        // Gemini Notebook opens the citation popover on mouseenter/pointerenter (Nov 2026)
+        button.dispatchEvent(new MouseEvent('mouseenter', { view: window, bubbles: false, cancelable: true }));
+        button.dispatchEvent(new PointerEvent('pointerenter', { view: window, bubbles: false, cancelable: true, pointerType: 'mouse' }));
 
-        // Increase wait time on retries
         const tooltipWaitTime = 2500 + (attempt - 1) * 500;
-        await sleep(150 + (attempt - 1) * 50);
-
-        // Wait for tooltip with multiple possible selectors
-        const tooltip = await raceWithCleanup([
-          waitForElement('xap-inline-dialog-container[role="dialog"]', tooltipWaitTime),
-          waitForElement('.citation-tooltip', tooltipWaitTime),
-          waitForElement('[role="dialog"].ng-star-inserted', tooltipWaitTime)
-        ]).catch(() => null);
+        const tooltip = await waitForElement(TOOLTIP, tooltipWaitTime).catch(() => null);
 
         if (!tooltip) {
           lastError = 'Tooltip did not appear';
           console.warn(`[NotebookLM Takeout] Citation ${spanIndex}: Attempt ${attempt}/${maxRetries} - ${lastError}`);
-          button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+          leave();
           await sleep(300 + attempt * 100);
           continue;
         }
 
-        // Wait for content to load with increased attempts on retry
         const maxContentAttempts = 15 + (attempt - 1) * 5;
-        let contentLoaded = false;
+        let textEl = null;
         for (let contentAttempt = 0; contentAttempt < maxContentAttempts; contentAttempt++) {
+          textEl = tooltip.querySelector('.citation-tooltip-text');
           const opacity = parseFloat(window.getComputedStyle(tooltip).opacity);
-          if (opacity > 0.5 && tooltip.textContent.trim().length > 0) {
-            contentLoaded = true;
-            break;
-          }
+          if (opacity > 0.5 && textEl && textEl.textContent.trim().length > 0) break;
+          textEl = null;
           await sleep(50);
         }
 
-        if (!contentLoaded) {
+        if (!textEl) {
           lastError = 'Tooltip content did not load';
           console.warn(`[NotebookLM Takeout] Citation ${spanIndex}: Attempt ${attempt}/${maxRetries} - ${lastError}`);
-          button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-          await sleep(300 + attempt * 100);
+          leave();
+          await waitForTooltipGone();
           continue;
         }
 
-        // Extract citation data
-        // Source title moved from footer to header in recent NotebookLM update
-        const headerEl = tooltip.querySelector('.citation-tooltip-header');
-        const textEl = tooltip.querySelector('.citation-tooltip-text');
+        const sourceTitle = tooltip.querySelector('.citation-tooltip-header')?.textContent?.trim() || '';
 
-        const sourceTitle = headerEl?.textContent?.trim() || '';
-
-        // Convert HTML to markdown
+        // Quote markup varies: structural-element wrappers or div.paragraph children
         let quoteMarkdown = '';
-        if (textEl) {
-          const textElements = textEl.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
-          if (textElements.length > 0) {
-            for (const element of textElements) {
-              const markdown = await htmlToMarkdownWithImages(element, includeImages);
-              if (markdown && markdown.length > 0) {
-                quoteMarkdown += markdown + '\n\n';
-              }
-            }
-          } else {
-            quoteMarkdown = await htmlToMarkdownWithImages(textEl, includeImages);
+        const textElements = textEl.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
+        if (textElements.length > 0) {
+          for (const element of textElements) {
+            const markdown = await htmlToMarkdownWithImages(element, includeImages);
+            if (markdown && markdown.length > 0) quoteMarkdown += markdown + '\n\n';
           }
+        } else {
+          quoteMarkdown = await htmlToMarkdownWithImages(textEl, includeImages);
         }
         quoteMarkdown = quoteMarkdown.trim();
 
-        // Close tooltip
-        button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-        await sleep(200);
+        leave();
+        await waitForTooltipGone();
 
-        // Wait for tooltip to fully close
-        for (let closeAttempt = 0; closeAttempt < 20; closeAttempt++) {
-          if (!document.querySelector('xap-inline-dialog-container[role="dialog"]')) {
-            break;
-          }
-          await sleep(100);
-        }
-
-        // Success!
         if (attempt > 1) {
           console.log(`[NotebookLM Takeout] Citation ${spanIndex}: Succeeded on attempt ${attempt}`);
         }
 
         return {
           success: true,
-          data: {
-            text: sourceTitle,
-            quote: quoteMarkdown,
-            sourceIndex: spanIndex
-          }
+          data: { text: sourceTitle, quote: quoteMarkdown, sourceIndex: spanIndex }
         };
-
       } catch (error) {
         lastError = error.message;
         console.warn(`[NotebookLM Takeout] Citation ${spanIndex}: Attempt ${attempt}/${maxRetries} error:`, error.message);
-
-        // Clean up
-        try {
-          button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-        } catch (e) {}
-
+        try { leave(); } catch (e) {}
         await sleep(300 + attempt * 100);
       }
     }
 
-    // All retries failed - track in DOMHealthTracker
     DOMHealthTracker.track('selector', 'citation-tooltip', `Citation ${spanIndex}`);
-
     return {
       success: false,
       error: `Citation ${spanIndex}: ${lastError} (after ${maxRetries} attempts)`
@@ -2250,12 +2152,12 @@
             if (allNoteElements.length > 0) break;
           }
 
-          // Try finding notes by their icon (sticky_note_2 or flowchart)
+          // Try finding notes by their icon (NOTE_ICONS or flowchart)
           const noteIcons = document.querySelectorAll('mat-icon.artifact-icon');
           const noteParents = [];
           noteIcons.forEach(icon => {
             const iconText = icon.textContent.trim();
-            if (iconText === 'sticky_note_2' || iconText === 'flowchart') {
+            if (NLME.NOTE_ICONS.includes(iconText) || iconText === 'flowchart') {
               const noteEl = icon.closest('artifact-library-note');
               if (noteEl && !noteParents.includes(noteEl)) {
                 noteParents.push(noteEl);
@@ -2274,43 +2176,13 @@
 
       console.log('[NotebookLM Takeout] Total note elements found:', allNoteElements.length);
 
-      let noteEl = null;
-
-      if (noteTitle) {
-        // Try to find by title first (search ALL notes, not just visible ones)
-        console.log('[NotebookLM Takeout] Searching for note with title:', noteTitle);
-
-        const foundTitles = [];
-        for (const el of allNoteElements) {
-          const titleEl = el.querySelector('.artifact-title, .note-title');
-          const title = titleEl?.textContent?.trim();
-          foundTitles.push(title);
-
-          if (title === noteTitle) {
-            noteEl = el;
-            console.log('[NotebookLM Takeout] ✓ Found note by exact title match');
-            break;
-          }
-        }
-
-        if (!noteEl) {
-          console.log('[NotebookLM Takeout] ✗ Title not found. Available titles:', foundTitles);
-          console.log('[NotebookLM Takeout] Looking for:', noteTitle);
-        }
-      }
-
-      // Fallback to index-based lookup if title search failed
-      if (!noteEl) {
-        console.log('[NotebookLM Takeout] Falling back to index-based lookup...');
-
-        // Use ALL note elements, not filtered (since scan also uses all)
-        if (noteIndex < allNoteElements.length) {
-          noteEl = allNoteElements[noteIndex];
-          console.log('[NotebookLM Takeout] Using note at index:', noteIndex);
-        } else {
-          console.error('[NotebookLM Takeout] Index out of bounds:', noteIndex, 'of', allNoteElements.length);
-        }
-      }
+      // Index first, accepted while its title still matches, so duplicate
+      // titles export the row that was clicked (titles can repeat)
+      const noteElements = Array.from(allNoteElements);
+      const noteTitles = noteElements.map(el => el.querySelector('.artifact-title, .note-title')?.textContent?.trim() || '');
+      const pick = NLME.pickByIndexThenTitle(noteTitles, noteIndex, noteTitle);
+      const noteEl = pick === -1 ? null : noteElements[pick];
+      console.log(`[NotebookLM Takeout] Resolved note "${noteTitle}" (index ${noteIndex}) to position ${pick}`);
 
       if (!noteEl) {
         // Gather diagnostic info
@@ -2340,53 +2212,100 @@
       console.log('[NotebookLM Takeout] Clicking note button...');
       button.click();
 
-      // Wait for content to load (editor or mindmap viewer).
-      // Scope to <studio-panel> so we don't accidentally pick up the chat panel's
-      // labs-tailwind-doc-viewer (used to render AI replies). When the chat
-      // panel is in DOM order, an unscoped lookup grabs the chat viewer and
-      // every citation hover ends up reading chat sources instead of the note's.
-      console.log('[NotebookLM Takeout] Waiting for content...');
-      const studioPanel = document.querySelector('studio-panel') || document;
-      const content = await raceWithCleanup([
-        waitForElement('rich-text-editor .ql-editor', 5000, studioPanel),
-        waitForElement('rich-text-editor .ProseMirror', 5000, studioPanel),
-        waitForElement('markdown-editor-legacy .ql-editor', 5000, studioPanel),
-        waitForElement('labs-tailwind-doc-viewer', 5000, studioPanel),
-        waitForElement('mindmap-viewer', 5000, studioPanel)
-      ]).catch(() => null);
-
-      if (!content) {
-        throw new Error('Content not found (no editor or mindmap viewer)');
-      }
-
-      console.log('[NotebookLM Takeout] Content found:', content.tagName, content.className || '(no class)');
-
-      // Wait a bit for content to fully render
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      // Check if it's a mindmap viewer
-      if (content.tagName.toLowerCase() === 'mindmap-viewer') {
-        console.log('[NotebookLM Takeout] Mindmap detected, extracting SVG...');
-        return await globalThis.__nlmeMindmap.extractMindmapSVG(content);
-      }
-
-      // Check if it's a Tailwind viewer (new format with sources)
-      if (content.tagName.toLowerCase() === 'labs-tailwind-doc-viewer') {
-        console.log('[NotebookLM Takeout] Tailwind viewer detected, extracting with citations...');
-        return await extractTailwindNoteContent(content);
-      } else {
-        // Old format - just grab HTML
-        console.log('[NotebookLM Takeout] Legacy editor format, no citations');
-        return {
-          html: content.innerHTML,
-          sources: []
-        };
-      }
+      return await readOpenStudioNote();
 
     } catch (error) {
       console.error('[NotebookLM Takeout] Extraction error:', error);
       throw error;
     }
+  }
+
+  // Read the note that was just opened in the Studio panel (editor, Tailwind
+  // viewer with citations, or legacy mindmap viewer).
+  async function readOpenStudioNote() {
+    // Wait for content to load (editor or mindmap viewer).
+    // Scope to <studio-panel> so we don't accidentally pick up the chat panel's
+    // labs-tailwind-doc-viewer (used to render AI replies). When the chat
+    // panel is in DOM order, an unscoped lookup grabs the chat viewer and
+    // every citation hover ends up reading chat sources instead of the note's.
+    console.log('[NotebookLM Takeout] Waiting for content...');
+    const studioPanel = document.querySelector('studio-panel') || document;
+    const content = await raceWithCleanup([
+      waitForElement('rich-text-editor .ql-editor', 5000, studioPanel),
+      waitForElement('rich-text-editor .ProseMirror', 5000, studioPanel),
+      waitForElement('markdown-editor-legacy .ql-editor', 5000, studioPanel),
+      waitForElement('labs-tailwind-doc-viewer', 5000, studioPanel),
+      waitForElement('mindmap-viewer', 5000, studioPanel)
+    ]).catch(() => null);
+
+    if (!content) {
+      throw new Error('Content not found (no editor or mindmap viewer)');
+    }
+
+    console.log('[NotebookLM Takeout] Content found:', content.tagName, content.className || '(no class)');
+
+    // Wait a bit for content to fully render
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // Check if it's a mindmap viewer
+    if (content.tagName.toLowerCase() === 'mindmap-viewer') {
+      console.log('[NotebookLM Takeout] Mindmap detected, extracting SVG...');
+      return await globalThis.__nlmeMindmap.extractMindmapSVG(content);
+    }
+
+    // Check if it's a Tailwind viewer (new format with sources)
+    if (content.tagName.toLowerCase() === 'labs-tailwind-doc-viewer') {
+      console.log('[NotebookLM Takeout] Tailwind viewer detected, extracting with citations...');
+      return await extractTailwindNoteContent(content);
+    } else {
+      // Old format - just grab HTML
+      console.log('[NotebookLM Takeout] Legacy editor format, no citations');
+      return {
+        html: content.innerHTML,
+        sources: []
+      };
+    }
+
+  }
+
+  // Notes listed in the Sources panel's "Notes" group (Nov 2026). They are not
+  // in the Studio list; clicking one opens the same note-editor in <studio-panel>.
+  function isNoteSourceContainer(container) {
+    const panel = container.closest('mat-expansion-panel');
+    if (!panel) return false;
+    if (panel.classList.contains('notes-category-panel')) return true;
+    const header = panel.querySelector('mat-expansion-panel-header');
+    if (!header) return false;
+    const clone = header.cloneNode(true);
+    clone.querySelectorAll('mat-icon').forEach(icon => icon.remove());
+    return clone.textContent.trim().startsWith('Notes');
+  }
+
+  function getSourceContainerTitle(container) {
+    return container.querySelector('.source-title')?.textContent?.trim() ||
+      container.querySelector('button.source-stretched-button')?.getAttribute('aria-label') || '';
+  }
+
+  // Open and read a Sources-panel note. sourceIndex is its position among all
+  // .single-source-container elements; the title confirms it.
+  async function extractSourcesPanelNote(sourceIndex, noteTitle, includeImages = false) {
+    includeCitationImages = includeImages;
+    if (findOpenStudioViewer()) await closeStudioViewer(500);
+
+    const containers = Array.from(document.querySelectorAll('.single-source-container'));
+    let container = containers[sourceIndex];
+    if (!container || !isNoteSourceContainer(container) || (noteTitle && getSourceContainerTitle(container) !== noteTitle)) {
+      container = containers.find(c => isNoteSourceContainer(c) && getSourceContainerTitle(c) === noteTitle) || null;
+    }
+    if (!container) {
+      throw new Error(`Note not found in Sources panel: "${noteTitle}"`);
+    }
+
+    const button = container.querySelector('button.source-stretched-button') || container.querySelector('button');
+    if (!button) throw new Error('Could not find button for note');
+    button.scrollIntoView({ behavior: 'instant', block: 'center' });
+    button.click();
+    return await readOpenStudioNote();
   }
 
   /**
@@ -2424,6 +2343,9 @@
       }
 
       const container = sourceContainers[sourceIndex];
+      if (isNoteSourceContainer(container)) {
+        throw new Error('This item is a note; export it from the Notes tab');
+      }
 
       // Get source title before clicking
       const titleEl = container.querySelector('.source-title');
@@ -2458,19 +2380,9 @@
       console.log(`[NotebookLM Takeout] Existing source-viewer count before click:`, existingViewers.length);
 
       if (existingViewers.length > 0) {
+        // A leftover viewer would be picked up by the wait below as the new source
         console.log(`[NotebookLM Takeout] Closing existing source viewer(s)...`);
-        // Look for close button in the viewer or press Escape
-        const closeButtons = document.querySelectorAll('button[aria-label="Close"], .close-button, button[title="Close"]');
-        if (closeButtons.length > 0) {
-          console.log(`[NotebookLM Takeout] Found ${closeButtons.length} close button(s), clicking last one`);
-          closeButtons[closeButtons.length - 1].click();
-          await new Promise(resolve => setTimeout(resolve, 500));
-        } else {
-          // Try pressing Escape key
-          console.log(`[NotebookLM Takeout] No close button found, pressing Escape key`);
-          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27 }));
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
+        await closeSourceViewer();
       }
 
       // Scroll into view first
@@ -3066,365 +2978,97 @@
   async function extractTailwindNoteCitations(viewer) {
     console.log('[NotebookLM Takeout] Extracting Tailwind format note...');
 
-    const sources = [];
     const errors = [];
-
-    // Step 1: Expand all collapsed citation groups
-    console.log('[NotebookLM Takeout] Checking for collapsed citation groups...');
-
-    // Find all "show more" buttons (contain "..." or "more_horiz" text, or "Show additional citations" aria-label)
-    const showMoreButtons = Array.from(viewer.querySelectorAll('button.citation-marker'))
-      .filter(btn => {
-        // Check for mat-icon (new DOM) or span (old DOM)
-        const icon = btn.querySelector('mat-icon[aria-label="Show additional citations"], mat-icon, span[aria-label="Show additional citations"], span');
-        return icon && (
-          icon.textContent?.trim() === '...' ||
-          icon.textContent?.trim() === 'more_horiz' ||
-          icon.getAttribute('aria-label') === 'Show additional citations'
-        );
+    const expanderOf = (btn) => {
+      const icon = btn.querySelector('mat-icon, span');
+      return NLME.isCitationExpander({
+        iconText: icon?.textContent,
+        ariaLabel: icon?.getAttribute('aria-label')
       });
+    };
 
-    console.log('[NotebookLM Takeout] Found', showMoreButtons.length, 'collapsed citation groups');
-
-    // Click each "show more" button to expand
+    // Step 1: expand collapsed citation groups so every marker is in the DOM
+    const showMoreButtons = Array.from(viewer.querySelectorAll('button.citation-marker')).filter(expanderOf);
     for (const button of showMoreButtons) {
-      console.log('[NotebookLM Takeout] Expanding citation group...');
-
-      // Scroll button into view
       button.scrollIntoView({ behavior: 'instant', block: 'center' });
       await sleep(100);
-
-      // Click to expand
       button.click();
-
-      // Wait for DOM to update
       await sleep(300);
     }
+    if (showMoreButtons.length > 0) await sleep(200);
 
-    if (showMoreButtons.length > 0) {
-      console.log('[NotebookLM Takeout] ✓ Expanded', showMoreButtons.length, 'citation groups');
-      // Extra wait to ensure DOM is fully updated
-      await sleep(200);
+    // Step 2: one marker per citation number. Markers lost the
+    // ng-star-inserted class in Nov 2026; keep the old selector as fallback.
+    const candidates = new Set(viewer.querySelectorAll(
+      'button.citation-marker, labs-tailwind-structural-element-view-v2 button.ng-star-inserted'
+    ));
+    const buttonsByIndex = new Map();
+    for (const button of candidates) {
+      if (expanderOf(button)) continue;
+      const index = NLME.parseCitationIndex(button.querySelector('span')?.textContent);
+      if (index && !buttonsByIndex.has(index)) buttonsByIndex.set(index, button);
     }
+    console.log('[NotebookLM Takeout] Found', buttonsByIndex.size, 'unique citations to extract');
 
-    // Step 2: Now find all citation buttons
-    console.log('[NotebookLM Takeout] Discovering citation buttons...');
-    // Find all citation buttons
-    const nodes = viewer.querySelectorAll('labs-tailwind-structural-element-view-v2');
-    console.log('[NotebookLM Takeout] Found', nodes.length, 'content nodes');
-
-    const uniqueSources = new Map();
-
-    // Collect all citation buttons first
-    const allCitationButtons = [];
-    for (const node of nodes) {
-      const citationButtons = node.querySelectorAll('button.ng-star-inserted');
-      for (const button of citationButtons) {
-        const span = button.querySelector('span');
-        const spanIndex = span?.innerText.trim();
-
-        // Debug: Log citation button details
-        console.log('[NotebookLM Takeout] Citation button found:');
-        console.log('  - span text:', spanIndex);
-        console.log('  - button outerHTML preview:', button.outerHTML.substring(0, 300));
-
-        if (spanIndex && !uniqueSources.has(spanIndex)) {
-          allCitationButtons.push({ button, spanIndex });
-        }
-      }
-    }
-
-    console.log('[NotebookLM Takeout] Found', allCitationButtons.length, 'unique citations to extract');
-
-    // Extract each citation
-    for (let i = 0; i < allCitationButtons.length; i++) {
-      const { button, spanIndex } = allCitationButtons[i];
-
-      if (uniqueSources.has(spanIndex)) {
+    // Step 3: hover each marker and read its tooltip
+    const sources = [];
+    for (const [index, button] of buttonsByIndex) {
+      const result = await extractSingleCitationWithRetry(button, index, includeCitationImages, 2);
+      if (!result.success) {
+        errors.push(result.error);
         continue;
       }
-
-      console.log(`[NotebookLM Takeout] Hovering citation button ${i + 1}/${allCitationButtons.length}:`, spanIndex);
-
-      try {
-        // Scroll button into view
-        button.scrollIntoView({ behavior: 'instant', block: 'center' });
-        await sleep(100);
-
-        // Simulate hover (mouseenter)
-        const mouseenterEvent = new MouseEvent('mouseenter', {
-          view: window,
-          bubbles: true,
-          cancelable: true
-        });
-        button.dispatchEvent(mouseenterEvent);
-
-        // Wait for tooltip popup to appear
-        console.log('[NotebookLM Takeout] Waiting for tooltip to appear...');
-        let tooltip = await waitForElement('xap-inline-dialog-container[role="dialog"][aria-label="Citation Details"]', 2000).catch(() => null);
-
-        // Fallback: try simpler selector
-        if (!tooltip) {
-          console.log('[NotebookLM Takeout] Trying fallback selector...');
-          tooltip = await waitForElement('xap-inline-dialog-container[role="dialog"]', 1000).catch(() => null);
-        }
-
-        // Fallback 2: try without role
-        if (!tooltip) {
-          console.log('[NotebookLM Takeout] Trying fallback selector without role...');
-          tooltip = await waitForElement('xap-inline-dialog-container', 1000).catch(() => null);
-        }
-
-        if (!tooltip) {
-          const errorMsg = `Citation ${spanIndex}: Tooltip container did not appear after mouseenter`;
-          console.warn('[NotebookLM Takeout]', errorMsg);
-          errors.push(errorMsg);
-
-          // Debug: Check if any tooltip appeared with different attributes
-          const anyTooltip = document.querySelector('xap-inline-dialog-container');
-          if (anyTooltip) {
-            console.log('[NotebookLM Takeout] Found tooltip but with different attributes:');
-            console.log('  - role:', anyTooltip.getAttribute('role'));
-            console.log('  - aria-label:', anyTooltip.getAttribute('aria-label'));
-            console.log('  - outerHTML preview:', anyTooltip.outerHTML.substring(0, 300));
-          } else {
-            console.log('[NotebookLM Takeout] No tooltip found at all. Hover might not be working.');
-          }
-
-          // Simulate mouseleave to clean up
-          const mouseleaveEvent = new MouseEvent('mouseleave', {
-            view: window,
-            bubbles: true,
-            cancelable: true
-          });
-          button.dispatchEvent(mouseleaveEvent);
-
-          continue;
-        }
-
-        // Wait for tooltip to become visible and content to load
-        console.log('[NotebookLM Takeout] Tooltip container found, waiting for content to load...');
-
-        // Give NotebookLM time to populate the tooltip after container appears
-        await sleep(150);
-
-        let footerEl = null;
-        let attempts = 0;
-        const maxAttempts = 12; // 12 x 50ms = 600ms max per tooltip
-
-        while (attempts < maxAttempts) {
-          // Check if tooltip is visible (opacity > 0.5) AND has content (either footer or text)
-          const opacity = parseFloat(tooltip.style.opacity || '0');
-          footerEl = tooltip.querySelector('.citation-tooltip-footer');
-          const tooltipTextEl = tooltip.querySelector('.citation-tooltip-text');
-
-          // Accept if opacity is high and we have either footer content OR tooltip text content
-          const hasFooterContent = footerEl && footerEl.textContent?.trim().length > 0;
-          const hasTooltipTextContent = tooltipTextEl && tooltipTextEl.textContent?.trim().length > 0;
-
-          if (opacity > 0.5 && (hasFooterContent || hasTooltipTextContent)) {
-            console.log('[NotebookLM Takeout] Tooltip content loaded after', attempts * 50, 'ms');
-            break;
-          }
-          await sleep(50);
-          attempts++;
-        }
-
-        // Check if we have any usable content (footer or tooltip text)
-        const tooltipTextEl = tooltip.querySelector('.citation-tooltip-text');
-        const hasFooterContent = footerEl && footerEl.textContent?.trim().length > 0;
-        const hasTooltipTextContent = tooltipTextEl && tooltipTextEl.textContent?.trim().length > 0;
-
-        if (!hasFooterContent && !hasTooltipTextContent) {
-          const errorMsg = `Citation ${spanIndex}: Tooltip has no content (timeout after ${maxAttempts * 50}ms)`;
-          console.warn('[NotebookLM Takeout]', errorMsg);
-          console.warn('  - tooltip HTML:', tooltip.outerHTML.substring(0, 300));
-          errors.push(errorMsg);
-
-          // Simulate mouseleave to clean up
-          const mouseleaveEvent = new MouseEvent('mouseleave', {
-            view: window,
-            bubbles: true,
-            cancelable: true
-          });
-          button.dispatchEvent(mouseleaveEvent);
-
-          continue;
-        }
-
-        console.log('[NotebookLM Takeout] Tooltip appeared! Extracting data...');
-        console.log('  - tooltip HTML preview:', tooltip.outerHTML.substring(0, 500));
-
-        // Extract source filename from header (moved from footer in recent update)
-        const headerEl = tooltip.querySelector('.citation-tooltip-header');
-        const sourceTitle = headerEl?.textContent?.trim() || '';
-        console.log('  - header element found:', !!headerEl, 'content:', sourceTitle || '(empty)');
-
-        // Extract quote text from citation-tooltip-text
-        const tooltipText = tooltip.querySelector('.citation-tooltip-text');
-        console.log('  - tooltip text element found:', !!tooltipText);
-        let highlightedText = '';
-
-        if (tooltipText) {
-          // Convert HTML to markdown to preserve formatting (bold, italic, links, etc.)
-          // Use direct child selector to avoid processing nested elements inside table cells
-          const textElements = tooltipText.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
-          console.log('  - found', textElements.length, 'top-level structural elements');
-
-          if (textElements.length > 0) {
-            // Strategy 1: Convert each structural element to markdown
-            for (const el of textElements) {
-              const markdown = await htmlToMarkdownWithImages(el, includeCitationImages);
-              if (markdown && markdown.length > 0) {
-                highlightedText += markdown + '\n\n';
-              }
-            }
-          } else {
-            // Strategy 2: Try converting the whole tooltipText element
-            console.log('  - using full tooltip text content');
-            highlightedText = await htmlToMarkdownWithImages(tooltipText, includeCitationImages);
-          }
-        } else {
-          // No .citation-tooltip-text found, try to extract from entire tooltip
-          console.log('  - no citation-tooltip-text found, using tooltip content');
-          const allText = tooltip.textContent?.trim() || '';
-          // Remove the footer text (source filename)
-          highlightedText = allText.replace(sourceTitle, '').trim();
-        }
-
-        // Store the citation data (even if text is empty, for debugging)
-        const sourceData = {
-          index: uniqueSources.size + 1,
-          text: sourceTitle,
-          quote: highlightedText.trim(),
-          href: '',
-          sourceIndex: spanIndex
-        };
-
-        // Validate extracted data
-        if (!sourceTitle || sourceTitle.trim().length === 0) {
-          const errorMsg = `Citation ${spanIndex}: Empty source filename`;
-          console.warn('[NotebookLM Takeout]', errorMsg);
-          errors.push(errorMsg);
-        }
-
-        if (!highlightedText || highlightedText.trim().length === 0) {
-          const errorMsg = `Citation ${spanIndex}: Empty quote text (source: ${sourceTitle || 'unknown'})`;
-          console.warn('[NotebookLM Takeout]', errorMsg);
-          errors.push(errorMsg);
-        } else {
-          console.log('[NotebookLM Takeout] ✓ Extracted from hover tooltip:', spanIndex);
-          console.log('  - source:', sourceTitle.substring(0, 50));
-          console.log('  - quote length:', highlightedText.trim().length);
-          console.log('  - sourceIndex stored:', spanIndex);
-        }
-
-        uniqueSources.set(spanIndex, sourceData);
-
-        // Close tooltip (simulate mouseleave)
-        const mouseleaveEvent = new MouseEvent('mouseleave', {
-          view: window,
-          bubbles: true,
-          cancelable: true
-        });
-        button.dispatchEvent(mouseleaveEvent);
-
-        // Wait for tooltip to fully close and disappear (critical for next citation)
-        console.log('[NotebookLM Takeout] Waiting for tooltip to close...');
-        let closedAttempts = 0;
-        while (closedAttempts < 15) {
-          const existingTooltip = document.querySelector('xap-inline-dialog-container[role="dialog"]');
-
-          // Wait for tooltip to either be removed OR have opacity 0 AND empty content
-          if (!existingTooltip) {
-            console.log('[NotebookLM Takeout] Tooltip removed after', closedAttempts * 100, 'ms');
-            break;
-          }
-
-          const opacity = parseFloat(existingTooltip.style.opacity || '1');
-          const hasContent = existingTooltip.querySelector('.citation-tooltip-footer');
-
-          if (opacity < 0.1 && !hasContent) {
-            console.log('[NotebookLM Takeout] Tooltip closed (empty) after', closedAttempts * 100, 'ms');
-            // Extra wait to ensure it's fully gone
-            await sleep(300);
-            break;
-          }
-
-          await sleep(100);
-          closedAttempts++;
-        }
-
-        // Extra safety wait
-        await sleep(100);
-
-      } catch (error) {
-        const errorMsg = `Citation ${spanIndex}: ${error.message || error.toString()}`;
-        console.error('[NotebookLM Takeout] Error extracting citation:', spanIndex, error);
-        errors.push(errorMsg);
-      }
+      if (!result.data.text) errors.push(`Citation ${index}: Empty source filename`);
+      if (!result.data.quote) errors.push(`Citation ${index}: Empty quote text (source: ${result.data.text || 'unknown'})`);
+      sources.push({
+        index: sources.length + 1,
+        text: result.data.text,
+        quote: result.data.quote,
+        href: '',
+        sourceIndex: index
+      });
     }
 
-    const totalAttempted = allCitationButtons.length;
-    const totalSuccessful = uniqueSources.size;
-    const totalFailed = totalAttempted - totalSuccessful;
-
-    console.log('[NotebookLM Takeout] ========== Citation Extraction Summary ==========');
-    console.log('[NotebookLM Takeout] Collapsed groups expanded:', showMoreButtons.length);
-    console.log('[NotebookLM Takeout] Total citation buttons found:', allCitationButtons.length);
-    console.log('[NotebookLM Takeout] Unique citations extracted:', totalSuccessful);
-    console.log('[NotebookLM Takeout] Failed to extract:', totalFailed);
-    console.log('[NotebookLM Takeout] Errors/warnings:', errors.length);
-
-    if (errors.length > 0) {
-      console.warn('[NotebookLM Takeout] Errors and warnings:');
-      errors.forEach((err, i) => console.warn(`  ${i + 1}. ${err}`));
-    }
-
-    const sourcesArray = Array.from(uniqueSources.values());
-
-    // Debug: Show final sources array
-    console.log('[NotebookLM Takeout] Final sources array:');
-    console.log('  - count:', sourcesArray.length);
-    console.log('  - sourceIndices:', sourcesArray.map(s => s.sourceIndex).join(', '));
-    console.log('  - full array:', JSON.stringify(sourcesArray, null, 2));
+    console.log(`[NotebookLM Takeout] Citations: ${sources.length}/${buttonsByIndex.size} extracted, ${errors.length} warning(s)`);
 
     return {
       html: viewer.innerHTML,
-      sources: sourcesArray,
-      errors: errors
+      sources,
+      errors
     };
   }
 
   // Extract mindmap SVG with all nodes expanded
+  // Studio artifacts that have a More button, in DOM order. Every artifact
+  // index (Artifacts tab, Studio moreIndex, batch ZIP) refers to this list.
+  function getArtifactItemsWithMore() {
+    return Array.from(document.querySelectorAll('artifact-library-item'))
+      .filter(item => item.querySelector('button[aria-label="More"]'));
+  }
+
+  function resolveArtifactItem(title, artifactIndex) {
+    const items = getArtifactItemsWithMore();
+    const titles = items.map(item => item.querySelector('.artifact-title')?.textContent?.trim() || '');
+    const pick = NLME.pickByIndexThenTitle(titles, artifactIndex, title);
+    return pick === -1 ? null : items[pick];
+  }
+
   /**
    * Extract Report content by clicking to open and reading the content
    * Reports are similar to Notes - they open in a viewer
    */
-  async function extractReportContent(reportTitle) {
+  async function extractReportContent(reportTitle, artifactIndex = -1) {
     console.log(`[NotebookLM Takeout] Extracting Report: "${reportTitle}"`);
 
     try {
-      // Find the artifact by title
-      const allTitles = document.querySelectorAll('.artifact-title');
-      const titleElement = Array.from(allTitles).find(
-        (el) => el.textContent.trim() === reportTitle
-      );
-
-      if (!titleElement) {
+      // Index first, accepted while its title still matches (titles can repeat)
+      const artifactItem = resolveArtifactItem(reportTitle, artifactIndex);
+      if (!artifactItem) {
         throw new Error(`Could not find Report with title: "${reportTitle}"`);
       }
 
-      // Find the parent artifact-library-item, then find the button
-      const artifactItem = titleElement.closest('artifact-library-item');
-      if (!artifactItem) {
-        throw new Error('Could not find artifact-library-item parent');
-      }
-
-      // Look for the main artifact button (by icon or first button with aria-description)
-      // Icon 'auto_tab_group' = Report
-      const icon = artifactItem.querySelector('mat-icon');
-      const reportButton = icon?.closest('button') || artifactItem.querySelector('button[aria-description]');
+      const reportButton = artifactItem.querySelector('button[aria-description]') ||
+        artifactItem.querySelector('button.artifact-stretched-button');
       if (!reportButton) {
         throw new Error('Could not find Report button');
       }
@@ -3506,12 +3150,11 @@
    * Data Tables open in a <table-viewer> element
    */
   // Open a mind map listed as a studio item and extract it (mindmap-extract.js)
-  async function extractMindmapArtifact(mindmapTitle) {
+  async function extractMindmapArtifact(mindmapTitle, artifactIndex = -1) {
     console.log(`[NotebookLM Takeout] Extracting Mind Map: "${mindmapTitle}"`);
 
-    const titleElement = Array.from(document.querySelectorAll('artifact-library-item .artifact-title'))
-      .find((el) => el.textContent.trim() === mindmapTitle);
-    const artifactItem = titleElement?.closest('artifact-library-item');
+    // Index first, accepted while its title still matches (titles can repeat)
+    const artifactItem = resolveArtifactItem(mindmapTitle, artifactIndex);
     if (!artifactItem) {
       throw new Error(`Could not find Mind Map with title: "${mindmapTitle}"`);
     }
@@ -3552,30 +3195,18 @@
     }
   }
 
-  async function extractDataTableContent(tableTitle) {
+  async function extractDataTableContent(tableTitle, artifactIndex = -1) {
     console.log(`[NotebookLM Takeout] Extracting Data Table: "${tableTitle}"`);
 
     try {
-      // Find the artifact by title
-      const allTitles = document.querySelectorAll('.artifact-title');
-      const titleElement = Array.from(allTitles).find(
-        (el) => el.textContent.trim() === tableTitle
-      );
-
-      if (!titleElement) {
+      // Index first, accepted while its title still matches (titles can repeat)
+      const artifactItem = resolveArtifactItem(tableTitle, artifactIndex);
+      if (!artifactItem) {
         throw new Error(`Could not find Data Table with title: "${tableTitle}"`);
       }
 
-      // Find the parent artifact-library-item, then find the button
-      const artifactItem = titleElement.closest('artifact-library-item');
-      if (!artifactItem) {
-        throw new Error('Could not find artifact-library-item parent');
-      }
-
-      // Look for the main artifact button (by icon or first button with aria-description)
-      // Icon 'table_view' = Data Table
-      const icon = artifactItem.querySelector('mat-icon');
-      const tableButton = icon?.closest('button') || artifactItem.querySelector('button[aria-description]');
+      const tableButton = artifactItem.querySelector('button[aria-description]') ||
+        artifactItem.querySelector('button.artifact-stretched-button');
       if (!tableButton) {
         throw new Error('Could not find Data Table button');
       }
@@ -3654,31 +3285,54 @@
       .find(el => el.getClientRects().length > 0) || null;
   }
 
-  // Close the open studio viewer. Only clicks controls inside <studio-panel>.
-  // Returns true once no studio viewer is open.
+  // Studio viewers close from the panel header since the Nov 2026 redesign;
+  // Escape no longer closes artifact-viewer or source-viewer.
+  function findStudioHeaderCloseButton() {
+    const labelled = document.querySelector(NLME.STUDIO_HEADER_CLOSE_SELECTOR);
+    if (labelled) return labelled;
+    return Array.from(document.querySelectorAll('section.studio-panel .panel-header button'))
+      .find(b => b.querySelector('mat-icon')?.textContent.trim() === 'collapse_content' &&
+                 !(b.getAttribute('aria-label') || '').startsWith('Collapse')) || null;
+  }
+
+  function findSourceHeaderCloseButton() {
+    return Array.from(document.querySelectorAll('.panel-header button'))
+      .find(b => !b.closest('section.studio-panel') &&
+                 b.querySelector('mat-icon')?.textContent.trim() === 'collapse_content') || null;
+  }
+
+  function pressEscape() {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+  }
+
+  // Close the open studio viewer. Returns true once no studio viewer is open.
   async function closeStudioViewer(delay = 800) {
+    const settle = () => new Promise(resolve => setTimeout(resolve, delay));
     for (let attempt = 0; attempt < 3; attempt++) {
       if (!findOpenStudioViewer()) return true;
       console.log(`[NotebookLM Takeout] Close attempt ${attempt + 1}/3`);
 
-      // Method 1: ESC key
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
-      document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
-      await new Promise(resolve => setTimeout(resolve, delay));
-      if (!findOpenStudioViewer()) {
-        console.log('[NotebookLM Takeout] ✓ Viewer closed via ESC key');
-        return true;
+      // Method 1: panel header close button
+      const headerClose = findStudioHeaderCloseButton();
+      if (headerClose) {
+        console.log(`[NotebookLM Takeout] Clicking header button "${headerClose.getAttribute('aria-label') || 'collapse_content'}"`);
+        headerClose.click();
+        await settle();
+        if (!findOpenStudioViewer()) {
+          console.log('[NotebookLM Takeout] ✓ Viewer closed via header button');
+          return true;
+        }
       }
 
       const studioPanel = document.querySelector('studio-panel');
       if (!studioPanel) return true;
 
-      // Method 2: "Close note view" button
+      // Method 2: "Close note view" inside the panel (older layouts)
       const closeNoteButton = studioPanel.querySelector('button[aria-label="Close note view"]');
       if (closeNoteButton) {
-        console.log('[NotebookLM Takeout] Clicking "Close note view" button');
         closeNoteButton.click();
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await settle();
         if (!findOpenStudioViewer()) {
           console.log('[NotebookLM Takeout] ✓ Viewer closed via "Close note view" button');
           return true;
@@ -3700,39 +3354,54 @@
       for (const icon of closeIcons) {
         const button = icon.closest('button');
         if (!button) continue;
-        console.log('[NotebookLM Takeout] Clicking close icon button:', icon.textContent.trim());
         button.click();
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await settle();
         if (!findOpenStudioViewer()) {
           console.log('[NotebookLM Takeout] ✓ Viewer closed via close icon');
           return true;
         }
       }
+
+      // Method 4: Escape (pre-2026 layouts)
+      pressEscape();
+      await settle();
+      if (!findOpenStudioViewer()) {
+        console.log('[NotebookLM Takeout] ✓ Viewer closed via ESC key');
+        return true;
+      }
     }
     return !findOpenStudioViewer();
   }
 
-  // Close the source viewer (sources panel). Kept separate from studio viewers:
-  // closing a source relies on ESC or the sources panel header button.
+  // Close the source viewer (sources panel). Kept separate from studio viewers.
   async function closeSourceViewer() {
+    const settle = () => new Promise(resolve => setTimeout(resolve, 800));
     for (let attempt = 0; attempt < 3; attempt++) {
       if (!document.querySelector('source-viewer')) return true;
       console.log(`[NotebookLM Takeout] Source close attempt ${attempt + 1}/3`);
 
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
-      document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', keyCode: 27, which: 27, bubbles: true }));
-      await new Promise(resolve => setTimeout(resolve, 800));
+      const headerClose = findSourceHeaderCloseButton();
+      if (headerClose) {
+        headerClose.click();
+        await settle();
+        if (!document.querySelector('source-viewer')) {
+          console.log('[NotebookLM Takeout] ✓ Source viewer closed via header button');
+          return true;
+        }
+      }
+
+      pressEscape();
+      await settle();
       if (!document.querySelector('source-viewer')) {
         console.log('[NotebookLM Takeout] ✓ Source viewer closed via ESC key');
         return true;
       }
 
-      // Panel header approach (works for sources)
+      // Older layout: second child of the first panel header
       const panelHeaders = document.querySelectorAll('.panel-header');
       if (panelHeaders.length > 0 && panelHeaders[0].children.length > 1) {
-        console.log('[NotebookLM Takeout] Clicking panel header children[1]');
         panelHeaders[0].children[1].click();
-        await new Promise(resolve => setTimeout(resolve, 800));
+        await settle();
       }
     }
     return !document.querySelector('source-viewer');
@@ -3767,7 +3436,7 @@
    * Main handler for artifact downloads via message passing
    * Coordinates the download process with proper error handling and metadata
    */
-  async function handleArtifactDownload(artifactIndex, artifactType, moreButtonAlreadyClicked = false, skipMoreButton = false, artifactName = null) {
+  async function handleArtifactDownload(artifactIndex, artifactType, moreButtonAlreadyClicked = false, skipMoreButton = false, artifactName = null, downloadPreference = 'pdf') {
     console.log(`[NotebookLM Takeout] [Download] Starting download for artifact ${artifactIndex} (${artifactType})`);
     const startTime = Date.now();
 
@@ -3778,7 +3447,7 @@
       // Mind maps have no Download in their More menu (the menu doesn't open):
       // open the map and extract SVG + tree data like the Notes tab does
       if (artifactType === 'Mind Map' && skipMoreButton) {
-        const mindmap = await extractMindmapArtifact(artifactTitle);
+        const mindmap = await extractMindmapArtifact(artifactTitle, artifactIndex);
         if (mindmap.inAppFrame) {
           return {
             success: true,
@@ -3802,8 +3471,8 @@
         console.log(`[NotebookLM Takeout] [Download] ${artifactType} with skipMoreButton - extracting directly...`);
 
         const extractResult = artifactType === 'Report'
-          ? await extractReportContent(artifactTitle)
-          : await extractDataTableContent(artifactTitle);
+          ? await extractReportContent(artifactTitle, artifactIndex)
+          : await extractDataTableContent(artifactTitle, artifactIndex);
 
         if (extractResult.success) {
           const duration = Date.now() - startTime;
@@ -3825,14 +3494,9 @@
       // For other artifacts, find by index (original logic)
       if (!moreButtonAlreadyClicked) {
         // Build array of More buttons ONLY from artifact-library-item (not from notes)
-        // This matches the indexing logic in sidebar.js scanPageForItems()
-        const artifactMoreButtons = [];
-        document.querySelectorAll('artifact-library-item').forEach(item => {
-          const btn = item.querySelector('button[aria-label="More"]');
-          if (btn) {
-            artifactMoreButtons.push(btn);
-          }
-        });
+        // Same index space as SCAN_STUDIO_ITEMS moreIndex
+        const artifactMoreButtons = getArtifactItemsWithMore()
+          .map(item => item.querySelector('button[aria-label="More"]'));
 
         if (artifactIndex < 0 || artifactIndex >= artifactMoreButtons.length) {
           throw new Error(`Artifact index ${artifactIndex} out of range (0-${artifactMoreButtons.length - 1})`);
@@ -3849,21 +3513,13 @@
 
       // Detect artifact type from icon if artifactItem is available (fallback for DOM changes)
       if (artifactItem) {
-        const iconToType = {
-          'auto_tab_group': 'Report',
-          'tablet': 'Slides',
-          'stacked_bar_chart': 'Infographic',
-          'table_view': 'Data Table',
-          'format_list_bulleted': 'Data Table', // icon since 2026 redesign
-          'flowchart': 'Mind Map',
-          'headphones': 'Audio Overview',
-          'audio_magic_eraser': 'Audio Overview',
-          'audio_spark': 'Audio Overview',
-          'videocam': 'Video Overview'
-        };
-        const icon = artifactItem.querySelector('mat-icon');
-        const iconText = icon?.textContent?.trim() || '';
-        const detectedType = iconToType[iconText];
+        const iconText = artifactItem.querySelector('mat-icon')?.textContent?.trim() || '';
+        const resolved = NLME.resolveArtifactType({
+          iconText,
+          buttonLabel: artifactItem.querySelector('button.artifact-stretched-button')?.getAttribute('aria-label')
+        });
+        // Only correct when the label/icon actually named a known type
+        const detectedType = (resolved !== iconText && resolved !== 'Unknown') ? resolved : null;
         if (detectedType && detectedType !== artifactType) {
           console.log(`[NotebookLM Takeout] [Download] Type corrected from "${artifactType}" to "${detectedType}" (via icon)`);
           artifactType = detectedType;
@@ -3902,8 +3558,8 @@
         console.log(`[NotebookLM Takeout] [Download] Attempting ${artifactType} extraction...`);
 
         const extractResult = artifactType === 'Report'
-          ? await extractReportContent(artifactTitle)
-          : await extractDataTableContent(artifactTitle);
+          ? await extractReportContent(artifactTitle, artifactIndex)
+          : await extractDataTableContent(artifactTitle, artifactIndex);
 
         if (extractResult.success) {
           const duration = Date.now() - startTime;
@@ -3947,7 +3603,7 @@
 
       // For all other artifacts (or infographic fallback), click download button
       console.log('[NotebookLM Takeout] [Download] Attempting download button click...');
-      const buttonResult = await clickArtifactDownloadButton(moreButtonAlreadyClicked ? null : artifactItem?.querySelector('button[aria-label="More"]'), artifactItem, moreButtonAlreadyClicked);
+      const buttonResult = await clickArtifactDownloadButton(moreButtonAlreadyClicked ? null : artifactItem?.querySelector('button[aria-label="More"]'), artifactItem, moreButtonAlreadyClicked, downloadPreference);
 
       const duration = Date.now() - startTime;
 
@@ -3988,7 +3644,7 @@
    * Uses MutationObserver to detect UI state changes instead of hard-coded delays
    * Now also captures intercepted download URLs from window.open
    */
-  async function clickArtifactDownloadButton(moreButton, artifactItem, moreButtonAlreadyClicked = false) {
+  async function clickArtifactDownloadButton(moreButton, artifactItem, moreButtonAlreadyClicked = false, downloadPreference = 'pdf') {
     // Clear any previous intercepted URL
     lastInterceptedDownloadUrl = null;
 
@@ -4005,7 +3661,7 @@
     await waitForElement('.mat-mdc-menu-panel, .cdk-overlay-pane', 2000);
 
     // Find download button with multiple selector attempts
-    const downloadButton = await findDownloadButton();
+    const downloadButton = await findDownloadButton(downloadPreference);
     if (!downloadButton) {
       // Close menu before throwing error
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
@@ -4049,15 +3705,17 @@
   }
 
   /**
-   * Find the Download menu item in the currently open more-menu.
-   * Thin wrapper around findMenuItemByText — preserves the old call site.
+   * Find the Download item in the open More menu. Slide decks offer PDF and
+   * PowerPoint (Nov 2026); preference picks between them.
+   * @param {'pdf'|'pptx'} preference
    */
-  async function findDownloadButton() {
-    const button = findMenuItemByText('download');
-    if (button) {
-      console.log('[NotebookLM Takeout] [Download] Found download menu item via text search');
+  async function findDownloadButton(preference = 'pdf') {
+    const items = Array.from(document.querySelectorAll('.mat-mdc-menu-item, [role="menuitem"]'));
+    const index = NLME.pickDownloadMenuIndex(items.map(item => item.textContent || ''), preference);
+    if (index !== -1) {
+      console.log(`[NotebookLM Takeout] [Download] Menu item: "${items[index].textContent.trim()}"`);
     }
-    return button;
+    return index === -1 ? null : items[index];
   }
 
   // ==================== STUDIO TAB (unified list) ====================
@@ -4069,21 +3727,9 @@
    * combined index (for delete targeting).
    */
   function scanStudioItems() {
-    const ICON_TO_TYPE = {
-      'auto_tab_group': 'Report',
-      'tablet': 'Slides',
-      'stacked_bar_chart': 'Infographic',
-      'table_view': 'Data Table',
-      'format_list_bulleted': 'Data Table', // icon since 2026 redesign
-      'flowchart': 'Mind Map',
-      'headphones': 'Audio Overview',
-      'audio_magic_eraser': 'Audio Overview',
-      'audio_spark': 'Audio Overview',
-      'videocam': 'Video Overview'
-    };
-
     const nodes = document.querySelectorAll('artifact-library-item, artifact-library-note');
     let artifactCursor = 0;
+    let moreCursor = 0;
     let noteCursor = 0;
     const items = [];
 
@@ -4098,16 +3744,25 @@
       const hasMoreButton = !!el.querySelector('button[aria-label="More"]');
 
       if (tag === 'artifact-library-item') {
+        // Gemini Notebook puts the type in the stretched button's aria-label for
+        // some kinds; icons cover the rest (Nov 2026)
+        const type = NLME.resolveArtifactType({
+          iconText,
+          buttonLabel: el.querySelector('button.artifact-stretched-button')?.getAttribute('aria-label')
+        });
         items.push({
           combinedIndex,
           kindIndex: artifactCursor,
+          moreIndex: hasMoreButton ? moreCursor : -1,
           kind: 'artifact',
           label,
           details,
-          type: ICON_TO_TYPE[iconText] || iconText || 'Unknown',
+          type,
+          downloadable: NLME.isDownloadableType(type),
           hasMoreButton
         });
         artifactCursor++;
+        if (hasMoreButton) moreCursor++;
       } else {
         // artifact-library-note — Note or Mindmap
         let type = 'Note';
@@ -4329,8 +3984,15 @@
   async function tryExtractInfographic(artifactElement) {
     console.log('[NotebookLM Takeout] [Download] Trying infographic extraction (tiered fallback)...');
 
+    // Only a rendered infographic qualifies; icons or thumbnails in the list
+    // row would otherwise replace the real download
+    const isLarge = (el) => {
+      const rect = el.getBoundingClientRect();
+      return rect.width >= 200 && rect.height >= 200;
+    };
+
     // TIER 1: Try SVG extraction (vector format - best quality)
-    const svg = artifactElement.querySelector('svg');
+    const svg = Array.from(artifactElement.querySelectorAll('svg')).find(isLarge);
     if (svg) {
       console.log('[NotebookLM Takeout] [Download] Found SVG, attempting extraction...');
       try {
@@ -4345,7 +4007,7 @@
     }
 
     // TIER 2: Try Canvas export (PNG raster)
-    const canvas = artifactElement.querySelector('canvas');
+    const canvas = Array.from(artifactElement.querySelectorAll('canvas')).find(isLarge);
     if (canvas) {
       console.log('[NotebookLM Takeout] [Download] Found canvas, attempting export...');
       try {
@@ -4417,7 +4079,7 @@
         method: 'svg_extract',
         data: dataUrl,
         format: 'svg',
-        dimensions: { width, height }
+        dimensions: { width: viewBoxWidth, height: viewBoxHeight }
       };
     } catch (error) {
       return { success: false, error: error.message };
@@ -4537,43 +4199,40 @@
       return;
     }
 
-    // Find all citation buttons with "..." or "more_horiz" text (collapsed indicators)
-    const allCitationButtons = chatPanel.querySelectorAll('button.citation-marker');
-    const collapsedButtons = Array.from(allCitationButtons).filter(button => {
-      // Check for mat-icon (new DOM) or span (old DOM)
+    // Only click groups that are still collapsed. Expanded groups show
+    // unfold_less / "Hide additional citations"; clicking those would
+    // collapse them again, e.g. when the chat is scanned a second time.
+    const findCollapsed = () => Array.from(chatPanel.querySelectorAll('button.citation-marker')).filter(button => {
       const icon = button.querySelector('mat-icon, span');
-      const text = icon?.textContent?.trim();
-      const ariaLabel = icon?.getAttribute('aria-label');
-      // Check for "..." or "more_horiz" text, or "Show additional citations" aria-label
-      return text === '...' || text === 'more_horiz' || ariaLabel?.includes('additional citations');
+      return NLME.isCollapsedCitationGroup({ iconText: icon?.textContent, ariaLabel: icon?.getAttribute('aria-label') });
     });
 
-    console.log(`[NotebookLM Takeout] Found ${collapsedButtons.length} collapsed citation indicators`);
+    let collapsedButtons = findCollapsed();
+    console.log(`[NotebookLM Takeout] Found ${collapsedButtons.length} collapsed citation groups`);
 
     if (collapsedButtons.length === 0) {
       console.log('[NotebookLM Takeout] No collapsed citations to expand');
       return;
     }
 
-    // Click each collapsed button to expand
-    for (let i = 0; i < collapsedButtons.length; i++) {
-      const button = collapsedButtons[i];
-
-      try {
-        console.log(`[NotebookLM Takeout] Expanding collapsed citation ${i + 1}/${collapsedButtons.length}...`);
-
-        // Scroll into view
-        button.scrollIntoView({ behavior: 'instant', block: 'center' });
-        await sleep(100);
-
-        // Click to expand
-        button.click();
-        await sleep(300); // Wait for expansion animation
-
-        console.log(`[NotebookLM Takeout] ✓ Expanded citation ${i + 1}/${collapsedButtons.length}`);
-      } catch (error) {
-        console.error(`[NotebookLM Takeout] Error expanding collapsed citation ${i + 1}:`, error);
+    // Re-scan after each pass: Angular may re-render a message and replace
+    // buttons that were collected before the first click.
+    for (let pass = 1; pass <= 3 && collapsedButtons.length > 0; pass++) {
+      for (let i = 0; i < collapsedButtons.length; i++) {
+        const button = collapsedButtons[i];
+        if (!button.isConnected) continue;
+        try {
+          button.scrollIntoView({ behavior: 'instant', block: 'center' });
+          await sleep(100);
+          button.click();
+          await sleep(300); // Wait for expansion animation
+        } catch (error) {
+          console.error(`[NotebookLM Takeout] Error expanding citation group ${i + 1}:`, error);
+        }
       }
+      await sleep(300);
+      collapsedButtons = findCollapsed();
+      console.log(`[NotebookLM Takeout] Expansion pass ${pass}: ${collapsedButtons.length} collapsed group(s) remain`);
     }
 
     // Final wait for all expansions to complete
@@ -4814,144 +4473,33 @@
     const errors = [];
 
     try {
-      // Find ALL citation buttons in the page
-      console.log('[NotebookLM Takeout] Finding all citation buttons in page...');
-      const allButtons = document.querySelectorAll('button.citation-marker');
-      console.log(`[NotebookLM Takeout] Found ${allButtons.length} total citation buttons`);
+      // Scope to the chat panel: an open note renders the same markers
+      const scope = document.querySelector('chat-panel') || document;
+      const buttonsBySourceIndex = new Map();
+      scope.querySelectorAll('button.citation-marker').forEach(button => {
+        const icon = button.querySelector('mat-icon, span');
+        if (NLME.isCitationExpander({ iconText: icon?.textContent, ariaLabel: icon?.getAttribute('aria-label') })) return;
+        const sourceIndex = NLME.parseCitationIndex(button.querySelector('span')?.textContent);
+        if (sourceIndex && !buttonsBySourceIndex.has(sourceIndex)) {
+          buttonsBySourceIndex.set(sourceIndex, button);
+        }
+      });
 
-      if (allButtons.length === 0) {
+      if (buttonsBySourceIndex.size === 0) {
         errors.push('No citation buttons found in page');
         return { sourcesByIndex, errors };
       }
 
-      // Get unique source indices
-      const uniqueSourceIndices = new Set();
-      const buttonsBySourceIndex = new Map();
-
-      allButtons.forEach(button => {
-        const span = button.querySelector('span');
-        const sourceIndex = span?.innerText?.trim();
-
-        if (sourceIndex && sourceIndex !== '...') {
-          uniqueSourceIndices.add(sourceIndex);
-          if (!buttonsBySourceIndex.has(sourceIndex)) {
-            buttonsBySourceIndex.set(sourceIndex, button);
-          }
-        }
-      });
-
-      console.log(`[NotebookLM Takeout] Found ${uniqueSourceIndices.size} unique source indices`);
-
-      // Extract each unique source
-      let extractedCount = 0;
-      for (const sourceIndex of uniqueSourceIndices) {
-        const button = buttonsBySourceIndex.get(sourceIndex);
-        if (!button) continue;
-
-        console.log(`[NotebookLM Takeout] Extracting source ${sourceIndex} (${extractedCount + 1}/${uniqueSourceIndices.size})...`);
-
-        try {
-          // Scroll into view
-          button.scrollIntoView({ behavior: 'instant', block: 'center' });
-          await sleep(100);
-
-          // Hover over button
-          button.dispatchEvent(new MouseEvent('mouseenter', {
-            view: window,
-            bubbles: true,
-            cancelable: true
-          }));
-
-          await sleep(500);  // Increased from 200ms for slower networks
-
-          // Wait for tooltip
-          const tooltip = await raceWithCleanup([
-            waitForElement('xap-inline-dialog-container[role="dialog"]', 3000),
-            waitForElement('.citation-tooltip', 3000),
-            waitForElement('[role="dialog"].ng-star-inserted', 3000)
-          ]).catch(() => null);
-
-          if (!tooltip) {
-            console.warn(`[NotebookLM Takeout] Source ${sourceIndex}: Tooltip did not appear`);
-            errors.push(`Source ${sourceIndex}: Tooltip did not appear`);
-            button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-            continue;
-          }
-
-          console.log(`[NotebookLM Takeout] Source ${sourceIndex}: Tooltip appeared`);
-
-          // Wait for content to load
-          let contentLoaded = false;
-          for (let attempt = 0; attempt < 20; attempt++) {
-            const opacity = parseFloat(window.getComputedStyle(tooltip).opacity);
-            if (opacity > 0.5 && tooltip.textContent.trim().length > 0) {
-              contentLoaded = true;
-              break;
-            }
-            await sleep(50);
-          }
-
-          if (!contentLoaded) {
-            console.warn(`[NotebookLM Takeout] Source ${sourceIndex}: Tooltip content did not load`);
-            errors.push(`Source ${sourceIndex}: Tooltip content did not load`);
-            button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-            continue;
-          }
-
-          // Extract citation data
-          // Source title moved from footer to header in recent NotebookLM update
-          const headerEl = tooltip.querySelector('.citation-tooltip-header');
-          const textEl = tooltip.querySelector('.citation-tooltip-text');
-
-          const sourceTitle = headerEl?.textContent?.trim() || '';
-
-          // Convert HTML to markdown using the same function as note exports
-          let quoteMarkdown = '';
-          if (textEl) {
-            // Try to process structural elements first
-            const textElements = textEl.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
-            if (textElements.length > 0) {
-              for (const element of textElements) {
-                const markdown = await htmlToMarkdownWithImages(element, includeCitationImages);
-                if (markdown && markdown.length > 0) {
-                  quoteMarkdown += markdown + '\n\n';
-                }
-              }
-            } else {
-              // Fallback: convert the whole textEl
-              quoteMarkdown = await htmlToMarkdownWithImages(textEl, includeCitationImages);
-            }
-          }
-          quoteMarkdown = quoteMarkdown.trim();
-
-          sourcesByIndex[sourceIndex] = {
-            text: sourceTitle,
-            quote: quoteMarkdown
-          };
-
-          console.log(`[NotebookLM Takeout] ✓ Extracted source ${sourceIndex}: "${sourceTitle?.substring(0, 40)}..." (quote: ${quoteMarkdown.length} chars)`);
-          extractedCount++;
-
-          // Close tooltip
-          button.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-          await sleep(400);  // Increased from 250ms for slower networks
-
-          // Wait for tooltip to close
-          for (let attempt = 0; attempt < 20; attempt++) {
-            if (!document.querySelector('xap-inline-dialog-container[role="dialog"]')) {
-              break;
-            }
-            await sleep(100);
-          }
-
-        } catch (error) {
-          console.error(`[NotebookLM Takeout] Error extracting source ${sourceIndex}:`, error);
-          errors.push(`Source ${sourceIndex}: ${error.message}`);
+      for (const [sourceIndex, button] of buttonsBySourceIndex) {
+        const result = await extractSingleCitationWithRetry(button, sourceIndex, includeCitationImages, 3);
+        if (result.success) {
+          sourcesByIndex[sourceIndex] = { text: result.data.text, quote: result.data.quote };
+        } else {
+          errors.push(result.error);
         }
       }
 
-      console.log(`[NotebookLM Takeout] Extraction complete: ${extractedCount}/${uniqueSourceIndices.size} sources extracted`);
-
+      console.log(`[NotebookLM Takeout] Extraction complete: ${Object.keys(sourcesByIndex).length}/${buttonsBySourceIndex.size} sources extracted`);
     } catch (error) {
       console.error('[NotebookLM Takeout] Fatal error in extractAllChatCitations:', error);
       errors.push(`Fatal error: ${error.message}`);

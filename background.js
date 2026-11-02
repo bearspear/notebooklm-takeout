@@ -5,6 +5,9 @@
 // the new one; keep both so users mid-rollout still work.
 const NOTEBOOK_HOSTS = ['notebook.google.com', 'notebooklm.google.com'];
 
+// Shared DOM-free helpers (globalThis.NLME)
+importScripts('takeout-shared.js');
+
 function isNotebookUrl(url) {
   return !!url && NOTEBOOK_HOSTS.some(host => url.includes(host));
 }
@@ -210,7 +213,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     case 'BATCH_DOWNLOAD_ALL':
       // Run batch download entirely in background (popup may close)
-      runBatchDownload(message.tabId, message.items)
+      runBatchDownload(message.tabId, message.items, message.downloadPreference || 'pdf')
         .then(result => {
           // Notify via notification since popup may be closed
           if (result.success) {
@@ -603,19 +606,8 @@ function handleArtifactDetected(data) {
         capturedAt: Date.now()
       });
 
-      // Update badge
-      updateBadge();
-
-      // Store in chrome.storage for persistence
-      chrome.storage.local.set({ capturedArtifacts });
     }
   }
-}
-
-function updateBadge() {
-  const total = Object.values(capturedArtifacts).reduce((sum, arr) => sum + arr.length, 0);
-  chrome.action.setBadgeText({ text: total > 0 ? String(total) : '' });
-  chrome.action.setBadgeBackgroundColor({ color: '#4285f4' });
 }
 
 async function downloadArtifact(data) {
@@ -712,20 +704,15 @@ function clearArtifacts() {
   capturedArtifacts.slides = [];
   capturedArtifacts.infographics = [];
   capturedArtifacts.notebooks = [];
-  chrome.storage.local.set({ capturedArtifacts });
-  updateBadge();
 }
 
-// Restore artifacts from storage on startup
-chrome.storage.local.get(['capturedArtifacts'], (result) => {
-  if (result.capturedArtifacts) {
-    Object.assign(capturedArtifacts, result.capturedArtifacts);
-    updateBadge();
-  }
-});
+// The toolbar badge counted artifacts found by the removed page polling
+// (Nov 2026). Clear what earlier versions stored so no stale count remains.
+chrome.storage.local.remove('capturedArtifacts');
+chrome.action.setBadgeText({ text: '' });
 
 // Run batch download entirely in background
-async function runBatchDownload(tabId, items) {
+async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
   console.log('[Background] Starting batch download for', items.length, 'items');
 
   batchDownloadMode = true;
@@ -763,7 +750,8 @@ async function runBatchDownload(tabId, items) {
           artifactIndex: item.index,
           artifactType: item.type,
           artifactName: item.label,
-          skipMoreButton: extractable
+          skipMoreButton: extractable,
+          downloadPreference
         }
       });
 
@@ -868,6 +856,9 @@ async function runBatchDownload(tabId, items) {
 
     // Create ZIP and download
     if (fileContents.length > 0) {
+    // Same-title artifacts (spec R8) would otherwise overwrite each other
+    const uniqueNames = NLME.uniqueFilenames(fileContents.map(f => f.filename));
+    fileContents.forEach((f, i) => { f.filename = uniqueNames[i]; });
     try {
       const zipBase64 = await createZipFromFiles(fileContents);
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);

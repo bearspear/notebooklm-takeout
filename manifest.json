@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NotebookLM Takeout",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Export audio, slides, infographics, notes, and sources from NotebookLM",
   "permissions": [
     "activeTab",
@@ -40,6 +40,7 @@
         "https://notebooklm.google.com/*"
       ],
       "js": [
+        "takeout-shared.js",
         "mindmap-extract.js",
         "content.js"
       ],
