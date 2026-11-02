@@ -1153,19 +1153,28 @@
   }
 
   // Helper function to wait for an element
-  function waitForElement(selector, timeout = 5000, parent = document) {
+  // options.exclude: elements to ignore (e.g. viewers open before a click);
+  // options.visible: only accept rendered elements. Used so a newly opened
+  // viewer is never confused with one already in the DOM (Milestone 1).
+  function waitForElement(selector, timeout = 5000, parent = document, options = {}) {
     let observer = null;
     let timeoutId = null;
+    const { exclude = null, visible = false } = options;
+    const find = () => {
+      if (!exclude && !visible) return parent.querySelector(selector);
+      return Array.from(parent.querySelectorAll(selector)).find(el =>
+        (!exclude || !exclude.has(el)) && (!visible || el.getClientRects().length > 0)) || null;
+    };
 
     const promise = new Promise((resolve, reject) => {
-      const existingEl = parent.querySelector(selector);
+      const existingEl = find();
       if (existingEl) {
         resolve(existingEl);
         return;
       }
 
       observer = new MutationObserver((mutations, obs) => {
-        const el = parent.querySelector(selector);
+        const el = find();
         if (el) {
           obs.disconnect();
           if (timeoutId) clearTimeout(timeoutId);
@@ -1175,7 +1184,8 @@
 
       observer.observe(parent, {
         childList: true,
-        subtree: true
+        subtree: true,
+        attributes: visible
       });
 
       timeoutId = setTimeout(() => {
@@ -2116,9 +2126,9 @@
         if (!closed) {
           console.error('[NotebookLM Takeout] ERROR: Failed to close viewer after 3 attempts');
           DOMHealthTracker.track('stuck', 'button[aria-label="Close note view"]', 'Viewer close failed');
-          // Don't throw - instead, warn and try to continue
-          console.warn('[NotebookLM Takeout] Attempting to continue anyway...');
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          // Reading on would return the still-open item's content under this
+          // note's title (Milestone 1: fail instead of continuing)
+          throw new Error('Previous viewer could not be closed');
         }
       }
 
@@ -2186,7 +2196,13 @@
       // titles export the row that was clicked (titles can repeat)
       const noteElements = Array.from(allNoteElements);
       const noteTitles = noteElements.map(el => el.querySelector('.artifact-title, .note-title')?.textContent?.trim() || '');
-      const pick = NLME.pickByIndexThenTitle(noteTitles, noteIndex, noteTitle);
+      // Strict: never fall back to an index whose title differs (Milestone 1)
+      let pick = -1;
+      try {
+        pick = NLME.pickByIndexThenTitleStrict(noteTitles, noteIndex, noteTitle);
+      } catch (e) {
+        pick = -1;
+      }
       const noteEl = pick === -1 ? null : noteElements[pick];
       console.log(`[NotebookLM Takeout] Resolved note "${noteTitle}" (index ${noteIndex}) to position ${pick}`);
 
@@ -2216,9 +2232,10 @@
       }
 
       console.log('[NotebookLM Takeout] Clicking note button...');
+      const viewersBefore = snapshotStudioViewers();
       button.click();
 
-      return await readOpenStudioNote();
+      return await readOpenStudioNote(noteTitle, viewersBefore);
 
     } catch (error) {
       console.error('[NotebookLM Takeout] Extraction error:', error);
@@ -2228,7 +2245,16 @@
 
   // Read the note that was just opened in the Studio panel (editor, Tailwind
   // viewer with citations, or legacy mindmap viewer).
-  async function readOpenStudioNote() {
+  // Viewer elements present before a click; the wait after the click accepts
+  // only a new, rendered viewer (Milestone 1).
+  function snapshotStudioViewers() {
+    const studioPanel = document.querySelector('studio-panel') || document;
+    return new Set(studioPanel.querySelectorAll(
+      'rich-text-editor .ql-editor, rich-text-editor .ProseMirror, markdown-editor-legacy .ql-editor, labs-tailwind-doc-viewer, mindmap-viewer'));
+  }
+
+  async function readOpenStudioNote(expectedTitle = '', viewersBefore = null) {
+    const fresh = { exclude: viewersBefore, visible: true };
     // Wait for content to load (editor or mindmap viewer).
     // Scope to <studio-panel> so we don't accidentally pick up the chat panel's
     // labs-tailwind-doc-viewer (used to render AI replies). When the chat
@@ -2237,15 +2263,21 @@
     console.log('[NotebookLM Takeout] Waiting for content...');
     const studioPanel = document.querySelector('studio-panel') || document;
     const content = await timePhase('note.open', () => raceWithCleanup([
-      waitForElement('rich-text-editor .ql-editor', 5000, studioPanel),
-      waitForElement('rich-text-editor .ProseMirror', 5000, studioPanel),
-      waitForElement('markdown-editor-legacy .ql-editor', 5000, studioPanel),
-      waitForElement('labs-tailwind-doc-viewer', 5000, studioPanel),
-      waitForElement('mindmap-viewer', 5000, studioPanel)
+      waitForElement('rich-text-editor .ql-editor', 5000, studioPanel, fresh),
+      waitForElement('rich-text-editor .ProseMirror', 5000, studioPanel, fresh),
+      waitForElement('markdown-editor-legacy .ql-editor', 5000, studioPanel, fresh),
+      waitForElement('labs-tailwind-doc-viewer', 5000, studioPanel, fresh),
+      waitForElement('mindmap-viewer', 5000, studioPanel, fresh)
     ]).catch(() => null));
 
     if (!content) {
       throw new Error('Content not found (no editor or mindmap viewer)');
+    }
+
+    // The opened note must be the requested one (Milestone 1)
+    const openedTitle = studioPanel.querySelector('input.note-header__editable-title')?.value?.trim();
+    if (expectedTitle && openedTitle && !NLME.titlesMatch(openedTitle, expectedTitle)) {
+      throw new Error(`Opened "${openedTitle}" instead of "${expectedTitle}"`);
     }
 
     console.log('[NotebookLM Takeout] Content found:', content.tagName, content.className || '(no class)');
@@ -2310,8 +2342,9 @@
     const button = container.querySelector('button.source-stretched-button') || container.querySelector('button');
     if (!button) throw new Error('Could not find button for note');
     button.scrollIntoView({ behavior: 'instant', block: 'center' });
+    const viewersBefore = snapshotStudioViewers();
     button.click();
-    return await readOpenStudioNote();
+    return await readOpenStudioNote(noteTitle, viewersBefore);
   }
 
   /**
@@ -3070,8 +3103,10 @@
   function resolveArtifactItem(title, artifactIndex) {
     const items = getArtifactItemsWithMore();
     const titles = items.map(item => item.querySelector('.artifact-title')?.textContent?.trim() || '');
-    const pick = NLME.pickByIndexThenTitle(titles, artifactIndex, title);
-    return pick === -1 ? null : items[pick];
+    // Strict (Milestone 1): throws "Item changed" instead of falling back to
+    // an index whose title differs
+    const pick = title ? NLME.pickByIndexThenTitleStrict(titles, artifactIndex, title) : artifactIndex;
+    return items[pick] || null;
   }
 
   /**
@@ -3095,11 +3130,17 @@
       }
 
       console.log('[NotebookLM Takeout] Clicking Report button to open report-viewer...');
+      // Close whatever is open, then accept only a newly opened viewer
+      // (Milestone 1): an old viewer would be read under this title
+      if (findOpenStudioViewer() && !(await closeStudioViewer(500))) {
+        throw new Error('Previous viewer could not be closed');
+      }
+      const viewersBefore = new Set(document.querySelectorAll('report-viewer'));
       reportButton.click();
 
       // Wait for report-viewer to appear in the DOM
       console.log('[NotebookLM Takeout] Waiting for report-viewer...');
-      const reportViewer = await waitForElement('report-viewer', 5000);
+      const reportViewer = await waitForElement('report-viewer', 5000, document, { exclude: viewersBefore, visible: true });
 
       if (!reportViewer) {
         throw new Error('report-viewer did not appear');
@@ -3233,11 +3274,17 @@
       }
 
       console.log('[NotebookLM Takeout] Clicking Data Table button to open table-viewer...');
+      // Close whatever is open, then accept only a newly opened viewer
+      // (Milestone 1): an old viewer would be read under this title
+      if (findOpenStudioViewer() && !(await closeStudioViewer(500))) {
+        throw new Error('Previous viewer could not be closed');
+      }
+      const viewersBefore = new Set(document.querySelectorAll('table-viewer'));
       tableButton.click();
 
       // Wait for table-viewer to appear in the DOM
       console.log('[NotebookLM Takeout] Waiting for table-viewer...');
-      const tableViewer = await waitForElement('table-viewer', 5000);
+      const tableViewer = await waitForElement('table-viewer', 5000, document, { exclude: viewersBefore, visible: true });
 
       if (!tableViewer) {
         throw new Error('table-viewer did not appear');
