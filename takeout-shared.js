@@ -50,11 +50,34 @@
     return !NOT_DOWNLOADABLE.includes(type);
   }
 
+  // Citation hover tooltip. Gemini Notebook replaced xap-inline-dialog-container
+  // with an nb-popover in a .citation-tooltip-panel overlay pane (Nov 2026).
+  const CITATION_TOOLTIP_SELECTOR = [
+    '.cdk-overlay-pane.citation-tooltip-panel',
+    'div.popover-card[aria-label="Citation Details"]',
+    'xap-inline-dialog-container[role="dialog"]'
+  ].join(', ');
+
+  const EXPANDER_ICONS = ['more_horiz', 'unfold_less', '...'];
+
+  function isCitationExpander({ iconText, ariaLabel } = {}) {
+    if (EXPANDER_ICONS.includes((iconText || '').trim())) return true;
+    return (ariaLabel || '').includes('additional citations');
+  }
+
+  function parseCitationIndex(text) {
+    const t = (text || '').trim();
+    return /^[0-9]+$/.test(t) ? t : null;
+  }
+
   const NLME = {
     ICON_TO_TYPE,
     NOTE_ICONS,
     resolveArtifactType,
-    isDownloadableType
+    isDownloadableType,
+    CITATION_TOOLTIP_SELECTOR,
+    isCitationExpander,
+    parseCitationIndex
   };
 
   root.NLME = NLME;

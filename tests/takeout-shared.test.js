@@ -26,3 +26,20 @@ test('isDownloadableType rejects Flashcards and Quiz only', () => {
 test('NOTE_ICONS includes the Nov 2026 article icon', () => {
   assert.equal(NLME.NOTE_ICONS.includes('article'), true);
 });
+
+test('isCitationExpander detects collapsed-group buttons only', () => {
+  assert.equal(NLME.isCitationExpander({ iconText: 'more_horiz' }), true);
+  assert.equal(NLME.isCitationExpander({ ariaLabel: 'Show additional citations' }), true);
+  assert.equal(NLME.isCitationExpander({ iconText: '', ariaLabel: '1: Donald E. Scott' }), false);
+});
+
+test('parseCitationIndex accepts digits only', () => {
+  assert.equal(NLME.parseCitationIndex(' 12 '), '12');
+  assert.equal(NLME.parseCitationIndex('more_horiz'), null);
+  assert.equal(NLME.parseCitationIndex(''), null);
+});
+
+test('CITATION_TOOLTIP_SELECTOR covers the Nov 2026 popover and the legacy dialog', () => {
+  assert.match(NLME.CITATION_TOOLTIP_SELECTOR, /\.citation-tooltip-panel/);
+  assert.match(NLME.CITATION_TOOLTIP_SELECTOR, /xap-inline-dialog-container/);
+});

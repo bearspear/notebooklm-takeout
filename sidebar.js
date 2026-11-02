@@ -2406,7 +2406,9 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
         }
       }
 
-      if (node.nodeName === 'BUTTON' && node.classList.contains('ng-star-inserted')) {
+      // Markers are button.citation-marker; they lost ng-star-inserted in Nov 2026
+      if (node.nodeName === 'BUTTON' &&
+          (node.classList.contains('citation-marker') || node.classList.contains('ng-star-inserted'))) {
         return true;
       }
       if (node.nodeName === 'A' && node.getAttribute('href')?.startsWith('#cite')) {
@@ -2429,13 +2431,11 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
                                 node.getAttribute('href')?.replace('#cite-', '');
 
       if (!originalSourceIndex && node.nodeName === 'BUTTON') {
-        // Try mat-icon first (new DOM), then span (old DOM)
-        const matIcon = node.querySelector('mat-icon');
-        const span = node.querySelector('span');
-        const textSource = matIcon || span;
-        if (textSource) {
-          originalSourceIndex = textSource.textContent.trim();
-          logger.info('Citation', `  - extracted from BUTTON ${matIcon ? 'mat-icon' : 'span'}: "${originalSourceIndex}"`);
+        // The number is the span text; a mat-icon only appears on expanders
+        originalSourceIndex = NLME.parseCitationIndex(node.querySelector('span')?.textContent) || '';
+        if (!originalSourceIndex) {
+          // Not a numbered citation (e.g. an unrecognised button) — drop it
+          return '';
         }
       }
 
