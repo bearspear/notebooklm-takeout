@@ -225,6 +225,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ started: true });
       break;
 
+    case 'EXTRACT_MINDMAP_FRAME':
+      extractMindmapFromAppFrame(message.tabId)
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ success: false, error: error.message }));
+      return true;
+
     case 'CANCEL_BATCH_DOWNLOAD':
       // Checked between items; the item in progress finishes first
       batchCancelRequested = true;
@@ -749,7 +755,7 @@ async function runBatchDownload(tabId, items) {
       // item among artifact-library-item rows only, extracts Reports/Data Tables
       // as HTML, and returns the CDN URL that injected.js intercepts from
       // window.open (no Chrome download is created for those).
-      const extractable = item.type === 'Report' || item.type === 'Data Table';
+      const extractable = item.type === 'Report' || item.type === 'Data Table' || item.type === 'Mind Map';
       capturedDownload = null;
       const response = await chrome.tabs.sendMessage(tabId, {
         type: 'DOWNLOAD_ARTIFACT',
@@ -763,6 +769,36 @@ async function runBatchDownload(tabId, items) {
 
       if (!response || !response.success) {
         throw new Error(response?.error || 'Download failed');
+      }
+
+      if (response.method === 'mindmap_app_frame') {
+        const frame = await extractMindmapFromAppFrame(tabId);
+        if (!frame.success) throw new Error(frame.error);
+        const base = sanitizeFilename(item.label);
+        for (const [filename, text] of [
+          [`${base}.svg`, frame.svgContent || ''],
+          [`${base}.json`, JSON.stringify(frame.treeData || {}, null, 2)]
+        ]) {
+          const data = utf8ToBase64(text);
+          fileContents.push({ filename, data, size: data.length });
+          downloadedFiles.push(filename);
+        }
+        console.log('[Background] Added mind map (app frame) to collection:', base);
+        continue;
+      }
+
+      if (response.method === 'mindmap_extraction') {
+        const base = sanitizeFilename(item.label);
+        for (const [filename, text] of [
+          [`${base}.svg`, response.svgContent || ''],
+          [`${base}.json`, JSON.stringify(response.treeData || {}, null, 2)]
+        ]) {
+          const data = utf8ToBase64(text);
+          fileContents.push({ filename, data, size: data.length });
+          downloadedFiles.push(filename);
+        }
+        console.log('[Background] Added mind map to collection:', base);
+        continue;
       }
 
       if (response.method === 'content_extraction') {
@@ -976,6 +1012,40 @@ function waitForCapture(timeout) {
     };
     setTimeout(check, 500); // Start after menu has time to open
   });
+}
+
+// Extract an open mind map from its sandboxed app iframe (*.scf.usercontent.goog)
+// by injecting mindmap-extract.js into the frame and running the same SVG/tree
+// extraction used for in-page mind maps. Polls while the frame loads, then
+// closes the viewer.
+async function extractMindmapFromAppFrame(tabId) {
+  try {
+    for (let attempt = 0; attempt < 12; attempt++) {
+      await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        files: ['mindmap-extract.js']
+      }).catch(() => {});
+      const results = await chrome.scripting.executeScript({
+        target: { tabId, allFrames: true },
+        func: async () => {
+          if (window === window.top) return null;
+          const svgNode = document.querySelector('svg g.node');
+          if (!svgNode || !globalThis.__nlmeMindmap) return null;
+          const root = svgNode.ownerSVGElement.parentElement || document.body;
+          const result = await globalThis.__nlmeMindmap.extractMindmapSVG(root);
+          return { svgContent: result.svgContent, treeData: result.treeData };
+        }
+      }).catch(() => []);
+      const extracted = results.map(r => r.result).find(Boolean);
+      if (extracted) {
+        return { success: true, ...extracted };
+      }
+      await new Promise(resolve => setTimeout(resolve, 750));
+    }
+    return { success: false, error: 'Mind map not found in app frame (check *.scf.usercontent.goog permission)' };
+  } finally {
+    chrome.tabs.sendMessage(tabId, { type: 'NAVIGATE_BACK' }).catch(() => {});
+  }
 }
 
 // Base64-encode a string as UTF-8 (chunked to avoid call-stack limits)
