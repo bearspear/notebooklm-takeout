@@ -175,3 +175,14 @@ test('isCollapsedCitationGroup never matches an expanded group (clicking it woul
   assert.equal(NLME.isCollapsedCitationGroup({ ariaLabel: 'Hide additional citations' }), false);
   assert.equal(NLME.isCollapsedCitationGroup({ iconText: '3' }), false);
 });
+
+test('classifyKatexScript reads a lone script relative to its pstrut', () => {
+  // Measured on notebook.google.com (Nov 2026): E = mc^2 and DM_{total}
+  assert.equal(NLME.classifyKatexScript({ top: -3.063, pstrutHeight: 2.7 }), 'sup');
+  assert.equal(NLME.classifyKatexScript({ top: -2.55, pstrutHeight: 2.7, hasDepth: true }), 'sub');
+});
+
+test('classifyKatexScript falls back to the vlist depth marker without a pstrut', () => {
+  assert.equal(NLME.classifyKatexScript({ top: -2.55, hasDepth: true }), 'sub');
+  assert.equal(NLME.classifyKatexScript({ top: -3.063, hasDepth: false }), 'sup');
+});

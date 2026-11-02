@@ -238,9 +238,16 @@ function katexExtractSupSub(supsubEl) {
   };
 
   if (items.length === 1) {
-    const top = parseFloat(items[0].style.top) || 0;
+    // `top` is relative to the .pstrut spacer, not the baseline, so a
+    // subscript (top -2.55em, pstrut 2.7em) is still negative (Nov 2026)
     const text = itemText(items[0]);
-    return top < -1 ? { sub: '', sup: text } : { sub: text, sup: '' };
+    const pstrut = items[0].querySelector('.pstrut');
+    const kind = NLME.classifyKatexScript({
+      top: parseFloat(items[0].style.top),
+      pstrutHeight: pstrut ? parseFloat(pstrut.style.height) : NaN,
+      hasDepth: !!supsubEl.querySelector('.vlist-t2')
+    });
+    return kind === 'sup' ? { sub: '', sup: text } : { sub: text, sup: '' };
   }
 
   // Two or more: sort by top, most negative first → superscript.

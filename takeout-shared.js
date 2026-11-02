@@ -180,7 +180,20 @@
     });
   }
 
+  // Classify a lone KaTeX sub/superscript. Its inline `top` is measured from
+  // the top of a .pstrut spacer, so top + pstrut height is the shift from the
+  // baseline: negative = raised (sup), positive = lowered (sub). E.g.
+  // E = mc^2: -3.063 + 2.7 < 0; DM_{total}: -2.55 + 2.7 > 0. Without a
+  // pstrut, KaTeX's .vlist-t2 (content below the baseline) marks a subscript.
+  function classifyKatexScript({ top, pstrutHeight, hasDepth } = {}) {
+    if (Number.isFinite(top) && Number.isFinite(pstrutHeight)) {
+      return top + pstrutHeight < 0 ? 'sup' : 'sub';
+    }
+    return hasDepth ? 'sub' : 'sup';
+  }
+
   const NLME = {
+    classifyKatexScript,
     isCollapsedCitationGroup,
     renumberCitationAnchors,
     uniqueFilenames,
