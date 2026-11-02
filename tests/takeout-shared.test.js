@@ -144,3 +144,22 @@ test('uniqueFilenames suffixes repeated names before the extension', () => {
 test('uniqueFilenames leaves distinct names and extensionless names usable', () => {
   assert.deepEqual(NLME.uniqueFilenames(['Map.svg', 'Map.json', 'README', 'README']), ['Map.svg', 'Map.json', 'README', 'README (2)']);
 });
+
+test('renumberCitationAnchors numbers occurrences in document order per message and source', () => {
+  const md = 'a<a id="msg-0-cite-ref-8-2" href="#msg-0-src-8">[8]</a> b<a id="msg-0-cite-ref-8-5" href="#msg-0-src-8">[8]</a>' +
+    ' c<a id="msg-1-cite-ref-8-3" href="#msg-1-src-8">[8]</a> d<a id="msg-0-cite-ref-9-4" href="#msg-0-src-9">[9]</a>';
+  assert.equal(NLME.renumberCitationAnchors(md),
+    'a<a id="msg-0-cite-ref-8-1" href="#msg-0-src-8">[8]</a> b<a id="msg-0-cite-ref-8-2" href="#msg-0-src-8">[8]</a>' +
+    ' c<a id="msg-1-cite-ref-8-1" href="#msg-1-src-8">[8]</a> d<a id="msg-0-cite-ref-9-1" href="#msg-0-src-9">[9]</a>');
+});
+
+test('renumberCitationAnchors handles note anchors without a message prefix', () => {
+  const md = '<a id="cite-ref-3-2" href="#src-3">[3]</a><a id="note-x-cite-ref-3-7" href="#note-x-src-3">[3]</a>';
+  assert.equal(NLME.renumberCitationAnchors(md),
+    '<a id="cite-ref-3-1" href="#src-3">[3]</a><a id="note-x-cite-ref-3-1" href="#note-x-src-3">[3]</a>');
+});
+
+test('renumberCitationAnchors leaves back-links in the Sources section untouched', () => {
+  const md = '**[[3]](#msg-0-cite-ref-3-1)** Title';
+  assert.equal(NLME.renumberCitationAnchors(md), md);
+});

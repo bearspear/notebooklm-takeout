@@ -156,7 +156,22 @@
     });
   }
 
+  // Citation anchors are numbered while Turndown runs, but some rules convert
+  // a subtree twice (the list rule re-runs Turndown on each <li>), which skips
+  // numbers and breaks the Sources back-links to "-1". Renumber the finished
+  // Markdown in document order, per anchor prefix and citation number.
+  function renumberCitationAnchors(markdown) {
+    const counts = new Map();
+    return (markdown || '').replace(/<a id="([^"]*?)cite-ref-(\d+)-\d+"/g, (_m, prefix, number) => {
+      const key = `${prefix}|${number}`;
+      const n = (counts.get(key) || 0) + 1;
+      counts.set(key, n);
+      return `<a id="${prefix}cite-ref-${number}-${n}"`;
+    });
+  }
+
   const NLME = {
+    renumberCitationAnchors,
     uniqueFilenames,
     pickDownloadMenuIndex,
     countFailedExtractions,

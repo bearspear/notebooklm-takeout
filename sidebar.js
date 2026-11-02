@@ -2499,6 +2499,10 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
   // Clean up excessive newlines (more than 2 consecutive)
   markdown = markdown.replace(/\n{3,}/g, '\n\n');
 
+  // Fix occurrence numbers skipped by rules that convert a subtree twice
+  // (lists), so every Sources back-link to "-1" has a target
+  markdown = NLME.renumberCitationAnchors(markdown);
+
   // Sources section: extracted sources plus a placeholder for any marker
   // whose tooltip could not be read, all under their original numbers
   const entries = NLME.buildCitationEntries(sources, [...citationOccurrences.keys()], { placeholders: citationPlaceholders });
@@ -4707,7 +4711,9 @@ async function exportChat(chatData, extractFullCitations = false) {
 
         if (citationButtons.length > 0) {
           stats.messagesWithCitations++;
-          stats.totalCitationsFound += citationButtons.length;
+          // Count numbered citations only, not the expand/collapse group buttons
+          stats.totalCitationsFound += Array.from(citationButtons)
+            .filter(b => NLME.parseCitationIndex(b.querySelector('span')?.textContent)).length;
           citationButtons.forEach((button) => {
             const span = button.querySelector('span');
             const sourceIndex = span?.textContent?.trim();
@@ -5173,6 +5179,8 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
 
     // Convert AI response HTML to markdown
     let aiResponseMarkdown = turndownService.turndown(msg.aiResponseHTML);
+    // Fix occurrence numbers skipped by rules that convert a subtree twice
+    aiResponseMarkdown = NLME.renumberCitationAnchors(aiResponseMarkdown);
 
     // Clean up: Merge consecutive footnote references into a single <sup> tag
     // Pattern: <sup>...[1]...</sup>,<sup>...[2]...</sup> → <sup>...[1]... ...[2]...</sup>
