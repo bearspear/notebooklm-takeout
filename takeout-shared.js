@@ -70,7 +70,29 @@
     return /^[0-9]+$/.test(t) ? t : null;
   }
 
+  // Sources-section entries for a note: every extracted source plus every
+  // marker number seen in the body, keyed by the ORIGINAL citation number so
+  // body links and anchors always agree. Markers whose tooltip could not be
+  // read get a placeholder instead of borrowing another source's number.
+  function buildCitationEntries(sources, markerIndices) {
+    const byNumber = new Map();
+    for (const s of sources || []) {
+      const number = String(s.sourceIndex);
+      if (!byNumber.has(number)) {
+        byNumber.set(number, { number, text: s.text || '', quote: s.quote || '', missing: false });
+      }
+    }
+    for (const m of markerIndices || []) {
+      const number = String(m);
+      if (!byNumber.has(number)) {
+        byNumber.set(number, { number, text: '(citation details unavailable)', quote: '', missing: true });
+      }
+    }
+    return [...byNumber.values()].sort((a, b) => (parseInt(a.number, 10) || 0) - (parseInt(b.number, 10) || 0));
+  }
+
   const NLME = {
+    buildCitationEntries,
     ICON_TO_TYPE,
     NOTE_ICONS,
     resolveArtifactType,

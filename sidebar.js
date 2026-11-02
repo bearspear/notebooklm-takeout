@@ -2215,20 +2215,6 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
   // Create anchor prefix for combined notes (prevents ID collisions)
   const anchorPrefix = noteId ? `note-${noteId}-` : '';
 
-  // Create a mapping from original sourceIndex to sequential display number
-  // The HTML buttons show sequential numbers, but sources have original IDs
-  const sourceIndexToDisplayNumber = new Map();
-  const displayNumberToSource = new Map();
-
-  if (sources && sources.length > 0) {
-    sources.forEach((source, idx) => {
-      const displayNumber = (idx + 1).toString();
-      sourceIndexToDisplayNumber.set(source.sourceIndex, displayNumber);
-      displayNumberToSource.set(source.sourceIndex, source);
-      logger.info('Markdown', `  - Mapping: original ID ${source.sourceIndex} -> display #${displayNumber}`);
-    });
-  }
-
   // Initialize TurndownService with standardized configuration
   const turndownService = createTurndownService();
 
@@ -2446,16 +2432,9 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
 
       logger.info('Citation', `  - original sourceIndex: "${originalSourceIndex}"`);
 
-      // Map original source ID to sequential display number
-      let displayNumber = sourceIndexToDisplayNumber.get(originalSourceIndex);
-
-      if (!displayNumber) {
-        // Source not found in our extracted sources - use original number
-        logger.info('Citation', `  - WARNING: Source ID ${originalSourceIndex} not found in sources, using original`);
-        displayNumber = originalSourceIndex;
-      } else {
-        logger.info('Citation', `  - mapped to display number: ${displayNumber}`);
-      }
+      // Original citation numbers everywhere so body links and the Sources
+      // section always agree (buildCitationEntries)
+      const displayNumber = originalSourceIndex;
 
       if (!citationOccurrences.has(displayNumber)) {
         citationOccurrences.set(displayNumber, 0);
@@ -2513,44 +2492,21 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
   // Clean up excessive newlines (more than 2 consecutive)
   markdown = markdown.replace(/\n{3,}/g, '\n\n');
 
-  // Append sources section if present
-  if (sources && sources.length > 0) {
+  // Sources section: extracted sources plus a placeholder for any marker
+  // whose tooltip could not be read, all under their original numbers
+  const entries = NLME.buildCitationEntries(sources, [...citationOccurrences.keys()]);
+  if (entries.length > 0) {
     markdown += '\n\n---\n\n## Sources\n\n';
 
-    // Deduplicate sources by sourceIndex
-    const uniqueSources = new Map();
-    sources.forEach(source => {
-      if (!uniqueSources.has(source.sourceIndex)) {
-        uniqueSources.set(source.sourceIndex, source);
-      }
-    });
+    entries.forEach(entry => {
+      const n = entry.number;
+      markdown += `<a id="${anchorPrefix}src-${n}"></a>\n`;
+      // Source number links back to its first citation in the body
+      markdown += `**[[${n}]](#${anchorPrefix}cite-ref-${n}-1)** ${entry.text}\n\n`;
 
-    logger.info('Markdown', `  - Unique sources after dedup: ${uniqueSources.size}`);
-
-    // Sort by source number
-    const sortedSources = Array.from(uniqueSources.values()).sort((a, b) => {
-      const numA = parseInt(a.sourceIndex) || 0;
-      const numB = parseInt(b.sourceIndex) || 0;
-      return numA - numB;
-    });
-
-    logger.info('Markdown', `  - Sorted source indices: [${sortedSources.map(s => s.sourceIndex).join(', ')}]`);
-
-    // Write sources with display numbers (1, 2, 3...) instead of original IDs
-    sortedSources.forEach((source, idx) => {
-      const displayNumber = (idx + 1).toString(); // Sequential: 1, 2, 3...
-      const originalId = source.sourceIndex;
-
-      logger.info('Markdown', `  - Writing source: #${displayNumber} (original ID: ${originalId})`);
-      markdown += `<a id="${anchorPrefix}src-${displayNumber}"></a>\n`;
-
-      // Make source number clickable to jump back to first citation
-      markdown += `**[[${displayNumber}]](#${anchorPrefix}cite-ref-${displayNumber}-1)** ${source.text}\n\n`;
-
-      // Include the quote if available
-      if (source.quote && source.quote.length > 0) {
+      if (!entry.missing && entry.quote && entry.quote.length > 0) {
         // Optionally clean OCR artifacts, then escape markdown
-        const cleanedQuote = settings.cleanOCRArtifacts ? cleanOCRArtifacts(source.quote) : source.quote;
+        const cleanedQuote = settings.cleanOCRArtifacts ? cleanOCRArtifacts(entry.quote) : entry.quote;
         if (citationsCodeBlock) {
           // Wrap in markdown code block for data separation
           markdown += `\`\`\`markdown\n${cleanedQuote}\n\`\`\`\n\n`;

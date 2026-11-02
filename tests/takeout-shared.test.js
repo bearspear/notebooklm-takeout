@@ -43,3 +43,27 @@ test('CITATION_TOOLTIP_SELECTOR covers the Nov 2026 popover and the legacy dialo
   assert.match(NLME.CITATION_TOOLTIP_SELECTOR, /\.citation-tooltip-panel/);
   assert.match(NLME.CITATION_TOOLTIP_SELECTOR, /xap-inline-dialog-container/);
 });
+
+test('buildCitationEntries gives an unextracted marker a placeholder at its own number', () => {
+  const entries = NLME.buildCitationEntries(
+    [{ sourceIndex: '1', text: 'A' }, { sourceIndex: '3', text: 'C' }],
+    ['1', '2', '3']
+  );
+  assert.deepEqual(entries.map(e => [e.number, e.text, e.missing]), [
+    ['1', 'A', false],
+    ['2', '(citation details unavailable)', true],
+    ['3', 'C', false]
+  ]);
+});
+
+test('buildCitationEntries sorts numerically regardless of extraction order', () => {
+  const entries = NLME.buildCitationEntries(
+    [{ sourceIndex: '3', text: 'C' }, { sourceIndex: '1', text: 'A' }],
+    ['3', '1']
+  );
+  assert.deepEqual(entries.map(e => e.number), ['1', '3']);
+});
+
+test('buildCitationEntries returns nothing for a note without citations', () => {
+  assert.deepEqual(NLME.buildCitationEntries([], []), []);
+});
