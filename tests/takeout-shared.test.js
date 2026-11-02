@@ -186,3 +186,18 @@ test('classifyKatexScript falls back to the vlist depth marker without a pstrut'
   assert.equal(NLME.classifyKatexScript({ top: -2.55, hasDepth: true }), 'sub');
   assert.equal(NLME.classifyKatexScript({ top: -3.063, hasDepth: false }), 'sup');
 });
+
+test('mathSourceToMarkdown copies the original LaTeX from data-math verbatim', () => {
+  assert.equal(NLME.mathSourceToMarkdown({ dataMath: '1 + p + p^2 + p^3... = \\frac{1}{1-p}' }), '$1 + p + p^2 + p^3... = \\frac{1}{1-p}$');
+  assert.equal(NLME.mathSourceToMarkdown({ dataMath: 'DM_{total} = DM_{MW}', display: true }), '$$DM_{total} = DM_{MW}$$');
+});
+
+test('mathSourceToMarkdown prefers data-math over the KaTeX annotation and trims whitespace', () => {
+  assert.equal(NLME.mathSourceToMarkdown({ dataMath: '  -1 ', annotation: 'x' }), '$-1$');
+  assert.equal(NLME.mathSourceToMarkdown({ annotation: ' \\frac{1}{2} ' }), '$\\frac{1}{2}$');
+});
+
+test('mathSourceToMarkdown returns null when no source is available', () => {
+  assert.equal(NLME.mathSourceToMarkdown({}), null);
+  assert.equal(NLME.mathSourceToMarkdown({ dataMath: '   ' }), null);
+});

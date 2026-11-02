@@ -192,7 +192,19 @@
     return hasDepth ? 'sub' : 'sup';
   }
 
+  // Formula source for Markdown. Gemini Notebook keeps the model's original
+  // LaTeX on the KaTeX host span as data-math (Nov 2026); KaTeX's own
+  // annotation is the next best. Both are exact, unlike rebuilding the
+  // formula from the rendered layout. null when neither is present.
+  function mathSourceToMarkdown({ dataMath, annotation, display = false } = {}) {
+    const tex = [dataMath, annotation].map(s => (s || '').trim()).find(s => s.length > 0);
+    if (!tex) return null;
+    const delim = display ? '$$' : '$';
+    return `${delim}${tex}${delim}`;
+  }
+
   const NLME = {
+    mathSourceToMarkdown,
     classifyKatexScript,
     isCollapsedCitationGroup,
     renumberCitationAnchors,

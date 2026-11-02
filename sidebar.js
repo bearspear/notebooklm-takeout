@@ -293,8 +293,9 @@ function katexRenderInline(el) {
 
   const cls = el.classList;
 
-  // Skip spacing artifacts.
-  if (cls.contains('strut') || cls.contains('pstrut') || cls.contains('vlist-s')) return '';
+  // Skip spacing artifacts. Gemini Notebook prefixes some KaTeX classes
+  // (katex-strut, katex-base, katex-sizing; Nov 2026).
+  if (cls.contains('strut') || cls.contains('katex-strut') || cls.contains('pstrut') || cls.contains('vlist-s')) return '';
 
   // Skip ARIA-only mirrors.
   if (el.tagName === 'SPAN' && el.getAttribute('aria-hidden') === 'true' && cls.length === 0) {
@@ -328,7 +329,7 @@ function katexRenderInline(el) {
     const child = children[i];
     const cc = child.classList;
 
-    if (cc.contains('strut') || cc.contains('pstrut') || cc.contains('vlist-s')) continue;
+    if (cc.contains('strut') || cc.contains('katex-strut') || cc.contains('pstrut') || cc.contains('vlist-s')) continue;
 
     if (cc.contains('msupsub')) {
       const { sub, sup } = katexExtractSupSub(child);
@@ -378,8 +379,11 @@ function katexRenderInline(el) {
     }
 
     if (cc.contains('mord') || cc.contains('minner')) {
-      // If the mord wraps a base + msupsub, recurse so the msupsub handler runs.
-      if (Array.from(child.children).some(c => c.classList.contains('msupsub'))) {
+      // Recurse when the mord holds structure: a trailing msupsub, a fraction
+      // wrapper (mord > mfrac) or a root. Its flat textContent would run the
+      // denominator and numerator together ("1−p1" for 1/(1−p)).
+      if (Array.from(child.children).some(c => c.classList.contains('msupsub')) ||
+          cc.contains('sqrt') || child.querySelector(':scope > .mfrac, :scope > .sqrt')) {
         out += katexRenderInline(child);
       } else {
         out += katexUnicodeToLatex(child.textContent.trim());
@@ -392,7 +396,7 @@ function katexRenderInline(el) {
       continue;
     }
 
-    if (cc.contains('base')) {
+    if (cc.contains('base') || cc.contains('katex-base')) {
       out += katexRenderInline(child) + ' ';
       continue;
     }
@@ -448,14 +452,19 @@ function convertKatexNodeToLatex(node) {
   const isDisplay = node.closest('.katex-display') !== null;
   const delim = isDisplay ? '$$' : '$';
 
-  const annotation = node.querySelector('annotation[encoding="application/x-tex"]');
-  if (annotation && annotation.textContent && annotation.textContent.trim()) {
-    return `${delim}${annotation.textContent.trim()}${delim}`;
-  }
+  // Exact source first: the model's original LaTeX on the host span
+  // (data-math, Nov 2026), else KaTeX's annotation. Rebuilding from the
+  // rendered layout below is only a fallback.
+  const exact = NLME.mathSourceToMarkdown({
+    dataMath: node.closest('[data-math]')?.getAttribute('data-math'),
+    annotation: node.querySelector('annotation[encoding="application/x-tex"]')?.textContent,
+    display: isDisplay
+  });
+  if (exact) return exact;
 
   const katexHtml = node.querySelector('.katex-html');
   if (katexHtml) {
-    const latex = katexRenderInline(katexHtml).replace(/\s+/g, ' ').trim();
+    const latex = katexRenderInline(katexHtml).replace(/\u200b/g, '').replace(/\s+/g, ' ').trim();
     if (latex) return `${delim}${latex}${delim}`;
   }
 
