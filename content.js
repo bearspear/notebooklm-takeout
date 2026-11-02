@@ -334,6 +334,12 @@
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ success: false, error: error.message }));
       return true; // Keep channel open for async
+    } else if (message.type === 'REQUEST_EXPORT_CANCEL') {
+      // Side panel Cancel button: same effect as the overlay's Cancel
+      exportCancelled = true;
+      chrome.runtime.sendMessage({ type: 'CANCEL_EXPORT' }).catch(() => {});
+      removeExportOverlay();
+      sendResponse({ success: true });
     } else if (message.type === 'EXTRACT_NOTE') {
       // Extract note content
       withRequestTiming(() => (typeof message.data.sourceIndex === 'number'

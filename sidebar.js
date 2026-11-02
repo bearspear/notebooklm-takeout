@@ -711,7 +711,8 @@ async function saveSettings() {
 }
 
 function setupEventListeners() {
-  document.getElementById('rescan-btn').addEventListener('click', scanPage);
+  document.getElementById('rescan-btn').addEventListener('click', () => { if (!jobLock.current()) scanPage(); });
+  document.getElementById('cancel-download-btn')?.addEventListener('click', requestCancel);
 
   document.getElementById('auto-refresh-checkbox').addEventListener('change', (e) => {
     if (e.target.checked) {
@@ -841,7 +842,7 @@ function setupEventListeners() {
   // Chat scan button
   const scanChatBtn = document.getElementById('scan-chat-btn');
   if (scanChatBtn) {
-    scanChatBtn.addEventListener('click', scanChatPage);
+    scanChatBtn.addEventListener('click', () => runExclusive('Chat scan', scanChatPage));
   }
 
   // Dismiss warning banner button
@@ -857,11 +858,11 @@ function setupEventListeners() {
   }
   const studioDownloadSelectedBtn = document.getElementById('studio-download-selected-btn');
   if (studioDownloadSelectedBtn) {
-    studioDownloadSelectedBtn.addEventListener('click', handleStudioBulkDownload);
+    studioDownloadSelectedBtn.addEventListener('click', () => runExclusive('Studio download', handleStudioBulkDownload));
   }
   const studioDeleteSelectedBtn = document.getElementById('studio-delete-selected-btn');
   if (studioDeleteSelectedBtn) {
-    studioDeleteSelectedBtn.addEventListener('click', handleStudioBulkDelete);
+    studioDeleteSelectedBtn.addEventListener('click', () => runExclusive('Studio delete', handleStudioBulkDelete));
   }
 }
 
@@ -886,8 +887,10 @@ function setupTabSwitching() {
         }
       });
 
-      // Trigger scan for the active tab
-      if (targetTab === 'notes') {
+      // Trigger scan for the active tab (not while a job runs)
+      if (jobLock.current()) {
+        // skip
+      } else if (targetTab === 'notes') {
         await scanNotesPage();
       } else if (targetTab === 'artifacts') {
         await scanPage();
@@ -906,6 +909,7 @@ function startAutoRefresh() {
 
   const interval = settings.refreshInterval * 1000;
   autoRefreshInterval = setInterval(async () => {
+    if (jobLock.current()) return; // never rescan during a job
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (isNotebookUrl(tab?.url)) {
       await scanPage();
@@ -923,7 +927,7 @@ function stopAutoRefresh() {
 async function handleTabChange(activeInfo) {
   currentTabId = activeInfo.tabId;
   await checkStatus();
-  await scanPage();
+  if (!jobLock.current()) await scanPage();
 }
 
 async function handleTabUpdate(tabId, changeInfo, tab) {
@@ -932,7 +936,7 @@ async function handleTabUpdate(tabId, changeInfo, tab) {
   if (activeTab && activeTab.id === tabId) {
     if (changeInfo.status === 'complete') {
       await checkStatus();
-      await scanPage();
+      if (!jobLock.current()) await scanPage();
     }
   }
 }
@@ -1495,7 +1499,7 @@ async function scanPage() {
         }
 
         try {
-          await triggerItemDownload(tab.id, idx, item.label, item.type);
+          await runExclusive('Artifact download', () => triggerItemDownload(tab.id, idx, item.label, item.type));
 
           // Show success status
           if (statusSpan) {
@@ -1535,7 +1539,7 @@ async function scanPage() {
     const downloadAllBtn = document.getElementById('download-all-btn');
     if (downloadAllBtn) {
       downloadAllBtn.addEventListener('click', async () => {
-        await downloadAllArtifacts(tab.id, enabledItems);
+        await runExclusive('Download All', () => downloadAllArtifacts(tab.id, enabledItems));
       });
     }
 
@@ -1720,7 +1724,7 @@ function renderNotesList(notes) {
       e.stopPropagation();
       const idx = parseInt(btn.dataset.index);
       const note = notes[idx];
-      await exportNotesAsMarkdown([note]);
+      await runExclusive('Notes export', () => exportNotesAsMarkdown([note]));
     });
   });
 
@@ -1734,7 +1738,7 @@ function renderNotesList(notes) {
       return;
     }
 
-    await exportNotesAsMarkdown(selected);
+    await runExclusive('Notes export', () => exportNotesAsMarkdown(selected));
   });
 }
 
@@ -2599,6 +2603,37 @@ async function generateZipTimed(zip) {
     return await zip.generateAsync({ type: 'blob' });
   } finally {
     exportTimer?.end('zip.build');
+  }
+}
+
+// One export/scan/download job at a time (Milestone 1, Task 3). While a job
+// runs, controls in the tabs are disabled via body.job-running, auto-refresh
+// and tab-switch rescans are skipped, and Cancel reaches the running job.
+const jobLock = NLME.createJobLock();
+
+async function runExclusive(name, fn) {
+  if (!jobLock.tryAcquire(name)) {
+    showToast(`${jobLock.current()} is still running`, 'warning');
+    return undefined;
+  }
+  document.body.classList.add('job-running');
+  try {
+    return await fn();
+  } finally {
+    jobLock.release(name);
+    document.body.classList.remove('job-running');
+  }
+}
+
+// Same path as the page overlay's Cancel button: the content script flags the
+// export as cancelled and broadcasts CANCEL_EXPORT to every running exporter.
+async function requestCancel() {
+  if (!jobLock.current()) return;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await chrome.tabs.sendMessage(currentTabId || tab?.id, { type: 'REQUEST_EXPORT_CANCEL' });
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Cancel request failed:', error.message);
   }
 }
 
@@ -3641,7 +3676,7 @@ function setupSourcesEventListeners(sources) {
       e.stopPropagation();
       const idx = parseInt(btn.dataset.index);
       const source = sources[idx];
-      await exportSources([source]);
+      await runExclusive('Sources export', () => exportSources([source]));
     });
   });
 
@@ -3665,7 +3700,7 @@ function setupSourcesEventListeners(sources) {
         return;
       }
 
-      await exportSources(selected);
+      await runExclusive('Sources export', () => exportSources(selected));
     });
   }
 }
@@ -4634,7 +4669,7 @@ function renderChatSummary(chatData) {
 
   newExportBtn.addEventListener('click', async () => {
     const extractFullCitations = document.getElementById('extract-full-citations-checkbox')?.checked || false;
-    await exportChat(chatData, extractFullCitations);
+    await runExclusive('Chat export', () => exportChat(chatData, extractFullCitations));
   });
 }
 
@@ -5694,7 +5729,7 @@ function renderStudioList(items) {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const idx = parseInt(btn.dataset.idx, 10);
-      handleStudioDownloadRow(idx, btn);
+      runExclusive('Studio download', () => handleStudioDownloadRow(idx, btn));
     });
   });
 

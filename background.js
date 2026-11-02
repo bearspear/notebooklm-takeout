@@ -212,6 +212,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true; // Keep channel open for async
 
     case 'BATCH_DOWNLOAD_ALL':
+      if (batchDownloadMode) {
+        sendResponse({ started: false, success: false, error: 'A batch download is already running' });
+        break;
+      }
       // Run batch download entirely in background (popup may close)
       runBatchDownload(message.tabId, message.items, message.downloadPreference || 'pdf')
         .then(result => {

@@ -300,7 +300,24 @@
     return lines.join('\n') + '\n';
   }
 
+  // One export/scan/download job at a time in the side panel.
+  function createJobLock() {
+    let owner = null;
+    return {
+      tryAcquire(name) {
+        if (owner !== null) return false;
+        owner = name;
+        return true;
+      },
+      release(name) {
+        if (owner === name) owner = null;
+      },
+      current() { return owner; }
+    };
+  }
+
   const NLME = {
+    createJobLock,
     createPhaseTimer,
     formatTimingSummary,
     cleanOcrArtifacts,

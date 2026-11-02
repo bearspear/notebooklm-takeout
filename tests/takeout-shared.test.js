@@ -273,3 +273,24 @@ test('formatTimingSummary lists phases and total', () => {
   assert.match(md, /a: 2 × 1\.50 s avg/);
   assert.match(md, /Total: 3 m 12 s/);
 });
+
+test('createJobLock allows one job at a time', () => {
+  const lock = NLME.createJobLock();
+  assert.equal(lock.tryAcquire('notes'), true);
+  assert.equal(lock.tryAcquire('chat'), false);
+  assert.equal(lock.current(), 'notes');
+});
+
+test('createJobLock release frees the lock', () => {
+  const lock = NLME.createJobLock();
+  lock.tryAcquire('notes');
+  lock.release('notes');
+  assert.equal(lock.tryAcquire('chat'), true);
+});
+
+test('createJobLock ignores release by a non-owner', () => {
+  const lock = NLME.createJobLock();
+  lock.tryAcquire('notes');
+  lock.release('chat');
+  assert.equal(lock.current(), 'notes');
+});
