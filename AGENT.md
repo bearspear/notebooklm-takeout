@@ -7,8 +7,8 @@ the table of contents to jump.
 - Repo root: `/Users/mbehringer/Downloads/notebooklm-exporter`
 - Remote: `git@github.com-personal:bearspear/notebooklm-takeout.git`
 - Manifest: V3 Chrome extension, no build step
-- Latest meaningful work: PR #2 "Adapt to the Nov 2026 Gemini Notebook DOM", squash-merged
-  as `27e073c` (v1.1.0)
+- Latest meaningful work: Milestone 1 "Trustworthy and faster" (v1.2.0), branch
+  `fix/milestone-1-trustworthy-faster`, after PR #2 (`27e073c`, v1.1.0)
 - Branch: `main`
 
 ## Table of contents
@@ -109,12 +109,16 @@ running pre-pull code (seen Nov 2026: the console showed old line numbers).
 | Sidebar | `sidebar.js` | Side panel iframe | own sidebar DOM only | yes |
 | Background | `background.js` | Service worker | none | yes |
 | Content | `content.js` | NotebookLM page (isolated world) | yes, read+write | yes (subset) |
-| Injected | `injected.js` | NotebookLM page (page world) | yes | no (uses postMessage) |
+| Injected | `injected.js` | NotebookLM page (MAIN world content script) | yes | no (uses postMessage) |
 
 Why two scripts inside the page: Chrome content scripts run in an isolated JS world and
-cannot patch `window.open` / `window.fetch`. `injected.js` is loaded as a web-accessible
-resource and runs in the page's own world so we can override those for download
-interception. It talks to `content.js` via `window.postMessage`.
+cannot patch `window.open`. `injected.js` (with `takeout-shared.js`) is a MAIN-world
+content script at `document_start` (manifest; `ensureContentScriptLoaded` re-injects it).
+It intercepts a download URL **only when armed**: `content.js` dispatches the DOM event
+`nlme-arm-intercept` right before its own Download click (`NLME.createInterceptArm`, 3 s,
+consumed by the first match), so the user's own downloads are never touched. It posts
+`NLME_DOWNLOAD_URL_INTERCEPTED` `{url, timestamp}`; content accepts only URLs captured
+after its click (`NLME.pickFreshIntercept`).
 
 Sidebar talks to content via `chrome.tabs.sendMessage(tabId, {type, data})`. Content responds
 synchronously (sendResponse) or asynchronously (`return true` in the listener and call
@@ -125,18 +129,18 @@ sendResponse later).
 ```
 notebooklm-exporter/
 ├── manifest.json           — V3 manifest, permissions, side_panel, content_scripts
-├── takeout-shared.js (246) — Selectors + DOM-free helpers (NLME global); content script,
+├── takeout-shared.js (488) — Selectors + DOM-free helpers (NLME global); content script,
 │                             sidebar, service worker (importScripts) and Node tests load it
 ├── tests/                  — node:test unit tests for takeout-shared.js
 ├── sidebar.html  ( 423)    — Side panel UI: tabs, controls, settings/health panels
-├── sidebar.js    (6430)    — UI logic, export orchestration, KaTeX, mindmap helpers
+├── sidebar.js    (6404)    — UI logic, export orchestration, KaTeX, mindmap helpers
 ├── styles.css    (1635)    — Side panel styles
-├── content.js    (4906)    — DOM scraping + extraction, runs on NotebookLM
+├── content.js    (5042)    — DOM scraping + extraction, runs on NotebookLM
 ├── mindmap-extract.js (325) — Mind map SVG/tree extraction; content script and injected
 │                             by background into the *.scf.usercontent.goog app frame
 ├── content-styles.css (57) — Page overlay styles (export progress overlay)
-├── background.js (1269)    — Service worker, download interception, batch ZIP, frame extraction
-├── injected.js   ( 306)    — Page-world hooks for window.open + link-click interception
+├── background.js (1186)    — Service worker, download interception, batch ZIP, frame extraction
+├── injected.js   (  68)    — MAIN-world download hook (window.open + link clicks), armed per click
 ├── mindmap-template.html (371) — Standalone interactive mindmap viewer (used as template)
 ├── jszip.min.js  (  12)    — Bundled JSZip
 ├── turndown.min.js (973)   — Bundled Turndown (HTML → Markdown)
@@ -281,14 +285,15 @@ respond synchronously (and `return true` is omitted) or asynchronously (must
 | `EXTRACT_NOTE` | `{noteIndex, noteTitle, sourceIndex?, includeCitationImages}` | `{html, sources, errors}` or `{isMindmap, svgContent, treeData}`. With `sourceIndex` the note is opened from the Sources panel "Notes" group |
 | `SCAN_NOTES` | — | `{notes: [{index, title, type, iconType, sourceIndex?}]}` — Sources-panel notes have `index: -1`, `type: 'Note (Sources panel)'` |
 | `SCAN_SOURCES` | — | `{sources, skippedNotes}` — Sources-panel notes are skipped |
-| `EXTRACT_SOURCE` | `{sourceIndex}` | `{html, sources, title, ...}` |
+| `EXTRACT_SOURCE` | `{sourceIndex, title, needsGuide}` | `{html, sources, title, ..., timing}` — `title` is checked strictly (`Item changed`); the guide/summary wait runs only with `needsGuide` |
+| `REQUEST_EXPORT_CANCEL` | — | `{success}` — side panel Cancel: sets the content cancel flag and broadcasts `CANCEL_EXPORT` |
 | `NAVIGATE_BACK` | — | `{success}` — closes open note/source viewer |
 | `SHOW_EXPORT_OVERLAY` | `{message}` | `{success}` — page overlay on NotebookLM |
 | `UPDATE_EXPORT_OVERLAY` | `{message, progress}` | `{success}` |
 | `HIDE_EXPORT_OVERLAY` | — | `{success}` |
 | `CHECK_EXPORT_CANCELLED` | — | `{cancelled}` |
 | `DEBUG_NOTES` | — | diagnostic — list of titles |
-| `DOWNLOAD_ARTIFACT` | `{artifactIndex, artifactType, artifactName, moreButtonAlreadyClicked, skipMoreButton, downloadPreference}` | `method`: `content_extraction` / `mindmap_extraction` / `mindmap_app_frame` / `url_intercepted` / `button_click` / `svg_extract` / `canvas_export`. `artifactIndex` = index among `artifact-library-item`s with a More button |
+| `DOWNLOAD_ARTIFACT` | `{artifactIndex, artifactType, artifactName, skipMoreButton, downloadPreference}` (content resolves the row strictly by title and clicks its own More button) | `method`: `content_extraction` / `mindmap_extraction` / `mindmap_app_frame` / `url_intercepted` / `button_click` / `svg_extract` / `canvas_export`. `artifactIndex` = index among `artifact-library-item`s with a More button |
 | `SCAN_CHAT` | — | `{notebookTitle, notebookSummary, messagePairs, dateRange}` |
 | `EXTRACT_ALL_CHAT_CITATIONS` | — | `{sourcesByIndex, errors}` |
 | `EXTRACT_MESSAGE_CITATIONS` | `{messageIndex, messageHTML, sourceIndices, includeCitationImages}` | `{sourcesByIndex, errors}` |
@@ -422,12 +427,24 @@ in every answer, so sources must never be keyed by number across answers.
      (see [Mindmap extraction](#mindmap-extraction)). Output: ZIP with SVG, JSON, HTML.
    - **Slides**: the More menu offers PDF and PowerPoint; `findDownloadButton` picks via
      `NLME.pickDownloadMenuIndex(labels, settings.slidesFormat)`.
-   - **Others**: click More button (in page context via `clickArtifactMoreButton`),
-     enter intercept mode preemptively, message content to click the "Download" menu item.
+   - **Others**: enter intercept mode preemptively, then message content, which resolves
+     the row by title (`NLME.pickByIndexThenTitleStrict`), clicks its More button, arms the
+     hook and clicks the "Download" menu item.
      The click triggers NotebookLM's `window.open(googleusercontent...)`. `injected.js`
      intercepts, sends URL back via `NLME_DOWNLOAD_URL_INTERCEPTED`. Sidebar then routes
      through background's `DIRECT_DOWNLOAD_URL` to call `chrome.downloads.download` with
-     the proper filename.
+     the proper filename. The extension comes from the URL's `filename` parameter
+     (`NLME.extensionFromDownloadUrl`; `.pptx` vs `.pdf`). A download that is never captured
+     now fails ("Download was not captured") instead of reporting success.
+   - **Download All, ZIP off**: saves every file into `Downloads/<Notebook>/`
+     (`activeDownloadFolder`, `NLME.downloadFolderPath`); no size limit.
+   - **Download All, ZIP on**: background `runBatchDownload` builds the ZIP with JSZip
+     (`importScripts`), with `errors.txt`; `GET_BATCH_STATUS` returns the final `result`.
+     Everything is held in service-worker memory, so a whole notebook with audio/video
+     overviews can exceed it; use folder mode for full exports.
+   - Extension-started downloads (blob/data URLs) register their name first via
+     `NAME_NEXT_DOWNLOAD`: Chrome drops the `filename` option while an
+     `onDeterminingFilename` listener exists and does not suggest one.
 
 Filename convention: `[{prefix}]_{sanitized-title}.{ext}` where prefix is one of `audio-overview`,
 `slides`, `infographic`, `report`, `data-table`, `flowchart`. In the batch ZIP
@@ -945,10 +962,6 @@ Artifacts tab. Rows in the Studio tab are still clickable and fail with an error
 ### 8. Follow-ups from the PR #2 review (deferred, minor)
 
 - `resolveArtifactItem`'s title fallback only searches items with a More button.
-- `waitForTooltipGone()`'s result is ignored; a popover that lingers > 2 s could be read
-  twice (not observed: live runs showed all-distinct quotes).
-- Batch ZIP may name a PowerPoint deck `.pdf` when the fetch returns a generic MIME type
-  (`getExtensionFromType` ignores `slidesFormat`).
 - The source-header close fallback accepts an unlabeled `collapse_content` button.
 - The list rule still converts each `<li>` twice; harmless now that anchors are
   renumbered, but any new per-node counter in a Turndown rule will double-count.
@@ -957,8 +970,10 @@ Artifacts tab. Rows in the Studio tab are still clickable and fail with an error
 
 ### 9. Export pacing
 
-Exports run sequentially at roughly human-click speed with no deliberate pause. A full
-notes export (~150 notes, ~2,000 citation hovers) runs 20–30 minutes. It makes no extra
+Exports run sequentially with no deliberate pause. Since Milestone 1 every wait is a
+condition poll (content text stable, viewer gone, list back) instead of a fixed sleep;
+`_index.md` ends with an "Export statistics" block (`NLME.createPhaseTimer`) to measure it.
+Text-based readiness matters: a source viewer's shell settles before its text arrives. It makes no extra
 data requests per hover, but at that volume it looks automated in Google's UI analytics.
 A pause-between-items setting was discussed and not built.
 
@@ -1033,7 +1048,7 @@ to keep your real notebook untouched while iterating.
 
 ## Testing and verification
 
-Unit tests cover the DOM-free helpers in `takeout-shared.js` (40 tests, `node --test
+Unit tests cover the DOM-free helpers in `takeout-shared.js` (76 tests, `node --test
 tests/`). Everything that touches the page is verified in Chrome. When a fix is DOM-only,
 verify it live: replicate the changed function in the page console (via Claude in Chrome
 or DevTools) and compare before/after on real elements, then confirm with a real export.
@@ -1127,6 +1142,6 @@ node --test tests/
 
 ---
 
-**Last refreshed**: 2026-11-02 (after PR #2). After significant drift events or pipeline rewrites, update
+**Last refreshed**: 2026-11-02 (Milestone 1, v1.2.0). After significant drift events or pipeline rewrites, update
 this file. It is the single document an agent should read before doing anything in this
 repo.
