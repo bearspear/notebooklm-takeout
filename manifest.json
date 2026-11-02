@@ -17,7 +17,8 @@
     "https://notebook.google.com/*",
     "https://notebooklm.google.com/*",
     "https://*.googleusercontent.com/*",
-    "https://*.google.com/*"
+    "https://*.google.com/*",
+    "https://*.scf.usercontent.goog/*"
   ],
   "action": {
     "default_icon": {
@@ -34,16 +35,29 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://notebook.google.com/*", "https://notebooklm.google.com/*"],
-      "js": ["content.js"],
-      "css": ["content-styles.css"],
+      "matches": [
+        "https://notebook.google.com/*",
+        "https://notebooklm.google.com/*"
+      ],
+      "js": [
+        "mindmap-extract.js",
+        "content.js"
+      ],
+      "css": [
+        "content-styles.css"
+      ],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["injected.js"],
-      "matches": ["https://notebook.google.com/*", "https://notebooklm.google.com/*"]
+      "resources": [
+        "injected.js"
+      ],
+      "matches": [
+        "https://notebook.google.com/*",
+        "https://notebooklm.google.com/*"
+      ]
     }
   ],
   "icons": {

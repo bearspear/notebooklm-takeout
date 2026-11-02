@@ -972,7 +972,9 @@ function getArtifactTypePrefix(artifactType) {
     'Data Table': 'data-table',
     'Report': 'report',
     'Infographic': 'infographic',
-    'Slides': 'slides'
+    'Slides': 'slides',
+    'Video Overview': 'video-overview',
+    'Mind Map': 'mind-map'
   };
   return typeMap[artifactType] || artifactType.toLowerCase().replace(/\s+/g, '-');
 }
@@ -990,7 +992,7 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
 
     // For Reports and Data Tables, skip More button entirely - content script will click artifact directly
     let response;
-    if (artifactType === 'Report' || artifactType === 'Data Table') {
+    if (artifactType === 'Report' || artifactType === 'Data Table' || artifactType === 'Mind Map') {
       logger.info('Download', `${artifactType} detected - skipping More button, extracting content directly`);
 
       response = await chrome.tabs.sendMessage(tabId, {
@@ -1047,7 +1049,17 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
     logger.download(artifactName, 'success', `Method: ${response.method}, Duration: ${response.duration}ms`);
 
     // Handle different download methods
-    if (response.method === 'content_extraction') {
+    if (response.method === 'mindmap_app_frame') {
+      const frame = await chrome.runtime.sendMessage({ type: 'EXTRACT_MINDMAP_FRAME', tabId });
+      if (!frame || !frame.success) {
+        throw new Error(frame?.error || 'Failed to extract mind map');
+      }
+      await downloadMindmapFiles(frame.svgContent, frame.treeData, response.title || artifactName, { zipped: true });
+      logger.download(artifactName, 'success', 'Mind map exported as SVG/JSON/HTML');
+    } else if (response.method === 'mindmap_extraction') {
+      await downloadMindmapFiles(response.svgContent, response.treeData, response.title || artifactName, { zipped: true });
+      logger.download(artifactName, 'success', 'Mind map exported as SVG/JSON/HTML');
+    } else if (response.method === 'content_extraction') {
       // Content extraction (Reports and Data Tables)
       const baseFilename = response.title || artifactName || 'artifact';
       const typePrefix = getArtifactTypePrefix(artifactType);
@@ -1189,17 +1201,9 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
       const filename = response.title || artifactName;
       const typePrefix = getArtifactTypePrefix(artifactType);
 
-      // Determine extension based on artifact type
-      const extensionMap = {
-        'Infographic': '.png',
-        'Slides': '.pdf',
-        'Audio Overview': '.m4a',
-        'Report': '.md',
-        'Data Table': '.zip'
-      };
-      const extension = extensionMap[artifactType] || '';
-
-      const fullFilename = `[${typePrefix}]_${sanitizeFilename(filename)}${extension}`;
+      // No extension here: background.js takes it from the actual download
+      // (Slides can be PDF or PPTX, and new types have no fixed format)
+      const fullFilename = `[${typePrefix}]_${sanitizeFilename(filename)}`;
 
       logger.info('Download', `URL intercepted (no tab), sending to background for download: ${fullFilename}`);
 
@@ -1528,7 +1532,7 @@ async function ensureContentScriptLoaded(tabId) {
       console.log('[NotebookLM Takeout] Content script not loaded, injecting...');
       await chrome.scripting.executeScript({
         target: { tabId: tabId },
-        files: ['content.js']
+        files: ['mindmap-extract.js', 'content.js']
       });
       await new Promise(resolve => setTimeout(resolve, 500));
       return true;
@@ -2815,7 +2819,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
     data: { type: 'notes' }
   });
 
-  if (!healthCheck.healthy) {
+  if (healthCheck && !healthCheck.healthy) {
     const proceed = await showDOMWarningDialog(healthCheck.issues);
     if (!proceed) {
       showToast('Export cancelled', 'info');
@@ -3125,6 +3129,32 @@ function downloadBlob(blob, filename) {
  * @param {{index: number, title: string, type?: string}} note
  * @returns {Promise<{success: boolean, filesWritten: number}>}
  */
+// Save a mind map as svg / json / interactive html: three loose files, or one
+// [MINDMAP]_<title>.zip containing them when zipped is true.
+// Returns the number of files written.
+async function downloadMindmapFiles(svgContent, treeData, title, { zipped = false } = {}) {
+  const base = `[MINDMAP]_${sanitizeFilename(title)}`;
+  const files = [
+    [`${base}.svg`, new Blob([svgContent], { type: 'image/svg+xml' })],
+    [`${base}.json`, new Blob([JSON.stringify(treeData, null, 2)], { type: 'application/json' })]
+  ];
+  try {
+    const html = await generateMindmapHTML(svgContent, title);
+    files.push([`${base}.html`, new Blob([html], { type: 'text/html' })]);
+  } catch (e) {
+    console.warn('[NotebookLM Takeout] Mindmap HTML viewer template unavailable:', e);
+  }
+
+  if (zipped) {
+    const zip = new JSZip();
+    for (const [filename, blob] of files) zip.file(filename, blob);
+    downloadBlob(await zip.generateAsync({ type: 'blob' }), `${base}.zip`);
+  } else {
+    for (const [filename, blob] of files) downloadBlob(blob, filename);
+  }
+  return files.length;
+}
+
 async function exportSingleNote(note) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!isNotebookUrl(tab?.url)) {
@@ -3158,19 +3188,7 @@ async function exportSingleNote(note) {
   let filesWritten = 0;
 
   if (noteData.isMindmap) {
-    // Drop three files (svg / json / interactive html) — no zip.
-    const base = `[MINDMAP]_${sanitizedTitle}`;
-    downloadBlob(new Blob([noteData.svgContent], { type: 'image/svg+xml' }), `${base}.svg`);
-    filesWritten++;
-    downloadBlob(new Blob([JSON.stringify(noteData.treeData, null, 2)], { type: 'application/json' }), `${base}.json`);
-    filesWritten++;
-    try {
-      const html = await generateMindmapHTML(noteData.svgContent, note.title);
-      downloadBlob(new Blob([html], { type: 'text/html' }), `${base}.html`);
-      filesWritten++;
-    } catch (e) {
-      console.warn('[NotebookLM Takeout] Mindmap HTML viewer template unavailable:', e);
-    }
+    filesWritten = await downloadMindmapFiles(noteData.svgContent, noteData.treeData, note.title);
     return { success: true, filesWritten };
   }
 
@@ -3684,7 +3702,7 @@ async function exportSources(selectedSources) {
     data: { type: 'sources' }
   });
 
-  if (!healthCheck.healthy) {
+  if (healthCheck && !healthCheck.healthy) {
     const proceed = await showDOMWarningDialog(healthCheck.issues);
     if (!proceed) {
       showToast('Export cancelled', 'info');
@@ -4776,7 +4794,7 @@ async function exportChat(chatData, extractFullCitations = false) {
             const fullCitationData = await chrome.tabs.sendMessage(tab.id, {
               type: 'EXTRACT_MESSAGE_CITATIONS',
               data: {
-                messageIndex: i,
+                messageIndex: pair.domIndex ?? i,
                 messageHTML: pair.aiResponseHTML,
                 sourceIndices: sourceIndices,
                 includeCitationImages: settings.includeCitationImages
@@ -5486,6 +5504,12 @@ function getIconForType(type) {
     </svg>`,
     'Data Table': `<svg width="20" height="20" viewBox="0 0 24 24" fill="#34a853">
       <path d="M3 3h18v18H3V3zm16 16V5H5v14h14zM7 7h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"/>
+    </svg>`,
+    'Video Overview': `<svg width="20" height="20" viewBox="0 0 24 24" fill="#1a73e8">
+      <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
+    </svg>`,
+    'Mind Map': `<svg width="20" height="20" viewBox="0 0 24 24" fill="#ea4335">
+      <path d="M22 11V3h-7v3H9V3H2v8h7V8h2v10h4v3h7v-8h-7v3h-2V8h2v3h7z"/>
     </svg>`
   };
 
@@ -5561,9 +5585,12 @@ function scanPageForItems() {
     'tablet': 'Slides',
     'stacked_bar_chart': 'Infographic',
     'table_view': 'Data Table',
-    'flowchart': 'Flowchart',
+    'format_list_bulleted': 'Data Table', // icon since 2026 redesign
+    'flowchart': 'Mind Map',
     'headphones': 'Audio Overview',
-    'audio_magic_eraser': 'Audio Overview'
+    'audio_magic_eraser': 'Audio Overview',
+    'audio_spark': 'Audio Overview',
+    'videocam': 'Video Overview'
   };
 
   artifactItems.forEach((item, idx) => {
@@ -5992,6 +6019,7 @@ async function downloadAllArtifacts(tabId, items) {
         if (cancelled) {
           console.log('[NotebookLM Takeout] ZIP download cancelled by user');
           clearInterval(pollStatus);
+          chrome.runtime.sendMessage({ type: 'CANCEL_BATCH_DOWNLOAD' }).catch(() => {});
           showToast('Download cancelled', 'warning');
 
           // Clean up overlay
