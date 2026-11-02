@@ -2571,48 +2571,8 @@ function escapeMarkdownInQuote(text) {
  * @returns {string} - Cleaned text
  */
 function cleanOCRArtifacts(text) {
-  if (!text) return '';
-
-  let cleaned = text
-    // Remove sequences of 3+ tildes (common OCR failure pattern)
-    .replace(/~{3,}/g, '')
-
-    // Clean tilde-colon patterns: :~:, ~:~, :~~:, etc.
-    .replace(/[:;]+~+[:;]*/g, '')
-    .replace(/~+[:;]+~*/g, '')
-
-    // Clean equals-tilde patterns: =~, ~=
-    .replace(/[=]+~+/g, '')
-    .replace(/~+[=]+/g, '')
-
-    // Clean exclamation/semicolon noise: ;!, !;, ;!~
-    .replace(/[;!]{2,}/g, '')
-    .replace(/[;!]~+[;!]*/g, '')
-
-    // Clean isolated tildes around single characters: ~a~ -> a
-    .replace(/~([a-zA-ZäöüÄÖÜß])~/g, '$1')
-
-    // Clean tilde at word boundaries: word~ -> word, ~word -> word
-    .replace(/~+(\s)/g, '$1')
-    .replace(/(\s)~+/g, '$1')
-
-    // Clean double tildes: ~~ -> (nothing)
-    .replace(/~~/g, '')
-
-    // Clean remaining isolated tildes between letters (likely OCR errors)
-    // e.g., "Gru~d" -> "Grund" (but be conservative)
-    .replace(/([a-zA-ZäöüÄÖÜß])~([a-zA-ZäöüÄÖÜß])/g, '$1$2')
-
-    // Clean up multiple spaces left behind
-    .replace(/\s{2,}/g, ' ')
-
-    // Clean up spaces before punctuation
-    .replace(/\s+([.,;:!?])/g, '$1')
-
-    // Trim
-    .trim();
-
-  return cleaned;
+  // Shared, unit-tested implementation (keeps paragraphs, tables, fences, ~~strike~~)
+  return NLME.cleanOcrArtifacts(text);
 }
 
 function sanitizeFilename(filename) {

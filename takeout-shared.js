@@ -219,7 +219,44 @@
     };
   }
 
+  // Strip OCR noise (~~~, :~:, =~, ;!) from citation quotes without flattening
+  // their structure: only horizontal whitespace is collapsed, fenced code is
+  // left alone and ~~strikethrough~~ spans are kept.
+  function cleanOcrSegment(text) {
+    const kept = [];
+    const protectedText = text.replace(/~~([^~\n]+?)~~/g, (m) => {
+      kept.push(m);
+      return `\u0000${kept.length - 1}\u0000`;
+    });
+    return protectedText
+      .replace(/~{3,}/g, '')
+      .replace(/[:;]+~+[:;]*/g, '')
+      .replace(/~+[:;]+~*/g, '')
+      .replace(/[=]+~+/g, '')
+      .replace(/~+[=]+/g, '')
+      .replace(/[;!]{2,}/g, '')
+      .replace(/[;!]~+[;!]*/g, '')
+      .replace(/~([a-zA-ZäöüÄÖÜß])~/g, '$1')
+      .replace(/~+([ \t\n])/g, '$1')
+      .replace(/([ \t\n])~+/g, '$1')
+      .replace(/([a-zA-ZäöüÄÖÜß])~([a-zA-ZäöüÄÖÜß])/g, '$1$2')
+      .replace(/[ \t]{2,}/g, ' ')
+      .replace(/[ \t]+([.,;:!?])/g, '$1')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/\u0000(\d+)\u0000/g, (_m, i) => kept[Number(i)]);
+  }
+
+  function cleanOcrArtifacts(text) {
+    if (!text) return '';
+    return text
+      .split(/(```[\s\S]*?```)/)
+      .map((part, i) => (i % 2 === 1 ? part : cleanOcrSegment(part)))
+      .join('')
+      .trim();
+  }
+
   const NLME = {
+    cleanOcrArtifacts,
     mathSourceHealth,
     mathSourceToMarkdown,
     classifyKatexScript,

@@ -220,3 +220,30 @@ test('mathSourceHealth passes with nothing to check when the page has no formula
   assert.equal(r.passed, true);
   assert.match(r.note, /No formulas/);
 });
+
+test('cleanOcrArtifacts keeps paragraph breaks and list lines', () => {
+  const t = 'Para one.\n\nPara two.\n- a\n- b';
+  assert.equal(NLME.cleanOcrArtifacts(t), t);
+});
+
+test('cleanOcrArtifacts keeps markdown tables', () => {
+  const t = '| a | b |\n|---|---|\n| 1 | 2 |';
+  assert.equal(NLME.cleanOcrArtifacts(t), t);
+});
+
+test('cleanOcrArtifacts leaves fenced code untouched', () => {
+  const t = '```\nx  =  1 ~~~\n```';
+  assert.equal(NLME.cleanOcrArtifacts(t), t);
+});
+
+test('cleanOcrArtifacts keeps ~~strikethrough~~', () => {
+  assert.equal(NLME.cleanOcrArtifacts('a ~~b~~ c'), 'a ~~b~~ c');
+});
+
+test('cleanOcrArtifacts strips OCR tildes', () => {
+  assert.equal(NLME.cleanOcrArtifacts('word ~~~ next :~: end =~ x'), 'word next end x');
+});
+
+test('cleanOcrArtifacts collapses horizontal runs and 3+ newlines', () => {
+  assert.equal(NLME.cleanOcrArtifacts('a  \t b\n\n\n\nc'), 'a b\n\nc');
+});
