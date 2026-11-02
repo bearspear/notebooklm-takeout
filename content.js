@@ -379,7 +379,7 @@
         const noteParents = [];
         noteIcons.forEach(icon => {
           const iconText = icon.textContent.trim();
-          if (iconText === 'sticky_note_2' || iconText === 'flowchart') {
+          if (NLME.NOTE_ICONS.includes(iconText) || iconText === 'flowchart') {
             const noteEl = icon.closest('artifact-library-note');
             if (noteEl && !noteParents.includes(noteEl)) {
               noteParents.push(noteEl);
@@ -1166,8 +1166,8 @@
       const noteParents = [];
       noteIcons.forEach(icon => {
         const iconText = icon.textContent.trim();
-        // Notes use sticky_note_2, Mindmaps use flowchart
-        if (iconText === 'sticky_note_2' || iconText === 'flowchart') {
+        // Notes use article (Nov 2026) / sticky_note_2; legacy mindmaps use flowchart
+        if (NLME.NOTE_ICONS.includes(iconText) || iconText === 'flowchart') {
           const noteEl = icon.closest('artifact-library-note');
           if (noteEl && !noteParents.includes(noteEl)) {
             noteParents.push(noteEl);
@@ -1193,7 +1193,7 @@
       let noteType = 'Note';
       if (iconType === 'flowchart') {
         noteType = 'Mindmap';
-      } else if (iconType === 'description' || iconType === 'note') {
+      } else if (NLME.NOTE_ICONS.includes(iconType)) {
         noteType = 'Note';
       } else {
         // Unknown icon type - log it for debugging
@@ -2250,12 +2250,12 @@
             if (allNoteElements.length > 0) break;
           }
 
-          // Try finding notes by their icon (sticky_note_2 or flowchart)
+          // Try finding notes by their icon (NOTE_ICONS or flowchart)
           const noteIcons = document.querySelectorAll('mat-icon.artifact-icon');
           const noteParents = [];
           noteIcons.forEach(icon => {
             const iconText = icon.textContent.trim();
-            if (iconText === 'sticky_note_2' || iconText === 'flowchart') {
+            if (NLME.NOTE_ICONS.includes(iconText) || iconText === 'flowchart') {
               const noteEl = icon.closest('artifact-library-note');
               if (noteEl && !noteParents.includes(noteEl)) {
                 noteParents.push(noteEl);
@@ -3825,7 +3825,7 @@
       // For other artifacts, find by index (original logic)
       if (!moreButtonAlreadyClicked) {
         // Build array of More buttons ONLY from artifact-library-item (not from notes)
-        // This matches the indexing logic in sidebar.js scanPageForItems()
+        // Same index space as SCAN_STUDIO_ITEMS moreIndex
         const artifactMoreButtons = [];
         document.querySelectorAll('artifact-library-item').forEach(item => {
           const btn = item.querySelector('button[aria-label="More"]');
@@ -3849,21 +3849,13 @@
 
       // Detect artifact type from icon if artifactItem is available (fallback for DOM changes)
       if (artifactItem) {
-        const iconToType = {
-          'auto_tab_group': 'Report',
-          'tablet': 'Slides',
-          'stacked_bar_chart': 'Infographic',
-          'table_view': 'Data Table',
-          'format_list_bulleted': 'Data Table', // icon since 2026 redesign
-          'flowchart': 'Mind Map',
-          'headphones': 'Audio Overview',
-          'audio_magic_eraser': 'Audio Overview',
-          'audio_spark': 'Audio Overview',
-          'videocam': 'Video Overview'
-        };
-        const icon = artifactItem.querySelector('mat-icon');
-        const iconText = icon?.textContent?.trim() || '';
-        const detectedType = iconToType[iconText];
+        const iconText = artifactItem.querySelector('mat-icon')?.textContent?.trim() || '';
+        const resolved = NLME.resolveArtifactType({
+          iconText,
+          buttonLabel: artifactItem.querySelector('button.artifact-stretched-button')?.getAttribute('aria-label')
+        });
+        // Only correct when the label/icon actually named a known type
+        const detectedType = (resolved !== iconText && resolved !== 'Unknown') ? resolved : null;
         if (detectedType && detectedType !== artifactType) {
           console.log(`[NotebookLM Takeout] [Download] Type corrected from "${artifactType}" to "${detectedType}" (via icon)`);
           artifactType = detectedType;
@@ -4069,21 +4061,9 @@
    * combined index (for delete targeting).
    */
   function scanStudioItems() {
-    const ICON_TO_TYPE = {
-      'auto_tab_group': 'Report',
-      'tablet': 'Slides',
-      'stacked_bar_chart': 'Infographic',
-      'table_view': 'Data Table',
-      'format_list_bulleted': 'Data Table', // icon since 2026 redesign
-      'flowchart': 'Mind Map',
-      'headphones': 'Audio Overview',
-      'audio_magic_eraser': 'Audio Overview',
-      'audio_spark': 'Audio Overview',
-      'videocam': 'Video Overview'
-    };
-
     const nodes = document.querySelectorAll('artifact-library-item, artifact-library-note');
     let artifactCursor = 0;
+    let moreCursor = 0;
     let noteCursor = 0;
     const items = [];
 
@@ -4098,16 +4078,25 @@
       const hasMoreButton = !!el.querySelector('button[aria-label="More"]');
 
       if (tag === 'artifact-library-item') {
+        // Gemini Notebook puts the type in the stretched button's aria-label for
+        // some kinds; icons cover the rest (Nov 2026)
+        const type = NLME.resolveArtifactType({
+          iconText,
+          buttonLabel: el.querySelector('button.artifact-stretched-button')?.getAttribute('aria-label')
+        });
         items.push({
           combinedIndex,
           kindIndex: artifactCursor,
+          moreIndex: hasMoreButton ? moreCursor : -1,
           kind: 'artifact',
           label,
           details,
-          type: ICON_TO_TYPE[iconText] || iconText || 'Unknown',
+          type,
+          downloadable: NLME.isDownloadableType(type),
           hasMoreButton
         });
         artifactCursor++;
+        if (hasMoreButton) moreCursor++;
       } else {
         // artifact-library-note — Note or Mindmap
         let type = 'Note';

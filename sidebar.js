@@ -1400,12 +1400,17 @@ async function scanPage() {
       return;
     }
 
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: scanPageForItems
-    });
-
-    const items = results[0]?.result || [];
+    await ensureContentScriptLoaded(tab.id);
+    const scan = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_STUDIO_ITEMS' });
+    const items = (scan?.items || [])
+      .filter(item => item.kind === 'artifact')
+      .map(item => ({
+        index: item.moreIndex,
+        label: item.label,
+        type: item.type,
+        details: item.details,
+        disabled: !item.downloadable
+      }));
 
     if (items.length === 0) {
       resultsEl.innerHTML = '<p class="empty-message">No downloadable artifacts found.<br><span class="hint">Make sure you have generated content in Studio.</span></p>';
@@ -1425,7 +1430,7 @@ async function scanPage() {
             <strong>${escapeHtml(item.label)}</strong>
             <small>${escapeHtml(item.type)}${item.details ? ' · ' + escapeHtml(item.details) : ''}</small>
           </div>
-          <button class="btn-icon download-single-btn" data-index="${item.index}" data-item-idx="${idx}" ${item.disabled ? 'disabled title="Study Guides not supported yet"' : `title="Download ${escapeHtml(item.label)}"`}>
+          <button class="btn-icon download-single-btn" data-index="${item.index}" data-item-idx="${idx}" ${item.disabled ? `disabled title="${escapeHtml(item.type)} export not supported yet"` :`title="Download ${escapeHtml(item.label)}"`}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
               <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
             </svg>
@@ -1532,7 +1537,7 @@ async function ensureContentScriptLoaded(tabId) {
       console.log('[NotebookLM Takeout] Content script not loaded, injecting...');
       await chrome.scripting.executeScript({
         target: { tabId: tabId },
-        files: ['mindmap-extract.js', 'content.js']
+        files: ['takeout-shared.js', 'mindmap-extract.js', 'content.js']
       });
       await new Promise(resolve => setTimeout(resolve, 500));
       return true;
@@ -5561,71 +5566,6 @@ function clickArtifactMoreButton(artifactIndex) {
     type: type,
     index: artifactIndex
   };
-}
-
-// This runs in the page context to find downloadable items
-function scanPageForItems() {
-  const items = [];
-
-  // Only scan artifact-library-item elements (not artifact-library-note)
-  const artifactItems = document.querySelectorAll('artifact-library-item');
-
-  // Build array of More buttons ONLY from artifact-library-item (not from notes)
-  const artifactMoreButtons = [];
-  document.querySelectorAll('artifact-library-item').forEach(item => {
-    const btn = item.querySelector('button[aria-label="More"]');
-    if (btn) {
-      artifactMoreButtons.push(btn);
-    }
-  });
-
-  // Icon to artifact type mapping
-  const iconToType = {
-    'auto_tab_group': 'Report',
-    'tablet': 'Slides',
-    'stacked_bar_chart': 'Infographic',
-    'table_view': 'Data Table',
-    'format_list_bulleted': 'Data Table', // icon since 2026 redesign
-    'flowchart': 'Mind Map',
-    'headphones': 'Audio Overview',
-    'audio_magic_eraser': 'Audio Overview',
-    'audio_spark': 'Audio Overview',
-    'videocam': 'Video Overview'
-  };
-
-  artifactItems.forEach((item, idx) => {
-    // Get the type from icon text content (aria-description now contains title, not type)
-    const icon = item.querySelector('mat-icon');
-    const iconText = icon?.textContent?.trim() || '';
-    const type = iconToType[iconText] || iconText || 'Unknown';
-
-    // Get the title from .artifact-title
-    const titleEl = item.querySelector('.artifact-title');
-    const artifactTitle = titleEl?.textContent?.trim() || `Artifact ${idx + 1}`;
-
-    // Get details from .artifact-details
-    const detailsEl = item.querySelector('.artifact-details');
-    const artifactDetails = detailsEl?.textContent?.trim() || '';
-
-    // Get the More button
-    const moreButton = item.querySelector('button[aria-label="More"]');
-
-    // Find this button's index in artifact More buttons (for clicking later)
-    let globalIndex = -1;
-    artifactMoreButtons.forEach((b, i) => {
-      if (b === moreButton) globalIndex = i;
-    });
-
-    items.push({
-      index: globalIndex,
-      label: artifactTitle,
-      type: type,
-      details: artifactDetails,
-      disabled: false
-    });
-  });
-
-  return items;
 }
 
 async function triggerItemDownload(tabId, itemIndex, artifactName, artifactType) {
