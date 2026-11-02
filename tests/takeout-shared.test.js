@@ -247,3 +247,29 @@ test('cleanOcrArtifacts strips OCR tildes', () => {
 test('cleanOcrArtifacts collapses horizontal runs and 3+ newlines', () => {
   assert.equal(NLME.cleanOcrArtifacts('a  \t b\n\n\n\nc'), 'a b\n\nc');
 });
+
+function fakeClock(times) {
+  let i = 0;
+  return () => times[i++];
+}
+
+test('createPhaseTimer sums repeated phases', () => {
+  const t = NLME.createPhaseTimer(fakeClock([0, 10, 10, 40]));
+  t.start('a'); t.end('a');
+  t.start('a'); t.end('a');
+  assert.deepEqual(t.totals().a, { count: 2, ms: 40 });
+});
+
+test('createPhaseTimer merge adds totals from another context', () => {
+  const t = NLME.createPhaseTimer(fakeClock([0, 5]));
+  t.start('a'); t.end('a');
+  t.merge({ a: { count: 3, ms: 30 }, b: { count: 1, ms: 7 } });
+  assert.deepEqual(t.totals(), { a: { count: 4, ms: 35 }, b: { count: 1, ms: 7 } });
+});
+
+test('formatTimingSummary lists phases and total', () => {
+  const md = NLME.formatTimingSummary({ a: { count: 2, ms: 3000 } }, 192000);
+  assert.match(md, /^## Export statistics/);
+  assert.match(md, /a: 2 × 1\.50 s avg/);
+  assert.match(md, /Total: 3 m 12 s/);
+});

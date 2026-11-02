@@ -2570,6 +2570,38 @@ function escapeMarkdownInQuote(text) {
  * @param {boolean} options.markUnclear - If true, mark unclear sections with [OCR?]
  * @returns {string} - Cleaned text
  */
+// Export-wide phase timing (Milestone 1, Task 2). Content-script responses
+// carry `timing` totals that are merged here; each export's _index.md ends
+// with an "Export statistics" block and the same summary is logged.
+let exportTimer = null;
+let exportStartedAt = 0;
+let lastChatScanTiming = null;
+
+function startExportTiming() {
+  exportTimer = NLME.createPhaseTimer();
+  exportStartedAt = performance.now();
+}
+
+function mergeTiming(response) {
+  if (exportTimer && response && response.timing) exportTimer.merge(response.timing);
+}
+
+function timingSummary() {
+  if (!exportTimer) return '';
+  const summary = NLME.formatTimingSummary(exportTimer.totals(), performance.now() - exportStartedAt);
+  console.log('[NotebookLM Takeout][timing]\n' + summary);
+  return '\n' + summary;
+}
+
+async function generateZipTimed(zip) {
+  exportTimer?.start('zip.build');
+  try {
+    return await zip.generateAsync({ type: 'blob' });
+  } finally {
+    exportTimer?.end('zip.build');
+  }
+}
+
 function cleanOCRArtifacts(text) {
   // Shared, unit-tested implementation (keeps paragraphs, tables, fences, ~~strike~~)
   return NLME.cleanOcrArtifacts(text);
@@ -2751,6 +2783,7 @@ async function getProjectName(tabId) {
 }
 
 async function exportNotesAsMarkdown(selectedNotes) {
+  startExportTiming();
   console.log('[NotebookLM Takeout] Starting export for notes:', selectedNotes.length);
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -2868,6 +2901,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
         });
 
         console.log('[NotebookLM Takeout] Note data received:', noteData);
+        mergeTiming(noteData);
 
         if (noteData && !noteData.error) {
           // Collect errors from this note
@@ -3440,10 +3474,10 @@ async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches =
     }
   }
 
-  zip.file('_index.md', indexContent);
+  zip.file('_index.md', indexContent + timingSummary());
 
   // Generate and download ZIP
-  const blob = await zip.generateAsync({ type: 'blob' });
+  const blob = await generateZipTimed(zip);
   const url = URL.createObjectURL(blob);
 
   try {
@@ -3641,6 +3675,7 @@ function setupSourcesEventListeners(sources) {
  * Reuses the same pattern as notes export
  */
 async function exportSources(selectedSources) {
+  startExportTiming();
   console.log(`[NotebookLM Takeout] Exporting ${selectedSources.length} sources...`);
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -3764,6 +3799,7 @@ async function exportSources(selectedSources) {
           1500, // baseDelay (1.5s)
           `Extract source "${source.title}"`
         );
+        mergeTiming(sourceData);
 
         if (sourceData.error) {
           console.error(`[NotebookLM Takeout] Failed to extract "${source.title}":`, sourceData.error);
@@ -4386,11 +4422,11 @@ async function exportSources(selectedSources) {
       });
 
       // Move _index.md to sources/ folder
-      sourcesFolder.file('_index.md', indexContent);
+      sourcesFolder.file('_index.md', indexContent + timingSummary());
 
       // Generate ZIP
       console.log(`[NotebookLM Takeout] Generating ZIP ${zipIndex + 1}/${totalZips}...`);
-      const blob = await zip.generateAsync({ type: 'blob' });
+      const blob = await generateZipTimed(zip);
       const url = URL.createObjectURL(blob);
       try {
         const sanitizedProjectName = sanitizeFilename(projectName);
@@ -4510,7 +4546,9 @@ async function scanChatPage() {
     });
 
     // Trigger auto-scroll and scan
+    const scanStartedAt = performance.now();
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_CHAT' });
+    lastChatScanTiming = { 'chat.scan': { count: 1, ms: Math.round(performance.now() - scanStartedAt) } };
 
     // Hide overlay
     await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
@@ -4604,6 +4642,8 @@ function renderChatSummary(chatData) {
  * Export chat as markdown file
  */
 async function exportChat(chatData, extractFullCitations = false) {
+  startExportTiming();
+  exportTimer.merge(lastChatScanTiming);
   console.log('[NotebookLM Takeout] Starting chat export...');
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -4747,6 +4787,7 @@ async function exportChat(chatData, extractFullCitations = false) {
             console.log(`[NotebookLM Takeout] Message ${i + 1}: Extracting sourceIndices:`, sourceIndices);
 
             // Call content script to extract citations by temporarily inserting HTML
+            exportTimer?.start('chat.citations');
             const fullCitationData = await chrome.tabs.sendMessage(tab.id, {
               type: 'EXTRACT_MESSAGE_CITATIONS',
               data: {
@@ -4758,6 +4799,8 @@ async function exportChat(chatData, extractFullCitations = false) {
             });
 
             console.log(`[NotebookLM Takeout] Message ${i + 1}: Received citation data:`, fullCitationData);
+            exportTimer?.end('chat.citations');
+            mergeTiming(fullCitationData);
 
             // Merge quotes into messageSources
             if (fullCitationData && fullCitationData.sourcesByIndex) {
@@ -5040,9 +5083,9 @@ async function exportChat(chatData, extractFullCitations = false) {
         }
       }
 
-      zip.file('_index.md', indexContent);
+      zip.file('_index.md', indexContent + timingSummary());
 
-      const blob = await zip.generateAsync({ type: 'blob' });
+      const blob = await generateZipTimed(zip);
       const url = URL.createObjectURL(blob);
       try {
         const zipFilename = `${sanitizeFilename(chatData.notebookTitle)}-chat-${timestamp}.zip`;

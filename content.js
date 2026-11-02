@@ -264,6 +264,24 @@
     exportOverlay = null;
   }
 
+  // Per-request phase timing (Task 2): reset per EXTRACT_* request, returned
+  // to the sidebar as `timing` and merged into the export's statistics.
+  let requestTimer = NLME.createPhaseTimer();
+  function withRequestTiming(run) {
+    requestTimer = NLME.createPhaseTimer();
+    return run().then(result => (result && typeof result === 'object'
+      ? { ...result, timing: requestTimer.totals() }
+      : result));
+  }
+  async function timePhase(phase, fn) {
+    requestTimer.start(phase);
+    try {
+      return await fn();
+    } finally {
+      requestTimer.end(phase);
+    }
+  }
+
   function isExportCancelled() {
     return exportCancelled;
   }
@@ -318,9 +336,9 @@
       return true; // Keep channel open for async
     } else if (message.type === 'EXTRACT_NOTE') {
       // Extract note content
-      (typeof message.data.sourceIndex === 'number'
+      withRequestTiming(() => (typeof message.data.sourceIndex === 'number'
         ? extractSourcesPanelNote(message.data.sourceIndex, message.data.noteTitle, message.data.includeCitationImages)
-        : extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages))
+        : extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages)))
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ error: error.message || 'Extraction failed' }));
       return true; // Keep channel open for async
@@ -336,7 +354,7 @@
       return true;
     } else if (message.type === 'EXTRACT_SOURCE') {
       // Extract source content
-      extractSourceContent(message.data.sourceIndex)
+      withRequestTiming(() => extractSourceContent(message.data.sourceIndex))
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ error: error.message }));
       return true;
@@ -451,12 +469,12 @@
       console.log('[NotebookLM Takeout] Include citation images:', message.data.includeCitationImages);
 
       try {
-        extractMessageCitations(
+        withRequestTiming(() => extractMessageCitations(
           message.data.messageIndex,
           message.data.messageHTML,
           message.data.sourceIndices,
           message.data.includeCitationImages || false
-        )
+        ))
           .then(result => {
             console.log('[NotebookLM Takeout] ====== Message citations extracted ======');
             console.log('[NotebookLM Takeout] Result:', result);
@@ -1989,7 +2007,11 @@
    * @param {number} maxRetries - Maximum retry attempts (default: 3)
    * @returns {Promise<{success: boolean, data?: object, error?: string}>}
    */
-  async function extractSingleCitationWithRetry(button, spanIndex, includeImages = false, maxRetries = 3) {
+  function extractSingleCitationWithRetry(button, spanIndex, includeImages = false, maxRetries = 3) {
+    return timePhase('citation.hover', () => extractSingleCitationWithRetryInner(button, spanIndex, includeImages, maxRetries));
+  }
+
+  async function extractSingleCitationWithRetryInner(button, spanIndex, includeImages = false, maxRetries = 3) {
     let lastError = null;
     const TOOLTIP = NLME.CITATION_TOOLTIP_SELECTOR;
 
@@ -2106,7 +2128,7 @@
         console.warn('[NotebookLM Takeout] WARNING: Note viewer still open from previous extraction!');
         console.log('[NotebookLM Takeout] Attempting to force close it...');
 
-        const closed = await closeStudioViewer(500);
+        const closed = await timePhase('note.close', () => closeStudioViewer(500));
         if (!closed) {
           console.error('[NotebookLM Takeout] ERROR: Failed to close viewer after 3 attempts');
           DOMHealthTracker.track('stuck', 'button[aria-label="Close note view"]', 'Viewer close failed');
@@ -2230,13 +2252,13 @@
     // every citation hover ends up reading chat sources instead of the note's.
     console.log('[NotebookLM Takeout] Waiting for content...');
     const studioPanel = document.querySelector('studio-panel') || document;
-    const content = await raceWithCleanup([
+    const content = await timePhase('note.open', () => raceWithCleanup([
       waitForElement('rich-text-editor .ql-editor', 5000, studioPanel),
       waitForElement('rich-text-editor .ProseMirror', 5000, studioPanel),
       waitForElement('markdown-editor-legacy .ql-editor', 5000, studioPanel),
       waitForElement('labs-tailwind-doc-viewer', 5000, studioPanel),
       waitForElement('mindmap-viewer', 5000, studioPanel)
-    ]).catch(() => null);
+    ]).catch(() => null));
 
     if (!content) {
       throw new Error('Content not found (no editor or mindmap viewer)');
@@ -2245,7 +2267,7 @@
     console.log('[NotebookLM Takeout] Content found:', content.tagName, content.className || '(no class)');
 
     // Wait a bit for content to fully render
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await timePhase('note.content', () => new Promise(resolve => setTimeout(resolve, 1000)));
 
     // Check if it's a mindmap viewer
     if (content.tagName.toLowerCase() === 'mindmap-viewer') {
@@ -2256,7 +2278,7 @@
     // Check if it's a Tailwind viewer (new format with sources)
     if (content.tagName.toLowerCase() === 'labs-tailwind-doc-viewer') {
       console.log('[NotebookLM Takeout] Tailwind viewer detected, extracting with citations...');
-      return await extractTailwindNoteContent(content);
+      return await timePhase('note.citations', () => extractTailwindNoteContent(content));
     } else {
       // Old format - just grab HTML
       console.log('[NotebookLM Takeout] Legacy editor format, no citations');
@@ -2386,6 +2408,7 @@
       }
 
       // Scroll into view first
+      requestTimer.start('source.open');
       clickTarget.scrollIntoView({ behavior: 'instant', block: 'center' });
       await new Promise(resolve => setTimeout(resolve, 200));
 
@@ -2425,12 +2448,16 @@
         });
         throw new Error('source-viewer not found - the source may not have opened');
       }
+      requestTimer.end('source.open');
+      requestTimer.start('source.content');
 
       console.log(`[NotebookLM Takeout] source-viewer found`);
 
       // Wait a bit for content to load
       await new Promise(resolve => setTimeout(resolve, 500));
 
+      requestTimer.end('source.content');
+      requestTimer.start('source.guide');
       // Try to wait for source-guide-container to load (optional, timeout after 3 seconds)
       console.log(`[NotebookLM Takeout] Waiting for source-guide-container to load...`);
       try {
@@ -2468,6 +2495,7 @@
       } catch (e) {
         console.log(`[NotebookLM Takeout] source-guide-container not found (optional, continuing anyway)`);
       }
+      requestTimer.end('source.guide');
 
       // Try to find content container within source-viewer
       let contentElement = null;

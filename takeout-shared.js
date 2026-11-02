@@ -255,7 +255,54 @@
       .trim();
   }
 
+  // Per-phase export timing. Phases may repeat (one per note/citation); totals
+  // can be merged across contexts (content-script responses into the sidebar).
+  function createPhaseTimer(now = () => (globalThis.performance ? globalThis.performance.now() : Date.now())) {
+    const totals = {};
+    const open = {};
+    const add = (phase, count, ms) => {
+      const t = totals[phase] || (totals[phase] = { count: 0, ms: 0 });
+      t.count += count;
+      t.ms += ms;
+    };
+    return {
+      start(phase) { open[phase] = now(); },
+      end(phase) {
+        if (open[phase] === undefined) return;
+        add(phase, 1, now() - open[phase]);
+        delete open[phase];
+      },
+      totals() {
+        const copy = {};
+        for (const [k, v] of Object.entries(totals)) copy[k] = { count: v.count, ms: Math.round(v.ms) };
+        return copy;
+      },
+      merge(other) {
+        for (const [k, v] of Object.entries(other || {})) add(k, v.count || 0, v.ms || 0);
+      }
+    };
+  }
+
+  function formatDuration(ms) {
+    const s = ms / 1000;
+    if (s < 60) return `${s.toFixed(1)} s`;
+    const m = Math.floor(s / 60);
+    return `${m} m ${Math.round(s - m * 60)} s`;
+  }
+
+  function formatTimingSummary(totals, wallMs) {
+    const lines = ['## Export statistics', ''];
+    for (const [phase, t] of Object.entries(totals || {})) {
+      const avg = t.count ? (t.ms / t.count / 1000).toFixed(2) : '0.00';
+      lines.push(`- ${phase}: ${t.count} × ${avg} s avg (${formatDuration(t.ms)})`);
+    }
+    lines.push(`- Total: ${formatDuration(wallMs || 0)}`);
+    return lines.join('\n') + '\n';
+  }
+
   const NLME = {
+    createPhaseTimer,
+    formatTimingSummary,
     cleanOcrArtifacts,
     mathSourceHealth,
     mathSourceToMarkdown,
