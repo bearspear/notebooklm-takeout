@@ -5707,7 +5707,8 @@ async function handleStudioDownloadRow(idx, btn) {
   setStudioRowStatus(btn, 'pending');
   try {
     if (item.kind === 'artifact') {
-      await downloadArtifact(_studioTabId, item.kindIndex, item.type, item.label);
+      // moreIndex: same index space as the Artifacts tab and DOWNLOAD_ARTIFACT
+      await downloadArtifact(_studioTabId, item.moreIndex, item.type, item.label);
     } else {
       // kind === 'note' — regular note or mindmap
       await exportSingleNote({ index: item.kindIndex, title: item.label, type: item.type });

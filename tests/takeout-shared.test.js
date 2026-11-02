@@ -67,3 +67,20 @@ test('buildCitationEntries sorts numerically regardless of extraction order', ()
 test('buildCitationEntries returns nothing for a note without citations', () => {
   assert.deepEqual(NLME.buildCitationEntries([], []), []);
 });
+
+test('pickByIndexThenTitle keeps the clicked duplicate', () => {
+  assert.equal(NLME.pickByIndexThenTitle(['A', 'B', 'A'], 2, 'A'), 2);
+});
+
+test('pickByIndexThenTitle follows the title when the list shifted', () => {
+  assert.equal(NLME.pickByIndexThenTitle(['A', 'B', 'C'], 0, 'B'), 1);
+});
+
+test('pickByIndexThenTitle falls back to the index when the title is gone', () => {
+  assert.equal(NLME.pickByIndexThenTitle(['A', 'B'], 1, 'Z'), 1);
+});
+
+test('pickByIndexThenTitle returns -1 when nothing is usable', () => {
+  assert.equal(NLME.pickByIndexThenTitle(['A'], 5, 'Z'), -1);
+  assert.equal(NLME.pickByIndexThenTitle([], 0, 'A'), -1);
+});

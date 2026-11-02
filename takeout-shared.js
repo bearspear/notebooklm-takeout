@@ -96,7 +96,22 @@
   // "Close note view"); "Collapse studio panel" must never match (Nov 2026).
   const STUDIO_HEADER_CLOSE_SELECTOR = 'section.studio-panel .panel-header button[aria-label^="Close"]';
 
+  // Resolve the item a row refers to when titles can repeat: trust the scanned
+  // index while its title still matches, else the first title match, else the
+  // index alone. -1 when neither is usable.
+  function pickByIndexThenTitle(titles, index, title) {
+    const list = titles || [];
+    const inRange = Number.isInteger(index) && index >= 0 && index < list.length;
+    if (inRange && list[index] === title) return index;
+    if (title) {
+      const byTitle = list.indexOf(title);
+      if (byTitle !== -1) return byTitle;
+    }
+    return inRange ? index : -1;
+  }
+
   const NLME = {
+    pickByIndexThenTitle,
     STUDIO_HEADER_CLOSE_SELECTOR,
     buildCitationEntries,
     ICON_TO_TYPE,

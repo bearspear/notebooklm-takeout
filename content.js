@@ -2254,43 +2254,13 @@
 
       console.log('[NotebookLM Takeout] Total note elements found:', allNoteElements.length);
 
-      let noteEl = null;
-
-      if (noteTitle) {
-        // Try to find by title first (search ALL notes, not just visible ones)
-        console.log('[NotebookLM Takeout] Searching for note with title:', noteTitle);
-
-        const foundTitles = [];
-        for (const el of allNoteElements) {
-          const titleEl = el.querySelector('.artifact-title, .note-title');
-          const title = titleEl?.textContent?.trim();
-          foundTitles.push(title);
-
-          if (title === noteTitle) {
-            noteEl = el;
-            console.log('[NotebookLM Takeout] ✓ Found note by exact title match');
-            break;
-          }
-        }
-
-        if (!noteEl) {
-          console.log('[NotebookLM Takeout] ✗ Title not found. Available titles:', foundTitles);
-          console.log('[NotebookLM Takeout] Looking for:', noteTitle);
-        }
-      }
-
-      // Fallback to index-based lookup if title search failed
-      if (!noteEl) {
-        console.log('[NotebookLM Takeout] Falling back to index-based lookup...');
-
-        // Use ALL note elements, not filtered (since scan also uses all)
-        if (noteIndex < allNoteElements.length) {
-          noteEl = allNoteElements[noteIndex];
-          console.log('[NotebookLM Takeout] Using note at index:', noteIndex);
-        } else {
-          console.error('[NotebookLM Takeout] Index out of bounds:', noteIndex, 'of', allNoteElements.length);
-        }
-      }
+      // Index first, accepted while its title still matches, so duplicate
+      // titles export the row that was clicked (titles can repeat)
+      const noteElements = Array.from(allNoteElements);
+      const noteTitles = noteElements.map(el => el.querySelector('.artifact-title, .note-title')?.textContent?.trim() || '');
+      const pick = NLME.pickByIndexThenTitle(noteTitles, noteIndex, noteTitle);
+      const noteEl = pick === -1 ? null : noteElements[pick];
+      console.log(`[NotebookLM Takeout] Resolved note "${noteTitle}" (index ${noteIndex}) to position ${pick}`);
 
       if (!noteEl) {
         // Gather diagnostic info
@@ -3147,34 +3117,36 @@
   }
 
   // Extract mindmap SVG with all nodes expanded
+  // Studio artifacts that have a More button, in DOM order. Every artifact
+  // index (Artifacts tab, Studio moreIndex, batch ZIP) refers to this list.
+  function getArtifactItemsWithMore() {
+    return Array.from(document.querySelectorAll('artifact-library-item'))
+      .filter(item => item.querySelector('button[aria-label="More"]'));
+  }
+
+  function resolveArtifactItem(title, artifactIndex) {
+    const items = getArtifactItemsWithMore();
+    const titles = items.map(item => item.querySelector('.artifact-title')?.textContent?.trim() || '');
+    const pick = NLME.pickByIndexThenTitle(titles, artifactIndex, title);
+    return pick === -1 ? null : items[pick];
+  }
+
   /**
    * Extract Report content by clicking to open and reading the content
    * Reports are similar to Notes - they open in a viewer
    */
-  async function extractReportContent(reportTitle) {
+  async function extractReportContent(reportTitle, artifactIndex = -1) {
     console.log(`[NotebookLM Takeout] Extracting Report: "${reportTitle}"`);
 
     try {
-      // Find the artifact by title
-      const allTitles = document.querySelectorAll('.artifact-title');
-      const titleElement = Array.from(allTitles).find(
-        (el) => el.textContent.trim() === reportTitle
-      );
-
-      if (!titleElement) {
+      // Index first, accepted while its title still matches (titles can repeat)
+      const artifactItem = resolveArtifactItem(reportTitle, artifactIndex);
+      if (!artifactItem) {
         throw new Error(`Could not find Report with title: "${reportTitle}"`);
       }
 
-      // Find the parent artifact-library-item, then find the button
-      const artifactItem = titleElement.closest('artifact-library-item');
-      if (!artifactItem) {
-        throw new Error('Could not find artifact-library-item parent');
-      }
-
-      // Look for the main artifact button (by icon or first button with aria-description)
-      // Icon 'auto_tab_group' = Report
-      const icon = artifactItem.querySelector('mat-icon');
-      const reportButton = icon?.closest('button') || artifactItem.querySelector('button[aria-description]');
+      const reportButton = artifactItem.querySelector('button[aria-description]') ||
+        artifactItem.querySelector('button.artifact-stretched-button');
       if (!reportButton) {
         throw new Error('Could not find Report button');
       }
@@ -3256,12 +3228,11 @@
    * Data Tables open in a <table-viewer> element
    */
   // Open a mind map listed as a studio item and extract it (mindmap-extract.js)
-  async function extractMindmapArtifact(mindmapTitle) {
+  async function extractMindmapArtifact(mindmapTitle, artifactIndex = -1) {
     console.log(`[NotebookLM Takeout] Extracting Mind Map: "${mindmapTitle}"`);
 
-    const titleElement = Array.from(document.querySelectorAll('artifact-library-item .artifact-title'))
-      .find((el) => el.textContent.trim() === mindmapTitle);
-    const artifactItem = titleElement?.closest('artifact-library-item');
+    // Index first, accepted while its title still matches (titles can repeat)
+    const artifactItem = resolveArtifactItem(mindmapTitle, artifactIndex);
     if (!artifactItem) {
       throw new Error(`Could not find Mind Map with title: "${mindmapTitle}"`);
     }
@@ -3302,30 +3273,18 @@
     }
   }
 
-  async function extractDataTableContent(tableTitle) {
+  async function extractDataTableContent(tableTitle, artifactIndex = -1) {
     console.log(`[NotebookLM Takeout] Extracting Data Table: "${tableTitle}"`);
 
     try {
-      // Find the artifact by title
-      const allTitles = document.querySelectorAll('.artifact-title');
-      const titleElement = Array.from(allTitles).find(
-        (el) => el.textContent.trim() === tableTitle
-      );
-
-      if (!titleElement) {
+      // Index first, accepted while its title still matches (titles can repeat)
+      const artifactItem = resolveArtifactItem(tableTitle, artifactIndex);
+      if (!artifactItem) {
         throw new Error(`Could not find Data Table with title: "${tableTitle}"`);
       }
 
-      // Find the parent artifact-library-item, then find the button
-      const artifactItem = titleElement.closest('artifact-library-item');
-      if (!artifactItem) {
-        throw new Error('Could not find artifact-library-item parent');
-      }
-
-      // Look for the main artifact button (by icon or first button with aria-description)
-      // Icon 'table_view' = Data Table
-      const icon = artifactItem.querySelector('mat-icon');
-      const tableButton = icon?.closest('button') || artifactItem.querySelector('button[aria-description]');
+      const tableButton = artifactItem.querySelector('button[aria-description]') ||
+        artifactItem.querySelector('button.artifact-stretched-button');
       if (!tableButton) {
         throw new Error('Could not find Data Table button');
       }
@@ -3566,7 +3525,7 @@
       // Mind maps have no Download in their More menu (the menu doesn't open):
       // open the map and extract SVG + tree data like the Notes tab does
       if (artifactType === 'Mind Map' && skipMoreButton) {
-        const mindmap = await extractMindmapArtifact(artifactTitle);
+        const mindmap = await extractMindmapArtifact(artifactTitle, artifactIndex);
         if (mindmap.inAppFrame) {
           return {
             success: true,
@@ -3590,8 +3549,8 @@
         console.log(`[NotebookLM Takeout] [Download] ${artifactType} with skipMoreButton - extracting directly...`);
 
         const extractResult = artifactType === 'Report'
-          ? await extractReportContent(artifactTitle)
-          : await extractDataTableContent(artifactTitle);
+          ? await extractReportContent(artifactTitle, artifactIndex)
+          : await extractDataTableContent(artifactTitle, artifactIndex);
 
         if (extractResult.success) {
           const duration = Date.now() - startTime;
@@ -3614,13 +3573,8 @@
       if (!moreButtonAlreadyClicked) {
         // Build array of More buttons ONLY from artifact-library-item (not from notes)
         // Same index space as SCAN_STUDIO_ITEMS moreIndex
-        const artifactMoreButtons = [];
-        document.querySelectorAll('artifact-library-item').forEach(item => {
-          const btn = item.querySelector('button[aria-label="More"]');
-          if (btn) {
-            artifactMoreButtons.push(btn);
-          }
-        });
+        const artifactMoreButtons = getArtifactItemsWithMore()
+          .map(item => item.querySelector('button[aria-label="More"]'));
 
         if (artifactIndex < 0 || artifactIndex >= artifactMoreButtons.length) {
           throw new Error(`Artifact index ${artifactIndex} out of range (0-${artifactMoreButtons.length - 1})`);
@@ -3682,8 +3636,8 @@
         console.log(`[NotebookLM Takeout] [Download] Attempting ${artifactType} extraction...`);
 
         const extractResult = artifactType === 'Report'
-          ? await extractReportContent(artifactTitle)
-          : await extractDataTableContent(artifactTitle);
+          ? await extractReportContent(artifactTitle, artifactIndex)
+          : await extractDataTableContent(artifactTitle, artifactIndex);
 
         if (extractResult.success) {
           const duration = Date.now() - startTime;
