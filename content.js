@@ -1279,6 +1279,21 @@
         note: closeButton ? 'Close button found' : 'Close button missing'
       });
 
+      // Citation markers must yield a number (markers changed shape in Nov 2026)
+      const markers = Array.from(noteViewer.querySelectorAll('button.citation-marker'))
+        .filter(btn => !btn.querySelector('mat-icon'));
+      const parsedMarkers = markers.filter(btn => NLME.parseCitationIndex(btn.querySelector('span')?.textContent));
+      checks.push({
+        name: 'Citation markers parse',
+        selector: 'button.citation-marker > span',
+        passed: markers.length === 0 || parsedMarkers.length > 0,
+        critical: true,
+        count: parsedMarkers.length,
+        note: markers.length === 0
+          ? 'No citations in this note'
+          : `${parsedMarkers.length}/${markers.length} marker(s) yield a citation number`
+      });
+
       // Check for citations in note (non-critical)
       const citations = noteViewer.querySelectorAll('button.citation-marker');
       checks.push({
@@ -1474,6 +1489,22 @@
         note: `Primary selector "${selectors[0]}" missed; using fallback "${matchedSelector}". Extension may be drifting behind NotebookLM UI changes.`
       });
     }
+
+    // Studio viewers close from the panel header since Nov 2026
+    const viewerOpen = !!findOpenStudioViewer();
+    const headerClose = document.querySelectorAll(NLME.STUDIO_HEADER_CLOSE_SELECTOR);
+    checks.push({
+      name: 'Studio header close control',
+      selector: NLME.STUDIO_HEADER_CLOSE_SELECTOR,
+      passed: viewerOpen ? headerClose.length === 1 : true,
+      critical: false,
+      count: headerClose.length,
+      note: viewerOpen
+        ? (headerClose.length === 1
+            ? `Found "${headerClose[0].getAttribute('aria-label')}"`
+            : 'Viewer open but no header close button — viewers may stay open after export')
+        : 'Open a studio item to verify (expected 1 match)'
+    });
 
     const healthy = checks.every(c => !c.critical || c.passed);
     return { healthy, checks };
