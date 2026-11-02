@@ -188,12 +188,17 @@ All lines start with `[NotebookLM Takeout]`.
 
 ## How long exports take
 
-Exports drive the page the way you would, one item at a time.
+Exports drive the page the way you would, one item at a time, and continue as soon as the
+page is ready (no fixed waits). Measured on a real notebook with version 1.2.0:
 
-- Artifacts: a few seconds each.
-- Notes: a few seconds each, plus about 0.3–1 s per citation when reading quotes.
-- Chat with full citations: about 0.5 s per distinct citation per answer. A 200-message chat
-  with ~1,400 citations takes roughly 10–15 minutes.
+| Export | Time |
+|---|---|
+| 10 notes with full citations (154 citations) | 49 s |
+| 5 sources with summaries | 8 s |
+| Chat with full citations (17 answers, 134 citations) | 30 s |
+| One citation | about 0.2 s |
+
+Each export's `_index.md` ends with an "Export statistics" block showing where the time went.
 
 Reading a citation only opens its popup. The citation text is already in the page, so it
 causes no extra requests to Gemini Notebook.
