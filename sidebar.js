@@ -1227,6 +1227,9 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
 
   } catch (error) {
     logger.error('Download', `Failed to download ${artifactName}`, error);
+    // A queued intercept request would otherwise rename the next unrelated
+    // download (even the user's own) as this item for up to 20 s
+    chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
     throw error;
   }
 }
@@ -2567,6 +2570,7 @@ async function generateZipTimed(zip) {
 // runs, controls in the tabs are disabled via body.job-running, auto-refresh
 // and tab-switch rescans are skipped, and Cancel reaches the running job.
 const jobLock = NLME.createJobLock();
+let jobTabId = null;
 
 async function runExclusive(name, fn) {
   if (!jobLock.tryAcquire(name)) {
@@ -2575,9 +2579,17 @@ async function runExclusive(name, fn) {
   }
   document.body.classList.add('job-running');
   try {
+    // Remember the job's tab: Cancel must reach it even after a tab switch
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      jobTabId = tab?.id ?? null;
+    } catch (e) {
+      jobTabId = null;
+    }
     return await fn();
   } finally {
     jobLock.release(name);
+    jobTabId = null;
     document.body.classList.remove('job-running');
   }
 }
@@ -2588,7 +2600,7 @@ async function requestCancel() {
   if (!jobLock.current()) return;
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    await chrome.tabs.sendMessage(currentTabId || tab?.id, { type: 'REQUEST_EXPORT_CANCEL' });
+    await chrome.tabs.sendMessage(jobTabId || currentTabId || tab?.id, { type: 'REQUEST_EXPORT_CANCEL' });
   } catch (error) {
     console.warn('[NotebookLM Takeout] Cancel request failed:', error.message);
   }
@@ -2816,6 +2828,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
 
   const allErrors = [];
   let cancelled = false;
+  let cancelNoted = false;
   let exportedCount = 0;
   let attemptedCount = 0;
   let errorsWritten = false;
@@ -2841,6 +2854,10 @@ async function exportNotesAsMarkdown(selectedNotes) {
     for (let zipIndex = 0; zipIndex < totalZips; zipIndex++) {
       if (cancelled) {
         console.log('[NotebookLM Takeout] Export cancelled by user');
+        if (!cancelNoted) {
+          cancelNoted = true;
+          allErrors.push(NLME.cancellationNote({ kind: 'notes', done: attemptedCount, total: selectedNotes.length }));
+        }
         break;
       }
 
@@ -2856,6 +2873,10 @@ async function exportNotesAsMarkdown(selectedNotes) {
       // Check for cancellation
       if (cancelled) {
         console.log('[NotebookLM Takeout] Export cancelled by user');
+        if (!cancelNoted) {
+          cancelNoted = true;
+          allErrors.push(NLME.cancellationNote({ kind: 'notes', done: attemptedCount, total: selectedNotes.length }));
+        }
         break;
       }
 
@@ -2871,11 +2892,11 @@ async function exportNotesAsMarkdown(selectedNotes) {
       progressText.textContent = `Batch ${zipIndex + 1}/${totalZips}: Processing ${i + 1}/${batchNotes.length}: ${note.title}`;
 
       // Update page overlay
-      await chrome.tabs.sendMessage(tab.id, {
+      chrome.tabs.sendMessage(tab.id, {
         type: 'UPDATE_EXPORT_OVERLAY',
         message: `Batch ${zipIndex + 1}/${totalZips}: Processing ${i + 1}/${batchNotes.length}: ${note.title}`,
         progress: progress
-      });
+      }).catch(() => {}); // overlay is cosmetic; never abort the job
 
       try {
         // Extract note content via content script
@@ -3712,6 +3733,7 @@ async function exportSources(selectedSources) {
 
   const allErrors = [];
   let cancelled = false;
+  let cancelNoted = false;
   let exportedCount = 0;
   let attemptedCount = 0;
   let errorsWritten = false;
@@ -3747,6 +3769,10 @@ async function exportSources(selectedSources) {
     for (let zipIndex = 0; zipIndex < totalZips; zipIndex++) {
       if (cancelled) {
         console.log('[NotebookLM Takeout] Export cancelled by user');
+        if (!cancelNoted) {
+          cancelNoted = true;
+          allErrors.push(NLME.cancellationNote({ kind: 'sources', done: attemptedCount, total: selectedSources.length }));
+        }
         break;
       }
 
@@ -3762,6 +3788,10 @@ async function exportSources(selectedSources) {
       // Check for cancellation
       if (cancelled) {
         console.log('[NotebookLM Takeout] Export cancelled by user');
+        if (!cancelNoted) {
+          cancelNoted = true;
+          allErrors.push(NLME.cancellationNote({ kind: 'sources', done: attemptedCount, total: selectedSources.length }));
+        }
         break;
       }
 
@@ -3775,11 +3805,11 @@ async function exportSources(selectedSources) {
       progressText.textContent = `Batch ${zipIndex + 1}/${totalZips}: Extracting ${i + 1}/${batchSources.length}: ${source.title}`;
 
       // Update page overlay
-      await chrome.tabs.sendMessage(tab.id, {
+      chrome.tabs.sendMessage(tab.id, {
         type: 'UPDATE_EXPORT_OVERLAY',
         message: `Batch ${zipIndex + 1}/${totalZips}: Extracting ${i + 1}/${batchSources.length}: ${source.title}`,
         progress: progress
-      });
+      }).catch(() => {}); // overlay is cosmetic; never abort the job
 
       console.log(`[NotebookLM Takeout] Extracting source: "${source.title}"`);
 
@@ -4674,6 +4704,7 @@ async function exportChat(chatData, extractFullCitations = false) {
   progressFill.style.width = '0%';
 
   let cancelled = false;
+  let cancelNoted = false;
   let processedCount = 0;
   // One truthful end-of-export toast (cancel no longer overwritten by success)
   const showChatOutcome = (errorCount) => {
@@ -4718,6 +4749,10 @@ async function exportChat(chatData, extractFullCitations = false) {
     for (let i = 0; i < messagePairs.length; i++) {
       if (cancelled) {
         console.log('[NotebookLM Takeout] Export cancelled by user');
+        if (!cancelNoted) {
+          cancelNoted = true;
+          allErrors.push(NLME.cancellationNote({ kind: 'messages', done: processedCount, total: chatData.messagePairs.length }));
+        }
         break;
       }
 
@@ -4729,11 +4764,11 @@ async function exportChat(chatData, extractFullCitations = false) {
       progressFill.style.width = `${progress}%`;
       progressText.textContent = `Processing message ${i + 1}/${messagePairs.length}`;
 
-      await chrome.tabs.sendMessage(tab.id, {
+      chrome.tabs.sendMessage(tab.id, {
         type: 'UPDATE_EXPORT_OVERLAY',
         message: `Processing message ${i + 1}/${messagePairs.length}`,
         progress: progress
-      });
+      }).catch(() => {}); // overlay is cosmetic; never abort the job
 
       console.log(`[NotebookLM Takeout] Message ${i + 1}: Processing...`);
 
@@ -4798,11 +4833,11 @@ async function exportChat(chatData, extractFullCitations = false) {
           progressFill.style.width = `${extractProgress}%`;
           progressText.textContent = `Message ${i + 1}/${messagePairs.length}: Extracting ${messageSources.size} quotes...`;
 
-          await chrome.tabs.sendMessage(tab.id, {
+          chrome.tabs.sendMessage(tab.id, {
             type: 'UPDATE_EXPORT_OVERLAY',
             message: `Message ${i + 1}/${messagePairs.length}: Extracting ${messageSources.size} quotes (this may take a minute)...`,
             progress: extractProgress
-          });
+          }).catch(() => {}); // overlay is cosmetic; never abort the job
 
           try {
             // Get source indices to extract
@@ -5958,8 +5993,14 @@ async function downloadAllArtifacts(tabId, items) {
         failed: errors.length,
         cancelled
       });
-      showToast(result && result.error && !result.count ? `Download All failed: ${result.error}` : outcome.message,
-        result && result.error && !result.count ? 'error' : outcome.level);
+      // A cancel is reported as "Cancelled: X of Y", not as a failure
+      const wasCancelled = cancelled || (result && result.cancelled);
+      const hardFailure = result && result.error && !result.count && !wasCancelled;
+      const shown = wasCancelled
+        ? NLME.summarizeExportOutcome({ kind: 'artifacts', selected: items.length, exported: (result && result.count) || 0, failed: 0, cancelled: true })
+        : outcome;
+      showToast(hardFailure ? `Download All failed: ${result.error} (see errors.txt)` : shown.message,
+        hardFailure ? 'error' : shown.level);
     } catch (error) {
       console.error('Batch download failed:', error);
       showToast(`Download All failed: ${error.message}`, 'error');
@@ -5973,9 +6014,13 @@ async function downloadAllArtifacts(tabId, items) {
   } else {
     // Individual downloads into Downloads/<Notebook>/ (Milestone 1, Task 8b):
     // each file streams to disk, so there is no size limit
-    activeDownloadFolder = (await getProjectName(tabId)) || 'NotebookLM';
     try {
+      activeDownloadFolder = (await getProjectName(tabId)) || 'NotebookLM';
       await downloadItemsSequentially(tabId, items, progressFill, progressText, () => cancelled);
+    } catch (error) {
+      // Fall through to the cleanup below (overlay, panel, button) either way
+      console.error('[NotebookLM Takeout] Download All failed:', error);
+      showToast(`Download All failed: ${error.message}`, 'error');
     } finally {
       activeDownloadFolder = '';
     }
@@ -6026,13 +6071,12 @@ async function downloadItemsSequentially(tabId, items, progressFill, progressTex
     progressFill.style.width = `${progress}%`;
     progressText.textContent = `Downloading ${i + 1}/${items.length}: ${item.label}`;
 
-    // Update page overlay
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    await chrome.tabs.sendMessage(tab.id, {
+    // Update page overlay on the job's own tab (the active tab may have changed)
+    chrome.tabs.sendMessage(tabId, {
       type: 'UPDATE_EXPORT_OVERLAY',
       message: `Downloading ${i + 1}/${items.length}: ${item.label}`,
       progress: progress
-    });
+    }).catch(() => {}); // overlay is cosmetic; never abort the job
 
     logger.download(item.label, 'progress', `Item ${i + 1}/${items.length}`);
 

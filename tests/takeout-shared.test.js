@@ -428,3 +428,9 @@ test('stability tracker never stable below minLength', () => {
   assert.equal(t.push(10), false);
   assert.equal(t.push(10), false);
 });
+
+test('cancellationNote says how far the export got and what is missing', () => {
+  const note = NLME.cancellationNote({ kind: 'messages', done: 4, total: 17 });
+  assert.match(note, /Cancelled by user after 4 of 17 messages/);
+  assert.match(note, /not exported/);
+});

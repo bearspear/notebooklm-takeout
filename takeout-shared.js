@@ -447,7 +447,14 @@
     };
   }
 
+  // errors.txt line for a cancelled run; it also forces the ZIP (and so the
+  // -PARTIAL name) for exports that otherwise write a single file.
+  function cancellationNote({ kind, done = 0, total = 0 } = {}) {
+    return `Cancelled by user after ${done} of ${total} ${kind}; the last one may have incomplete citations and the rest were not exported`;
+  }
+
   const NLME = {
+    cancellationNote,
     createStabilityTracker,
     downloadFolderPath,
     extensionFromDownloadUrl,

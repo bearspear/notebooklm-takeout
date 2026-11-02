@@ -3552,12 +3552,17 @@
   async function navigateBackToNotesList() {
     console.log('[NotebookLM Takeout] Attempting to close panel/navigate back...');
 
+    // Only a closed Studio viewer brings the notes list back; after a source
+    // (or with no notes at all) there is nothing to wait for
+    const studioViewerWasOpen = !!findOpenStudioViewer();
     const studioClosed = await closeStudioViewer();
     const sourceClosed = await closeSourceViewer();
     if (studioClosed && sourceClosed) {
       console.log('[NotebookLM Takeout] ✓ Panel closed successfully');
       // Resolve once the Studio list is back, so the next note can start at once
-      await waitForElement('artifact-library-note', 3000).catch(() => null);
+      if (studioViewerWasOpen) {
+        await waitForElement('artifact-library-note', 3000).catch(() => null);
+      }
       return;
     }
 

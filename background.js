@@ -756,6 +756,7 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
 
   batchDownloadMode = true;
   batchCancelRequested = false;
+  let batchWasCancelled = false;
   batchStatus = 'Starting...';
   const downloadedFiles = [];
   const errors = [];
@@ -767,9 +768,12 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
 
   for (let i = 0; i < items.length; i++) {
     if (batchCancelRequested) {
+      // Keep what was fetched: it becomes a -PARTIAL ZIP below
       console.log('[Background] Batch download cancelled by user');
       batchStatus = 'Cancelled';
-      return { success: false, cancelled: true, error: 'Cancelled', errors };
+      batchWasCancelled = true;
+      errors.push(NLME.cancellationNote({ kind: 'artifacts', done: i, total: items.length }));
+      break;
     }
 
     const item = items[i];
@@ -904,7 +908,7 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
 
       // Download the ZIP (awaited: a failure here is a failed batch)
       const zipUrl = `data:application/zip;base64,${zipBase64}`;
-      const zipName = `notebooklm-export-${timestamp}.zip`;
+      const zipName = `notebooklm-export-${timestamp}${batchWasCancelled ? '-PARTIAL' : ''}.zip`;
       nameNextDownload(zipUrl, zipName);
       await chrome.downloads.download({
         url: zipUrl,
@@ -913,7 +917,7 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
       });
 
       batchStatus = `Complete: ${downloadedFiles.length} files`;
-      return { success: true, count: downloadedFiles.length, errors };
+      return { success: true, cancelled: batchWasCancelled, count: downloadedFiles.length, errors };
     } catch (zipError) {
       console.error('[Background] ZIP creation failed:', zipError);
       console.log('[Background] Falling back to individual file downloads...');
@@ -943,8 +947,12 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
           };
           const mimeType = mimeTypes[ext] || 'application/octet-stream';
 
+          // Register the name: Chrome drops `filename` while our
+          // onDeterminingFilename listener exists (see NAME_NEXT_DOWNLOAD)
+          const fileUrl = `data:${mimeType};base64,${file.data}`;
+          nameNextDownload(fileUrl, file.filename);
           await chrome.downloads.download({
-            url: `data:${mimeType};base64,${file.data}`,
+            url: fileUrl,
             filename: file.filename,
             saveAs: false
           });
@@ -980,7 +988,19 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
     }
   } else {
     batchStatus = 'No files downloaded';
-    return { success: false, error: 'No files downloaded', errors };
+    // Never lose the reasons: an errors-only ZIP
+    if (errors.length > 0) {
+      try {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const errUrl = `data:application/zip;base64,${await createZipFromFiles([], errors)}`;
+        const errName = `notebooklm-export-${timestamp}${batchWasCancelled ? '-PARTIAL' : ''}-errors.zip`;
+        nameNextDownload(errUrl, errName);
+        await chrome.downloads.download({ url: errUrl, filename: errName, saveAs: false });
+      } catch (e) {
+        console.error('[Background] Could not save errors-only ZIP:', e);
+      }
+    }
+    return { success: false, cancelled: batchWasCancelled, error: 'No files downloaded', count: 0, errors };
   }
 
   } finally {
