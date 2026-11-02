@@ -5,6 +5,9 @@
 // the new one; keep both so users mid-rollout still work.
 const NOTEBOOK_HOSTS = ['notebook.google.com', 'notebooklm.google.com'];
 
+// Shared DOM-free helpers (globalThis.NLME)
+importScripts('takeout-shared.js');
+
 function isNotebookUrl(url) {
   return !!url && NOTEBOOK_HOSTS.some(host => url.includes(host));
 }
@@ -853,6 +856,9 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
 
     // Create ZIP and download
     if (fileContents.length > 0) {
+    // Same-title artifacts (spec R8) would otherwise overwrite each other
+    const uniqueNames = NLME.uniqueFilenames(fileContents.map(f => f.filename));
+    fileContents.forEach((f, i) => { f.filename = uniqueNames[i]; });
     try {
       const zipBase64 = await createZipFromFiles(fileContents);
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
