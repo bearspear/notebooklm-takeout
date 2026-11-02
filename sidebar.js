@@ -6366,6 +6366,8 @@ function generateHealthReport(results) {
         let icon;
         if (check.passed) {
           icon = '[OK]';
+        } else if (check.warning) {
+          icon = '[WARN]'; // Non-critical, but exports lose fidelity
         } else if (check.critical === false) {
           icon = '[INFO]'; // Non-critical - informational only
         } else {

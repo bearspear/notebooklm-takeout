@@ -1508,6 +1508,26 @@
         : 'Open a studio item to verify (expected 1 match)'
     });
 
+    // Formulas are exported from their original LaTeX (data-math, Nov 2026).
+    // Warn if Gemini stops providing it and exports fall back to rebuilding.
+    const formulas = Array.from(document.querySelectorAll('.katex'));
+    const mathHealth = NLME.mathSourceHealth({
+      total: formulas.length,
+      withSource: formulas.filter(k =>
+        (k.closest('[data-math]')?.getAttribute('data-math') || '').trim() ||
+        (k.querySelector('annotation[encoding="application/x-tex"]')?.textContent || '').trim()
+      ).length
+    });
+    checks.push({
+      name: 'Formulas carry LaTeX source',
+      selector: '[data-math] .katex',
+      passed: mathHealth.passed,
+      critical: false,
+      warning: true,
+      count: formulas.length,
+      note: mathHealth.note
+    });
+
     const healthy = checks.every(c => !c.critical || c.passed);
     return { healthy, checks };
   }

@@ -58,8 +58,10 @@ No backend, no build. Unit tests cover the DOM-free helpers in `takeout-shared.j
   via NotebookLM's "More → Download" menu, which calls `window.open` to a Google CDN URL.
   We override `window.open` in `injected.js` and route the URL back through the extension's
   `chrome.downloads` API so no tab opens.
-- **KaTeX math.** Notes often render math via KaTeX. The MathML `<annotation>` tag (verbatim
-  LaTeX) is preferred; when missing we reconstruct LaTeX from the `.katex-html` tree.
+- **KaTeX math.** Notes and chat render math via KaTeX. The model's original LaTeX sits on
+  the host span as `data-math` (Nov 2026) and is exported verbatim; then the MathML
+  `<annotation>`; only when both are missing do we reconstruct LaTeX from `.katex-html`.
+  The health check's "Formulas carry LaTeX source" line warns when formulas lack a source.
 
 ## How to load and iterate
 
@@ -586,17 +588,22 @@ Turndown rules (notes/sources rule and chat rule), both filter on
 `SPAN.classList.contains('katex')`.
 
 ```
-1. Look for <annotation encoding="application/x-tex">.
-   If present, use textContent verbatim. Done.
+1. Exact source via NLME.mathSourceToMarkdown(): the host span's data-math
+   (Gemini Notebook keeps the model's original LaTeX there, Nov 2026), else
+   <annotation encoding="application/x-tex">. Verbatim. Done.
 2. Otherwise, walk .katex-html recursively via katexRenderInline(el).
+   Best effort: cannot recover \text{}, matrices, alignments exactly.
 3. If walker returns empty, last-resort: textContent + unicodeToLatex map.
 ```
+
+Gemini prefixes some KaTeX classes: `katex-base`, `katex-strut`, `katex-sizing`
+(Nov 2026). The walker accepts both spellings.
 
 `katexRenderInline` handles, by KaTeX class:
 
 | Class | Handling |
 |---|---|
-| `strut` / `pstrut` / `vlist-s` | Skip (spacing artifacts) |
+| `strut` / `katex-strut` / `pstrut` / `vlist-s` | Skip (spacing artifacts) |
 | `mfrac` | `\frac{num}{den}` — sub-render each from `.vlist` children by `top` |
 | `sqrt` | `\sqrt{radicand}` |
 | `mop` (named function) | `\ln` / `\log` / `\sin` / `\cos` / `\tan` / `\exp` / `\lim` / `\max` / `\min` / + 24 others |
@@ -605,10 +612,10 @@ Turndown rules (notes/sources rule and chat rule), both filter on
 | `mbin` / `mrel` | Binary operator / relation → `unicodeToLatex(textContent)` with surrounding spaces |
 | `mopen` / `mclose` | Parens, brackets → preserve textContent. If wraps `+msupsub`, recurse |
 | `mpunct` | Commas, periods → preserve textContent |
-| `mord` / `minner` | Variable / number. If has `.msupsub` child, recurse to attach scripts |
+| `mord` / `minner` | Variable / number. Recurse if it has a `.msupsub` child or wraps `.mfrac` / `.sqrt` |
 | `mspace` | Single space |
-| `msupsub` | Sub/super attached to previous atom. Extract from `.vlist` by `top` sign (more negative = sup) |
-| `base` | Recurse |
+| `msupsub` | Sub/super attached to previous atom. Two scripts: more negative `top` = sup. One script: `top + pstrut height` < 0 = sup (`NLME.classifyKatexScript`) |
+| `base` / `katex-base` | Recurse |
 
 `KATEX_UNICODE_MAP` covers 47 symbols (Greek, set theory, logic, arrows, basic ops). Single
 source of truth for both Turndown rules.

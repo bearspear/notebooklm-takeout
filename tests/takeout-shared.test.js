@@ -201,3 +201,22 @@ test('mathSourceToMarkdown returns null when no source is available', () => {
   assert.equal(NLME.mathSourceToMarkdown({}), null);
   assert.equal(NLME.mathSourceToMarkdown({ dataMath: '   ' }), null);
 });
+
+test('mathSourceHealth passes when every formula carries its LaTeX source', () => {
+  const r = NLME.mathSourceHealth({ total: 27, withSource: 27 });
+  assert.equal(r.passed, true);
+  assert.match(r.note, /27\/27/);
+});
+
+test('mathSourceHealth warns when formulas lack a LaTeX source', () => {
+  const r = NLME.mathSourceHealth({ total: 27, withSource: 24 });
+  assert.equal(r.passed, false);
+  assert.match(r.note, /3 of 27/);
+  assert.match(r.note, /rebuilt/);
+});
+
+test('mathSourceHealth passes with nothing to check when the page has no formulas', () => {
+  const r = NLME.mathSourceHealth({ total: 0, withSource: 0 });
+  assert.equal(r.passed, true);
+  assert.match(r.note, /No formulas/);
+});

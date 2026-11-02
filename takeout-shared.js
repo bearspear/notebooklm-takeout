@@ -203,7 +203,24 @@
     return `${delim}${tex}${delim}`;
   }
 
+  // Health of formula export: formulas without a LaTeX source (data-math or
+  // annotation) are rebuilt from the rendered layout, which can be inexact.
+  function mathSourceHealth({ total = 0, withSource = 0 } = {}) {
+    if (total === 0) {
+      return { passed: true, note: 'No formulas on this page (open a chat or note with math to verify)' };
+    }
+    if (withSource >= total) {
+      return { passed: true, note: `${withSource}/${total} formulas carry LaTeX source (exported exactly)` };
+    }
+    const missing = total - withSource;
+    return {
+      passed: false,
+      note: `${missing} of ${total} formulas have no LaTeX source; they will be rebuilt from the rendered layout and may be inexact`
+    };
+  }
+
   const NLME = {
+    mathSourceHealth,
     mathSourceToMarkdown,
     classifyKatexScript,
     isCollapsedCitationGroup,
