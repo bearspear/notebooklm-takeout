@@ -2784,11 +2784,12 @@ async function getProjectName(tabId) {
 
 // Notes export (Milestone 3a): the shared export shell around runNotesJob.
 // Each batch becomes one <Notebook>-notes-<ts>.zip from buildNotesFiles.
-async function exportNotesAsMarkdown(selectedNotes) {
+// options.tabId: the tab the notes were scanned on (a retry); default the active tab.
+async function exportNotesAsMarkdown(selectedNotes, { tabId } = {}) {
   startExportTiming();
   console.log('[NotebookLM Takeout] Starting export for notes:', selectedNotes.length);
 
-  await withExportShell({ label: 'notes', healthType: 'notes', overlayMessage: 'Preparing to export notes...' }, async shell => {
+  await withExportShell({ label: 'notes', healthType: 'notes', overlayMessage: 'Preparing to export notes...', tabId }, async shell => {
     const { result, zips, auditOk } = await runNotesJob(shell, selectedNotes);
 
     shell.finish({
@@ -2800,7 +2801,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
         ? `Stopped after ${result.exported} of ${selectedNotes.length} notes: citations could not be read (Gemini Notebook may have changed). Run the health check 🩺; details in errors.md.`
         : undefined,
       saved: zips,
-      retry: retryFor(result.failedItems, 'Notes export', failed => exportNotesAsMarkdown(failed))
+      retry: retryFor(result.failedItems, 'Notes export', failed => exportNotesAsMarkdown(failed, { tabId: shell.tab.id }))
     });
   });
 }
@@ -3627,11 +3628,12 @@ function renderSourcesList(sources, skippedNotes = 0) {
 // Sources export (Milestone 3a): the shared export shell around
 // runSourcesJob. Each batch becomes one <Notebook>-sources-<ts>.zip from
 // buildSourcesFiles.
-async function exportSources(selectedSources) {
+// options.tabId: the tab the sources were scanned on (a retry); default the active tab.
+async function exportSources(selectedSources, { tabId } = {}) {
   startExportTiming();
   console.log(`[NotebookLM Takeout] Exporting ${selectedSources.length} sources...`);
 
-  await withExportShell({ label: 'sources', healthType: 'sources', overlayMessage: 'Preparing to export sources...' }, async shell => {
+  await withExportShell({ label: 'sources', healthType: 'sources', overlayMessage: 'Preparing to export sources...', tabId }, async shell => {
     const { result, zips, auditOk } = await runSourcesJob(shell, selectedSources);
 
     shell.finish({
@@ -3640,7 +3642,7 @@ async function exportSources(selectedSources) {
       result,
       auditOk,
       saved: zips,
-      retry: retryFor(result.failedItems, 'Sources export', failed => exportSources(failed))
+      retry: retryFor(result.failedItems, 'Sources export', failed => exportSources(failed, { tabId: shell.tab.id }))
     });
   });
 }
@@ -5383,7 +5385,7 @@ async function downloadAllArtifacts(tabId, items) {
   startExportTiming();
 
   try {
-    await withExportShell({ label: 'artifacts', overlayMessage: 'Preparing to download artifacts...' }, async shell => {
+    await withExportShell({ label: 'artifacts', overlayMessage: 'Preparing to download artifacts...', tabId }, async shell => {
       const folder = zipEnabled ? null : (shell.projectName || 'NotebookLM');
       const { result, zips, savedOutside } = await runArtifactsJob(shell, items, { folder });
 

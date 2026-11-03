@@ -188,13 +188,15 @@ async function saveFiles(files, { zipName, folder } = {}) {
  *                              // and does not call finish)
  * }
  *
- * @param {{ label: string, healthType?: string, preflight?: string, overlayMessage?: string }} options
+ * @param {{ label: string, healthType?: string, preflight?: string, overlayMessage?: string, tabId?: number }} options
  *   label names the export in logs; healthType ('notes', 'sources', ...) runs
  *   the DOM health check first; preflight ('chat') shows preflightWarn's
- *   toast after the tab lookup
+ *   toast after the tab lookup; tabId: the tab the items were scanned on
+ *   (Download All, every Retry), used instead of the active tab, also for
+ *   shell.meta (notebook title and URL). Omitted: the active tab.
  * @param {(shell: object) => Promise<void>} run
  */
-async function withExportShell({ label, healthType, preflight, overlayMessage }, run) {
+async function withExportShell({ label, healthType, preflight, overlayMessage, tabId: requestedTabId }, run) {
   let tab = null;
   let overlayShown = false;
   let panelShown = false;
@@ -209,7 +211,9 @@ async function withExportShell({ label, healthType, preflight, overlayMessage },
   hideResults();
 
   try {
-    [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    // The tab the caller scanned (tabId), else the one in front. Everything below
+    // (project name, URL, health check, overlay) comes from this tab
+    tab = requestedTabId != null ? await chrome.tabs.get(requestedTabId) : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
 
     // Pre-flight warning (the DOM-health type, e.g. 'chat'): after the tab lookup, inside
     // the shell, so its cleanup covers it
@@ -347,8 +351,8 @@ function takeoutZipEnabled() {
  * single category's outcome, so the takeout does not use it. It lists the ZIPs
  * (or the folder) and the combined errors, and offers "Retry N failed" for the
  * Sources, Notes and Artifacts items that failed (never chat). A retry is an
- * ordinary tab export of those items (own ZIPs or folders); it does not rewrite
- * the takeout or its index.
+ * ordinary tab export of those items (own ZIPs or folders) on the tab the takeout
+ * ran on; it does not rewrite the takeout or its index.
  */
 async function runFullTakeout() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -371,7 +375,7 @@ async function runFullTakeout() {
   // A takeout always includes the with-images versions, whatever the tab exports tick
   const variantSettings = NLME.takeoutVariantSettings(settings);
 
-  await withExportShell({ label: 'takeout', healthType: 'notes', overlayMessage: 'Preparing Full Takeout...' }, async shell => {
+  await withExportShell({ label: 'takeout', healthType: 'notes', overlayMessage: 'Preparing Full Takeout...', tabId: tab.id }, async shell => {
     const tabId = shell.tab.id;
     const root = sanitizeFilename(shell.projectName);
     const folder = zipMode ? null : `${shell.projectName} takeout ${shell.timestamp}`;
@@ -568,8 +572,9 @@ async function runFullTakeout() {
         count: retryCount,
         // Each export replaces the panel, so the last one retried stays visible
         run: () => runExclusive('Retry failed', async () => {
-          if (failedSources.length) await exportSources(failedSources);
-          if (failedNotes.length) await exportNotesAsMarkdown(failedNotes);
+          // On the tab the takeout scanned, not whichever tab is active now
+          if (failedSources.length) await exportSources(failedSources, { tabId });
+          if (failedNotes.length) await exportNotesAsMarkdown(failedNotes, { tabId });
           if (failedArtifacts.length) await downloadAllArtifacts(tabId, failedArtifacts);
         })
       } : null
