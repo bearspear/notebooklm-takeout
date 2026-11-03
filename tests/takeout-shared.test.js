@@ -496,3 +496,22 @@ test('escapeHtml escapes quotes', () => {
   assert.equal(NLME.escapeHtml('"a" & <b>'), '&quot;a&quot; &amp; &lt;b&gt;');
   assert.equal(NLME.escapeHtml("it's"), 'it&#39;s');
 });
+
+test('isAllowedDownloadUrl accepts Gemini Notebook download hosts', () => {
+  assert.equal(NLME.isAllowedDownloadUrl('https://contribution.usercontent.google.com/download?filename=a.pdf'), true);
+  assert.equal(NLME.isAllowedDownloadUrl('https://lh3.googleusercontent.com/notebooklm/x'), true);
+});
+
+test('isAllowedDownloadUrl rejects other hosts and schemes', () => {
+  assert.equal(NLME.isAllowedDownloadUrl('https://drive.google.com/uc?id=1'), false);
+  assert.equal(NLME.isAllowedDownloadUrl('http://contribution.usercontent.google.com/x'), false);
+  assert.equal(NLME.isAllowedDownloadUrl('https://evil.com/?q=googleusercontent.com'), false);
+  assert.equal(NLME.isAllowedDownloadUrl('blob:chrome-extension://abc/123'), false);
+});
+
+test('isNotebookDownload rejects a Drive download from another tab', () => {
+  assert.equal(NLME.isNotebookDownload({ url: 'https://drive.usercontent.google.com/download?id=1', referrer: 'https://drive.google.com/' }), false);
+  assert.equal(NLME.isNotebookDownload({ url: 'https://contribution.usercontent.google.com/download?c=x', referrer: 'https://notebook.google.com/' }), true);
+  assert.equal(NLME.isNotebookDownload({ url: 'https://contribution.usercontent.google.com/download?c=x', referrer: '' }), true);
+  assert.equal(NLME.isNotebookDownload({ url: 'https://lh3.googleusercontent.com/x', referrer: 'https://mail.google.com/' }), false);
+});

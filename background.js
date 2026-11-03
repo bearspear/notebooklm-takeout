@@ -141,15 +141,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .catch(error => ({ success: false, count: 0, error: error.message, errors: [error.message] }))
         .then(result => {
           lastBatchResult = result;
-          // Notify via notification since popup may be closed
-          if (result.success) {
+          // Notify (if enabled in settings) since the side panel may be closed
+          chrome.storage.local.get('settings').then(({ settings }) => {
+            if (!result.success || (settings && settings.showNotifications === false)) return;
             chrome.notifications.create({
               type: 'basic',
               iconUrl: 'icons/icon48.png',
               title: 'NotebookLM Export Complete',
               message: `Downloaded ${result.count} files as ZIP`
             });
-          }
+          }).catch(() => {});
         });
       sendResponse({ started: true });
       break;
@@ -189,6 +190,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
           // The URL names the real file (e.g. .pptx vs .pdf); without this the
           // name fell back to the artifact type's default (.pdf for slides)
+          // Only Gemini Notebook download hosts (the URL comes from the page)
+          if (!NLME.isAllowedDownloadUrl(message.url)) {
+            throw new Error('Not a Gemini Notebook download URL');
+          }
           let directFilename = message.filename;
           if (!/\.[a-z0-9]{2,5}$/i.test(directFilename)) {
             directFilename += NLME.extensionFromDownloadUrl(message.url);
@@ -226,10 +231,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // Capture downloads as soon as they're created (backup method)
 chrome.downloads.onCreated.addListener((downloadItem) => {
-  // 'notebook' matches both the new host and the legacy 'notebooklm' URLs
-  const isFromNotebookLM = downloadItem.url?.includes('notebook') ||
-                           downloadItem.url?.includes('googleusercontent') ||
-                           downloadItem.referrer?.includes('notebook');
+  // Only Gemini Notebook downloads (allowed host, notebook referrer); never
+  // the extension's own downloads or downloads from other tabs (Milestone 2)
+  const isFromNotebookLM = !downloadItem.byExtensionId && NLME.isNotebookDownload(downloadItem);
 
   // Check if this download matches a pending intercept request
   const hasInterceptRequest = pendingDownloads.some(d => d.intercept);
@@ -399,11 +403,8 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
 
 // Intercept downloads from NotebookLM and rename them
 chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
-  // Check if this download is from NotebookLM
-  // 'notebook' matches both the new host and the legacy 'notebooklm' URLs
-  const isFromNotebookLM = downloadItem.url?.includes('notebook') ||
-                           downloadItem.referrer?.includes('notebook') ||
-                           downloadItem.finalUrl?.includes('googleusercontent');
+  // Gemini Notebook downloads only (allowed host, notebook referrer)
+  const isFromNotebookLM = NLME.isNotebookDownload(downloadItem);
 
   // Extension-started downloads with a registered name (folder mode, batch ZIP)
   const namedFile = namedDownloads.get(downloadItem.url) || namedDownloads.get(downloadItem.finalUrl);
@@ -483,17 +484,12 @@ async function fetchFileContent(url) {
   try {
     console.log('[Background] Fetching file:', url);
 
-    // Get cookies for the URL domain
-    const urlObj = new URL(url);
-    const cookies = await chrome.cookies.getAll({ domain: urlObj.hostname });
-    const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-
-    console.log('[Background] Got', cookies.length, 'cookies for', urlObj.hostname);
-
-    const response = await fetch(url, {
-      credentials: 'include',
-      headers: cookieHeader ? { 'Cookie': cookieHeader } : {}
-    });
+    if (!NLME.isAllowedDownloadUrl(url)) {
+      throw new Error('Not a Gemini Notebook download URL');
+    }
+    // credentials: 'include' sends the user's cookies for this host (the old
+    // manual Cookie header was a forbidden header that Chrome dropped)
+    const response = await fetch(url, { credentials: 'include' });
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);

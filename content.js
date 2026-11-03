@@ -502,6 +502,11 @@
     switch (data.type) {
       case 'NLME_DOWNLOAD_URL_INTERCEPTED': {
         const entry = { url: data.payload?.url, timestamp: data.payload?.timestamp || Date.now() };
+        // The page can post anything; accept Gemini Notebook download hosts only
+        if (!NLME.isAllowedDownloadUrl(entry.url)) {
+          console.warn('[NotebookLM Takeout] Ignoring intercepted URL from an unexpected host');
+          break;
+        }
         console.log('[NotebookLM Takeout] Download URL intercepted:', entry.url?.substring(0, 100));
         interceptedDownloads.push(entry);
         if (interceptedDownloads.length > 10) interceptedDownloads.shift();

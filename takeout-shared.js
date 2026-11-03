@@ -574,7 +574,28 @@
     '.notebook-title'
   ];
 
+  // Hosts Gemini Notebook serves downloads from. URLs posted from the page or
+  // seen by the downloads listeners are trusted only if they match.
+  function isAllowedDownloadUrl(url) {
+    let u;
+    try { u = new URL(url); } catch { return false; }
+    if (u.protocol !== 'https:') return false;
+    const host = u.hostname;
+    return host === 'contribution.usercontent.google.com' ||
+      host === 'googleusercontent.com' || host.endsWith('.googleusercontent.com');
+  }
+
+  // A download Gemini Notebook started: an allowed host, and (when Chrome
+  // knows it) a notebook page as referrer. Downloads from other tabs, e.g.
+  // Drive, are left alone.
+  function isNotebookDownload({ url, finalUrl, referrer } = {}) {
+    if (!isAllowedDownloadUrl(url) && !isAllowedDownloadUrl(finalUrl)) return false;
+    return !referrer || isNotebookUrl(referrer);
+  }
+
   const NLME = {
+    isAllowedDownloadUrl,
+    isNotebookDownload,
     NOTEBOOK_HOSTS,
     isNotebookUrl,
     sanitizeFilename,
