@@ -8,7 +8,7 @@ const path = require('node:path');
 const NLME = require('../takeout-shared.js');
 
 const ROOT = path.join(__dirname, '..');
-const FILES = ['content.js', 'sidebar-core.js', 'sidebar-artifacts.js', 'sidebar-notes.js', 'sidebar-sources.js', 'sidebar-chat.js', 'sidebar-generated.js', 'sidebar-health.js', 'sidebar.js', 'sidebar-list.js', 'sidebar-results.js', 'sidebar-takeout.js', 'background.js', 'injected.js', 'mindmap-extract.js'];
+const FILES = ['content.js', 'sidebar-core.js', 'sidebar-artifacts.js', 'sidebar-notes.js', 'sidebar-sources.js', 'sidebar-chat.js', 'sidebar-generated.js', 'sidebar-health.js', 'sidebar-list.js', 'sidebar-results.js', 'sidebar-takeout.js', 'background.js', 'injected.js', 'mindmap-extract.js'];
 
 // Delivered by window.postMessage between page world and content script
 const EXTERNAL = new Set(['NLME_DOWNLOAD_URL_INTERCEPTED']);

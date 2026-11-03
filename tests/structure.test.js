@@ -46,6 +46,14 @@ test('classic scripts declare each top-level name once', () => {
   assert.deepEqual(problems, [], `Duplicate top-level declarations:\n  ${problems.join('\n  ')}`);
 });
 
+test('every non-IIFE sidebar script yields top-level names', () => {
+  // Guards the scan above: a file the regex cannot read would pass it silently
+  const empty = sidebarScripts()
+    .filter(file => path.basename(file).startsWith('sidebar'))
+    .filter(file => topLevelDeclarations(fs.readFileSync(path.join(ROOT, file), 'utf8')).length === 0);
+  assert.deepEqual(empty, [], `No top-level names found in: ${empty.join(', ')}`);
+});
+
 test('content scripts load takeout-shared before content.js', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
   const js = manifest.content_scripts.map(block => block.js);

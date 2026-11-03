@@ -37,6 +37,8 @@ the table of contents to jump.
 19. [Conventions in this codebase](#conventions-in-this-codebase)
 20. [Git workflow](#git-workflow)
 
+The per-milestone contracts (Milestone 2 to 3d) sit between "Drift patterns" and "Known issues".
+
 ---
 
 ## TL;DR
@@ -82,7 +84,7 @@ No backend, no build. Unit tests cover the DOM-free helpers in `takeout-shared.j
 ```
 
 All log lines are prefixed `[NotebookLM Takeout]`. The codebase has a `logger` helper
-(`logger.info` / `logger.warn` / `logger.error` / `logger.download`) defined in `sidebar.js`.
+(`logger.info` / `logger.warn` / `logger.error` / `logger.download`) defined in `sidebar-core.js`.
 
 No package.json, no lint config, no formatter. After every edit run `node --check` on each
 touched file and `node --test tests/` (Node 20 built-in runner, no npm packages).
@@ -96,7 +98,7 @@ running pre-pull code (seen Nov 2026: the console showed old line numbers).
 ```
 ┌─────────────────── Chrome extension ──────────────────────┐
 │                                                            │
-│  [sidebar.js  ◄──messages──►  background.js]              │
+│  [sidebar-*.js◄──messages──►  background.js]              │
 │       │                              │                     │
 │       │ scripting / sendMessage      │                     │
 │       ▼                              ▼                     │
@@ -110,7 +112,7 @@ running pre-pull code (seen Nov 2026: the console showed old line numbers).
 
 | Context | File | Lives in | Has DOM | Has chrome.* APIs |
 |---|---|---|---|---|
-| Sidebar | `sidebar.js` | Side panel iframe | own sidebar DOM only | yes |
+| Sidebar | `sidebar-*.js` | Side panel iframe | own sidebar DOM only | yes |
 | Background | `background.js` | Service worker | none | yes |
 | Content | `content.js` | NotebookLM page (isolated world) | yes, read+write | yes (subset) |
 | Injected | `injected.js` | NotebookLM page (MAIN world content script) | yes | no (uses postMessage) |
@@ -139,7 +141,11 @@ notebooklm-exporter/
 ├── tests/                  — node:test unit tests for takeout-shared.js, takeout-job.js and
 │                             the message protocol
 ├── sidebar.html  ( 436)    — Side panel UI: tabs, controls, settings/health panels
-├── sidebar.js    (5701)    — UI logic, per-category runners, extract/build functions, KaTeX
+├── sidebar-core.js (2132) — Settings, init, tab and notebook switching, job lock, shared helpers,
+│                             Markdown converter, KaTeX, job records (see Milestone 3d contracts)
+├── sidebar-artifacts.js (1161), sidebar-notes.js (786), sidebar-sources.js (727),
+│   sidebar-chat.js (983), sidebar-generated.js (306), sidebar-health.js (304)
+│                           — one file per tab (scan, list, export job, build files)
 ├── sidebar-takeout.js (519) — saveFiles, fetchDownload, withExportShell, runFullTakeout
 ├── styles.css    (1644)    — Side panel styles
 ├── content.js    (4161)    — DOM scraping + extraction, runs on NotebookLM
@@ -157,23 +163,23 @@ notebooklm-exporter/
 └── TECHNICAL.md            — Untracked earlier deep dive; partly superseded, cross-check
 ```
 
-`sidebar.js` and `content.js` are the two real surfaces of work. Almost every change touches
+The `sidebar-*.js` files and `content.js` are the two real surfaces of work. Almost every change touches
 one or both. Use grep extensively. Useful anchors:
 
 Line numbers drift with every change, so anchors are names: `grep -n "<name>" <file>`.
 
 | What | Where (grep for) |
 |---|---|
-| Settings defaults | `let settings = {` in sidebar.js |
-| `loadSettings` / `saveSettings` | sidebar.js |
-| Tab switching | `setupTabSwitching` (sidebar.js) |
-| KaTeX converter (shared) | `convertKatexNodeToLatex`, `katexRenderInline` (sidebar.js) |
-| Per-item artifact download | `async function downloadArtifact` (sidebar.js) |
-| Sources / Notes / Chat / Artifacts export | per-category runners `runSourcesJob`, `runNotesJob`, `runChatJob`, `runArtifactsJob`; entry points `exportSources`, `exportNotesAsMarkdown`, `exportChat`, `downloadAllArtifacts` (sidebar.js) |
-| Extract / build / scan data | `extractSourceItem` / `buildSourcesFiles`, `extractNoteItem` / `buildNotesFiles`, `extractChatPair` / `buildChatAuditDoc` / `buildChatFiles`, `fetchArtifactFiles`; `scanSourcesData`, `scanNotesData`, `scanChatData`, `scanArtifactsData` (sidebar.js) |
+| Settings defaults | `let settings = {` in sidebar-core.js |
+| `loadSettings` / `saveSettings` | sidebar-core.js |
+| Tab switching | `setupTabSwitching` (sidebar-core.js) |
+| KaTeX converter (shared) | `convertKatexNodeToLatex`, `katexRenderInline` (sidebar-core.js) |
+| Per-item artifact download | `async function downloadArtifact` (sidebar-artifacts.js) |
+| Sources / Notes / Chat / Artifacts export | per-category runners `runSourcesJob`, `runNotesJob`, `runChatJob`, `runArtifactsJob`; entry points `exportSources`, `exportNotesAsMarkdown`, `exportChat`, `downloadAllArtifacts` (one per tab file: sidebar-sources.js, sidebar-notes.js, sidebar-chat.js, sidebar-artifacts.js) |
+| Extract / build / scan data | `extractSourceItem` / `buildSourcesFiles`, `extractNoteItem` / `buildNotesFiles`, `extractChatPair` / `buildChatAuditDoc` / `buildChatFiles`, `fetchArtifactFiles`; `scanSourcesData`, `scanNotesData`, `scanChatData`, `scanArtifactsData` (one per tab file) |
 | File writer, shell, Full Takeout | `saveFiles`, `fetchDownload`, `withExportShell`, `runFullTakeout` (sidebar-takeout.js); `NLME.runExportJob` (takeout-job.js) |
-| Note Markdown (citations, Sources section) | `function convertToMarkdown` (sidebar.js) |
-| Generated tab (id `studio`) | `scanStudioPage`, `handleStudioDownloadRow`, `exportSingleNote` (sidebar.js) |
+| Note Markdown (citations, Sources section) | `function convertToMarkdown` (sidebar-core.js) |
+| Generated tab (id `studio`) | `scanStudioPage`, `handleStudioDownloadRow` (sidebar-generated.js), `exportSingleNote` (sidebar-notes.js) |
 | Content message dispatcher | `chrome.runtime.onMessage.addListener` near the top of content.js |
 | Note extraction | `extractNoteContent`, `extractTailwindNoteContent`, `extractSourcesPanelNote` (content.js) |
 | Citation hover | `extractSingleCitationWithRetry` (content.js) |
@@ -187,7 +193,7 @@ Line numbers drift with every change, so anchors are names: `grep -n "<name>" <f
 
 ## Settings shape and storage
 
-Storage: `chrome.storage.local`, single key `settings`. Defaults in `let settings = {` (sidebar.js):
+Storage: `chrome.storage.local`, single key `settings`. Defaults in `let settings = {` (sidebar-core.js):
 
 ```js
 {
@@ -230,7 +236,7 @@ chat export code reads them. Update both halves if you touch this.
 
 Adding a new boolean setting:
 
-1. Add field to the `let settings = {` defaults object in sidebar.js.
+1. Add field to the `let settings = {` defaults object in sidebar-core.js.
 2. Add `<input type="checkbox" id="{name}-checkbox">` inside the appropriate
    `.setting-section` in `sidebar.html`.
 3. Read in `loadSettings`: `document.getElementById('{name}-checkbox').checked = settings.{name};`
@@ -258,7 +264,7 @@ Markup (`sidebar.html`):
 <div class="tab-content" data-tab-content="{name}">...</div>
 ```
 
-Wiring is in `setupTabSwitching` (sidebar.js). Each button toggles the `.active` class on
+Wiring is in `setupTabSwitching` (sidebar-core.js). Each button toggles the `.active` class on
 itself + the matching `.tab-content`, then calls the relevant scan:
 
 ```js
@@ -422,7 +428,7 @@ in every answer, so sources must never be keyed by number across answers.
    ```
 3. Each row renders with a per-item Download button. Bulk: `Download All` with optional ZIP
    toggle.
-4. `downloadArtifact(tabId, artifactIndex, artifactType, artifactName)` (sidebar.js):
+4. `downloadArtifact(tabId, artifactIndex, artifactType, artifactName)` (sidebar-artifacts.js):
    - **Reports / Data Tables**: skip More button. Message `DOWNLOAD_ARTIFACT` with
      `skipMoreButton: true`. Content opens the item (`resolveArtifactItem`) and extracts
      HTML. Reports → Markdown (no citation placeholders). Tables → ZIP with CSV, JSON, HTML
@@ -659,7 +665,7 @@ sidebar shows a "DOM may be drifting" warning dialog.
 
 ## KaTeX → LaTeX conversion
 
-Entry point: `convertKatexNodeToLatex(node)` (sidebar.js). Called from two
+Entry point: `convertKatexNodeToLatex(node)` (sidebar-core.js). Called from two
 Turndown rules (notes/sources rule and chat rule), both filter on
 `SPAN.classList.contains('katex')`.
 
@@ -703,7 +709,7 @@ When you see math export quality issues, the order of operations to debug:
    `[...document.querySelectorAll('.katex')].map(k => k.closest('[data-math]')?.dataset.math)`
    in the page console. Mismatches are escaping/whitespace issues in the Turndown rule.
 2. If it is `[WARN]`, the reconstruction walker is responsible. Trace `katexRenderInline`
-   for the offending span. It needs module scope, so paste the KaTeX section of sidebar.js
+   for the offending span. It needs module scope, so paste the KaTeX section of sidebar-core.js
    into the page console (with an `NLME` stub) and run it on the live node.
 3. Add a new handler class or extend `KATEX_UNICODE_MAP`. Lone sub/superscripts are
    classified by `NLME.classifyKatexScript` (`top + pstrut height`).
@@ -740,7 +746,7 @@ Since Nov 2026 mind maps are Studio artifacts (`flowchart` icon) that open in
 6. Extract tree via `extractMindmapTreeData(svg)` (parses node text + parent-child links).
 7. Return `{isMindmap: true, svgContent, treeData}`.
 
-`generateMindmapHTML(svgContent, title)` in sidebar.js wraps SVG + tree into a standalone
+`generateMindmapHTML(svgContent, title)` in sidebar-core.js wraps SVG + tree into a standalone
 HTML viewer based on `mindmap-template.html` (pan/zoom, expand/collapse, dark/light theme).
 The template uses `{{TITLE}}` and `{{SVG_CONTENT}}` placeholders. `loadMindmapTemplate` is
 called once on script init and cached.
@@ -821,7 +827,7 @@ similar, look here first.
   (chat-panel is before studio-panel in DOM order). Note exports got chat-side citations
   with sources from the chat history. Citation hovers landed on chat markers.
 - **Fix**: scope the wait-race in `extractNoteContent` to `<studio-panel>`. See
-  sidebar.js `extractNoteContent` viewer race.
+  content.js `extractNoteContent` viewer race.
 
 ### 2. ProseMirror replaces Quill in note editor (Apr 2026)
 
@@ -873,7 +879,7 @@ similar, look here first.
 - **Symptom**: content script never injected (manifest `matches` missed the new host) and
   every sidebar action showed "Please open NotebookLM first" from the 9 inline
   `tab.url.includes('notebooklm.google.com')` gates.
-- **Fix**: `NOTEBOOK_HOSTS` + `isNotebookUrl()` defined per-context in sidebar.js,
+- **Fix**: `NOTEBOOK_HOSTS` + `isNotebookUrl()` defined per-context in sidebar-core.js,
   background.js, and content.js; both hosts listed in manifest `host_permissions`,
   `content_scripts.matches`, and `web_accessible_resources.matches`. Download-source
   checks in background.js/injected.js match `'notebook'`, which still substring-matches
@@ -961,11 +967,12 @@ Found while checking real exports after #8; the export bugs below predate it.
 ### Script order and ownership
 
 `sidebar.html` loads, in this order: `jszip.min.js`, `turndown.min.js`, `takeout-shared.js`,
-`takeout-job.js`, `sidebar.js`, `sidebar-takeout.js`. All are classic scripts sharing one
+`takeout-job.js`, the sidebar scripts, `sidebar-takeout.js` (the sidebar scripts were one
+`sidebar.js` until Milestone 3d; see "Milestone 3d contracts"). All are classic scripts sharing one
 global scope. `takeout-job.js` extends `NLME` and must come after `takeout-shared.js`.
-`sidebar-takeout.js` comes last and calls `sidebar.js` functions at call time
-(`generateZipTimed`, `getProjectName`, `showToast`, `downloadBlob`, ...), while `sidebar.js`
-calls `saveFiles`. The service worker imports only `takeout-shared.js`; it no longer zips.
+`sidebar-takeout.js` comes last and calls functions of the sidebar scripts at call time
+(`generateZipTimed`, `getProjectName`, `showToast`, `downloadBlob`, ...), while those scripts
+call `saveFiles`. The service worker imports only `takeout-shared.js`; it no longer zips.
 
 ### Collector / builder / writer split
 
@@ -1127,7 +1134,7 @@ download (`triggerItemDownload`); it is not a system notification.
   `totalBatches > 1`, in `saveCategoryBatch` / `batchPrefix` (`part-N/` in a takeout). Errors still go
   only to the last package (an errors-only package when the final items failed). Delivered results are
   dropped, so Blobs can be freed.
-- `runArtifactsJob` (ZIP mode only) passes `maxBatchBytes: ARTIFACT_ZIP_MAX_BYTES` (500 MB, `sidebar.js`) and
+- `runArtifactsJob` (ZIP mode only) passes `maxBatchBytes: ARTIFACT_ZIP_MAX_BYTES` (500 MB, `sidebar-artifacts.js`) and
   `sizeOf: r => NLME.filesByteSize(r.files)`; folder mode stays `perZip: 1`. Each part writes its own
   `artifactsRootFiles` (`_index.md`, `_index.html`, `manifest.json` with `part`, `totalParts` null when
   split; `errors.md` in the last part). Names: `NLME.zipName({ part, totalParts: null })` gives `-partN`
@@ -1137,7 +1144,7 @@ download (`triggerItemDownload`); it is not a system notification.
 ### List controller (`sidebar-list.js`)
 
 Script order is now `jszip`, `turndown`, `takeout-shared.js`, `takeout-job.js`,
-`sidebar-list.js`, `sidebar-results.js`, `sidebar.js`, `sidebar-takeout.js`. `sidebar-list.js` is DOM only; its pure
+`sidebar-list.js`, `sidebar-results.js`, the sidebar scripts (one `sidebar.js` then), `sidebar-takeout.js`. `sidebar-list.js` is DOM only; its pure
 logic is `NLME.listItemKeys / listView / pruneSelection / listSummary / listStateKey /
 restoreListState` in `takeout-shared.js` (unit tested).
 
@@ -1191,7 +1198,7 @@ onChange, canSelect }) -> { items, selectedItems(), selectedCount(), destroy() }
 ### Results panel and failed items (`sidebar-results.js`)
 
 Script order is now `jszip`, `turndown`, `takeout-shared.js`, `takeout-job.js`, `sidebar-list.js`,
-`sidebar-results.js`, `sidebar.js`, `sidebar-takeout.js`. Export outcomes no longer go to toasts:
+`sidebar-results.js`, the sidebar scripts (one `sidebar.js` then), `sidebar-takeout.js`. Export outcomes no longer go to toasts:
 they stay in `#results-panel` (below `#download-progress`) until the next export starts or the
 user clicks Dismiss.
 
@@ -1214,7 +1221,7 @@ user clicks Dismiss.
   its Retry, and toasts "The notebook tab for this export is closed. Open it and try again.").
 - `shell.finish({ ..., saved, retry })`: `saved` is the ZIP names (`zips` from the runner) or the
   Downloads folder; `stoppedMessage` still replaces the outcome line (level error) and the errors
-  are listed anyway. `retryFor(failedItems, jobName, exportFn)` (sidebar.js) builds `retry` for
+  are listed anyway. `retryFor(failedItems, jobName, exportFn)` (sidebar-core.js) builds `retry` for
   notes, sources and Download All (`downloadAllArtifacts(shell.tab.id, failed)`, `exportSources(failed, { tabId })`); chat passes none
   (its messages do not fail as a whole; re-export the chat).
 - Toasts remain for short notices (job refused, no tab, cancelled at the health check, unexpected
@@ -1232,7 +1239,7 @@ user clicks Dismiss.
   category (`NLME.prefixExportErrors`), and a Retry for all remaining `failedItems` (a category that
   did not run keeps its items). If no step ran, the previous panel is put back. The per-category
   panels shown while the chain runs are replaced by the combined one.
-- Side-panel Cancel (`requestCancel`, sidebar.js) sends `REQUEST_EXPORT_CANCEL` to
+- Side-panel Cancel (`requestCancel`, sidebar-core.js) sends `REQUEST_EXPORT_CANCEL` to
   `activeShellTabId` (the running shell's tab, sidebar-takeout.js), else `jobTabId` (the active tab
   when the job started), else the current tab. Retries and Download Selected run on the tab they
   were scanned on, which need not be the active one. The content script there broadcasts
@@ -1275,14 +1282,47 @@ user clicks Dismiss.
 - **Store only complete reads.** Notes: no warnings, not cancelled, one source per marker, each with a filename and a non-empty quote. Chat: the response has no errors and every source index came back with a non-empty quote. Otherwise nothing is stored.
 - **`EXTRACT_NOTE`** takes `data.reuseCitations` (boolean; the content script treats anything but `true` as off, the side panel sends `settings.reuseCitations !== false` from the notes job and `exportSingleNote`). On a hit the response has `fromCache: true` and `errors: []`. No new message types.
 - **Visibility.** `newAudit()` has `cacheHits` and `cachedItems` (items that had citations to read); `auditMarkdown` prints "Citations from cache: N of M items" only when N > 0. Chat: `extractChatPair`'s ProcessedMessage carries `fromCache`; `buildChatAuditDoc` derives both counts from the messages. The `_index.md` "Export statistics" block gets the same line from `citationCacheTally` (reset in `startExportTiming`).
-- **Job records (Task 3).** Each unfinished export keeps one record per notebook at `NLME.jobRecordKey(id)` = `nlme.job.<notebookId>` in `chrome.storage.local`: `{ id, kind, label, notebookId, startedAt, updatedAt, remaining: { [category]: keys }, failed: { [category]: keys } }`. `kind` is `'notes' | 'sources' | 'artifacts' | 'takeout'` (categories `notes`, `sources`, `artifacts`; a takeout has all three, an empty or failed-scan category has `[]`); chat is never recorded. Keys only, never payloads: `NLME.listItemKeys` with the tab lists' accessors (notes `title`/`type`, sources `title`/`type`, artifacts `label`/`type`), so they match a fresh scan. `createListController` stamps each item with a non-enumerable `_listKey` (its key in the whole list) and `jobItemKeys` (sidebar.js) prefers it, so a selected subset or a retry keeps the "#n" suffix of duplicates; Keys must be stamped over the full fresh scan before any subset is taken (computed over a subset, duplicates get different "#n" suffixes); Task 4's Resume depends on this (see Resume below). Single-item row exports (the Sources row download) never record, so a one-shot download cannot replace or clear a pending record. Full Takeout stamps its scans the same way (`stampJobKeys`); its artifacts keys are computed over the unfiltered scan (disabled items included, as the Generated tab lists them) and only the enabled items are recorded. `id` = `` `${kind}-${Date.now()}` ``. Pure helpers (takeout-shared.js): `newJobRecord`, `markJobItem(record, category, key, { failed, now })` (a success clears an earlier failure), `jobRemainingCount` (remaining + failed), `jobRecordFinished`.
-- **Write rules.** `startJobRecord` / `withJobRecord` (sidebar.js) wrap `NLME.createJobRecorder` (takeout-job.js). With no notebook id, or nothing to do, nothing is recorded. A fresh export writes the record at the start, replacing a record of that notebook unless `NLME.jobRecordMode(stored, kind)` says `'update'` (the stored record is usable, of a DIFFERENT kind and has items left): then the export runs in update mode and only marks the keys that record holds, so a cancelled takeout keeps its Resume offer through a small Sources export. Same kind, a finished record, or a Full Takeout (it supersedes partial tab-export records): replaced as before. A retry or resume (`updateRecord: true` on `exportNotesAsMarkdown` / `exportSources` / `downloadAllArtifacts`, set by every Retry button, the takeout retry chain and, in Task 4, Resume) never creates or replaces a record: it loads the notebook's existing one (none: writes nothing) and marks its items done or failed on it with `NLME.markJobItems(record, category, keys, { failed, now })`, which ignores keys the record does not hold; an id-guarded removal still happens when every key is cleared. A failed item is marked from the runner's `afterEach(item, { failed })`; a success is only staged there and applied by `commit()` in `packageBatch` after the package is saved, so a record never claims an item that is not on disk. Writes are throttled to one per second (`createJobRecorder` intervalMs); a held-back change gets one trailing write when the interval ends (injectable `setTimer` / `clearTimer`), and `finish` clears that timer before the id-guarded removal, then makes the final write. `finish({ clean })`: clean (not cancelled or stopped) and `jobRecordFinished` reads the stored record first and removes it only if its `id` equals this job's; otherwise the held-back state is flushed and the record stays. A runner that throws before saving a package calls `discard()` (also in the takeout's per-category catch), so staged successes never leak into the next category's `commit()`. Every storage call is caught and logged; recording never fails an export.
+- **Job records (Task 3).** Each unfinished export keeps one record per notebook at `NLME.jobRecordKey(id)` = `nlme.job.<notebookId>` in `chrome.storage.local`: `{ id, kind, label, notebookId, startedAt, updatedAt, remaining: { [category]: keys }, failed: { [category]: keys } }`. `kind` is `'notes' | 'sources' | 'artifacts' | 'takeout'` (categories `notes`, `sources`, `artifacts`; a takeout has all three, an empty or failed-scan category has `[]`); chat is never recorded. Keys only, never payloads: `NLME.listItemKeys` with the tab lists' accessors (notes `title`/`type`, sources `title`/`type`, artifacts `label`/`type`), so they match a fresh scan. `createListController` stamps each item with a non-enumerable `_listKey` (its key in the whole list) and `jobItemKeys` (sidebar-core.js) prefers it, so a selected subset or a retry keeps the "#n" suffix of duplicates; Keys must be stamped over the full fresh scan before any subset is taken (computed over a subset, duplicates get different "#n" suffixes); Task 4's Resume depends on this (see Resume below). Single-item row exports (the Sources row download) never record, so a one-shot download cannot replace or clear a pending record. Full Takeout stamps its scans the same way (`stampJobKeys`); its artifacts keys are computed over the unfiltered scan (disabled items included, as the Generated tab lists them) and only the enabled items are recorded. `id` = `` `${kind}-${Date.now()}` ``. Pure helpers (takeout-shared.js): `newJobRecord`, `markJobItem(record, category, key, { failed, now })` (a success clears an earlier failure), `jobRemainingCount` (remaining + failed), `jobRecordFinished`.
+- **Write rules.** `startJobRecord` / `withJobRecord` (sidebar-core.js) wrap `NLME.createJobRecorder` (takeout-job.js). With no notebook id, or nothing to do, nothing is recorded. A fresh export writes the record at the start, replacing a record of that notebook unless `NLME.jobRecordMode(stored, kind)` says `'update'` (the stored record is usable, of a DIFFERENT kind and has items left): then the export runs in update mode and only marks the keys that record holds, so a cancelled takeout keeps its Resume offer through a small Sources export. Same kind, a finished record, or a Full Takeout (it supersedes partial tab-export records): replaced as before. A retry or resume (`updateRecord: true` on `exportNotesAsMarkdown` / `exportSources` / `downloadAllArtifacts`, set by every Retry button, the takeout retry chain and, in Task 4, Resume) never creates or replaces a record: it loads the notebook's existing one (none: writes nothing) and marks its items done or failed on it with `NLME.markJobItems(record, category, keys, { failed, now })`, which ignores keys the record does not hold; an id-guarded removal still happens when every key is cleared. A failed item is marked from the runner's `afterEach(item, { failed })`; a success is only staged there and applied by `commit()` in `packageBatch` after the package is saved, so a record never claims an item that is not on disk. Writes are throttled to one per second (`createJobRecorder` intervalMs); a held-back change gets one trailing write when the interval ends (injectable `setTimer` / `clearTimer`), and `finish` clears that timer before the id-guarded removal, then makes the final write. `finish({ clean })`: clean (not cancelled or stopped) and `jobRecordFinished` reads the stored record first and removes it only if its `id` equals this job's; otherwise the held-back state is flushed and the record stays. A runner that throws before saving a package calls `discard()` (also in the takeout's per-category catch), so staged successes never leak into the next category's `commit()`. Every storage call is caught and logged; recording never fails an export.
 - **Resume (Task 4).** The record also has `total` (keys it started with; `newJobRecord`); a record without it counts what is left as the total (`NLME.jobResumeProgress(record) -> { done, total, left }`). Pure helpers: `NLME.matchResumeItems(keys, items, { titleOf, typeOf }) -> { matched, missing }` (keys re-derived with `listItemKeys` over the FRESH FULL scan; `matched` in scan order, `missing` in `keys` order; a key never matches an item with a different key, so a "#2" whose duplicate is gone is missing, not the first one), `jobResumeKeys(record, category)` (remaining then failed, no repeats), `jobRecordUsable(record, notebookId)` (storage data validated: shape, notebook, items left), `jobKeyTitle(key)`, and `combineRetryOutcomes({ steps, notRun, verb: 'Retry'|'Resume', extraErrors })`.
-- **Resume banner.** `#resume-banner` sits above `#results-panel` (its own element, so `showResults` does not wipe it). `showResumeBanner(record, { onResume, onDiscard, running })` / `hideResumeBanner()` in sidebar-results.js (every string escaped; the banner hides itself on Resume, Discard hides it after). `refreshResumeBanner()` (sidebar.js) runs on panel open, at the top of `refreshForTab` (every tab event), and in `runExclusive`'s finally; `runExclusive` hides the banner when a job starts. It shows only when no job runs, the active tab is a notebook whose id equals `record.notebookId`, and `NLME.jobRecordUsable`; a newer check supersedes an older one (`resumeBannerSeq`). `discardJobRecord` removes the record only if the stored id still equals the shown one. Storage failures are caught and logged.
+- **Resume banner.** `#resume-banner` sits above `#results-panel` (its own element, so `showResults` does not wipe it). `showResumeBanner(record, { onResume, onDiscard, running })` / `hideResumeBanner()` in sidebar-results.js (every string escaped; the banner hides itself on Resume, Discard hides it after). `refreshResumeBanner()` (sidebar-core.js) runs on panel open, at the top of `refreshForTab` (every tab event), and in `runExclusive`'s finally; `runExclusive` hides the banner when a job starts. It shows only when no job runs, the active tab is a notebook whose id equals `record.notebookId`, and `NLME.jobRecordUsable`; a newer check supersedes an older one (`resumeBannerSeq`). `discardJobRecord` removes the record only if the stored id still equals the shown one. Storage failures are caught and logged.
 - **`resumeJob(record)` (sidebar-takeout.js)** runs under `runExclusive('Resume')`: re-checks the active tab's notebook and the stored record's id, scans each category in the record (`RESUME_CATEGORIES`: sources, notes, artifacts), `stampJobKeys` over the full scan (artifacts: unfiltered, then only enabled matches run; a disabled match stays in the record and is reported), `matchResumeItems`, then `clearMissingFromRecord` (missing keys are marked resolved; the record is removed if that empties it), then the shared `runRetryChain` (the same steps as `takeoutRetry`, `updateRecord: true`) and one combined panel via `showTakeoutResults`. Missing keys appear as `{ type: 'not_found', title: <category>, message: '<title> is no longer in the notebook' }`. Missing is decided by `NLME.planResume(keys, items, { titleOf, typeOf, regionOfType })`: a scan that matches nothing (empty, still drawing, wrong page) makes every key `unknown`, and for notes a key counts as missing only if the scan shows its own region (Studio notes vs type 'Note (Sources panel)'), else `unknown`. Unknown keys and scan failures are reported (`scan_failed`, `not_ready` for a disabled artifact) and stay in the record. `not_found`, `not_ready` and `scan_failed` are in `PANEL_ONLY_ERROR_TYPES`: `groupErrorsForPanel` lists them all (they are in no errors.md). `resumeJob` re-checks the tab's notebook id (`chrome.tabs.get`) before and after each scan. In-app navigation (`refreshForTab` with `settleMs`) hides the banner at once and re-checks it only after the settle wait; `discardJobRecord` bumps `resumeBannerSeq`. Banner wording: `NLME.resumeBannerLabel` ("Notes export", but a takeout's label as is) and `NLME.resumeBannerView(record) -> { text, actionLabel, failedOnly }`: "stopped at N of M" + "Resume (K left)", or, with nothing remaining and only failed keys, "finished with K failed" + "Retry (K)" (same action). Like a retry it makes ordinary tab exports and never writes into the original takeout tree. The record after a resume is whatever the exports left: successes cleared, failures and un-run items kept.
-- **Chain cancel flag.** `chainActive` / `chainCancelRequested` (sidebar.js). `runChain(fn)` (sidebar-takeout.js) sets `chainActive` and resets the flag at start and end. `requestCancel` sets `chainCancelRequested` whenever a chain is active, whether or not a shell is running (it still sends `REQUEST_EXPORT_CANCEL`, which cancels a running step by its own path; the flag is what stops the NEXT step when no shell is active between steps). `runRetryChain` checks it before each step (later steps go to `notRun`) and `resumeJob` checks it before each scan. Both `takeoutRetry` and `resumeJob` use `runChain`.
+- **Chain cancel flag.** `chainActive` / `chainCancelRequested` (sidebar-core.js). `runChain(fn)` (sidebar-takeout.js) sets `chainActive` and resets the flag at start and end. `requestCancel` sets `chainCancelRequested` whenever a chain is active, whether or not a shell is running (it still sends `REQUEST_EXPORT_CANCEL`, which cancels a running step by its own path; the flag is what stops the NEXT step when no shell is active between steps). `runRetryChain` checks it before each step (later steps go to `notRun`) and `resumeJob` checks it before each scan. Both `takeoutRetry` and `resumeJob` use `runChain`.
 - **Windowed quotes and naming polish (Task 5).** `NLME.markWindowedQuote(text, { min = 990 })` runs once, on `quoteMarkdown` in content.js `extractSingleCitationWithRetry` (notes and chat share it): a quote of at least `min` characters gets a leading "…" if it starts with a lower-case letter or digit and a trailing "…" if it ends in a letter or digit (a cut transcript window); shorter or sentence-ending quotes are untouched. Cached quotes carry the marks; quotes cached before this change have none (⚙️ Clear citation cache resets them). Chat in 'titles' mode groups its Sources like notes (`NLME.groupedSourcesMarkdown(entries, anchorPrefix)`, shared with `convertToMarkdown`; `convertChatToMarkdown`'s `groupTitles` parameter); 'quotes' and 'none' are unchanged. `exportSingleNote` names a mind map `[mind-map]_<Title>` (the lowercase scheme of `artifactTypePrefix`).
-- **Delete Sources-panel notes (Task 6).** `isStudioItemDeletable` is true for every Generated item. `sendStudioDelete(item, { useIndex })` (sidebar.js) routes `kind === 'source-note'` to `DELETE_SOURCE_NOTE { sourceIndex, title: item.label }` and everything else to `DELETE_STUDIO_ITEM` as before (bulk: by label only). Content script `deleteSourceNote`: checks the title guard first (no click on a mismatch), closes an open Studio viewer, clicks `button[aria-label="More"]` in the container, opens the menu through the trigger's `aria-controls` binding (`openMenuForTrigger`: waits for `aria-expanded="true"`, takes the panel by id, never "the first panel"), clicks `.more-menu-delete-source-button` ("Remove note"), clicks the confirm button if `findConfirmDialogButton()` finds one (not observed in recon), and polls up to 5 s until fewer note containers with that title are left (re-found by title each poll). On any failure it clicks every `.cdk-overlay-backdrop` (Escape does not close the menu). **Menu binding (safety):** a regular source's "Remove source" item has the same class (`more-menu-delete-source-button`) and the confirm auto-clicks, so a wrong menu would delete a real source. Both delete flows therefore (1) `closeOpenMenus()` first (refuse with "Close the open menu and try again" if one stays open ~1 s), (2) `openMenuForTrigger(trigger)`: click, wait for `aria-expanded="true"`, take the panel via `document.getElementById(aria-controls)` (no fallback to the first panel), (3) pick the item only inside that panel (notes: class + text "remove note", never text with "source"; Studio: text "delete"), (4) snapshot the dialog panes before the click and let `findConfirmDialogButton(exclude)` confirm only a NEW pane. `deleteSourceNote` also re-checks `container.isConnected && isNoteSourceContainer && title` right before the More click. `isNoteSourceContainer` uses `NLME.isNotesHeaderText` (`/^Notes(\s*\(\d+\))?$/` on the header text without mat-icons). Row delete runs under `runExclusive('Generated delete')`. Bulk delete: Studio items first (1 s apart), then Sources-panel notes from the highest `sourceIndex` down; the confirm counts the deletable selected items. Untitled Studio items (`untitled: true` from `scanStudioItems`, label made up as "Item N") are skipped by bulk delete and counted as skipped in the confirm and toast; row delete refuses them. Content-script delete errors say "Generated item".
+- **Delete Sources-panel notes (Task 6).** `isStudioItemDeletable` is true for every Generated item. `sendStudioDelete(item, { useIndex })` (sidebar-generated.js) routes `kind === 'source-note'` to `DELETE_SOURCE_NOTE { sourceIndex, title: item.label }` and everything else to `DELETE_STUDIO_ITEM` as before (bulk: by label only). Content script `deleteSourceNote`: checks the title guard first (no click on a mismatch), closes an open Studio viewer, clicks `button[aria-label="More"]` in the container, opens the menu through the trigger's `aria-controls` binding (`openMenuForTrigger`: waits for `aria-expanded="true"`, takes the panel by id, never "the first panel"), clicks `.more-menu-delete-source-button` ("Remove note"), clicks the confirm button if `findConfirmDialogButton()` finds one (not observed in recon), and polls up to 5 s until fewer note containers with that title are left (re-found by title each poll). On any failure it clicks every `.cdk-overlay-backdrop` (Escape does not close the menu). **Menu binding (safety):** a regular source's "Remove source" item has the same class (`more-menu-delete-source-button`) and the confirm auto-clicks, so a wrong menu would delete a real source. Both delete flows therefore (1) `closeOpenMenus()` first (refuse with "Close the open menu and try again" if one stays open ~1 s), (2) `openMenuForTrigger(trigger)`: click, wait for `aria-expanded="true"`, take the panel via `document.getElementById(aria-controls)` (no fallback to the first panel), (3) pick the item only inside that panel (notes: class + text "remove note", never text with "source"; Studio: text "delete"), (4) snapshot the dialog panes before the click and let `findConfirmDialogButton(exclude)` confirm only a NEW pane. `deleteSourceNote` also re-checks `container.isConnected && isNoteSourceContainer && title` right before the More click. `isNoteSourceContainer` uses `NLME.isNotesHeaderText` (`/^Notes(\s*\(\d+\))?$/` on the header text without mat-icons). Row delete runs under `runExclusive('Generated delete')`. Bulk delete: Studio items first (1 s apart), then Sources-panel notes from the highest `sourceIndex` down; the confirm counts the deletable selected items. Untitled Studio items (`untitled: true` from `scanStudioItems`, label made up as "Item N") are skipped by bulk delete and counted as skipped in the confirm and toast; row delete refuses them. Content-script delete errors say "Generated item".
+
+## Milestone 3d contracts (v1.7.0)
+
+### Sidebar split (Task 2, a pure move)
+
+`sidebar.js` (6,387 lines) is split into classic scripts, one per tab plus a shared core. Code was
+moved verbatim; exports stay byte-identical to 1.6.0. `sidebar.html` loads them in this order,
+after `takeout-shared.js`, `takeout-job.js`, `sidebar-list.js` and `sidebar-results.js`, and
+before `sidebar-takeout.js`:
+
+| File | Holds |
+|---|---|
+| `sidebar-core.js` | `logger`, mindmap template and `mindmapFiles`, `showDOMWarningDialog`, `createTurndownService`, the KaTeX to LaTeX section, settings (`settings`, `loadSettings`, `saveSettings`), `init`, tab and notebook switching, auto-refresh, resume banner, `retryDownload`, `checkStatus`, `ScanError`, `ensureContentScriptLoaded`, `convertToMarkdown`, timing and audit helpers, `runExclusive` / job lock, `retryFor`, `refreshListButtons`, cancel, `sanitizeFilename`, image helpers, job records (`startJobRecord`, `withJobRecord`), `saveCategoryBatch`, `batchPrefix`, `newWritten`, `itemFailed`, `variantName`, `noteFrontMatter`, `getIconForType`, `showToast`, `escapeHtml` |
+| `sidebar-artifacts.js` | artifact files (`fetchArtifactFiles`, `downloadArtifact`), `scanArtifactsData`, `scanPage`, Download Selected, `runArtifactsJob`, `downloadAllArtifacts`, and the table converters (`convertTableToCSV`, `createCleanTableHTML`, ...) that only data-table artifacts use |
+| `sidebar-notes.js` | note scanning and list, `exportNotesAsMarkdown`, `runNotesJob`, `extractNoteItem`, `exportSingleNote`, `buildNotesFiles` |
+| `sidebar-sources.js` | the sources scan, list, `runSourcesJob`, `extractSourceItem`, `buildSourcesFiles` |
+| `sidebar-chat.js` | the chat scan, `runChatJob`, `extractChatPair`, `buildChatFiles`, `convertChatToMarkdown` |
+| `sidebar-generated.js` | the Generated tab (id `studio`): list, row and bulk download and delete |
+| `sidebar-health.js` | the DOM health check panel and report |
+
+Rules:
+
+- **Placement.** A helper used by two or more tabs lives in `sidebar-core.js`; code only one tab
+  uses lives in that tab's file. The Generated tab calls the artifact and notes exporters
+  (`fetchArtifactFiles`, `exportSingleNote`, ...) across files; that is by design.
+- **Load-time code.** Only `sidebar-core.js` runs statements at load: `loadMindmapTemplate()`, the
+  `DOMContentLoaded` listener that calls `init`, `chrome.runtime.onMessage.addListener(...)` and the
+  `beforeunload` listener. A top-level statement or initialiser may only use names declared in the
+  same or an earlier file; functions are hoisted only within their own file. Calls inside function
+  bodies are safe, because every file has loaded before `DOMContentLoaded` runs `init`.
+- **Unique names.** Each top-level name is declared once across all sidebar scripts
+  (`tests/structure.test.js`). `tests/message-protocol.test.js` scans every `sidebar-*.js` file.
+- **Anchors.** Find code by name (`grep -n "<name>" sidebar-*.js`), not by line number.
 
 ## Known issues and latent bugs
 
@@ -1374,7 +1414,7 @@ A pause-between-items setting was discussed and not built.
 
 ### "Add a new export setting"
 
-1. Add the default to the `settings` object in sidebar.js.
+1. Add the default to the `settings` object in sidebar-core.js.
 2. Add the checkbox to the appropriate `.setting-section` in sidebar.html.
 3. Add load/save lines in `loadSettings` / `saveSettings`.
 4. Reference where the setting affects behavior.
@@ -1387,7 +1427,7 @@ A pause-between-items setting was discussed and not built.
    (`SCAN_X`/`EXTRACT_X`).
 2. Wire the message in the content-script dispatcher.
 3. Add a tab in sidebar.html OR add a row type in Studio's `scanStudioItems`.
-4. Add the orchestrator in sidebar.js (`exportX(selected)`).
+4. Add the orchestrator in the tab's sidebar-*.js file (`exportX(selected)`).
 5. Add health-check probes for the new selectors.
 6. Test from a clean reload.
 
@@ -1409,7 +1449,7 @@ Only needed when 🩺 shows formulas without `data-math`; otherwise the source i
    `findMenuItemByText('convert to source')` pattern in content.js.
 3. Add a new message type (e.g. `CONVERT_STUDIO_ITEM_TO_SOURCE`) following the
    `DELETE_STUDIO_ITEM` pattern.
-4. Wire a UI button in the Studio row template (sidebar.js `renderStudioList`).
+4. Wire a UI button in the Studio row template (sidebar-generated.js `renderStudioList`).
 5. Mirror the confirm flow if NotebookLM shows a confirmation dialog for that action.
 
 ### "Diagnose: an export hangs"
@@ -1471,7 +1511,7 @@ Export checks that catch real bugs (scripted against the unzipped export):
 ### Syntax and unit tests
 
 ```bash
-for f in sidebar.js sidebar-takeout.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js; do node --check "$f"; done
+for f in sidebar-*.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js; do node --check "$f"; done
 node --test tests/
 ```
 
@@ -1483,7 +1523,7 @@ node --test tests/
   user discussion.
 - **Tests**: DOM-free logic goes in `takeout-shared.js` with a `node:test` test in
   `tests/`; DOM behaviour gets manual smoke checks.
-- **Logger**: `logger.info/warn/error/download` in sidebar.js. Content uses raw `console.log`
+- **Logger**: `logger.info/warn/error/download` in sidebar-core.js. Content uses raw `console.log`
   with `[NotebookLM Takeout]` prefix.
 - **Filenames**: `[{PREFIX}]_{sanitized-title}.{ext}` for single artifact downloads,
   `NLME.zipName` (`{project-title}-{kind}-{timestamp}[-PARTIAL][-partNofM].zip`) for ZIPs,

@@ -409,7 +409,14 @@ Plain JavaScript Manifest V3 extension: no build step, no npm dependencies.
 
 ```
 manifest.json         Manifest V3
-sidebar.html/.js      Side panel UI and export orchestration (Markdown, formulas, per-category runners)
+sidebar.html          Side panel UI
+sidebar-core.js       Settings, tab and notebook switching, job lock, shared helpers, Markdown and formulas
+sidebar-artifacts.js  Artifacts tab: scan, Download Selected, Download All, table converters
+sidebar-notes.js      Notes tab: scan, list, note export jobs
+sidebar-sources.js    Sources tab: scan, list, source export jobs
+sidebar-chat.js       Chat tab: scan, chat export job
+sidebar-generated.js  Generated tab: list, download and delete
+sidebar-health.js     DOM health check panel and report
 sidebar-list.js       List toolbar: filter, type chips, sort, select all visible, remembered state
 sidebar-results.js    Results panel (outcome, saved files, errors, Retry)
 sidebar-takeout.js    File writer (ZIP/folder/single), export shell and Full Takeout
@@ -429,7 +436,7 @@ tests/                node:test unit tests for takeout-shared.js and takeout-job
 Check your changes:
 
 ```bash
-for f in sidebar.js sidebar-takeout.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js; do node --check "$f"; done
+for f in sidebar-*.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js; do node --check "$f"; done
 node --test tests/
 ```
 
