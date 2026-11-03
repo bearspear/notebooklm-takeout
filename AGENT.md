@@ -142,6 +142,7 @@ notebooklm-exporter/
 │                             sidebar, service worker (importScripts) and Node tests load it
 ├── takeout-job.js (228)    — NLME.runExportJob: the one DOM-free job runner (sidebar + Node tests)
 ├── takeout-markdown.js (1029) — NLMEMarkdown: the one Markdown converter + KaTeX (sidebar + page)
+├── tools/validate_export.py — Export checker and baseline comparison (Python stdlib; see Testing)
 ├── tests/                  — node:test unit tests for takeout-shared.js, takeout-job.js, the
 │                             message protocol and the file structure (load order, unique names)
 ├── sidebar.html  ( 478)    — Side panel UI: tabs, controls, settings/health panels
@@ -1662,9 +1663,24 @@ Export checks that catch real bugs (scripted against the unzipped export):
 ```bash
 for f in sidebar-*.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js; do node --check "$f"; done
 node --test tests/
+python3 -I -m unittest discover -s tools
 ```
 
-`node --check` prints nothing and exits 0; `node --test` reports `# fail 0`.
+`node --check` prints nothing and exits 0; `node --test` reports `# fail 0`; unittest ends with `OK`.
+
+### Checking real exports
+
+`python3 -I tools/validate_export.py EXPORT...` checks exports against the format contract
+(manifest files and sizes, audit counts, index links and front matter, footnotes, sentinels,
+errors.md for partial exports, part sets). `--baseline OLD` compares after normalising run details;
+use it for A/B rounds instead of ad-hoc diffs. **When the export format changes** (new manifest
+fields, new front matter, renamed files), update `tools/validate_export.py` and its tests
+(`tools/test_validate_export.py`, synthetic fixtures only — never commit real notebook content)
+in the same change.
+
+The Claude Code skill that drives the checker is `tools/validate-notebooklm-export/SKILL.md` (its
+table explains every finding code, so update it when codes change). To use it everywhere, link it
+into your skills folder: `ln -s "$PWD/tools/validate-notebooklm-export" ~/.claude/skills/`.
 
 ## Conventions in this codebase
 

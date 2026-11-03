@@ -471,6 +471,7 @@ mindmap-template.html Interactive mind map viewer template
 turndown.min.js       HTML → Markdown (bundled)
 jszip.min.js          ZIP creation (bundled)
 tests/                node:test unit tests for takeout-shared.js, takeout-job.js, the message protocol and file structure
+tools/                validate_export.py: checks exports and compares them with a baseline (Python 3, standard library)
 ```
 
 Check your changes:
@@ -478,9 +479,34 @@ Check your changes:
 ```bash
 for f in sidebar-*.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js takeout-markdown.js; do node --check "$f"; done
 node --test tests/
+python3 -I -m unittest discover -s tools
 ```
 
 DOM behaviour is verified in Chrome with the health check and real exports.
+
+### Checking an export
+
+`tools/validate_export.py` checks finished exports: ZIPs, extracted folders, Full Takeout folders
+or single `.md` downloads. It never writes next to them (ZIPs are unpacked into a temp folder).
+
+```bash
+python3 -I tools/validate_export.py ~/Downloads/New-Math-notes-*.zip          # one or more exports
+python3 -I tools/validate_export.py NEW.zip --baseline OLD.zip                # same as an older export?
+python3 -I tools/validate_export.py NEW.zip --baseline OLD.zip --allow '\$[^$\n]+\$'   # accept a known change
+```
+
+- **Per export:** every file in `manifest.json` exists and has its listed size; no stray files;
+  `_audit.md` counts ("N of M") are complete; `_index.md` / `_index.html` links open; `_index.md`
+  has front matter (from 1.7.0); every footnote has exactly one definition; no internal markers
+  are left; no `[object …]` text; PARTIAL and failed exports are explained from `errors.md`; split
+  exports have every part and no item file appears in two parts.
+- **Against a baseline:** files are compared after removing run details (dates, times, version,
+  export statistics, file sizes that only changed because a date got shorter). Differences only in
+  front matter are listed separately; `--allow REGEX` accepts known changes.
+- Each export gets PASS, WARN or FAIL; the exit code is 1 when anything fails or differs.
+- **With Claude Code:** `tools/validate-notebooklm-export/` is a skill that runs the checker and explains
+  its findings. Link it once with `ln -s "$PWD/tools/validate-notebooklm-export" ~/.claude/skills/`,
+  then ask "validate my latest exports".
 **[AGENT.md](AGENT.md)** is the engineering guide: architecture, message protocol, the DOM
 contract with Gemini Notebook, past drift and recipes.
 
