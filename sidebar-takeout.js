@@ -338,8 +338,12 @@ function takeoutZipEnabled() {
  * takeout-level note to errors.md, and marks every later one 'skipped'; the
  * root files are written anyway.
  *
- * One combined toast at the end, shown here with showToast: shell.finish
- * reports a single category's outcome, so the takeout does not use it.
+ * One combined results panel at the end (showResults): shell.finish reports a
+ * single category's outcome, so the takeout does not use it. It lists the ZIPs
+ * (or the folder) and the combined errors, and offers "Retry N failed" for the
+ * Sources, Notes and Artifacts items that failed (never chat). A retry is an
+ * ordinary tab export of those items (own ZIPs or folders); it does not rewrite
+ * the takeout or its index.
  */
 async function runFullTakeout() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -395,7 +399,7 @@ async function runFullTakeout() {
         scan: async () => (await scanArtifactsData(tabId)).filter(item => !item.disabled),
         run: (catShell, items, target) => runArtifactsJob(catShell, items, { ...target, bothSlideFormats: true })
       }
-    ].map(c => ({ ...c, status: null, selected: 0, exported: 0, failed: 0, zips: [], errors: [], auditOk: true, items: null }));
+    ].map(c => ({ ...c, status: null, selected: 0, exported: 0, failed: 0, zips: [], errors: [], auditOk: true, items: null, failedItems: [] }));
     const takeoutErrors = []; // not tied to one category
     // Set once a cancellation is on record (scan, a runner's own note, or
     // between categories): every later category is skipped
@@ -442,6 +446,7 @@ async function runFullTakeout() {
         c.zips = out.zips;
         c.parts = out.parts || 0;
         c.errors.push(...out.errors);
+        c.failedItems = out.result.failedItems || []; // small; kept past `c.items = null`, for Retry
         c.auditOk = out.auditOk;
         // Nothing exported but items failed or errors recorded (e.g. chat
         // messages that could not be read): 'failed', not "complete"
@@ -508,21 +513,22 @@ async function runFullTakeout() {
 
     shell.progress('Writing the takeout index...', 1);
     let rootWritten = true;
+    let indexZip = null;
     try {
       const placed = rootFiles.map(f => ({ ...f, path: `${root}/${f.path}` }));
       if (folder) {
         await saveFiles(placed, { folder });
       } else {
-        await saveFiles(placed, {
-          zipName: NLME.zipName({ notebook: shell.projectName, kind: 'takeout-index', timestamp: shell.timestamp, partial: cancelled })
-        });
+        const zipName = NLME.zipName({ notebook: shell.projectName, kind: 'takeout-index', timestamp: shell.timestamp, partial: cancelled });
+        await saveFiles(placed, { zipName });
+        indexZip = zipName;
       }
     } catch (error) {
       console.error('[NotebookLM Takeout] Full Takeout: root files failed:', error);
       rootWritten = false;
     }
 
-    // 4. One toast for the whole takeout
+    // 4. One results panel for the whole takeout
     let { message, level } = NLME.summarizeTakeoutOutcome({
       categories: summary.map((c, i) => ({ ...c, errorCount: categories[i].errors.length })),
       auditOk: categories.every(c => c.auditOk)
@@ -532,6 +538,28 @@ async function runFullTakeout() {
       if (level !== 'error') level = 'warning';
     }
     console.log('[NotebookLM Takeout] Full Takeout finished:', message);
-    showToast(message, level);
+    const saved = folder ? [folder] : [...categories.flatMap(c => c.zips), ...(indexZip ? [indexZip] : [])];
+
+    // Retry: Sources, Notes and Artifacts items that failed (chat is never retried)
+    const failedOf = name => categories.find(c => c.name === name).failedItems;
+    const failedSources = failedOf('Sources');
+    const failedNotes = failedOf('Notes');
+    const failedArtifacts = failedOf('Artifacts');
+    const retryCount = failedSources.length + failedNotes.length + failedArtifacts.length;
+    showResults({
+      message,
+      level,
+      saved,
+      errors,
+      retry: retryCount > 0 ? {
+        count: retryCount,
+        // Each export replaces the panel, so the last one retried stays visible
+        run: () => runExclusive('Retry failed', async () => {
+          if (failedSources.length) await exportSources(failedSources);
+          if (failedNotes.length) await exportNotesAsMarkdown(failedNotes);
+          if (failedArtifacts.length) await downloadAllArtifacts(tabId, failedArtifacts);
+        })
+      } : null
+    });
   });
 }
