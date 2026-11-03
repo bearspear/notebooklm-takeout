@@ -11,6 +11,21 @@ function isNotebookUrl(url) {
   return NLME.isNotebookUrl(url);
 }
 
+// 1.7.0 converts formulas to LaTeX, which quotes cached by 1.6.0 and earlier
+// lack: clear the citation cache once, on the update that crosses 1.7.0 (never on a
+// fresh install, whose cache is empty). onInstalled fires once per update.
+chrome.runtime.onInstalled.addListener(details => {
+  try {
+    if (!NLME.shouldClearCitationCache(details, chrome.runtime.getManifest().version)) return;
+    // citationCacheClear catches its own storage errors and resolves false
+    NLME.citationCacheClear(chrome.storage.local)
+      .then(ok => console.log('[Background] Citation cache cleared for the 1.7.0 update:', ok))
+      .catch(error => console.warn('[Background] Citation cache clear failed:', error));
+  } catch (error) {
+    console.warn('[Background] onInstalled handler failed:', error);
+  }
+});
+
 // Handle extension icon click - open sidebar
 chrome.action.onClicked.addListener(async (tab) => {
   // Open the side panel for the current window

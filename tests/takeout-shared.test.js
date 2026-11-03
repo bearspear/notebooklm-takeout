@@ -1515,6 +1515,42 @@ test('citation cache helpers never throw on storage errors or a missing notebook
   assert.deepEqual(ok.data, {});
 });
 
+test('versionLess compares dotted versions numerically', () => {
+  assert.equal(NLME.versionLess('1.6.0', '1.7.0'), true);
+  assert.equal(NLME.versionLess('1.7.0', '1.7.0'), false);
+  assert.equal(NLME.versionLess('1.7.1', '1.7.0'), false);
+  assert.equal(NLME.versionLess('1.9.0', '1.10.0'), true);
+  assert.equal(NLME.versionLess('1.6', '1.6.1'), true);
+  assert.equal(NLME.versionLess('1.7', '1.7.0'), false);
+  assert.equal(NLME.versionLess('0.9.9', '1.0.0'), true);
+});
+
+test('versionLess treats a missing or malformed version as not older', () => {
+  assert.equal(NLME.versionLess(undefined, '1.7.0'), false);
+  assert.equal(NLME.versionLess('', '1.7.0'), false);
+  assert.equal(NLME.versionLess('abc', '1.7.0'), false);
+  assert.equal(NLME.versionLess('1.6.0', undefined), false);
+});
+
+test('shouldClearCitationCache fires only on an update from before 1.7.0 to 1.7.0 or later', () => {
+  const clear = (details, current) => NLME.shouldClearCitationCache(details, current);
+  assert.equal(clear({ reason: 'update', previousVersion: '1.6.0' }, '1.7.0'), true);
+  assert.equal(clear({ reason: 'update', previousVersion: '1.5.2' }, '1.7.1'), true);
+  // Fresh install: the cache is empty anyway
+  assert.equal(clear({ reason: 'install' }, '1.7.0'), false);
+  assert.equal(clear({ reason: 'install', previousVersion: '1.6.0' }, '1.7.0'), false);
+  // Already on 1.7.0 or later: a reload or a later update keeps the cache
+  assert.equal(clear({ reason: 'update', previousVersion: '1.7.0' }, '1.7.0'), false);
+  assert.equal(clear({ reason: 'update', previousVersion: '1.7.0' }, '1.7.1'), false);
+  // An update that stays before 1.7.0 has no new converter
+  assert.equal(clear({ reason: 'update', previousVersion: '1.5.0' }, '1.6.0'), false);
+  // browser update / shared module update / missing details
+  assert.equal(clear({ reason: 'chrome_update' }, '1.7.0'), false);
+  assert.equal(clear(undefined, '1.7.0'), false);
+  // No previousVersion on an update: cannot say it is older
+  assert.equal(clear({ reason: 'update' }, '1.7.0'), false);
+});
+
 test('citationCacheClear removes every nlme.cite.* key and nothing else', async () => {
   const st = fakeStorage({ settings: { a: 1 }, 'nlme.cite.nb1': { entries: {} }, 'nlme.cite.meta': { 'nlme.cite.nb1': 1 }, 'nlme.other': 1 });
   assert.equal(await NLME.citationCacheClear(st), true);

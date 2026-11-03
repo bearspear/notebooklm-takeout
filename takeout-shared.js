@@ -1899,6 +1899,32 @@ footer { margin-top: 3rem; }
     }
   }
 
+  // True when `a` is an older dotted version than `b` ('1.6.0' < '1.7.0',
+  // '1.9.0' < '1.10.0'; a missing part counts as 0). A missing or malformed
+  // version is never "older": callers act only on a version they can read.
+  function versionLess(a, b) {
+    const parse = v => (typeof v === 'string' && /^\d+(\.\d+)*$/.test(v) ? v.split('.').map(Number) : null);
+    const x = parse(a);
+    const y = parse(b);
+    if (!x || !y) return false;
+    for (let i = 0; i < Math.max(x.length, y.length); i++) {
+      const d = (x[i] || 0) - (y[i] || 0);
+      if (d !== 0) return d < 0;
+    }
+    return false;
+  }
+
+  // 1.7.0 changed how formulas convert (LaTeX), so quotes cached by an older
+  // version lack them: clear the citation cache once, on the update that crosses
+  // 1.7.0. `details` is chrome.runtime.onInstalled's; a fresh install has an empty
+  // cache, a reload of 1.7.0 or later (previousVersion not older) keeps it.
+  const CITE_CACHE_CLEAR_BELOW = '1.7.0';
+  function shouldClearCitationCache(details, currentVersion) {
+    if (!details || details.reason !== 'update') return false;
+    return versionLess(details.previousVersion, CITE_CACHE_CLEAR_BELOW) &&
+      !versionLess(currentVersion, CITE_CACHE_CLEAR_BELOW);
+  }
+
   async function citationCacheClear(storage) {
     if (!storage) return false;
     try {
@@ -2109,6 +2135,8 @@ footer { margin-top: 3rem; }
     citationCacheRead,
     citationCacheWrite,
     citationCacheClear,
+    versionLess,
+    shouldClearCitationCache,
     citationSourcesComplete,
     CITE_MAX_BYTES_PER_NOTEBOOK,
     CITE_KEEP_NOTEBOOKS
