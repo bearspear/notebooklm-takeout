@@ -931,8 +931,42 @@
     return md;
   }
 
+  // The one toast after a Full Takeout: "Takeout: sources 12/12, notes 4/10
+  // partial, chat skipped, artifacts none". Warning when any category failed
+  // items, has errors, was cut short or skipped, or lost content (audit);
+  // error when items existed but none was exported and nobody cancelled;
+  // info for a notebook with nothing to export.
+  function summarizeTakeoutOutcome({ categories = [], auditOk = true } = {}) {
+    const part = c => {
+      const name = c.name.toLowerCase();
+      const count = `${c.exported}/${c.selected}`;
+      switch (c.status) {
+        case 'partial': return `${name} ${count} partial`;
+        case 'stopped': return `${name} ${count} stopped`;
+        case 'skipped': return `${name} skipped`;
+        case 'empty': return `${name} none`;
+        case 'failed': return `${name} failed`;
+        default: return `${name} ${count}`;
+      }
+    };
+    let message = `Takeout: ${categories.map(part).join(', ')}`;
+    const hasErrors = categories.some(c => (c.errorCount || 0) > 0);
+    if (hasErrors) message += ' (see errors.md)';
+    if (!auditOk) message += ' — some content is missing, see _audit.md';
+
+    const exported = categories.reduce((sum, c) => sum + (c.exported || 0), 0);
+    const cancelled = categories.some(c => c.status === 'partial' || c.status === 'skipped');
+    const hadWork = categories.some(c => c.status !== 'empty');
+    let level = 'success';
+    if (!hadWork) level = 'info';
+    else if (exported === 0 && !cancelled) level = 'error';
+    else if (hasErrors || !auditOk || categories.some(c => c.failed > 0 || !['done', 'empty'].includes(c.status))) level = 'warning';
+    return { level, message };
+  }
+
   const NLME = {
     buildRootIndex,
+    summarizeTakeoutOutcome,
     frontMatter,
     uniqueStems,
     notebookIdFromUrl,

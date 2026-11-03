@@ -734,3 +734,34 @@ test('prefixExportErrors puts the category in front of every error and keeps its
   assert.match(report, /## CANCELLED \(1\)\n\n- Notes: Cancelled by user after 4 of 10 notes/);
   assert.match(report, /## MISSING SUMMARY \(1\)\n\n- Notes: Paper\.pdf: No summary/);
 });
+
+test('summarizeTakeoutOutcome gives one message for every category', () => {
+  const cat = (name, status, selected, exported, extra = {}) =>
+    ({ name, folder: name.toLowerCase(), status, selected, exported, failed: 0, zips: [], errorCount: 0, ...extra });
+  const ok = NLME.summarizeTakeoutOutcome({ categories: [
+    cat('Sources', 'done', 12, 12), cat('Notes', 'done', 10, 10), cat('Chat', 'done', 17, 17), cat('Artifacts', 'done', 5, 5)
+  ] });
+  assert.deepEqual(ok, { level: 'success', message: 'Takeout: sources 12/12, notes 10/10, chat 17/17, artifacts 5/5' });
+
+  const cancelled = NLME.summarizeTakeoutOutcome({ categories: [
+    cat('Sources', 'done', 12, 11, { failed: 1, errorCount: 1 }), cat('Notes', 'partial', 10, 4, { errorCount: 1 }),
+    cat('Chat', 'skipped', 17, 0), cat('Artifacts', 'empty', 0, 0)
+  ] });
+  assert.equal(cancelled.level, 'warning');
+  assert.equal(cancelled.message, 'Takeout: sources 11/12, notes 4/10 partial, chat skipped, artifacts none (see errors.md)');
+
+  const audit = NLME.summarizeTakeoutOutcome({ auditOk: false, categories: [cat('Sources', 'done', 1, 1)] });
+  assert.equal(audit.level, 'warning');
+  assert.match(audit.message, /some content is missing, see _audit\.md/);
+
+  const nothing = NLME.summarizeTakeoutOutcome({ categories: [
+    cat('Sources', 'done', 3, 0, { failed: 3, errorCount: 3 }), cat('Notes', 'failed', 0, 0, { errorCount: 1 }), cat('Chat', 'empty', 0, 0)
+  ] });
+  assert.equal(nothing.level, 'error');
+  assert.equal(nothing.message, 'Takeout: sources 0/3, notes failed, chat none (see errors.md)');
+
+  // A cancel before anything was written is a warning, not an error
+  assert.equal(NLME.summarizeTakeoutOutcome({ categories: [cat('Sources', 'partial', 3, 0), cat('Notes', 'skipped', 2, 0)] }).level, 'warning');
+  // An empty notebook is no failure
+  assert.equal(NLME.summarizeTakeoutOutcome({ categories: [cat('Sources', 'empty', 0, 0)] }).level, 'info');
+});
