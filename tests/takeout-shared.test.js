@@ -912,6 +912,44 @@ test('buildIndexHtml groups files by folder and encodes links', () => {
   assert.doesNotMatch(html, /https?:\/\/[^"' ]*\.(css|js)/);
 });
 
+test('buildIndexHtml groups flattened files by itemKind', () => {
+  const meta = { notebook: 'NB', notebook_url: '', notebook_id: '', exporter: 'E', exported: 'T' };
+  const html = NLME.buildIndexHtml({ meta, heading: 'Takeout', files: [
+    { path: 'A.md', itemKind: 'note' },
+    { path: 'mind-maps/M.svg', itemKind: 'mindmap' },
+    { path: 'S.md', itemKind: 'source' },
+    { path: 'combined-notes.md', itemKind: 'combined-notes' },
+    { path: 'slides/D.pdf' }
+  ] });
+  const heading = name => html.indexOf(`<h2>${name}</h2>`);
+  assert.ok(heading('Notes') >= 0 && heading('Sources') >= 0 && heading('Mind maps') >= 0 && heading('Combined') >= 0);
+  // Fixed order, then the path-grouped rest
+  assert.ok(heading('Notes') < heading('Sources') && heading('Sources') < heading('Mind maps')
+    && heading('Mind maps') < heading('Combined') && heading('Combined') < heading('slides'));
+  const group = name => html.slice(heading(name), html.indexOf('</ul>', heading(name)));
+  assert.match(group('Notes'), /href="A\.md"/);
+  assert.match(group('Mind maps'), /href="mind-maps\/M\.svg"/);
+  assert.match(group('Combined'), /href="combined-notes\.md"/);
+  // An entry without itemKind still groups by its first path segment
+  assert.match(group('slides'), /href="slides\/D\.pdf"/);
+  // The spelling in the plan works too
+  assert.match(NLME.buildIndexHtml({ meta, heading: 'T', files: [{ path: 'm.svg', itemKind: 'mind-map' }] }), /<h2>Mind maps<\/h2>/);
+});
+
+test('buildIndexHtml reads sensibly for a tab export under notes/ and sources/', () => {
+  const meta = { notebook: 'NB', notebook_url: '', notebook_id: '', exporter: 'E', exported: 'T' };
+  const html = NLME.buildIndexHtml({ meta, heading: 'Notes', files: [
+    { path: 'notes/A.md', itemKind: 'note' },
+    { path: 'notes/A-code-blocks.md', itemKind: 'note', variant: 'code-blocks' },
+    { path: 'sources/S.md', itemKind: 'source' },
+    { path: 'errors.md' }
+  ] });
+  assert.equal(html.split('<h2>Notes</h2>').length, 2); // one Notes group, not notes/ plus Notes
+  assert.match(html, /<h2>Sources<\/h2>/);
+  assert.doesNotMatch(html, /<h2>notes<\/h2>/);
+  assert.match(html, /href="notes\/A-code-blocks\.md"/);
+});
+
 test('fileTypeLabel names common export types', () => {
   assert.equal(NLME.fileTypeLabel('a.md'), 'Markdown');
   assert.equal(NLME.fileTypeLabel('deck.PPTX'), 'PowerPoint');

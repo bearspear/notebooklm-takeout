@@ -1485,16 +1485,30 @@ footer { margin-top: 3rem; }
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
+  // itemKind values the builders set (buildNotesFiles / buildSourcesFiles) and
+  // the heading each lands under in _index.html
+  const INDEX_KIND_GROUPS = ['Notes', 'Sources', 'Mind maps', 'Combined'];
+  const INDEX_KIND_HEADINGS = {
+    note: 'Notes', source: 'Sources', mindmap: 'Mind maps', 'mind-map': 'Mind maps',
+    'combined-notes': 'Combined', combined: 'Combined'
+  };
+
   function buildIndexHtml({ meta, heading, files = [], links = [] } = {}) {
     const linked = new Set(links.map(l => l.href));
-    const groups = new Map();
+    // Entries with an itemKind group under a kind heading (flattened Takeout
+    // folders hold several kinds); the rest group by first path segment
+    const kindGroups = new Map(INDEX_KIND_GROUPS.map(g => [g, []]));
+    const pathGroups = new Map();
     for (const f of files) {
       if (!f || f.path === '_index.html' || f.path === 'manifest.json' || linked.has(f.path)) continue;
+      const kindGroup = INDEX_KIND_HEADINGS[f.itemKind];
+      if (kindGroup) { kindGroups.get(kindGroup).push(f); continue; }
       const parts = String(f.path).split('/');
       const group = parts.length > 1 ? parts[0] : 'Files';
-      if (!groups.has(group)) groups.set(group, []);
-      groups.get(group).push(f);
+      if (!pathGroups.has(group)) pathGroups.set(group, []);
+      pathGroups.get(group).push(f);
     }
+    const groups = new Map([...kindGroups].filter(([, list]) => list.length).concat([...pathGroups]));
     let body = indexHtmlLinks(links);
     for (const [group, list] of groups) {
       body += `<h2>${escapeHtml(group)}</h2>\n<ul class="files">\n`;
