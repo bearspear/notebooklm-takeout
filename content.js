@@ -1762,7 +1762,7 @@
     if (!header) return false;
     const clone = header.cloneNode(true);
     clone.querySelectorAll('mat-icon').forEach(icon => icon.remove());
-    return clone.textContent.trim().startsWith('Notes');
+    return NLME.isNotesHeaderText(clone.textContent);
   }
 
   function getSourceContainerTitle(container) {
@@ -3379,6 +3379,56 @@
     return items;
   }
 
+  // --- Menu binding for deletes -------------------------------------------
+  // A More menu is opened by a trigger and bound to it through aria-controls.
+  // Delete items from different menus share classes ("Remove source" has the
+  // same one as "Remove note"), so a delete item is only ever taken from the
+  // panel of the trigger just clicked, never from "the first panel".
+
+  const DIALOG_SELECTOR = 'mat-dialog-container, mat-mdc-dialog-container, [role="dialog"], [role="alertdialog"], .cdk-dialog-container, .cdk-overlay-pane';
+
+  function snapshotDialogPanes() {
+    return new Set(document.querySelectorAll(DIALOG_SELECTOR));
+  }
+
+  function closeMenuBackdrops() {
+    document.querySelectorAll('.cdk-overlay-backdrop').forEach(b => b.click());
+  }
+
+  // Close every open menu panel; false if one is still open after ~1 s.
+  async function closeOpenMenus() {
+    const deadline = Date.now() + 1000;
+    while (document.querySelector('.mat-mdc-menu-panel')) {
+      if (Date.now() > deadline) return false;
+      closeMenuBackdrops();
+      await new Promise(r => setTimeout(r, 100));
+    }
+    return true;
+  }
+
+  // Click the More trigger and return the menu panel it controls. Throws
+  // (after closing the menu) if the panel cannot be tied to this trigger.
+  async function openMenuForTrigger(trigger) {
+    trigger.click();
+    const deadline = Date.now() + 2000;
+    while (trigger.getAttribute('aria-expanded') !== 'true') {
+      if (Date.now() > deadline) {
+        closeMenuBackdrops();
+        throw new Error('More menu did not open');
+      }
+      await new Promise(r => setTimeout(r, 50));
+    }
+    // Let the panel render its items
+    await new Promise(r => setTimeout(r, 150));
+    const panelId = trigger.getAttribute('aria-controls');
+    const panel = panelId ? document.getElementById(panelId) : null;
+    if (!panel || !panel.classList.contains('mat-mdc-menu-panel')) {
+      closeMenuBackdrops();
+      throw new Error('More menu could not be identified');
+    }
+    return panel;
+  }
+
   /**
    * Delete one studio item:
    *   1. Resolve target element (by label first, else combined index).
@@ -3417,22 +3467,20 @@
       throw new Error('More button not found on this item');
     }
 
-    moreButton.click();
-
-    try {
-      await waitForElement('.mat-mdc-menu-panel, .cdk-overlay-pane', 2000);
-    } catch (e) {
-      throw new Error('More menu did not open');
+    if (!(await closeOpenMenus())) {
+      throw new Error('Close the open menu and try again');
     }
 
-    // Small yield so menu items populate.
-    await new Promise(r => setTimeout(r, 150));
+    const panel = await openMenuForTrigger(moreButton);
 
-    const deleteItem = findMenuItemByText('delete');
+    // Only this trigger's own menu: its item whose text says delete.
+    const deleteItem = Array.from(panel.querySelectorAll('.mat-mdc-menu-item, [role="menuitem"]'))
+      .find(el => (el.textContent || '').toLowerCase().includes('delete')) || null;
     if (!deleteItem) {
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      closeMenuBackdrops();
       throw new Error('Delete menu item not found');
     }
+    const existingDialogs = snapshotDialogPanes();
     deleteItem.click();
 
     // NotebookLM's behavior varies per item type:
@@ -3452,7 +3500,7 @@
       if (isGone()) return { success: true };
 
       if (!confirmed) {
-        const confirmBtn = findConfirmDialogButton();
+        const confirmBtn = findConfirmDialogButton(existingDialogs);
         if (confirmBtn) {
           confirmBtn.click();
           confirmed = true;
@@ -3495,46 +3543,55 @@
       return { success: false, error: STALE };
     }
 
-    const closeMenu = () => {
-      document.querySelectorAll('.cdk-overlay-backdrop').forEach(b => b.click());
-    };
+    const closeMenu = closeMenuBackdrops;
+    const guardOk = () => container.isConnected && isNoteSourceContainer(container) &&
+      getSourceContainerTitle(container) === title;
 
     if (findOpenStudioViewer()) await closeStudioViewer(500);
+
+    // A menu left open (it may belong to a real source) must never be used.
+    if (!(await closeOpenMenus())) {
+      return { success: false, error: 'Close the open menu and try again' };
+    }
 
     const moreButton = container.querySelector('button[aria-label="More"]');
     if (!moreButton) {
       return { success: false, error: 'More button not found on this note' };
     }
 
+    // The page may have changed while the viewer / menus were closing.
+    if (!guardOk()) return { success: false, error: STALE };
+
     const initialCount = listNotes().length;
-    moreButton.click();
-
+    let panel;
     try {
-      await waitForElement('.mat-mdc-menu-panel', 2000);
+      panel = await openMenuForTrigger(moreButton);
     } catch (e) {
-      closeMenu();
-      return { success: false, error: 'More menu did not open' };
+      return { success: false, error: e.message };
     }
-    await new Promise(r => setTimeout(r, 150));
 
-    const panel = document.querySelector('.mat-mdc-menu-panel');
-    const deleteItem = panel?.querySelector('.more-menu-delete-source-button') ||
-      Array.from(panel?.querySelectorAll('[role="menuitem"]') || [])
-        .find(el => (el.textContent || '').toLowerCase().includes('remove note')) || null;
+    // Only an item of this trigger's own menu that says "Remove note": never
+    // one that mentions "source" (a real source's "Remove source" has the same class).
+    const deleteItem = Array.from(panel.querySelectorAll('.more-menu-delete-source-button'))
+      .find(el => {
+        const text = (el.textContent || '').toLowerCase();
+        return text.includes('remove note') && !text.includes('source');
+      }) || null;
     if (!deleteItem) {
       closeMenu();
       return { success: false, error: 'Remove note menu item not found' };
     }
+    const existingDialogs = snapshotDialogPanes();
     deleteItem.click();
 
-    // A confirm dialog may or may not appear: click it if it does, and succeed
-    // as soon as the note is gone either way.
+    // A confirm dialog may or may not appear: click it if it does (only a new
+    // one), and succeed as soon as the note is gone either way.
     let confirmed = false;
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
       if (listNotes().length < initialCount) return { success: true };
       if (!confirmed) {
-        const confirmBtn = findConfirmDialogButton();
+        const confirmBtn = findConfirmDialogButton(existingDialogs);
         if (confirmBtn) {
           confirmBtn.click();
           confirmed = true;
@@ -3560,14 +3617,16 @@
    * container that has a Cancel sibling (the strongest confirm-dialog signal)
    * and skipping the more-options menu panel we just used.
    */
-  function findConfirmDialogButton() {
+  function findConfirmDialogButton(exclude = null) {
     const DESTRUCTIVE = ['delete', 'confirm', 'remove'];
     const exactMatch = (t) => DESTRUCTIVE.includes(t);
     const looseMatch = (t) => DESTRUCTIVE.some(w => t.includes(w));
 
-    const candidates = document.querySelectorAll(
+    // exclude: dialog elements that were already open before the delete click
+    // (a leftover dialog must never be confirmed by the next delete).
+    const candidates = Array.from(document.querySelectorAll(
       'mat-dialog-container, mat-mdc-dialog-container, [role="dialog"], [role="alertdialog"], .cdk-dialog-container, .cdk-overlay-pane'
-    );
+    )).filter(el => !exclude || ![...exclude].some(old => old === el || old.contains(el)));
 
     for (const container of candidates) {
       // Skip the more-options menu panel (it has .mat-mdc-menu-panel descendants).

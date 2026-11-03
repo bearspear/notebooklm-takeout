@@ -457,7 +457,7 @@ contract with Gemini Notebook, past drift and recipes.
   extension (e.g. `.jpeg`); names that differ only in Unicode form no longer overwrite each other;
   Download All and Retry use the tab they were started from.
 - The Studio tab is now the Generated tab and also lists the notes in the Sources panel (download
-  only at first; Milestone 3c can delete them too). The setting keeps its saved value.
+  only; they can't be deleted there yet). The setting keeps its saved value.
 
 **1.4.0 (Nov 2026)**: one-click Full Takeout and one layout everywhere.
 - New **Full Takeout** (📦): sources, notes, chat and artifacts of a notebook in one run, as one

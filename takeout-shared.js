@@ -1693,7 +1693,14 @@ footer { margin-top: 3rem; }
       sources.every(s => s && typeof s.text === 'string' && s.text !== '' && typeof s.quote === 'string' && s.quote !== '');
   }
 
+  // Header text of the Sources panel's "Notes" group, with its mat-icons already
+  // removed: "Notes" or "Notes (3)", nothing else ("Notes and Papers" is a source group).
+  function isNotesHeaderText(text) {
+    return /^Notes(\s*\(\d+\))?$/.test(String(text == null ? '' : text).trim());
+  }
+
   const NLME = {
+    isNotesHeaderText,
     buildRootIndex,
     buildIndexHtml,
     fileTypeLabel,

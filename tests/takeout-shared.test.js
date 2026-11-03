@@ -1527,3 +1527,16 @@ test('resumeBannerText says export unless the label is a takeout', () => {
   assert.equal(NLME.resumeBannerLabel({ kind: 'takeout', label: 'Full Takeout' }), 'Full Takeout');
   assert.equal(NLME.resumeBannerLabel({}), 'export');
 });
+
+test('isNotesHeaderText matches the Notes group header only', () => {
+  assert.equal(NLME.isNotesHeaderText('Notes'), true);
+  assert.equal(NLME.isNotesHeaderText('  Notes \n'), true);
+  assert.equal(NLME.isNotesHeaderText('Notes (3)'), true);
+  assert.equal(NLME.isNotesHeaderText('Notes(12)'), true);
+  assert.equal(NLME.isNotesHeaderText('Notes and Papers'), false);
+  assert.equal(NLME.isNotesHeaderText('Notes on Physics'), false);
+  assert.equal(NLME.isNotesHeaderText('keyboard_arrow_downNotes'), false);
+  assert.equal(NLME.isNotesHeaderText('Sources'), false);
+  assert.equal(NLME.isNotesHeaderText(''), false);
+  assert.equal(NLME.isNotesHeaderText(null), false);
+});
