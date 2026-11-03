@@ -976,10 +976,15 @@ function notebookSwitchedTo(tab) {
 async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}) {
   if (notebookSwitchedTo(tab)) {
     resetChatPanel();
+    const recordedId = lastPanelNotebookId;
     if (settleMs) {
       await new Promise(resolve => setTimeout(resolve, settleMs));
       const [now] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!now || now.id !== tab.id || NLME.notebookIdFromUrl(now.url) !== lastPanelNotebookId) return;
+      if (!now || now.id !== tab.id || NLME.notebookIdFromUrl(now.url) !== recordedId) {
+        // Nothing was rescanned: forget the id (unless a newer event replaced it) so the next event does
+        if (lastPanelNotebookId === recordedId) lastPanelNotebookId = '';
+        return;
+      }
     }
     await rescanOpenPanelTab();
   } else if (sameNotebookScan && !jobLock.current()) {
@@ -1010,8 +1015,9 @@ async function handleTabUpdate(tabId, changeInfo, tab) {
     if (changeInfo.status === 'complete') {
       await checkStatus();
       await refreshForTab(tab);
-    } else if (changeInfo.url) {
-      // In-app navigation (history API): a URL change with no 'complete'
+    } else if (changeInfo.url && !changeInfo.status) {
+      // In-app navigation (history API): a URL change with no status. A full
+      // load reports {status: 'loading', url} first and is handled by 'complete'.
       await checkStatus();
       await refreshForTab(tab, { settleMs: 1500, sameNotebookScan: false });
     }
