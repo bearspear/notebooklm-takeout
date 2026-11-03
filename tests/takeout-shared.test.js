@@ -957,3 +957,50 @@ test('extensionFor guesses the requested slide format when nothing else says', (
   assert.equal(NLME.extensionFor({ type: 'Slides' }), '.pdf');
   assert.equal(NLME.extensionFor({ type: 'Infographic', format: 'pptx' }), '.png');
 });
+
+const by = { titleOf: i => i.title, typeOf: i => i.type };
+const items = [
+  { title: 'Zeta', type: 'Note' }, { title: 'café notes', type: 'Note' },
+  { title: 'Atom', type: 'Mindmap' }, { title: 'item 10', type: 'Note' }, { title: 'item 2', type: 'Note' }
+];
+
+test('listView matches case- and accent-insensitively', () => {
+  assert.deepEqual(NLME.listView(items, { query: 'CAFE' }, by).indices, [1]);
+  assert.deepEqual(NLME.listView(items, { query: 'item note' }, by).indices, [3, 4]);
+});
+test('listView filters by type chips and reports all types', () => {
+  const v = NLME.listView(items, { types: ['Mindmap'] }, by);
+  assert.deepEqual(v.indices, [2]);
+  assert.deepEqual(v.types, [{ type: 'Note', count: 4 }, { type: 'Mindmap', count: 1 }]);
+});
+test('listView sorts by title numerically and by type', () => {
+  assert.deepEqual(NLME.listView(items, { sort: 'title' }, by).indices, [2, 1, 4, 3, 0]);
+  assert.deepEqual(NLME.listView(items, { sort: 'type' }, by).indices, [0, 1, 3, 4, 2]);
+  assert.deepEqual(NLME.listView(items, { sort: 'bogus' }, by).indices, [0, 1, 2, 3, 4]);
+});
+test('listItemKeys keeps duplicate titles distinct', () => {
+  const keys = NLME.listItemKeys([{ title: 'Summary', type: 'Note' }, { title: 'Summary', type: 'Note' }], by);
+  assert.equal(keys.length, 2);
+  assert.notEqual(keys[0], keys[1]);
+  assert.equal(keys[1], 'Note\u0000Summary#2');
+});
+test('pruneSelection drops keys that are not visible', () => {
+  assert.deepEqual([...NLME.pruneSelection(new Set(['a', 'b', 'c']), ['a', 'c'])], ['a', 'c']);
+});
+test('listSummary counts shown and selected', () => {
+  assert.equal(NLME.listSummary({ shown: 12, total: 149, selected: 3 }), '12 of 149 shown · 3 selected');
+});
+test('listStateKey is per notebook and tab', () => {
+  assert.equal(NLME.listStateKey('abc', 'notes'), 'nlme.list.abc.notes');
+});
+test('restoreListState keeps a saved state over a rescan', () => {
+  const s = NLME.restoreListState({ query: 'atom', types: ['Mindmap', 'Gone'], sort: 'title', selected: ['k1', 'k9'] },
+    { keys: ['k1', 'k2'], types: ['Note', 'Mindmap'], defaultSelected: 'all' });
+  assert.equal(s.query, 'atom'); assert.equal(s.sort, 'title');
+  assert.deepEqual(s.types, ['Mindmap']); // 'Gone' no longer exists
+  assert.deepEqual([...s.selected], ['k1']); // 'k9' no longer exists
+});
+test('restoreListState falls back to the tab default', () => {
+  assert.deepEqual([...NLME.restoreListState(null, { keys: ['a', 'b'], defaultSelected: 'all' }).selected], ['a', 'b']);
+  assert.deepEqual([...NLME.restoreListState({ sort: 1 }, { keys: ['a'], defaultSelected: 'none' }).selected], []);
+});

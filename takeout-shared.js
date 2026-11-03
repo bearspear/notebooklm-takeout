@@ -795,6 +795,88 @@
     return m ? m[1] : '';
   }
 
+  // ---- List view helpers (filter / sort / select toolbar) ----
+
+  const LIST_SORTS = ['notebook', 'title', 'type'];
+
+  function foldForSearch(s) {
+    return String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  }
+
+  // Stable per-item keys: "<type>\0<title>", the nth duplicate gets "#n" appended.
+  function listItemKeys(items, { titleOf, typeOf } = {}) {
+    const seen = new Map();
+    return (items || []).map(item => {
+      const base = `${typeOf(item)}\u0000${titleOf(item)}`;
+      const n = (seen.get(base) || 0) + 1;
+      seen.set(base, n);
+      return n >= 2 ? `${base}#${n}` : base;
+    });
+  }
+
+  // Visible indices (filtered and sorted) plus the type chips of the whole list.
+  function listView(items, { query = '', types = [], sort = 'notebook' } = {}, { titleOf, typeOf } = {}) {
+    const list = items || [];
+    const typeCounts = new Map();
+    list.forEach(item => {
+      const t = typeOf(item);
+      typeCounts.set(t, (typeCounts.get(t) || 0) + 1);
+    });
+    const typeOrder = [...typeCounts.keys()];
+    const chips = typeOrder.map(type => ({ type, count: typeCounts.get(type) }));
+
+    const words = foldForSearch(query).split(/\s+/).filter(Boolean);
+    const wanted = Array.isArray(types) && types.length ? new Set(types) : null;
+    let indices = [];
+    list.forEach((item, i) => {
+      const type = typeOf(item);
+      if (wanted && !wanted.has(type)) return;
+      if (words.length) {
+        const hay = `${foldForSearch(titleOf(item))} ${foldForSearch(type)}`;
+        if (!words.every(w => hay.includes(w))) return;
+      }
+      indices.push(i);
+    });
+
+    if (sort === 'title') {
+      const titles = list.map(item => String(titleOf(item) == null ? '' : titleOf(item)));
+      indices = indices.slice().sort((a, b) =>
+        titles[a].localeCompare(titles[b], undefined, { numeric: true, sensitivity: 'base' }) || a - b);
+    } else if (sort === 'type') {
+      indices = indices.slice().sort((a, b) =>
+        typeOrder.indexOf(typeOf(list[a])) - typeOrder.indexOf(typeOf(list[b])) || a - b);
+    }
+    return { indices, types: chips };
+  }
+
+  // Keeps only the selected keys that are still visible.
+  function pruneSelection(selectedKeys, visibleKeys) {
+    const visible = new Set(visibleKeys || []);
+    return new Set([...(selectedKeys || [])].filter(k => visible.has(k)));
+  }
+
+  function listSummary({ shown, total, selected } = {}) {
+    return `${shown} of ${total} shown · ${selected} selected`;
+  }
+
+  function listStateKey(notebookId, tab) {
+    return `nlme.list.${notebookId}.${tab}`;
+  }
+
+  // Rebuilds a list's toolbar state from storage, tolerating missing or malformed data.
+  function restoreListState(saved, { keys = [], types = null, defaultSelected } = {}) {
+    const s = saved && typeof saved === 'object' ? saved : {};
+    const query = typeof s.query === 'string' ? s.query : '';
+    const sort = LIST_SORTS.includes(s.sort) ? s.sort : 'notebook';
+    let chips = Array.isArray(s.types) ? s.types.filter(t => typeof t === 'string') : [];
+    if (Array.isArray(types)) chips = chips.filter(t => types.includes(t));
+    const keySet = new Set(keys);
+    let selected;
+    if (Array.isArray(s.selected)) selected = new Set(s.selected.filter(k => keySet.has(k)));
+    else selected = new Set(defaultSelected === 'all' ? keys : []);
+    return { query, types: chips, sort, selected };
+  }
+
   // Notebook-level metadata shared by every front matter block and the manifest.
   function exportMeta({ notebookTitle, tabUrl, version, exportedAt } = {}) {
     return {
@@ -1167,6 +1249,12 @@ footer { margin-top: 3rem; }
     frontMatter,
     uniqueStems,
     notebookIdFromUrl,
+    listItemKeys,
+    listView,
+    pruneSelection,
+    listSummary,
+    listStateKey,
+    restoreListState,
     exportMeta,
     buildManifest,
     zipName,
