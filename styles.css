@@ -1675,6 +1675,32 @@ body.job-running #rescan-btn {
   opacity: 0.5;
 }
 
+/* ========== RESUME BANNER (above the results panel) ========== */
+.resume-banner {
+  background: #fef7e0;
+  border: 1px solid #fde293;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #3c4043;
+}
+
+.resume-banner .resume-text {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+
+.resume-banner .resume-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.resume-banner .btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* ========== RESULTS PANEL ========== */
 .results-panel {
   background: #f8f9fa;

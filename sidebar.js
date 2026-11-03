@@ -540,6 +540,7 @@ async function init() {
     const [startTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     notebookSwitchedTo(startTab); // the first scan below covers this notebook
   } catch (_) { /* no active tab */ }
+  refreshResumeBanner(); // an earlier unfinished export of this notebook
   await scanSourcesPage(); // Start with Sources tab since it's now the default
 
   // Monitor tab changes
@@ -993,6 +994,7 @@ function notebookSwitchedTo(tab) {
 // has drawn the new notebook, and the content-script scans read the DOM as it
 // is (no waits), so wait, then rescan only if the tab still shows that notebook.
 async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}) {
+  refreshResumeBanner(); // follows the active tab's notebook, switched or not
   if (notebookSwitchedTo(tab)) {
     resetChatPanel();
     const recordedId = lastPanelNotebookId;
@@ -1017,6 +1019,48 @@ async function runPendingNotebookCheck() {
   pendingNotebookCheck = false;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   await refreshForTab(tab, { sameNotebookScan: false });
+}
+
+// ---- Resume banner (Milestone 3c) ----
+// Shown above the results panel when the active tab's notebook has a job record
+// with items left and no job is running. Re-checked on panel open, on every tab
+// event (refreshForTab) and when a job ends (runExclusive). A newer check
+// supersedes an older one still waiting on storage.
+let resumeBannerSeq = 0;
+async function refreshResumeBanner() {
+  const seq = ++resumeBannerSeq;
+  try {
+    if (jobLock.current()) { hideResumeBanner(); return; }
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const notebookId = isNotebookUrl(tab?.url) ? NLME.notebookIdFromUrl(tab.url) : '';
+    let record = null;
+    if (notebookId) {
+      const key = NLME.jobRecordKey(notebookId);
+      record = (await chrome.storage.local.get(key))[key];
+    }
+    if (seq !== resumeBannerSeq) return;
+    if (jobLock.current() || !NLME.jobRecordUsable(record, notebookId)) { hideResumeBanner(); return; }
+    showResumeBanner(record, {
+      onResume: () => resumeJob(record),
+      onDiscard: () => discardJobRecord(record)
+    });
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Resume banner check failed:', error);
+    if (seq === resumeBannerSeq) hideResumeBanner();
+  }
+}
+
+// Discard: remove the record the banner showed, but only if it is still that one
+// (a newer export may have replaced it since).
+async function discardJobRecord(record) {
+  try {
+    const key = NLME.jobRecordKey(record.notebookId);
+    const stored = (await chrome.storage.local.get(key))[key];
+    if (stored && stored.id === record.id) await chrome.storage.local.remove(key);
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Job record not discarded:', error);
+    showToast('Could not discard the earlier export', 'warning');
+  }
 }
 
 async function handleTabChange(activeInfo) {
@@ -2655,6 +2699,7 @@ async function runExclusive(name, fn) {
     return JOB_BUSY;
   }
   document.body.classList.add('job-running');
+  hideResumeBanner(); // its numbers go stale while a job writes the record
   // Disable (not just dim) the tab controls so keyboard activation is
   // blocked too. Mark them: a scan may replace a control with a clone (the
   // chat Export button), and the clone must be re-enabled too, so restore
@@ -2681,6 +2726,8 @@ async function runExclusive(name, fn) {
     });
     // Blanket re-enabling above would leave K = 0 buttons enabled
     refreshListButtons();
+    // The job may have left (or finished) a record: show or hide Resume
+    refreshResumeBanner();
     // A tab switch or navigation to another notebook during the job was skipped
     runPendingNotebookCheck().catch(e => console.warn('[NotebookLM Takeout] Notebook check failed:', e));
   }
@@ -2704,12 +2751,20 @@ function refreshListButtons() {
   updateStudioBulkButtonsState();
 }
 
+// The Retry / Resume chain (sidebar-takeout.js: runChain) is running under the job
+// lock. requestCancel sets chainCancelRequested; the chain checks it before each step.
+let chainActive = false;
+let chainCancelRequested = false;
+
 // Same path as the page overlay's Cancel button: the content script flags the
 // export as cancelled and broadcasts CANCEL_EXPORT to every running exporter.
 // Target tab: activeShellTabId (sidebar-takeout.js, the running shell's tab),
 // else jobTabId (the active tab when the job started), else the current tab.
 async function requestCancel() {
   if (!jobLock.current()) return;
+  // A Retry / Resume chain has moments with no shell (between two steps): note the
+  // cancel on the chain so it does not start the next step
+  if (chainActive) chainCancelRequested = true;
   try {
     // The export shell's tab first: retries and Download Selected run on the tab
     // they were scanned on, which need not be the active one. The content script

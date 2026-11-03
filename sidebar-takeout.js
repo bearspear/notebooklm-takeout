@@ -645,6 +645,66 @@ function showTakeoutResults(panel, failed, tabId) {
 }
 
 /**
+ * Run `fn` as a Retry / Resume chain: while it runs, requestCancel (sidebar.js)
+ * notes a Cancel on the chain, so one pressed between two steps (no shell
+ * active) still stops it. The flag is reset when the chain starts and ends.
+ */
+async function runChain(fn) {
+  chainActive = true;
+  chainCancelRequested = false;
+  try {
+    return await fn();
+  } finally {
+    chainActive = false;
+    chainCancelRequested = false;
+  }
+}
+
+/**
+ * The steps shared by the takeout Retry and Resume, in TAKEOUT_RETRY_STEPS order,
+ * each an ordinary tab export of `itemsByName[step.name]` on `tabId`. Empty
+ * categories are skipped. A cancel (the step's own, or the chain flag set between
+ * steps), a declined health-check dialog or an aborted step ends the chain: later
+ * categories do not run. Call it inside runChain.
+ *
+ * @returns {{ steps: object[], notRun: object[] }} the inputs of
+ *   NLME.combineRetryOutcomes
+ */
+async function runRetryChain(itemsByName, tabId, verb = 'Retry') {
+  const steps = [];
+  const notRun = [];
+  let stopped = false;
+  for (const step of TAKEOUT_RETRY_STEPS) {
+    const items = itemsByName[step.name] || [];
+    if (items.length === 0) continue;
+    if (chainCancelRequested) stopped = true;
+    if (stopped) { notRun.push({ name: step.name, failedItems: items }); continue; }
+    let out;
+    try {
+      out = await step.run(items, tabId);
+    } catch (error) {
+      console.error(`[NotebookLM Takeout] ${verb} ${step.name} failed:`, error);
+      showToast('Export failed. Please try again.', 'error');
+    }
+    if (!out || !out.result) { // declined, aborted (tab closed, export threw)
+      stopped = true;
+      notRun.push({ name: step.name, failedItems: items });
+      continue;
+    }
+    steps.push({
+      name: step.name,
+      message: out.message,
+      level: out.level,
+      saved: out.saved,
+      errors: out.errors,
+      failedItems: out.result.failedItems || []
+    });
+    if (out.result.cancelled) stopped = true;
+  }
+  return { steps, notRun };
+}
+
+/**
  * The takeout panel's Retry: runs the failed Sources, Notes and Artifacts
  * exports one after another under one job lock, on the tab the takeout
  * scanned (not whichever tab is active now). A cancel or a declined
@@ -662,35 +722,7 @@ function takeoutRetry(failed, tabId, restore) {
   return {
     count,
     run: () => runExclusive('Retry failed', async () => {
-      const steps = [];
-      const notRun = [];
-      let stopped = false;
-      for (const step of TAKEOUT_RETRY_STEPS) {
-        const items = failed[step.name] || [];
-        if (items.length === 0) continue;
-        if (stopped) { notRun.push({ name: step.name, failedItems: items }); continue; }
-        let out;
-        try {
-          out = await step.run(items, tabId);
-        } catch (error) {
-          console.error(`[NotebookLM Takeout] Retry ${step.name} failed:`, error);
-          showToast('Export failed. Please try again.', 'error');
-        }
-        if (!out || !out.result) { // declined, aborted (tab closed, export threw)
-          stopped = true;
-          notRun.push({ name: step.name, failedItems: items });
-          continue;
-        }
-        steps.push({
-          name: step.name,
-          message: out.message,
-          level: out.level,
-          saved: out.saved,
-          errors: out.errors,
-          failedItems: out.result.failedItems || []
-        });
-        if (out.result.cancelled) stopped = true;
-      }
+      const { steps, notRun } = await runChain(() => runRetryChain(failed, tabId, 'Retry'));
       if (steps.length === 0) {
         restore(); // the first step never ran: keep the panel and its Retry
         return;
@@ -705,4 +737,131 @@ function takeoutRetry(failed, tabId, restore) {
       }, combined.remaining, tabId);
     })
   };
+}
+
+// ---- Resume (Milestone 3c) ----
+
+// Resume's fresh scan per job-record category (full lists, like the tab lists).
+const RESUME_CATEGORIES = [
+  { category: 'sources', name: 'Sources', scan: async tabId => (await scanSourcesData(tabId)).sources },
+  { category: 'notes', name: 'Notes', scan: tabId => scanNotesData(tabId) },
+  { category: 'artifacts', name: 'Artifacts', scan: tabId => scanArtifactsData(tabId) }
+];
+
+// The notebook's stored record, only when it is still `record` (same id) and usable.
+async function loadResumableRecord(record) {
+  try {
+    const key = NLME.jobRecordKey(record.notebookId);
+    const stored = (await chrome.storage.local.get(key))[key];
+    return stored && stored.id === record.id && NLME.jobRecordUsable(stored, record.notebookId) ? stored : null;
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Job record not read:', error);
+    return null;
+  }
+}
+
+// Keys a resume found gone from the notebook are resolved: cleared from the
+// record (the banner stops offering them); the record is removed when that was
+// everything. Awaited before the exports start, which load the record themselves.
+// Never throws: on a storage failure the keys simply stay in the record.
+async function clearMissingFromRecord(record, missingByCategory) {
+  try {
+    const key = NLME.jobRecordKey(record.notebookId);
+    const stored = (await chrome.storage.local.get(key))[key];
+    if (!stored || stored.id !== record.id || !NLME.jobRecordUsable(stored, record.notebookId)) return;
+    let next = stored;
+    const now = Date.now();
+    for (const [category, keys] of Object.entries(missingByCategory)) next = NLME.markJobItems(next, category, keys, { now });
+    if (next === stored) return;
+    if (NLME.jobRecordFinished(next)) await chrome.storage.local.remove(key);
+    else await chrome.storage.local.set({ [key]: next });
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Job record not updated:', error);
+  }
+}
+
+/**
+ * The banner's Resume: re-runs what an unfinished export left (remaining +
+ * failed) as the same chain as the takeout Retry (sources, notes, artifacts), on
+ * the active tab, which must show the record's notebook. Items are found again by
+ * key in a fresh scan of each category (NLME.matchResumeItems, keys stamped over
+ * the FULL scan, artifacts over the unfiltered one); keys no longer in the
+ * notebook are cleared from the record and listed in the panel as "not_found".
+ * The exports run with updateRecord, so the record ends as the outcome: successes
+ * cleared, failures kept. Like a retry it makes ordinary tab exports; it never
+ * writes back into the original takeout's files. One combined results panel.
+ */
+function resumeJob(record) {
+  return runExclusive('Resume', () => runChain(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !isNotebookUrl(tab.url) || NLME.notebookIdFromUrl(tab.url) !== record.notebookId) {
+      showToast('Open the notebook this export was running on to resume it', 'warning');
+      return;
+    }
+    const tabId = tab.id;
+    const live = await loadResumableRecord(record);
+    if (!live) {
+      showToast('That earlier export is no longer pending', 'info');
+      return;
+    }
+
+    // Find the items again, category by category
+    showToast('Checking what is left…', 'info');
+    const itemsByName = {};
+    const missingByCategory = {};
+    const extraErrors = [];
+    for (const { category, name, scan } of RESUME_CATEGORIES) {
+      const keys = NLME.jobResumeKeys(live, category);
+      if (keys.length === 0) continue;
+      if (chainCancelRequested) { showToast('Resume cancelled', 'info'); return; }
+      let items;
+      try {
+        items = await scan(tabId);
+        stampJobKeys(category, items); // over the full scan, before any subset is cut
+      } catch (error) {
+        console.error(`[NotebookLM Takeout] Resume: ${name} scan failed:`, error);
+        extraErrors.push({ type: 'error', title: name, message: `Could not scan ${name.toLowerCase()} (${(error && error.message) || error}); its items stay in the list to resume` });
+        continue;
+      }
+      // An empty scan (the page still drawing, a failed read) cannot tell us that
+      // every item is gone: clearing them all would lose the record
+      if (items.length === 0) {
+        extraErrors.push({ type: 'error', title: name, message: `Found no ${name.toLowerCase()} in the notebook (the page may still be loading); its items stay in the list to resume` });
+        continue;
+      }
+      const { matched, missing } = NLME.matchResumeItems(keys, items, JOB_KEY_ACCESSORS[category]);
+      let runnable = matched;
+      if (category === 'artifacts') {
+        runnable = matched.filter(item => !item.disabled);
+        for (const item of matched.filter(item => item.disabled)) {
+          extraErrors.push({ type: 'error', title: name, message: `${item.label} is not ready to download; it stays in the list to resume` });
+        }
+      }
+      if (runnable.length) itemsByName[name] = runnable;
+      if (missing.length) {
+        missingByCategory[category] = missing;
+        for (const key of missing) extraErrors.push({ type: 'not_found', title: name, message: `${NLME.jobKeyTitle(key)} is no longer in the notebook` });
+      }
+    }
+    if (chainCancelRequested) { showToast('Resume cancelled', 'info'); return; }
+    await clearMissingFromRecord(live, missingByCategory);
+
+    const { steps, notRun } = await runRetryChain(itemsByName, tabId, 'Resume');
+    if (steps.length === 0 && notRun.length === 0 && extraErrors.length === 0) {
+      showToast('Nothing left to resume', 'info');
+      return;
+    }
+    if (steps.length === 0 && extraErrors.length === 0) {
+      showToast('Resume stopped', 'info'); // cancelled or declined before any step ran
+      return;
+    }
+    const combined = NLME.combineRetryOutcomes({ steps, notRun, verb: 'Resume', extraErrors });
+    showTakeoutResults({
+      message: combined.message,
+      level: combined.level,
+      lines: combined.lines,
+      saved: combined.saved,
+      errors: combined.errors
+    }, combined.remaining, tabId);
+  }));
 }

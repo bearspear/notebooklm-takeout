@@ -355,11 +355,14 @@
   // { name, failedItems } (their items still failed). Returns the panel's
   // content: one line per category, the worst level, every ZIP, every error
   // prefixed with its category, and what a further Retry would re-run.
-  function combineRetryOutcomes({ steps = [], notRun = [] } = {}) {
+  // verb: 'Retry' (default) or 'Resume' for the message. extraErrors: errors
+  // that belong to no step (a resume's items that left the notebook), already
+  // in the panel's { type, title, message } shape.
+  function combineRetryOutcomes({ steps = [], notRun = [], verb = 'Retry', extraErrors = [] } = {}) {
     const rank = { success: 0, info: 0, warning: 1, error: 2 };
     let level = 'success';
     for (const s of steps) if ((rank[s.level] || 0) > rank[level]) level = s.level;
-    if (notRun.length && level === 'success') level = 'warning';
+    if ((notRun.length || extraErrors.length) && level === 'success') level = 'warning';
 
     const remaining = {};
     for (const s of steps) remaining[s.name] = s.failedItems || [];
@@ -367,8 +370,8 @@
     const remainingCount = Object.values(remaining).reduce((sum, list) => sum + list.length, 0);
 
     let message = notRun.length
-      ? `Retry stopped before ${notRun.map(n => n.name.toLowerCase()).join(' and ')}`
-      : 'Retry finished';
+      ? `${verb} stopped before ${notRun.map(n => n.name.toLowerCase()).join(' and ')}`
+      : `${verb} finished`;
     if (remainingCount > 0) message += ` \u2014 ${remainingCount} still failed`;
 
     return {
@@ -376,7 +379,7 @@
       level,
       lines: steps.map(s => `${s.name}: ${s.message}`),
       saved: steps.flatMap(s => s.saved || []),
-      errors: steps.flatMap(s => prefixExportErrors(s.name, s.errors)),
+      errors: [...steps.flatMap(s => prefixExportErrors(s.name, s.errors)), ...extraErrors],
       remaining,
       remainingCount
     };
@@ -924,7 +927,9 @@
       remaining[category] = [...keys];
       failed[category] = [];
     }
-    return { id, kind, label, notebookId, startedAt: now, updatedAt: now, remaining, failed };
+    // total: how many keys the job started with (the banner's "stopped at N of total")
+    const total = Object.values(remaining).reduce((sum, keys) => sum + keys.length, 0);
+    return { id, kind, label, notebookId, startedAt: now, updatedAt: now, total, remaining, failed };
   }
 
   // A new record with `key` done: removed from remaining, and from failed unless
@@ -956,6 +961,53 @@
 
   function jobRecordFinished(record) {
     return jobRemainingCount(record) === 0;
+  }
+
+  // A stored record the banner may offer: an object for this notebook whose
+  // remaining / failed are { category: keys[] } and which still has items.
+  // Storage data is not trusted, so anything else is not usable.
+  function jobRecordUsable(record, notebookId) {
+    const arrays = group => !!group && typeof group === 'object' && !Array.isArray(group) && Object.values(group).every(Array.isArray);
+    return !!record && typeof record === 'object' && !!notebookId && record.notebookId === notebookId
+      && typeof record.id === 'string' && arrays(record.remaining) && arrays(record.failed)
+      && jobRemainingCount(record) > 0;
+  }
+
+  // The keys a resume re-runs for one category: remaining, then failed, no repeats.
+  function jobResumeKeys(record, category) {
+    const list = group => (group && Array.isArray(group[category]) ? group[category] : []);
+    return [...new Set([...list(record && record.remaining), ...list(record && record.failed)])];
+  }
+
+  // The banner's numbers. A record without `total` (written before it existed)
+  // counts what is left as the whole job.
+  function jobResumeProgress(record) {
+    const left = jobRemainingCount(record);
+    const total = Math.max(Number.isFinite(record.total) ? record.total : 0, left);
+    return { done: total - left, total, left };
+  }
+
+  // The title part of a key ("<type>\0<title>[#n]"), for messages.
+  function jobKeyTitle(key) {
+    const s = String(key == null ? '' : key);
+    const at = s.indexOf('\u0000');
+    return at >= 0 ? s.slice(at + 1) : s;
+  }
+
+  // Resume: which of the recorded `keys` are still in the fresh `items` (scanned
+  // now, in full, so listItemKeys numbers duplicates the way the record did).
+  // matched: those items in scan order; missing: the keys with no item, in
+  // `keys` order. A key never matches an item with a different key.
+  function matchResumeItems(keys, items, { titleOf, typeOf } = {}) {
+    const wanted = new Set(keys || []);
+    const list = items || [];
+    const itemKeys = listItemKeys(list, { titleOf, typeOf });
+    const found = new Set();
+    const matched = [];
+    list.forEach((item, i) => {
+      if (wanted.has(itemKeys[i])) { matched.push(item); found.add(itemKeys[i]); }
+    });
+    return { matched, missing: [...wanted].filter(k => !found.has(k)) };
   }
 
   // Visible indices (filtered and sorted) plus the type chips of the whole list.
@@ -1598,6 +1650,11 @@ footer { margin-top: 3rem; }
     markJobItems,
     jobRemainingCount,
     jobRecordFinished,
+    jobRecordUsable,
+    jobResumeKeys,
+    jobResumeProgress,
+    jobKeyTitle,
+    matchResumeItems,
     listView,
     pruneSelection,
     listSummary,

@@ -1363,3 +1363,93 @@ test('markJobItems returns the same record when nothing matches', () => {
   assert.equal(NLME.markJobItems(r, 'sources', ['a'], { now: 2 }), r);
   assert.equal(NLME.markJobItems(r, 'notes', [], { now: 2 }), r);
 });
+
+test('matchResumeItems reports keys that no longer exist', () => {
+  const by = { titleOf: i => i.title, typeOf: i => i.type };
+  const items = [{ title: 'A', type: 'Note' }, { title: 'B', type: 'Note' }];
+  const keys = NLME.listItemKeys(items, by);
+  const r = NLME.matchResumeItems([keys[1], 'Note\u0000Gone'], items, by);
+  assert.deepEqual(r.matched, [items[1]]);
+  assert.deepEqual(r.missing, ['Note\u0000Gone']);
+});
+
+test('matchResumeItems keeps duplicates apart by their #n suffix and returns scan order', () => {
+  const by = { titleOf: i => i.title, typeOf: i => i.type };
+  const items = [{ title: 'A', type: 'Note', id: 1 }, { title: 'A', type: 'Note', id: 2 }, { title: 'B', type: 'Note', id: 3 }];
+  const keys = NLME.listItemKeys(items, by);
+  const r = NLME.matchResumeItems([keys[2], keys[1]], items, by);
+  assert.deepEqual(r.matched.map(i => i.id), [2, 3]);
+  assert.deepEqual(r.missing, []);
+  // Only one "A" left: its "#2" is gone, never matched to the first
+  const fewer = [items[0], items[2]];
+  const r2 = NLME.matchResumeItems([keys[1]], fewer, by);
+  assert.deepEqual(r2.matched, []);
+  assert.deepEqual(r2.missing, [keys[1]]);
+});
+
+test('matchResumeItems ignores repeated keys and empty input', () => {
+  const by = { titleOf: i => i.title, typeOf: i => i.type };
+  const items = [{ title: 'A', type: 'T' }];
+  const key = NLME.listItemKeys(items, by)[0];
+  assert.deepEqual(NLME.matchResumeItems([key, key], items, by), { matched: items, missing: [] });
+  assert.deepEqual(NLME.matchResumeItems([], items, by), { matched: [], missing: [] });
+  assert.deepEqual(NLME.matchResumeItems(['x', 'x'], [], by), { matched: [], missing: ['x'] });
+  assert.deepEqual(NLME.matchResumeItems(null, null, by), { matched: [], missing: [] });
+});
+
+test('jobResumeKeys lists remaining then failed keys of a category without repeats', () => {
+  const r = { remaining: { notes: ['a', 'b'] }, failed: { notes: ['b', 'c'], sources: ['s'] } };
+  assert.deepEqual(NLME.jobResumeKeys(r, 'notes'), ['a', 'b', 'c']);
+  assert.deepEqual(NLME.jobResumeKeys(r, 'sources'), ['s']);
+  assert.deepEqual(NLME.jobResumeKeys(r, 'artifacts'), []);
+});
+
+test('newJobRecord stores total, the number of keys it started with', () => {
+  const r = NLME.newJobRecord({ id: 't-1', kind: 'takeout', label: 'Full Takeout', notebookId: 'nb', keysByCategory: { sources: ['s1', 's2'], notes: ['n'], artifacts: [] }, now: 1 });
+  assert.equal(r.total, 3);
+});
+
+test('jobResumeProgress gives done and total, tolerating a record without total', () => {
+  const r = NLME.newJobRecord({ id: 'n-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a', 'b', 'c', 'd'] }, now: 1 });
+  const part = NLME.markJobItems(r, 'notes', ['a'], { now: 2 });
+  assert.deepEqual(NLME.jobResumeProgress(part), { done: 1, total: 4, left: 3 });
+  const old = { ...part }; delete old.total;
+  assert.deepEqual(NLME.jobResumeProgress(old), { done: 0, total: 3, left: 3 });
+});
+
+test('jobKeyTitle shows the title part of a key', () => {
+  assert.equal(NLME.jobKeyTitle('Note\u0000My note'), 'My note');
+  assert.equal(NLME.jobKeyTitle('Note\u0000My note#2'), 'My note#2');
+  assert.equal(NLME.jobKeyTitle('plain'), 'plain');
+});
+
+test('combineRetryOutcomes names a resume and lists keys that are gone', () => {
+  const ok = { name: 'Notes', message: '3 notes', level: 'success', saved: ['n.zip'], errors: [], failedItems: [] };
+  const c = NLME.combineRetryOutcomes({ steps: [ok], verb: 'Resume', extraErrors: [{ type: 'not_found', title: 'Notes', message: 'X is no longer in the notebook' }] });
+  assert.equal(c.message, 'Resume finished');
+  assert.equal(c.level, 'warning');
+  assert.equal(c.errors.length, 1);
+  assert.equal(c.errors[0].type, 'not_found');
+  const stopped = NLME.combineRetryOutcomes({ steps: [ok], notRun: [{ name: 'Artifacts', failedItems: [1] }], verb: 'Resume' });
+  assert.match(stopped.message, /^Resume stopped before artifacts/);
+  // Default verb unchanged
+  assert.equal(NLME.combineRetryOutcomes({ steps: [ok] }).message, 'Retry finished');
+});
+
+test('combineRetryOutcomes with no step run still reports the extra errors', () => {
+  const c = NLME.combineRetryOutcomes({ steps: [], verb: 'Resume', extraErrors: [{ type: 'not_found', title: 'Notes', message: 'X is no longer in the notebook' }] });
+  assert.equal(c.errors.length, 1);
+  assert.equal(c.remainingCount, 0);
+});
+
+test('jobRecordUsable accepts only a whole record of this notebook with items left', () => {
+  const r = NLME.newJobRecord({ id: 'n-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1 });
+  assert.equal(NLME.jobRecordUsable(r, 'nb'), true);
+  assert.equal(NLME.jobRecordUsable(r, 'other'), false);
+  assert.equal(NLME.jobRecordUsable(r, ''), false);
+  assert.equal(NLME.jobRecordUsable(NLME.markJobItems(r, 'notes', ['a'], { now: 2 }), 'nb'), false); // nothing left
+  assert.equal(NLME.jobRecordUsable(null, 'nb'), false);
+  assert.equal(NLME.jobRecordUsable({ notebookId: 'nb', remaining: { notes: 'a' }, failed: {} }, 'nb'), false);
+  assert.equal(NLME.jobRecordUsable({ notebookId: 'nb', remaining: [], failed: {} }, 'nb'), false);
+  assert.equal(NLME.jobRecordUsable({ notebookId: 'nb', id: 'x' }, 'nb'), false);
+});

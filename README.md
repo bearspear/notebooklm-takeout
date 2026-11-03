@@ -252,6 +252,23 @@ folder) it was saved to, and the errors grouped by kind (collapsed; the first 20
 rest are in `errors.md`). If items failed, **Retry N failed** exports just those again.
 (Chat exports have no Retry: re-export the chat.)
 
+### Resume an unfinished export
+
+If an export stops early (you cancel it, the tab closes, the panel closes or a Full Takeout
+runs into failures), the side panel remembers which items were left. When you open that
+notebook again, a banner above the results shows "An earlier Notes export stopped at 12 of
+40" with **Resume (28 left)** and **Discard**. It appears only while the active tab is that
+notebook, no export is running, and something is left; it goes away when you switch to
+another notebook (or a page that is not a notebook), and comes back when you return.
+
+**Resume** looks the left-over and failed items up again in the notebook (by type and title,
+so a renamed or deleted item is not guessed at), then exports them as an ordinary new export:
+Sources, then Notes, then Artifacts, ending in one results panel. Items that are no longer in
+the notebook are listed there as "no longer in the notebook" and dropped from the banner;
+items that fail again stay in it. The files come as new ZIPs or folders; a resume never
+adds to the earlier export's files. **Discard** forgets the earlier export. Chat exports are
+never resumed. Cancel stops a resume between its steps, too.
+
 Only one export, scan or download runs at a time. While one runs, the panel's other buttons
 are disabled and a second click shows "… is still running".
 
