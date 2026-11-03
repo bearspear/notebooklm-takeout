@@ -1709,3 +1709,9 @@ test('studioTargetMatches needs the exact label', () => {
   assert.equal(NLME.studioTargetMatches('My note', ''), false);
   assert.equal(NLME.studioTargetMatches('My note', undefined), false);
 });
+
+test('NLME.MSG is frozen and maps each type name to itself', () => {
+  assert.equal(Object.isFrozen(NLME.MSG), true);
+  assert.equal(NLME.MSG.EXTRACT_NOTE, 'EXTRACT_NOTE');
+  for (const [key, value] of Object.entries(NLME.MSG)) assert.equal(value, key);
+});

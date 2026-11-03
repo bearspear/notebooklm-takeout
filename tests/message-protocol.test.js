@@ -5,6 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const NLME = require('../takeout-shared.js');
 
 const ROOT = path.join(__dirname, '..');
 const FILES = ['content.js', 'sidebar.js', 'sidebar-list.js', 'sidebar-results.js', 'sidebar-takeout.js', 'background.js', 'injected.js', 'mindmap-extract.js'];
@@ -56,4 +57,13 @@ test('background no longer builds ZIPs', () => {
   const bg = fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8');
   assert.doesNotMatch(bg, /jszip/i);
   assert.doesNotMatch(bg, /BATCH_DOWNLOAD_ALL|GET_BATCH_STATUS|CANCEL_BATCH_DOWNLOAD|createZipFromFiles/);
+});
+
+test('NLME.MSG lists every message type found by the scan, with equal values', () => {
+  const { handled, sent } = collect();
+  const found = new Set([...handled.keys(), ...sent.keys()]);
+  const missing = [...found].filter(t => NLME.MSG[t] !== t);
+  assert.deepEqual(missing, [], `Not in NLME.MSG (or value differs):\n  ${missing.join('\n  ')}`);
+  const extra = Object.keys(NLME.MSG).filter(k => !found.has(k) || NLME.MSG[k] !== k);
+  assert.deepEqual(extra, [], `In NLME.MSG but never sent or handled:\n  ${extra.join('\n  ')}`);
 });
