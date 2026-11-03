@@ -660,7 +660,22 @@
     return lines.join('\n');
   }
 
+  // Compare what an export wrote with what the page showed. ok is false when
+  // anything came out short; each key gets one "written of expected" line.
+  function auditExport({ expected = {}, written = {} } = {}) {
+    let ok = true;
+    const lines = Object.keys(expected).map(key => {
+      const want = expected[key] || 0;
+      const got = written[key] || 0;
+      const short = got < want;
+      if (short) ok = false;
+      return `- ${short ? '⚠️ ' : ''}${key}: ${got} of ${want}`;
+    });
+    return { ok, lines };
+  }
+
   const NLME = {
+    auditExport,
     buildSourcesIndex,
     citationTitleFromAriaLabel,
     fenceFor,

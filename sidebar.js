@@ -447,12 +447,12 @@ function convertKatexNodeToLatex(node) {
     annotation: node.querySelector('annotation[encoding="application/x-tex"]')?.textContent,
     display: isDisplay
   });
-  if (exact) return exact;
+  if (exact) { katexConversions++; return exact; }
 
   const katexHtml = node.querySelector('.katex-html');
   if (katexHtml) {
     const latex = katexRenderInline(katexHtml).replace(/\u200b/g, '').replace(/\s+/g, ' ').trim();
-    if (latex) return `${delim}${latex}${delim}`;
+    if (latex) { katexConversions++; return `${delim}${latex}${delim}`; }
   }
 
   // Last-resort textual fallback.
@@ -2457,6 +2457,43 @@ function timingSummary() {
   return '\n' + summary;
 }
 
+// Export audit (Milestone 2, Resilience #1): what the page showed vs what
+// the export wrote. Expected counts come from the HTML each export reads.
+let katexConversions = 0;
+
+function countPageContent(html) {
+  const doc = new DOMParser().parseFromString(html || '', 'text/html');
+  const citations = [...doc.querySelectorAll('button.citation-marker')]
+    .filter(b => NLME.parseCitationIndex(b.querySelector('span')?.textContent)).length;
+  const formulas = doc.querySelectorAll('.katex').length;
+  return { citations, formulas };
+}
+
+function countWrittenCitations(markdown) {
+  return ((markdown || '').match(/<a id="[^"]*cite-ref-/g) || []).length;
+}
+
+function newAudit() {
+  return { expected: { items: 0, citations: 0, formulas: 0 }, written: { items: 0, citations: 0, formulas: 0 } };
+}
+
+// Converts with the KaTeX counter so the audit knows how many formulas made it
+function convertCounted(audit, html, convert) {
+  const page = countPageContent(html);
+  const before = katexConversions;
+  const markdown = convert();
+  audit.expected.citations += page.citations;
+  audit.expected.formulas += page.formulas;
+  audit.written.citations += countWrittenCitations(markdown);
+  audit.written.formulas += katexConversions - before;
+  return markdown;
+}
+
+function auditMarkdown(title, audit) {
+  const result = NLME.auditExport(audit);
+  return { ok: result.ok, text: `# ${title} Audit\n\nWhat the page showed vs what was exported:\n\n${result.lines.join('\n')}\n` };
+}
+
 async function generateZipTimed(zip) {
   exportTimer?.start('zip.build');
   try {
@@ -2683,6 +2720,9 @@ async function getProjectName(tabId) {
 
 async function exportNotesAsMarkdown(selectedNotes) {
   startExportTiming();
+  const notesAudit = newAudit();
+  let notesWithMarkers = 0;
+  let unreadNotes = 0;
   console.log('[NotebookLM Takeout] Starting export for notes:', selectedNotes.length);
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -2832,8 +2872,23 @@ async function exportNotesAsMarkdown(selectedNotes) {
               treeData: noteData.treeData
             });
           } else {
-            // Convert to markdown (without noteId for individual files)
-            const markdown = convertToMarkdown(noteData.html, noteData.sources, note.title, false);
+            // Convert to markdown (without noteId for individual files),
+            // counting citations and formulas for the audit
+            const markdown = convertCounted(notesAudit, noteData.html,
+              () => convertToMarkdown(noteData.html, noteData.sources, note.title, false));
+            const pageCitations = countPageContent(noteData.html).citations;
+            if (pageCitations > 0 && settings.citationDetail !== 'titles') {
+              notesWithMarkers++;
+              if ((noteData.sources || []).length === 0) unreadNotes++;
+            }
+            if (notesWithMarkers === 3 && unreadNotes === 3) {
+              // The first three notes with citations all failed: the page
+              // has probably changed. Stop instead of exporting 150 notes
+              // without sources.
+              allErrors.push(`[${note.title}] Citations could not be read in the first 3 notes that have them; export stopped (Gemini Notebook may have changed — run the health check)`);
+              cancelNoted = true; // not a user cancel: no "Cancelled by user" note
+              cancelled = true;
+            }
 
             exportedNotes.push({
               title: note.title,
@@ -2899,7 +2954,10 @@ async function exportNotesAsMarkdown(selectedNotes) {
       // the batch the user cancelled in. A cancelled run is named -PARTIAL.
       const isLastZip = zipIndex === totalZips - 1 || cancelled;
       exportedCount += exportedNotes.length;
-      await createNotesZip(exportedNotes, isLastZip ? allErrors : [], zipIndex + 1, totalZips, projectName, timestamp, cancelled ? '-PARTIAL' : '');
+      notesAudit.expected.items = selectedNotes.length;
+      notesAudit.written.items = exportedCount;
+      const notesAuditDoc = isLastZip ? auditMarkdown('Notes Export', notesAudit) : null;
+      await createNotesZip(exportedNotes, isLastZip ? allErrors : [], zipIndex + 1, totalZips, projectName, timestamp, cancelled ? '-PARTIAL' : '', notesAuditDoc?.text);
       if (isLastZip && allErrors.length > 0) errorsWritten = true;
 
       // CRITICAL: Clear memory after each ZIP to prevent crashes
@@ -2937,7 +2995,11 @@ async function exportNotesAsMarkdown(selectedNotes) {
       failed: Math.max(0, attemptedCount - exportedCount),
       cancelled
     });
-    showToast(outcome.message, outcome.level);
+    notesAudit.expected.items = selectedNotes.length;
+    notesAudit.written.items = exportedCount;
+    const finalAudit = NLME.auditExport(notesAudit);
+    showToast(finalAudit.ok ? outcome.message : `${outcome.message} — some content is missing, see _audit.md`,
+      finalAudit.ok ? outcome.level : (outcome.level === 'error' ? 'error' : 'warning'));
 
   } catch (error) {
     console.error('Export failed:', error);
@@ -3101,7 +3163,7 @@ async function exportSingleNote(note) {
   return { success: true, filesWritten };
 }
 
-async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches = 1, projectName = 'NotebookLM', timestamp = null, nameSuffix = '') {
+async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches = 1, projectName = 'NotebookLM', timestamp = null, nameSuffix = '', auditText = '') {
   const zip = new JSZip();
   const indexFiles = []; // Track all files for _index.md
   let versionCount = 0; // Track number of versions created
@@ -3109,6 +3171,10 @@ async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches =
   // Use provided timestamp or generate new one
   if (!timestamp) {
     timestamp = NLME.exportTimestamp();
+  }
+
+  if (auditText) {
+    zip.file('_audit.md', auditText);
   }
 
   // Add errors.txt when the caller passes errors (it passes ALL errors to the
@@ -3537,6 +3603,7 @@ function setupSourcesEventListeners(sources) {
  */
 async function exportSources(selectedSources) {
   startExportTiming();
+  const sourcesAudit = newAudit();
   console.log(`[NotebookLM Takeout] Exporting ${selectedSources.length} sources...`);
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -3750,7 +3817,8 @@ async function exportSources(selectedSources) {
 
           // Add the main content
           md += `## Content\n\n`;
-          md += convertToMarkdown(sourceData.html, sourceData.sources || [], '', false, false, null, false);
+          md += convertCounted(sourcesAudit, sourceData.html,
+            () => convertToMarkdown(sourceData.html, sourceData.sources || [], '', false, false, null, false));
 
           return md;
         };
@@ -4081,6 +4149,11 @@ async function exportSources(selectedSources) {
       // Include errors.txt in the LAST ZIP so it contains ALL errors from all batches
       // errors.txt goes into the last ZIP this run writes: the final batch,
       // or the batch the user cancelled in
+      if (zipIndex === totalZips - 1 || cancelled) {
+        sourcesAudit.expected.items = selectedSources.length;
+        sourcesAudit.written.items = exportedCount;
+        zip.file('_audit.md', auditMarkdown('Sources Export', sourcesAudit).text);
+      }
       if ((zipIndex === totalZips - 1 || cancelled) && allErrors.length > 0) {
         errorsWritten = true;
         // Shared report (handles string and object errors, e.g. the cancel note)
@@ -4260,7 +4333,11 @@ async function exportSources(selectedSources) {
       failed: Math.max(0, attemptedCount - exportedCount),
       cancelled
     });
-    showToast(outcome.message, outcome.level);
+    sourcesAudit.expected.items = selectedSources.length;
+    sourcesAudit.written.items = exportedCount;
+    const sourcesAuditResult = NLME.auditExport(sourcesAudit);
+    showToast(sourcesAuditResult.ok ? outcome.message : `${outcome.message} — some content is missing, see _audit.md`,
+      sourcesAuditResult.ok ? outcome.level : (outcome.level === 'error' ? 'error' : 'warning'));
 
   } catch (error) {
     console.error('[NotebookLM Takeout] Export failed:', error);
@@ -4438,7 +4515,7 @@ async function exportChat(chatData, extractFullCitations = false) {
   let cancelNoted = false;
   let processedCount = 0;
   // One truthful end-of-export toast (cancel no longer overwritten by success)
-  const showChatOutcome = (errorCount) => {
+  const showChatOutcome = (errorCount, auditOk = true) => {
     const outcome = NLME.summarizeExportOutcome({
       kind: 'messages',
       selected: chatData.messagePairs.length,
@@ -4446,7 +4523,8 @@ async function exportChat(chatData, extractFullCitations = false) {
       failed: 0,
       cancelled
     });
-    const extra = !cancelled && errorCount > 0 ? ` (${errorCount} citation error(s), see errors.txt)` : '';
+    let extra = !cancelled && errorCount > 0 ? ` (${errorCount} citation error(s), see errors.txt)` : '';
+    if (!auditOk) extra += ' — some content is missing, see _audit.md';
     showToast(outcome.message + extra, extra ? 'warning' : outcome.level);
   };
 
@@ -4685,12 +4763,17 @@ async function exportChat(chatData, extractFullCitations = false) {
 
     // Versions (NLME.noteVariants): base always; code blocks only when some
     // answer has quotes; with-images only when the Markdown has images
-    const baseMarkdown = convertChatToMarkdown(
+    const chatAudit = newAudit();
+    chatAudit.expected.items = chatData.messagePairs.length;
+    chatAudit.written.items = processedMessages.length;
+    const chatHtml = chatData.messagePairs.map(p => p.aiResponseHTML || '').join('\n');
+    const baseMarkdown = convertCounted(chatAudit, chatHtml, () => convertChatToMarkdown(
       chatData.notebookTitle,
       chatData.notebookSummary,
       processedMessages,
       false
-    );
+    ));
+    const chatAuditDoc = auditMarkdown('Chat Export', chatAudit);
     const chatHasQuotes = processedMessages.some(m => (m.sources || []).some(src => src.quote && src.quote.trim()));
     const chatHasImages = /!\[/.test(baseMarkdown);
     const CHAT_VERSION_INFO = {
@@ -4710,7 +4793,7 @@ async function exportChat(chatData, extractFullCitations = false) {
     });
 
     // Determine if we need ZIP (for multiple files OR errors)
-    const shouldZip = versions.length > 1 || allErrors.length > 0;
+    const shouldZip = versions.length > 1 || allErrors.length > 0 || !chatAuditDoc.ok;
 
     if (shouldZip) {
       // Create ZIP with all versions + errors.txt
@@ -4745,6 +4828,8 @@ async function exportChat(chatData, extractFullCitations = false) {
         errors: allErrors,
         stats: chatStats
       });
+
+      zip.file('_audit.md', chatAuditDoc.text);
 
       // Only when something went wrong (no "Total Errors: 0" files)
       if (allErrors.length > 0) {
@@ -4799,7 +4884,7 @@ async function exportChat(chatData, extractFullCitations = false) {
         a.click();
         document.body.removeChild(a);
 
-        showChatOutcome(allErrors.length);
+        showChatOutcome(allErrors.length, chatAuditDoc.ok);
       } finally {
         URL.revokeObjectURL(url);
       }

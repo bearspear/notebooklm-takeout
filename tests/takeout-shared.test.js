@@ -577,3 +577,15 @@ test('buildSourcesIndex never throws on odd characters', () => {
   const md = NLME.buildSourcesIndex([{ title: 'Ω \ud83d', files: [{ label: 'Base', path: 'sources/\ud83d-x.md' }] }]);
   assert.match(md, /### 1\./);
 });
+
+test('auditExport passes when everything was written', () => {
+  const r = NLME.auditExport({ expected: { items: 10, citations: 246 }, written: { items: 10, citations: 246 } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.lines, ['- items: 10 of 10', '- citations: 246 of 246']);
+});
+
+test('auditExport flags missing citations', () => {
+  const r = NLME.auditExport({ expected: { items: 17, citations: 294 }, written: { items: 17, citations: 280 } });
+  assert.equal(r.ok, false);
+  assert.ok(r.lines.some(l => l.includes('280 of 294') && l.startsWith('- ⚠️')));
+});
