@@ -717,10 +717,25 @@ test('buildRootIndex lists every category with its status and links errors', () 
   assert.match(md, /# Takeout — New Math/);
   assert.match(md, /\| Sources \| 12 of 12 \| 0 \| complete \| sources\/ \|/);
   assert.match(md, /\| Notes \| 4 of 10 \| 0 \| partial \(cancelled\) \| notes\/ \|/);
-  assert.match(md, /\| Chat \| 0 of 17 \| 0 \| skipped \(cancelled earlier\) \| chat\/ \|/);
+  assert.match(md, /\| Chat \| 0 of 17 \| 0 \| skipped \(cancelled earlier\) \| — \|/);
   assert.match(md, /\| Artifacts \| 0 of 0 \| 0 \| none in notebook \| — \|/);
   assert.match(md, /\[errors\.md\]\(errors\.md\)/);
   assert.match(md, /Unzip every ZIP into the same folder/);
+});
+
+test('buildRootIndex shows a folder only where files were written, part folders included', () => {
+  const meta = { notebook: 'New Math', notebook_url: '', notebook_id: '', exporter: 'E', exported: 'T' };
+  const md = NLME.buildRootIndex({ meta, categories: [
+    { name: 'Sources', folder: 'sources', status: 'failed', selected: 3, exported: 0, failed: 3, zips: [] },
+    { name: 'Notes', folder: 'notes', status: 'done', selected: 60, exported: 60, failed: 0, zips: ['b1.zip', 'b2.zip'], parts: 2 },
+    { name: 'Chat', folder: 'chat', status: 'skipped', selected: 17, exported: 0, failed: 0, zips: [] },
+    { name: 'Artifacts', folder: 'artifacts', status: 'partial', selected: 9, exported: 2, failed: 0, zips: ['c.zip'], parts: 1 }
+  ] });
+  assert.match(md, /\| Sources \| 0 of 3 \| 3 \| failed \(see errors\) \| — \|/);
+  assert.match(md, /\| Notes \| 60 of 60 \| 0 \| complete \| notes\/part-1\/ … notes\/part-2\/ \|/);
+  assert.match(md, /\| Chat \| 0 of 17 \| 0 \| skipped \(cancelled earlier\) \| — \|/);
+  assert.match(md, /\| Artifacts \| 2 of 9 \| 0 \| partial \(cancelled\) \| artifacts\/part-1\/ \|/);
+  assert.doesNotMatch(md, /\| notes\/ \|/);
 });
 
 test('chatScanIsEmpty only when nothing was skipped', () => {

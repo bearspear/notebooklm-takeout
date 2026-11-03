@@ -1061,8 +1061,13 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined toa
   valid. Do not flatten it without reworking those links.
 - **Statuses**: `done` (complete), `partial` (cancelled), `skipped` (cancelled earlier),
   `empty` (none in notebook), `stopped` (the job stopped itself), `failed` (scan or write
-  error, or every item failed). A failing category does not stop the others.
-- **Cancel** ends the current category as `partial` and marks the rest `skipped`; the root
+  error, or nothing exported but items failed or errors recorded). After a runner the status
+  comes from `NLME.takeoutCategoryStatus`. Chat is `empty` only when `NLME.chatScanIsEmpty`
+  (no pairs, nothing skipped, nothing collapsed); unreadable messages still run the chat job
+  and reach errors.md. A failing category does not stop the others. The root `_index.md`
+  folder column shows `—` unless something was written, and `part-1/ … part-N/` for batches.
+- **Cancel** ends the current category as `partial` and marks the rest `skipped`; a cancel
+  between categories adds one takeout-level "Cancelled by user before …" entry. The root
   files are still written.
 - **Chat citations** follow ⚙️ Citation detail (`NLME.takeoutChatFullCitations(settings)`:
   Full quotes → `EXTRACT_MESSAGE_CITATIONS` per message; titles/none → titles-only Sources),

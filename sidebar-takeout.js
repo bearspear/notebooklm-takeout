@@ -340,8 +340,9 @@ function takeoutZipEnabled() {
  * reach errors.md), then runs on its own runner (runSourcesJob, runNotesJob,
  * runChatJob, runArtifactsJob) in that order, unchanged builders included.
  * Status after a runner: NLME.takeoutCategoryStatus. Cancel ends the current
- * category as 'partial' (its ZIP -PARTIAL) and marks every later one
- * 'skipped'; the root files are written anyway.
+ * category as 'partial' (its ZIP -PARTIAL), or (between categories) adds a
+ * takeout-level note to errors.md, and marks every later one 'skipped'; the
+ * root files are written anyway.
  *
  * One combined toast at the end, shown here with showToast: shell.finish
  * reports a single category's outcome, so the takeout does not use it.
@@ -402,11 +403,15 @@ async function runFullTakeout() {
       }
     ].map(c => ({ ...c, status: null, selected: 0, exported: 0, failed: 0, zips: [], errors: [], auditOk: true, items: null }));
     const takeoutErrors = []; // not tied to one category
+    // Set once a cancellation is on record (scan, a runner's own note, or
+    // between categories): every later category is skipped
+    let stopRest = false;
 
     // 1. Scan everything up front
     for (const [i, c] of categories.entries()) {
       if (shell.isCancelled()) {
         takeoutErrors.push({ type: 'cancelled', message: 'Cancelled by user during the scan; the remaining categories were skipped' });
+        stopRest = true;
         break;
       }
       shell.progress(`Scanning ${c.name.toLowerCase()}…`, i / categories.length);
@@ -423,10 +428,14 @@ async function runFullTakeout() {
     console.log('[NotebookLM Takeout] Full Takeout scan:', categories.map(c => `${c.name} ${c.selected}`).join(', '));
 
     // 2. One runner per category, in order; a cancel skips the rest
-    let stopRest = false;
     for (const c of categories) {
       if (c.status) continue; // empty, or the scan failed
       if (stopRest || shell.isCancelled()) {
+        if (!stopRest) {
+          // Cancelled between two categories: no runner wrote a note
+          takeoutErrors.push({ type: 'cancelled', message: `Cancelled by user before ${c.name.toLowerCase()}; the remaining categories were skipped` });
+          stopRest = true;
+        }
         c.status = 'skipped';
         c.items = null;
         continue;

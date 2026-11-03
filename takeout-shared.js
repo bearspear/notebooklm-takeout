@@ -986,7 +986,15 @@
     md += '| Category | Exported | Failed | Status | Folder |\n';
     md += '| --- | --- | --- | --- | --- |\n';
     for (const c of categories) {
-      const folder = c.status === 'empty' ? '—' : `${c.folder}/`;
+      // Same rule as buildRootIndexHtml: nothing written (empty, skipped,
+      // failed without a package) has no folder; a category written in
+      // several batches lives in part-N/ folders
+      let folder = '—';
+      if (c.exported > 0 || (c.zips || []).length > 0) {
+        if (c.parts > 1) folder = `${c.folder}/part-1/ … ${c.folder}/part-${c.parts}/`;
+        else if (c.parts === 1) folder = `${c.folder}/part-1/`;
+        else folder = `${c.folder}/`;
+      }
       md += `| ${c.name} | ${c.exported} of ${c.selected} | ${c.failed} | ${TAKEOUT_STATUS_WORDS[c.status] || c.status} | ${folder} |\n`;
     }
     md += '\n';
