@@ -144,6 +144,13 @@ function isStudioItemDeletable(item) {
   return !!item;
 }
 
+// An untitled Studio item only has a made-up label ("Item 3"): deleting by it
+// could hit a real item with that title, so a bulk delete skips it. The bulk
+// button's count and the confirm both use this.
+function isStudioItemUntitled(item) {
+  return !!item && item.untitled === true && item.kind !== 'source-note';
+}
+
 // One delete request for a Generated item; throws on failure. Bulk delete passes
 // useIndex false for Studio items: by label only, a stale index could hit another item.
 async function sendStudioDelete(item, { useIndex = true } = {}) {
@@ -157,10 +164,13 @@ async function sendStudioDelete(item, { useIndex = true } = {}) {
 }
 
 // The bulk buttons follow the selection: disabled at 0, otherwise "... Selected (K)".
-// Delete counts the deletable selected items (all of them).
+// Delete is enabled while anything deletable is selected, but its count K is what
+// the bulk delete will remove: untitled Studio items are left out, as in the confirm.
 function updateStudioBulkButtonsState(controller = _studioListController) {
   const n = controller ? controller.selectedCount() : 0;
-  const deletableN = controller ? controller.selectedItems().filter(isStudioItemDeletable).length : 0;
+  const selected = controller ? controller.selectedItems() : [];
+  const deletableN = selected.filter(isStudioItemDeletable).length;
+  const deleteCount = selected.filter(item => isStudioItemDeletable(item) && !isStudioItemUntitled(item)).length;
   const downloadBulkBtn = document.getElementById('studio-download-selected-btn');
   const deleteBulkBtn = document.getElementById('studio-delete-selected-btn');
   if (downloadBulkBtn) {
@@ -169,7 +179,7 @@ function updateStudioBulkButtonsState(controller = _studioListController) {
   }
   if (deleteBulkBtn) {
     deleteBulkBtn.disabled = deletableN === 0;
-    setButtonLabel(deleteBulkBtn, deletableN > 0 ? `Delete Selected (${deletableN})` : 'Delete Selected');
+    setButtonLabel(deleteBulkBtn, deleteCount > 0 ? `Delete Selected (${deleteCount})` : 'Delete Selected');
   }
 }
 
@@ -261,10 +271,8 @@ async function handleStudioBulkDownload() {
 async function handleStudioBulkDelete() {
   // Only what is selected (and so visible) is deleted; the dialog names that count.
   const selectedItems = _studioListController ? _studioListController.selectedItems() : [];
-  // An untitled Studio item only has a made-up label ("Item 3"): deleting by it
-  // could hit a real item with that title, so a bulk delete skips it
-  const skippedUntitled = selectedItems.filter(item => item && item.untitled === true && item.kind !== 'source-note').length;
-  const deletable = selectedItems.filter(item => isStudioItemDeletable(item) && !(item.untitled === true && item.kind !== 'source-note'));
+  const skippedUntitled = selectedItems.filter(isStudioItemUntitled).length;
+  const deletable = selectedItems.filter(item => isStudioItemDeletable(item) && !isStudioItemUntitled(item));
   if (deletable.length === 0) {
     if (skippedUntitled > 0) showToast(`Skipped ${skippedUntitled} untitled item(s): delete them one by one`, 'warning');
     return;
