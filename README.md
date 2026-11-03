@@ -493,7 +493,8 @@ contract with Gemini Notebook, past drift and recipes.
 - Every category `_index.md` starts with front matter (`kind: index`), like the items.
 - Split sources exports get an `_audit.md` per part; Resume can be cancelled while it scans;
   folder-mode manifests record downloaded file sizes; Delete Selected counts only items it can
-  delete; a delete closes only its own menu and dialog.
+  delete; a delete no longer clicks a dialog's backdrop on a menu's behalf or closes dialogs it didn't
+  open (it closes its own menu and confirm dialog).
 - Under the hood: `sidebar.js` is split into one file per tab, the page script answers messages
   through a handler table, and one module (`takeout-markdown.js`) holds all Markdown conversion.
   Exports are otherwise byte-identical to 1.6.0.
