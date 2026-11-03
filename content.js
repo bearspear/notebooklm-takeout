@@ -3447,15 +3447,25 @@
       throw new Error('No Generated items found on the page');
     }
 
-    // Resolve target — prefer label (stable across deletes) but fall back to index.
+    // Resolve target. The title of the element must equal the label whenever a
+    // label is given: a combinedIndex is only a hint that picks between
+    // same-titled items, never a fallback (the page may have changed since the scan).
+    const titleOf = el => el.querySelector('.artifact-title, .note-title')?.textContent;
+    const hasIndex = typeof combinedIndex === 'number' && combinedIndex >= 0 && combinedIndex < all.length;
     let target = null;
     if (label) {
-      target = all.find(el => {
-        const t = el.querySelector('.artifact-title, .note-title');
-        return t && t.textContent?.trim() === label;
-      }) || null;
-    }
-    if (!target && typeof combinedIndex === 'number' && combinedIndex >= 0 && combinedIndex < all.length) {
+      if (typeof combinedIndex === 'number') {
+        // Row delete: the item at that index, or nothing
+        if (!hasIndex || !NLME.studioTargetMatches(titleOf(all[combinedIndex]), label)) {
+          throw new Error('Item changed \u2014 rescan and try again');
+        }
+        target = all[combinedIndex];
+      } else {
+        // Bulk delete: by label alone
+        target = all.find(el => NLME.studioTargetMatches(titleOf(el), label)) || null;
+      }
+    } else if (hasIndex) {
+      // No caller sends an index without a label (sendStudioDelete always sends the label)
       target = all[combinedIndex];
     }
     if (!target) {
@@ -3469,6 +3479,11 @@
 
     if (!(await closeOpenMenus())) {
       throw new Error('Close the open menu and try again');
+    }
+
+    // The page may have changed while menus were closing.
+    if (!target.isConnected || (label && !NLME.studioTargetMatches(titleOf(target), label))) {
+      throw new Error('Item changed \u2014 rescan and try again');
     }
 
     const panel = await openMenuForTrigger(moreButton);
@@ -3510,6 +3525,7 @@
       await new Promise(r => setTimeout(r, 100));
     }
 
+    closeMenuBackdrops();
     throw new Error(confirmed
       ? 'Item did not disappear after clicking confirm'
       : 'Delete did not take effect (no dialog, no removal)');

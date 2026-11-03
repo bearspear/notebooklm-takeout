@@ -1540,3 +1540,12 @@ test('isNotesHeaderText matches the Notes group header only', () => {
   assert.equal(NLME.isNotesHeaderText(''), false);
   assert.equal(NLME.isNotesHeaderText(null), false);
 });
+
+test('studioTargetMatches needs the exact label', () => {
+  assert.equal(NLME.studioTargetMatches('  My note \n', 'My note'), true);
+  assert.equal(NLME.studioTargetMatches('My note 2', 'My note'), false);
+  assert.equal(NLME.studioTargetMatches('', 'My note'), false);
+  assert.equal(NLME.studioTargetMatches(null, 'My note'), false);
+  assert.equal(NLME.studioTargetMatches('My note', ''), false);
+  assert.equal(NLME.studioTargetMatches('My note', undefined), false);
+});

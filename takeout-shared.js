@@ -1699,7 +1699,13 @@ footer { margin-top: 3rem; }
     return /^Notes(\s*\(\d+\))?$/.test(String(text == null ? '' : text).trim());
   }
 
+  // A Generated item's title element must read exactly the label the delete was asked for.
+  function studioTargetMatches(titleText, label) {
+    return typeof label === 'string' && label !== '' && String(titleText == null ? '' : titleText).trim() === label;
+  }
+
   const NLME = {
+    studioTargetMatches,
     isNotesHeaderText,
     buildRootIndex,
     buildIndexHtml,
