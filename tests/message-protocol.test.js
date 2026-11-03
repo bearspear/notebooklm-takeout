@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
-const FILES = ['content.js', 'sidebar.js', 'background.js', 'injected.js', 'mindmap-extract.js'];
+const FILES = ['content.js', 'sidebar.js', 'sidebar-takeout.js', 'background.js', 'injected.js', 'mindmap-extract.js'];
 
 // Delivered by window.postMessage between page world and content script
 const EXTERNAL = new Set(['NLME_DOWNLOAD_URL_INTERCEPTED']);
