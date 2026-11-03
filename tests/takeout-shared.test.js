@@ -646,6 +646,32 @@ test('uniqueStems treats stem+variant names as taken', () => {
   assert.deepEqual(NLME.uniqueStems(['Summary', 'summary CODE blocks'], ['-code-blocks']), ['Summary', 'summary-CODE-blocks-2']);
 });
 
+test('takeoutVariantSettings turns on image versions and keeps the rest', () => {
+  const s = { exportNoteWithImages: false, exportSourceWithImages: false, exportSourcePlusMetaWithImages: false, exportNoteCodeBlocks: true };
+  const t = NLME.takeoutVariantSettings(s);
+  assert.equal(t.exportNoteWithImages, true);
+  assert.equal(t.exportSourceWithImages, true);
+  assert.equal(t.exportSourcePlusMetaWithImages, false);
+  assert.equal(t.exportNoteCodeBlocks, true);
+  assert.equal(s.exportNoteWithImages, false); // input not mutated
+});
+
+test('takeoutVariantSettings makes the variant sets include the image versions', () => {
+  const t = NLME.takeoutVariantSettings({});
+  assert.deepEqual(NLME.noteVariants(t, { hasImages: true }).map(v => v.suffix), ['', '-with-images']);
+  assert.deepEqual(NLME.sourceVariants(t, { hasImages: true }).map(v => v.suffix), ['', '-with-images']);
+  assert.deepEqual(NLME.noteVariants(t, { hasImages: false }).map(v => v.suffix), ['']);
+});
+
+test('uniqueStems keeps reserved names free for package files', () => {
+  assert.deepEqual(NLME.uniqueStems(['errors', 'Errors', 'Combined Notes'], [], ['errors', 'combined-notes']),
+    ['errors-2', 'Errors-3', 'Combined-Notes-2']);
+  assert.deepEqual(NLME.uniqueStems(['combined-notes'], ['-with-images'], ['combined-notes-with-images', 'combined-notes']),
+    ['combined-notes-2']);
+  assert.deepEqual(NLME.uniqueStems(['ERRORS'], [], ['errors']), ['ERRORS-2']);
+  assert.deepEqual(NLME.uniqueStems(['errors']), ['errors']); // no reserved names: as before
+});
+
 test('exportMeta and notebookIdFromUrl describe the notebook', () => {
   const url = 'https://notebook.google.com/notebook/62d6e344-2fa7-42ed-b3ef-236f3007fdc3';
   assert.equal(NLME.notebookIdFromUrl(url), '62d6e344-2fa7-42ed-b3ef-236f3007fdc3');
@@ -682,6 +708,26 @@ test('artifactFolder and extensionFor', () => {
   assert.equal(NLME.extensionFor({ mime: 'audio/mp4' }), '.m4a');
   assert.equal(NLME.extensionFor({ type: 'Video Overview' }), '.mp4');
   assert.equal(NLME.extensionFor({}), '');
+});
+
+test('extensionFor keeps a real URL path extension that no list knows, lower-cased', () => {
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/photo.JPEG' }), '.jpeg');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/photo.JPEG?size=large' }), '.jpeg');
+  // A real URL extension beats the type guess; a known one also beats the MIME,
+  // an unlisted one (.php, .def) does not
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/photo.jpeg', type: 'Infographic' }), '.jpeg');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/page.php', mime: 'image/png' }), '.png');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/page.php', type: 'Infographic' }), '.php');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/deck.pdf', mime: 'audio/mp4' }), '.pdf');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/photo.JPEG', mime: 'audio/mp4' }), '.m4a');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/noext', type: 'Infographic' }), '.png');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/a.pptx?filename=Deck.pdf' }), '.pdf');
+  // No extension (or not one): today's result
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/noext' }), '');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/noext', type: 'Video Overview' }), '.mp4');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y.z/noext' }), '');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/archive.toolongext' }), '');
+  assert.equal(NLME.extensionFor({ url: 'not a url' }), '');
 });
 
 test('artifactStems makes stems unique per type folder only', () => {
@@ -736,6 +782,48 @@ test('buildRootIndex shows a folder only where files were written, part folders 
   assert.match(md, /\| Chat \| 0 of 17 \| 0 \| skipped \(cancelled earlier\) \| — \|/);
   assert.match(md, /\| Artifacts \| 2 of 9 \| 0 \| partial \(cancelled\) \| artifacts\/part-1\/ \|/);
   assert.doesNotMatch(md, /\| notes\/ \|/);
+});
+
+test('buildRootIndex links the folder of an errors-only package (folder mode: no zips, nothing exported)', () => {
+  const meta = { notebook: 'New Math', notebook_url: '', notebook_id: '', exporter: 'E', exported: 'T' };
+  const categories = [
+    // One batch, every item failed: the errors-only package is a written package
+    { name: 'Sources', folder: 'sources', status: 'failed', selected: 3, exported: 0, failed: 3, zips: [], parts: 0, packages: 1 },
+    // A part that was written before the category failed
+    { name: 'Notes', folder: 'notes', status: 'failed', selected: 60, exported: 0, failed: 0, zips: [], parts: 1, packages: 1 },
+    // Nothing reached the disk
+    { name: 'Chat', folder: 'chat', status: 'failed', selected: 5, exported: 0, failed: 0, zips: [], parts: 0, packages: 0 }
+  ];
+  const md = NLME.buildRootIndex({ meta, categories });
+  assert.match(md, /\| Sources \| 0 of 3 \| 3 \| failed \(see errors\) \| sources\/ \|/);
+  assert.match(md, /\| Notes \| 0 of 60 \| 0 \| failed \(see errors\) \| notes\/part-1\/ \|/);
+  assert.match(md, /\| Chat \| 0 of 5 \| 0 \| failed \(see errors\) \| — \|/);
+  const html = NLME.buildRootIndexHtml({ meta, categories });
+  assert.match(html, /href="sources\/_index\.html"/);
+  assert.match(html, /href="notes\/part-1\/_index\.html"/);
+  assert.doesNotMatch(html, /href="chat\//);
+});
+
+test('uniqueStems treats the NFC and NFD spellings of a name as one name', () => {
+  const composed = 'Caf\u00e9';
+  const decomposed = 'Cafe\u0301';
+  assert.notEqual(composed, decomposed);
+  const s = NLME.uniqueStems([composed, decomposed]);
+  assert.notEqual(s[0].normalize('NFC'), s[1].normalize('NFC'));
+  assert.equal(s[1].normalize('NFC'), 'Caf\u00e9-2');
+  // Case still folds, variant suffixes and reserved names too
+  assert.equal(NLME.uniqueStems(['CAF\u00c9', decomposed])[1].normalize('NFC'), 'Caf\u00e9-2');
+  assert.equal(NLME.uniqueStems([decomposed], [], ['caf\u00e9'])[0].normalize('NFC'), 'Caf\u00e9-2');
+  const withSuffix = NLME.uniqueStems([composed + ' plus', decomposed], [' plus']);
+  assert.notEqual(withSuffix[0].normalize('NFC'), withSuffix[1].normalize('NFC'));
+});
+
+test('chatSelectedCount counts the messages the page showed, not only the readable ones', () => {
+  assert.equal(NLME.chatSelectedCount({ messagePairs: [], stats: { pairsInDom: 3 } }), 3);
+  assert.equal(NLME.chatSelectedCount({ messagePairs: [{}, {}], stats: { pairsInDom: 5 } }), 5);
+  assert.equal(NLME.chatSelectedCount({ messagePairs: [{}, {}], stats: {} }), 2);
+  assert.equal(NLME.chatSelectedCount({ messagePairs: [{}] }), 1);
+  assert.equal(NLME.chatSelectedCount({ messagePairs: [] }), 0);
 });
 
 test('chatScanIsEmpty only when nothing was skipped', () => {
@@ -935,11 +1023,12 @@ test('singleArtifactPackage bundles data tables and mind maps like before', () =
   }), null);
 });
 
-test('takeoutChatFullCitations follows the Citation detail setting', () => {
-  assert.equal(NLME.takeoutChatFullCitations({ citationDetail: 'quotes' }), true);
-  assert.equal(NLME.takeoutChatFullCitations({ citationDetail: 'titles' }), false);
-  assert.equal(NLME.takeoutChatFullCitations({ citationDetail: 'none' }), false);
-  assert.equal(NLME.takeoutChatFullCitations({}), true);
+test('chatCitationMode follows Citation detail with quotes as default', () => {
+  assert.equal(NLME.chatCitationMode({ citationDetail: 'titles' }), 'titles');
+  assert.equal(NLME.chatCitationMode({ citationDetail: 'none' }), 'none');
+  assert.equal(NLME.chatCitationMode({}), 'quotes');
+  assert.equal(NLME.chatCitationMode({ citationDetail: 'bogus' }), 'quotes');
+  assert.equal(NLME.takeoutChatFullCitations, undefined);
 });
 
 test('slideFormatsFor gives both formats only when asked', () => {
@@ -956,4 +1045,133 @@ test('extensionFor guesses the requested slide format when nothing else says', (
   assert.equal(NLME.extensionFor({ type: 'Slides', format: 'pdf' }), '.pdf');
   assert.equal(NLME.extensionFor({ type: 'Slides' }), '.pdf');
   assert.equal(NLME.extensionFor({ type: 'Infographic', format: 'pptx' }), '.png');
+});
+
+const by = { titleOf: i => i.title, typeOf: i => i.type };
+const items = [
+  { title: 'Zeta', type: 'Note' }, { title: 'café notes', type: 'Note' },
+  { title: 'Atom', type: 'Mindmap' }, { title: 'item 10', type: 'Note' }, { title: 'item 2', type: 'Note' }
+];
+
+test('listView matches case- and accent-insensitively', () => {
+  assert.deepEqual(NLME.listView(items, { query: 'CAFE' }, by).indices, [1]);
+  assert.deepEqual(NLME.listView(items, { query: 'item note' }, by).indices, [3, 4]);
+});
+test('listView filters by type chips and reports all types', () => {
+  const v = NLME.listView(items, { types: ['Mindmap'] }, by);
+  assert.deepEqual(v.indices, [2]);
+  assert.deepEqual(v.types, [{ type: 'Note', count: 4 }, { type: 'Mindmap', count: 1 }]);
+});
+test('listView sorts by title numerically and by type', () => {
+  assert.deepEqual(NLME.listView(items, { sort: 'title' }, by).indices, [2, 1, 4, 3, 0]);
+  assert.deepEqual(NLME.listView(items, { sort: 'type' }, by).indices, [0, 1, 3, 4, 2]);
+  assert.deepEqual(NLME.listView(items, { sort: 'bogus' }, by).indices, [0, 1, 2, 3, 4]);
+});
+test('listItemKeys keeps duplicate titles distinct', () => {
+  const keys = NLME.listItemKeys([{ title: 'Summary', type: 'Note' }, { title: 'Summary', type: 'Note' }], by);
+  assert.equal(keys.length, 2);
+  assert.notEqual(keys[0], keys[1]);
+  assert.equal(keys[1], 'Note\u0000Summary#2');
+});
+test('pruneSelection drops keys that are not visible', () => {
+  assert.deepEqual([...NLME.pruneSelection(new Set(['a', 'b', 'c']), ['a', 'c'])], ['a', 'c']);
+});
+test('listSummary counts shown and selected', () => {
+  assert.equal(NLME.listSummary({ shown: 12, total: 149, selected: 3 }), '12 of 149 shown · 3 selected');
+});
+test('listStateKey is per notebook and tab', () => {
+  assert.equal(NLME.listStateKey('abc', 'notes'), 'nlme.list.abc.notes');
+});
+test('restoreListState keeps a saved state over a rescan', () => {
+  const s = NLME.restoreListState({ query: 'atom', types: ['Mindmap', 'Gone'], sort: 'title', selected: ['k1', 'k9'] },
+    { keys: ['k1', 'k2'], types: ['Note', 'Mindmap'], defaultSelected: 'all' });
+  assert.equal(s.query, 'atom'); assert.equal(s.sort, 'title');
+  assert.deepEqual(s.types, ['Mindmap']); // 'Gone' no longer exists
+  assert.deepEqual([...s.selected], ['k1']); // 'k9' no longer exists
+});
+test('restoreListState falls back to the tab default', () => {
+  assert.deepEqual([...NLME.restoreListState(null, { keys: ['a', 'b'], defaultSelected: 'all' }).selected], ['a', 'b']);
+  assert.deepEqual([...NLME.restoreListState({ sort: 1 }, { keys: ['a'], defaultSelected: 'none' }).selected], []);
+});
+
+test('restoreListState gives items new since the save the tab default', () => {
+  const saved = { selected: ['a'], known: ['a', 'b'] };
+  assert.deepEqual([...NLME.restoreListState(saved, { keys: ['a', 'b', 'c'], defaultSelected: 'all' }).selected].sort(), ['a', 'c']);
+  assert.deepEqual([...NLME.restoreListState(saved, { keys: ['a', 'b', 'c'], defaultSelected: 'none' }).selected], ['a']);
+});
+test('restoreListState without known keeps the saved selection as an allow-list', () => {
+  const s = NLME.restoreListState({ selected: ['a'] }, { keys: ['a', 'b'], defaultSelected: 'all' });
+  assert.deepEqual([...s.selected], ['a']);
+  const bad = NLME.restoreListState({ selected: ['a'], known: 'nope' }, { keys: ['a', 'b'], defaultSelected: 'all' });
+  assert.deepEqual([...bad.selected], ['a']);
+});
+
+test('combineRetryOutcomes merges the retried categories into one outcome', () => {
+  const c = NLME.combineRetryOutcomes({ steps: [
+    { name: 'Sources', message: 'Exported 2 of 3 sources (1 failed, see errors.md)', level: 'warning', saved: ['s.zip'], errors: ['[A] boom'], failedItems: [{ id: 'a' }] },
+    { name: 'Notes', message: 'Exported 2 of 2 notes', level: 'success', saved: ['n.zip'], errors: [], failedItems: [] }
+  ] });
+  assert.equal(c.level, 'warning'); // the worst of the categories, not the last
+  assert.deepEqual(c.lines, ['Sources: Exported 2 of 3 sources (1 failed, see errors.md)', 'Notes: Exported 2 of 2 notes']);
+  assert.deepEqual(c.saved, ['s.zip', 'n.zip']);
+  assert.deepEqual(c.errors.map(e => [e.type, e.title, e.message]), [['error', 'Sources: A', 'boom']]);
+  assert.deepEqual(c.remaining, { Sources: [{ id: 'a' }], Notes: [] });
+  assert.equal(c.remainingCount, 1);
+  assert.match(c.message, /^Retry finished/);
+  assert.match(c.message, /1 still failed/);
+});
+test('combineRetryOutcomes is a success only when every category is and nothing was skipped', () => {
+  const ok = { name: 'Notes', message: 'Exported 1 of 1 notes', level: 'success', saved: [], errors: [], failedItems: [] };
+  assert.equal(NLME.combineRetryOutcomes({ steps: [ok] }).level, 'success');
+  assert.equal(NLME.combineRetryOutcomes({ steps: [ok, { ...ok, level: 'error' }] }).level, 'error');
+  const stopped = NLME.combineRetryOutcomes({ steps: [ok], notRun: [{ name: 'Artifacts', failedItems: [1, 2] }] });
+  assert.equal(stopped.level, 'warning');
+  assert.match(stopped.message, /^Retry stopped before artifacts/);
+  assert.equal(stopped.remainingCount, 2); // the skipped category's items still failed
+  assert.deepEqual(stopped.remaining.Artifacts, [1, 2]);
+  assert.equal(NLME.combineRetryOutcomes({ steps: [ok, { ...ok, level: 'error' }] }).remainingCount, 0);
+});
+
+test('groupErrorsForPanel groups by type and caps entries', () => {
+  const errs = ['[A] boom', { type: 'message_skipped', message: 'm1' }, '[B] bang', { type: 'message_skipped', message: 'm2' }];
+  const g = NLME.groupErrorsForPanel(errs, { perGroup: 1 });
+  assert.deepEqual(g.map(x => [x.heading, x.count, x.entries.length, x.more]), [['Error', 2, 1, 1], ['Message skipped', 2, 1, 1]]);
+  assert.deepEqual(g[0].entries[0], { item: 'A', message: 'boom' });
+});
+test('composeOutcome adds the error note and audit note as warnings', () => {
+  const o = NLME.composeOutcome({ kind: 'messages', selected: 3, result: { exported: 3, failed: 0, cancelled: false }, auditOk: false, errorNote: '2 citation error(s), see errors.md' });
+  assert.equal(o.level, 'warning');
+  assert.match(o.message, /\(2 citation error\(s\), see errors\.md\) — some content is missing, see _audit\.md$/);
+});
+test('composeOutcome leaves the error note off a cancelled run', () => {
+  const o = NLME.composeOutcome({ kind: 'notes', selected: 4, result: { exported: 2, failed: 0, cancelled: true }, errorNote: 'x' });
+  assert.doesNotMatch(o.message, /\(x\)/);
+});
+
+test('takeoutZipChoice uses takeoutZip when it is a boolean, else autoZip', () => {
+  assert.equal(NLME.takeoutZipChoice({ takeoutZip: true, autoZip: false }), true);
+  assert.equal(NLME.takeoutZipChoice({ takeoutZip: false, autoZip: true }), false);
+  assert.equal(NLME.takeoutZipChoice({ autoZip: true }), true);
+  assert.equal(NLME.takeoutZipChoice({}), false);
+});
+
+test('zipName with an unknown total uses a -partN suffix', () => {
+  assert.equal(NLME.zipName({ notebook: 'NB', kind: 'artifacts', timestamp: 'T', part: 2, totalParts: null }), 'NB-artifacts-T-part2.zip');
+  assert.equal(NLME.zipName({ notebook: 'NB', kind: 'artifacts', timestamp: 'T', partial: true, part: 3, totalParts: null }), 'NB-artifacts-T-PARTIAL-part3.zip');
+  assert.equal(NLME.zipName({ notebook: 'NB', kind: 'artifacts', timestamp: 'T', part: 1, totalParts: 1 }), 'NB-artifacts-T.zip');
+  assert.equal(NLME.zipName({ notebook: 'NB', kind: 'artifacts', timestamp: 'T', part: 2, totalParts: 3 }), 'NB-artifacts-T-part2of3.zip');
+});
+
+test('filesByteSize sums the data size of each file entry', () => {
+  assert.equal(NLME.filesByteSize([]), 0);
+  assert.equal(NLME.filesByteSize(undefined), 0);
+  assert.equal(NLME.filesByteSize([
+    { path: 'a', data: new Blob(['12345']) },
+    { path: 'b', data: new ArrayBuffer(10) },
+    { path: 'c', data: new Uint8Array(7) },
+    { path: 'd', data: 'abc' },
+    { path: 'e', data: { size: 100 } },
+    { path: 'f', url: 'https://x/y' },
+    { path: 'g' }
+  ]), 5 + 10 + 7 + 3 + 100);
 });

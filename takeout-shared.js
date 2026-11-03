@@ -46,11 +46,18 @@
     return ICON_TO_TYPE[icon] || icon || 'Unknown';
   }
 
-  // Full Takeout chat follows the one Citation detail setting (the one-click export has no
-  // per-tab checkbox); 'quotes' is the default, so a missing value counts as quotes.
-  function takeoutChatFullCitations(settings) {
+  // Chat (the Chat tab and Full Takeout) follows the one Citation detail setting, the same
+  // one notes use: 'quotes' (default), 'titles' or 'none'. A missing or unknown value is 'quotes'.
+  function chatCitationMode(settings) {
     const detail = settings && settings.citationDetail;
-    return detail === undefined || detail === null || detail === 'quotes';
+    return detail === 'titles' || detail === 'none' ? detail : 'quotes';
+  }
+
+  // Full Takeout's own ZIP choice (the checkbox next to its button): takeoutZip when it has
+  // been set (a boolean), else the "Always use ZIP" setting (autoZip).
+  function takeoutZipChoice(settings) {
+    if (settings && typeof settings.takeoutZip === 'boolean') return settings.takeoutZip;
+    return !!(settings && settings.autoZip);
   }
 
   function isDownloadableType(type) {
@@ -317,6 +324,82 @@
       return { level: 'warning', message: `Exported ${exported} of ${selected} ${kind} (${failed} failed, see errors.md)`, partial: false };
     }
     return { level: 'success', message: `Exported ${exported} of ${selected} ${kind}`, partial: false };
+  }
+
+  // The end-of-export message and level: the outcome text, the errorNote in
+  // brackets (not on a cancelled run), then the audit note. Each note on top
+  // of the outcome is at least a warning.
+  function composeOutcome({ kind, selected, result = {}, auditOk = true, errorNote } = {}) {
+    const outcome = summarizeExportOutcome({
+      kind,
+      selected,
+      exported: result.exported,
+      failed: result.failed,
+      cancelled: result.cancelled
+    });
+    let message = outcome.message;
+    let level = outcome.level;
+    const note = text => {
+      message += text;
+      if (level !== 'error') level = 'warning';
+    };
+    if (errorNote && !result.cancelled) note(` (${errorNote})`);
+    if (!auditOk) note(' \u2014 some content is missing, see _audit.md');
+    return { message, level };
+  }
+
+  // Full Takeout's "Retry N failed" runs one export per category (Sources,
+  // Notes, Artifacts) and ends in ONE results panel. steps: each retried
+  // category's outcome { name, message, level, saved, errors, failedItems };
+  // notRun: categories a cancel or a declined dialog kept from running
+  // { name, failedItems } (their items still failed). Returns the panel's
+  // content: one line per category, the worst level, every ZIP, every error
+  // prefixed with its category, and what a further Retry would re-run.
+  function combineRetryOutcomes({ steps = [], notRun = [] } = {}) {
+    const rank = { success: 0, info: 0, warning: 1, error: 2 };
+    let level = 'success';
+    for (const s of steps) if ((rank[s.level] || 0) > rank[level]) level = s.level;
+    if (notRun.length && level === 'success') level = 'warning';
+
+    const remaining = {};
+    for (const s of steps) remaining[s.name] = s.failedItems || [];
+    for (const n of notRun) remaining[n.name] = n.failedItems || [];
+    const remainingCount = Object.values(remaining).reduce((sum, list) => sum + list.length, 0);
+
+    let message = notRun.length
+      ? `Retry stopped before ${notRun.map(n => n.name.toLowerCase()).join(' and ')}`
+      : 'Retry finished';
+    if (remainingCount > 0) message += ` \u2014 ${remainingCount} still failed`;
+
+    return {
+      message,
+      level,
+      lines: steps.map(s => `${s.name}: ${s.message}`),
+      saved: steps.flatMap(s => s.saved || []),
+      errors: steps.flatMap(s => prefixExportErrors(s.name, s.errors)),
+      remaining,
+      remainingCount
+    };
+  }
+
+  // The results panel's error list: groups by error type in first-seen
+  // order, at most perGroup entries each; `more` entries are in errors.md.
+  function groupErrorsForPanel(errors = [], { perGroup = 20 } = {}) {
+    const groups = new Map();
+    for (const raw of errors || []) {
+      const e = normalizeExportError(raw);
+      if (!groups.has(e.type)) groups.set(e.type, []);
+      groups.get(e.type).push({ item: e.item, message: e.message });
+    }
+    return [...groups].map(([type, list]) => {
+      const words = type.replace(/_/g, ' ');
+      return {
+        heading: words.charAt(0).toUpperCase() + words.slice(1),
+        count: list.length,
+        entries: list.slice(0, perGroup),
+        more: Math.max(0, list.length - perGroup)
+      };
+    });
   }
 
   // Gemini Notebook's own download links (More → Download opens one via
@@ -649,6 +732,13 @@
     return variants;
   }
 
+  // Settings for a Full Takeout's notes, sources and chat: a takeout always
+  // writes the with-images versions (for items that have images), whatever
+  // the user ticked for tab exports. The input is not changed.
+  function takeoutVariantSettings(settings = {}) {
+    return { ...settings, exportNoteWithImages: true, exportSourceWithImages: true };
+  }
+
   // A code fence the quote cannot close early: longer than its longest
   // backtick run, at least three.
   function fenceFor(text) {
@@ -776,10 +866,16 @@
   // next to each stem ('-code-blocks'): a stem is taken only if none of its
   // stem+suffix names is already in use, so "Diagram with images" cannot
   // overwrite the -with-images variant of "Diagram".
-  function uniqueStems(titles, suffixes = []) {
-    const used = new Set();
+  // `reserved` names (package files that share the folder, such as
+  // 'errors' or '_index' when the items sit next to them) are never handed out.
+  // Names compare after NFC normalization.
+  function uniqueStems(titles, suffixes = [], reserved = []) {
+    // Names compare as NFC, lower-cased: "Café" typed as e + combining accent
+    // and as the single é look identical and collide on a macOS disk
+    const fold = name => String(name).normalize('NFC').toLowerCase();
+    const used = new Set((reserved || []).map(fold));
     const endings = ['', ...suffixes];
-    const names = candidate => endings.map(s => (candidate + s).toLowerCase());
+    const names = candidate => endings.map(s => fold(candidate + s));
     return (titles || []).map(title => {
       const base = sanitizeFilename(title);
       let candidate = base;
@@ -793,6 +889,98 @@
   function notebookIdFromUrl(url) {
     const m = String(url || '').match(/\/notebook\/([^/?#]+)/);
     return m ? m[1] : '';
+  }
+
+  // ---- List view helpers (filter / sort / select toolbar) ----
+
+  const LIST_SORTS = ['notebook', 'title', 'type'];
+
+  function foldForSearch(s) {
+    return String(s == null ? '' : s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  }
+
+  // Stable per-item keys: "<type>\0<title>", the nth duplicate gets "#n" appended.
+  function listItemKeys(items, { titleOf, typeOf } = {}) {
+    const seen = new Map();
+    return (items || []).map(item => {
+      const base = `${typeOf(item)}\u0000${titleOf(item)}`;
+      const n = (seen.get(base) || 0) + 1;
+      seen.set(base, n);
+      return n >= 2 ? `${base}#${n}` : base;
+    });
+  }
+
+  // Visible indices (filtered and sorted) plus the type chips of the whole list.
+  function listView(items, { query = '', types = [], sort = 'notebook' } = {}, { titleOf, typeOf } = {}) {
+    const list = items || [];
+    const typeCounts = new Map();
+    list.forEach(item => {
+      const t = typeOf(item);
+      typeCounts.set(t, (typeCounts.get(t) || 0) + 1);
+    });
+    const typeOrder = [...typeCounts.keys()];
+    const chips = typeOrder.map(type => ({ type, count: typeCounts.get(type) }));
+
+    const words = foldForSearch(query).split(/\s+/).filter(Boolean);
+    const wanted = Array.isArray(types) && types.length ? new Set(types) : null;
+    let indices = [];
+    list.forEach((item, i) => {
+      const type = typeOf(item);
+      if (wanted && !wanted.has(type)) return;
+      if (words.length) {
+        const hay = `${foldForSearch(titleOf(item))} ${foldForSearch(type)}`;
+        if (!words.every(w => hay.includes(w))) return;
+      }
+      indices.push(i);
+    });
+
+    if (sort === 'title') {
+      const titles = list.map(item => String(titleOf(item) == null ? '' : titleOf(item)));
+      indices = indices.slice().sort((a, b) =>
+        titles[a].localeCompare(titles[b], undefined, { numeric: true, sensitivity: 'base' }) || a - b);
+    } else if (sort === 'type') {
+      indices = indices.slice().sort((a, b) =>
+        typeOrder.indexOf(typeOf(list[a])) - typeOrder.indexOf(typeOf(list[b])) || a - b);
+    }
+    return { indices, types: chips };
+  }
+
+  // Keeps only the selected keys that are still visible.
+  function pruneSelection(selectedKeys, visibleKeys) {
+    const visible = new Set(visibleKeys || []);
+    return new Set([...(selectedKeys || [])].filter(k => visible.has(k)));
+  }
+
+  function listSummary({ shown, total, selected } = {}) {
+    return `${shown} of ${total} shown · ${selected} selected`;
+  }
+
+  function listStateKey(notebookId, tab) {
+    return `nlme.list.${notebookId}.${tab}`;
+  }
+
+  // Rebuilds a list's toolbar state from storage, tolerating missing or malformed data.
+  // saved: { query, types, sort, selected, known? } (see sidebar-list.js savedShape).
+  function restoreListState(saved, { keys = [], types = null, defaultSelected } = {}) {
+    const s = saved && typeof saved === 'object' ? saved : {};
+    const query = typeof s.query === 'string' ? s.query : '';
+    const sort = LIST_SORTS.includes(s.sort) ? s.sort : 'notebook';
+    let chips = Array.isArray(s.types) ? s.types.filter(t => typeof t === 'string') : [];
+    if (Array.isArray(types)) chips = chips.filter(t => types.includes(t));
+    const keySet = new Set(keys);
+    let selected;
+    if (Array.isArray(s.selected)) {
+      selected = new Set(s.selected.filter(k => keySet.has(k)));
+      // `known`: the keys that existed at save time. An item that arrived since
+      // (a new source, a newly generated artifact) gets the tab default, so a
+      // remembered selection does not leave it unticked forever. A state saved
+      // without `known` stays a plain allow-list.
+      if (Array.isArray(s.known) && defaultSelected === 'all') {
+        const known = new Set(s.known);
+        for (const k of keys) if (!known.has(k)) selected.add(k);
+      }
+    } else selected = new Set(defaultSelected === 'all' ? keys : []);
+    return { query, types: chips, sort, selected };
   }
 
   // Notebook-level metadata shared by every front matter block and the manifest.
@@ -839,8 +1027,24 @@
   }
 
   // ZIP file name: "<Notebook>-<kind>-<timestamp>[-PARTIAL][-partNofM].zip".
+  // totalParts null means the total is unknown (size-split parts): "-partN".
   function zipName({ notebook, kind, timestamp, partial = false, part = 1, totalParts = 1 } = {}) {
-    return `${sanitizeFilename(notebook)}-${kind}-${timestamp}${partial ? '-PARTIAL' : ''}${totalParts > 1 ? `-part${part}of${totalParts}` : ''}.zip`;
+    const suffix = totalParts === null ? `-part${part}` : totalParts > 1 ? `-part${part}of${totalParts}` : '';
+    return `${sanitizeFilename(notebook)}-${kind}-${timestamp}${partial ? '-PARTIAL' : ''}${suffix}.zip`;
+  }
+
+  // Approximate bytes of the data held by a list of file entries (Blob,
+  // ArrayBuffer, typed array, string); url entries carry no data and count 0.
+  function filesByteSize(files) {
+    let total = 0;
+    for (const f of files || []) {
+      const d = f && f.data;
+      if (d == null) continue;
+      if (typeof d === 'string') total += d.length;
+      else if (typeof d.size === 'number') total += d.size;
+      else if (typeof d.byteLength === 'number') total += d.byteLength;
+    }
+    return total;
   }
 
   const ARTIFACT_FOLDERS = {
@@ -886,13 +1090,28 @@
   };
 
   // File extension for a downloaded artifact: the real file name in the URL
-  // wins, then the MIME type, then what the artifact type usually is.
+  // wins, then a known extension on the URL's path, then the MIME type, then any
+  // other extension on the path (so a real .jpeg beats the type guess, but a
+  // stray .php does not beat a correct MIME), then what the artifact type
+  // usually is.
   // `format` ('pdf'|'pptx') is the Slides format that was asked for: the
   // last-resort guess, so a PDF and a PowerPoint of one deck never share a name.
   function extensionFor({ url = '', mime = '', type = '', format = null } = {}) {
     const baseMime = String(mime || '').split(';')[0].trim().toLowerCase();
     const typeGuess = type === 'Slides' && format === 'pptx' ? '.pptx' : TYPE_EXTENSIONS[type];
-    return extensionFromDownloadUrl(url) || MIME_EXTENSIONS[baseMime] || typeGuess || '';
+    const pathExt = extensionFromUrlPath(url);
+    return extensionFromDownloadUrl(url) || (KNOWN_EXTENSIONS.has(pathExt) ? pathExt : '') ||
+      MIME_EXTENSIONS[baseMime] || pathExt || typeGuess || '';
+  }
+
+  // The extension of the URL's path (".jpeg" for https://x/y/photo.JPEG?w=1),
+  // lower-cased, '' when the last segment has none. extensionFor's
+  // fallback for extensions no list knows.
+  function extensionFromUrlPath(url) {
+    let u;
+    try { u = new URL(url); } catch { return ''; }
+    const m = u.pathname.split('/').pop().match(/(\.[a-z0-9]{2,5})$/i);
+    return m ? m[1].toLowerCase() : '';
   }
 
   // The Slides download formats to fetch for an artifact type: both for a
@@ -969,6 +1188,21 @@
       !((stats.skipped || []).length) && !(stats.collapsedRemaining > 0);
   }
 
+  // How many messages a chat scan "selected": the pairs it could read, or the
+  // messages the page showed when that is more (a chat of only unreadable
+  // messages is "0 of 3", not "0 of 0")
+  function chatSelectedCount(chatData) {
+    const pairs = ((chatData && chatData.messagePairs) || []).length;
+    return Math.max(pairs, (chatData && chatData.stats && chatData.stats.pairsInDom) || 0);
+  }
+
+  // Did a takeout category put anything on disk? Exported items, a ZIP, a part,
+  // or a package (packages: an errors-only package counts, and so does a
+  // folder-mode one, which has no ZIP name to show for it)
+  function categoryWritten(c) {
+    return c.exported > 0 || (c.zips || []).length > 0 || c.parts > 0 || c.packages > 0;
+  }
+
   // _index.md at the root of a Full Takeout: one row per category (Sources,
   // Notes, Chat, Artifacts) with its counts, status and folder, the ZIPs each
   // category wrote, and a link to the combined errors.md.
@@ -990,7 +1224,7 @@
       // failed without a package) has no folder; a category written in
       // several batches lives in part-N/ folders
       let folder = '—';
-      if (c.exported > 0 || (c.zips || []).length > 0) {
+      if (categoryWritten(c)) {
         if (c.parts > 1) folder = `${c.folder}/part-1/ … ${c.folder}/part-${c.parts}/`;
         else if (c.parts === 1) folder = `${c.folder}/part-1/`;
         else folder = `${c.folder}/`;
@@ -1109,7 +1343,7 @@ footer { margin-top: 3rem; }
     for (const c of categories) {
       let folder = '—';
       // Nothing written (empty, skipped, scan failed): no folder to link
-      if (c.exported > 0 || (c.zips || []).length > 0) {
+      if (categoryWritten(c)) {
         const dir = encodePath(c.folder);
         folder = c.parts >= 1
           ? Array.from({ length: c.parts }, (_, i) => `<a href="${dir}/part-${i + 1}/_index.html">part-${i + 1}</a>`).join(' · ')
@@ -1164,12 +1398,21 @@ footer { margin-top: 3rem; }
     summarizeTakeoutOutcome,
     takeoutCategoryStatus,
     chatScanIsEmpty,
+    chatSelectedCount,
+    categoryWritten,
     frontMatter,
     uniqueStems,
     notebookIdFromUrl,
+    listItemKeys,
+    listView,
+    pruneSelection,
+    listSummary,
+    listStateKey,
+    restoreListState,
     exportMeta,
     buildManifest,
     zipName,
+    filesByteSize,
     artifactFolder,
     extensionFor,
     slideFormatsFor,
@@ -1187,6 +1430,7 @@ footer { margin-top: 3rem; }
     toBlockquote,
     noteVariants,
     sourceVariants,
+    takeoutVariantSettings,
     isAllowedDownloadUrl,
     isNotebookDownload,
     NOTEBOOK_HOSTS,
@@ -1211,6 +1455,9 @@ footer { margin-top: 3rem; }
     isNotebookDownloadUrl,
     createInterceptArm,
     summarizeExportOutcome,
+    composeOutcome,
+    combineRetryOutcomes,
+    groupErrorsForPanel,
     createJobLock,
     createPhaseTimer,
     formatTimingSummary,
@@ -1230,7 +1477,8 @@ footer { margin-top: 3rem; }
     NOTE_ICONS,
     resolveArtifactType,
     isDownloadableType,
-    takeoutChatFullCitations,
+    chatCitationMode,
+    takeoutZipChoice,
     CITATION_TOOLTIP_SELECTOR,
     isCitationExpander,
     parseCitationIndex,

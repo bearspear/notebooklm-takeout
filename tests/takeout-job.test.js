@@ -145,3 +145,119 @@ test('runExportJob delivers seedErrors with the last batch when every item succe
   assert.deepEqual(result.errors, ['2 messages skipped']);
   assert.deepEqual(seedErrors, ['2 messages skipped'], 'the caller array is not mutated');
 });
+
+test('runExportJob returns the items that threw as failedItems', async () => {
+  const items = [{ title: 'a' }, { title: 'b' }, { title: 'c' }];
+  const r = await NLME.runExportJob({
+    kind: 'notes', items, isCancelled: () => false, packageBatch: async () => {},
+    extractOne: async (item, ctx) => { if (item.title === 'b') throw new Error('x'); if (item.title === 'c') ctx.warn('w'); return item; }
+  });
+  assert.deepEqual(r.failedItems, [items[1]]);
+});
+
+test('runExportJob tells packageBatch how many items were exported and failed so far', async () => {
+  const { run, calls } = harness({ items: items(5), perZip: 2, fail: ['N2', 'N5'] });
+  await run;
+  assert.deepEqual(calls.map(c => [c.exported, c.failed]), [[1, 1], [3, 1], [3, 2]]);
+});
+
+test('runExportJob counts on an errors-only package too', async () => {
+  const { run, calls } = harness({ items: items(2), fail: ['N1', 'N2'] });
+  await run;
+  assert.deepEqual(calls.map(c => [c.errorsOnly, c.exported, c.failed]), [[true, 0, 2]]);
+});
+
+// Size-based batching: flush a batch once its accumulated size reaches the cap
+function sizeHarness({ sizes, max = 500, fail = [], cancelAfter = Infinity }) {
+  const calls = []; let done = 0;
+  const its = sizes.map((size, i) => ({ title: String.fromCharCode(97 + i), size }));
+  const run = NLME.runExportJob({
+    kind: 'artifacts', items: its, perZip: Infinity, maxBatchBytes: max, sizeOf: r => r.size,
+    extractOne: async item => { done++; if (fail.includes(item.title)) throw new Error('boom'); return item; },
+    packageBatch: async (results, info) => { calls.push({ results: results.map(r => r.title), ...info, errors: [...info.errors] }); },
+    isCancelled: () => done >= cancelAfter
+  });
+  return { run, calls };
+}
+
+test('size batching flushes when the batch reaches the cap and numbers the packages', async () => {
+  const { run, calls } = sizeHarness({ sizes: [300, 300, 300] });
+  await run;
+  assert.deepEqual(calls.map(c => [c.results, c.batchIndex, c.isLast, c.multi, c.totalBatches]), [
+    [['a', 'b'], 1, false, true, null], [['c'], 2, true, true, null]]);
+});
+
+test('size batching under the cap is one single, non-multi package', async () => {
+  const { run, calls } = sizeHarness({ sizes: [100, 100] });
+  await run;
+  assert.deepEqual(calls.map(c => [c.results, c.batchIndex, c.isLast, c.multi, c.totalBatches]), [
+    [['a', 'b'], 1, true, false, null]]);
+});
+
+test('size batching gives an item bigger than the cap a package of its own', async () => {
+  const { run, calls } = sizeHarness({ sizes: [900, 10] });
+  await run;
+  assert.deepEqual(calls.map(c => [c.results, c.isLast, c.multi]), [[['a'], false, true], [['b'], true, true]]);
+});
+
+test('size batching flushes after the very last item as the last package', async () => {
+  const { run, calls } = sizeHarness({ sizes: [10, 600] });
+  await run;
+  assert.deepEqual(calls.map(c => [c.results, c.isLast, c.multi]), [[['a', 'b'], true, false]]);
+});
+
+test('size batching delivers errors only in the last package', async () => {
+  const { run, calls } = sizeHarness({ sizes: [300, 300, 300, 300], fail: ['a'] });
+  const r = await run;
+  assert.deepEqual(calls.map(c => [c.results, c.errors, c.exported, c.failed]), [
+    [['b', 'c'], [], 2, 1], [['d'], ['[a] boom'], 3, 1]]);
+  assert.deepEqual(r.errors, ['[a] boom']);
+});
+
+test('size batching writes an errors-only last package when the rest all failed', async () => {
+  const { run, calls } = sizeHarness({ sizes: [600, 10], fail: ['b'] });
+  await run;
+  assert.deepEqual(calls.map(c => [c.results, c.batchIndex, c.isLast, c.errorsOnly, c.multi, c.errors]), [
+    [['a'], 1, false, false, true, []], [[], 2, true, true, true, ['[b] boom']]]);
+});
+
+test('size batching cancel during the second batch delivers it as partial with the note', async () => {
+  const { run, calls } = sizeHarness({ sizes: [300, 300, 300, 300, 300], cancelAfter: 3 });
+  const r = await run;
+  assert.deepEqual(calls.map(c => [c.results, c.batchIndex, c.isLast, c.partial]), [
+    [['a', 'b'], 1, false, false], [['c'], 2, true, true]]);
+  assert.equal(calls[1].errors.length, 1);
+  assert.match(calls[1].errors[0], /Cancelled by user after 3 of 5/);
+  assert.equal(r.cancelled, true);
+});
+
+test('size batching without sizeOf keeps count-based batching and totalBatches', async () => {
+  const calls = [];
+  await NLME.runExportJob({
+    kind: 'notes', items: items(3), perZip: 2, maxBatchBytes: 10,
+    extractOne: async i => i, isCancelled: () => false,
+    packageBatch: async (r, info) => calls.push([r.length, info.totalBatches, info.multi])
+  });
+  assert.deepEqual(calls, [[2, 2, true], [1, 2, true]]);
+});
+
+test('count-based batching reports multi from totalBatches', async () => {
+  const { run, calls } = harness({ items: items(3), perZip: 2 });
+  await run;
+  assert.deepEqual(calls.map(c => c.multi), [true, true]);
+  const one = harness({ items: items(3) });
+  await one.run;
+  assert.deepEqual(one.calls.map(c => c.multi), [false]);
+});
+
+test('size batching drops delivered results so memory can be freed', async () => {
+  const seen = [];
+  await NLME.runExportJob({
+    kind: 'artifacts', items: [{ n: 1 }, { n: 2 }, { n: 3 }], maxBatchBytes: 5, sizeOf: () => 5,
+    extractOne: async i => ({ ...i }), isCancelled: () => false,
+    packageBatch: async results => { seen.push(results); }
+  });
+  assert.equal(seen.length, 3);
+  assert.equal(seen[0].length, 1);
+  assert.notEqual(seen[0], seen[1]);
+});

@@ -73,6 +73,13 @@ permissions or content scripts.
 
 Open a notebook, then use the tabs in the side panel.
 
+The Notes, Sources, Artifacts and Generated lists each have a toolbar with a filter box that matches
+titles and types, type chips with counts (shown when there is more than one type), a sort menu
+(notebook order, title A-Z, type) and a **Select all visible** checkbox that only touches the rows
+the filter leaves showing. Rows the filter hides are deselected, so an export never includes
+something you cannot see. The side panel remembers each notebook's filter, sort and selection per
+list, so it is still there after a rescan or when you reopen the panel.
+
 ### Sources
 
 1. **Sources** tab → **Scan Sources**.
@@ -112,8 +119,10 @@ The quoted passage from the source…
 
 1. **Chat** tab → **Scan Chat** (scrolls to load the whole history and opens collapsed
    citation groups).
-2. Optional: **Extract Full Citations** adds the quoted passage for every citation. This is
-   slower: it reads each citation's popup.
+2. Chat follows ⚙️ **Citation detail** (the line above Export Chat shows the current level):
+   Full quotes adds the quoted passage for every citation (slower: it reads each citation's
+   popup), Source titles only keeps the [n] links without quotes, No citations removes the
+   [n] markers and the Sources section.
 3. **Export Chat**. A clean single-version chat downloads as one file,
    `{notebook}-chat-{timestamp}.md`. With several versions, errors or a failed audit you get
    `{notebook}-chat-{timestamp}.zip` with `chat.md` (and `chat-code-blocks.md` /
@@ -122,18 +131,24 @@ The quoted passage from the source…
 
 ### Artifacts
 
-1. **Artifacts** tab lists everything in the Studio panel.
-2. Click **Download** on a row, or **Download All**.
+1. **Artifacts** tab lists everything in the Studio panel. Every downloadable artifact starts
+   selected; filter, sort or untick rows to choose what you want.
+2. Click **Download** on a row, or **Download Selected (N)** for the ticked rows.
    - **Download** saves one file named `[type]_Title.ext` (for example `[report]_Title.md`,
      `[mind-map]_Title.svg`). A Data Table or mind map saves as one ZIP (`[data-table]_Title.zip`, `[MINDMAP]_Title.zip`).
-   - With **ZIP off** (recommended for whole notebooks), **Download All** saves every file into
+   - With **ZIP off** (recommended for whole notebooks), **Download Selected** saves every ticked file into
      `Downloads/<Notebook name>/<type>/…`, one file at a time, so even large audio and video
      overviews work.
-   - With **ZIP on**, **Download All** writes one `{notebook}-artifacts-{timestamp}.zip` with
+   - With **ZIP on**, **Download Selected** writes one `{notebook}-artifacts-{timestamp}.zip` with
      type folders (`audio/ video/ slides/ infographics/ reports/ tables/ mind-maps/`), an
      `_index.md`, a `manifest.json` and `errors.md` when something failed. The side panel builds
-     it in memory, so a full notebook with audio/video can be too large for a ZIP; use folder
-     mode for those.
+     each ZIP in memory, so a big notebook is split into parts of about 500 MB:
+     `{notebook}-artifacts-{timestamp}-part1.zip`, `-part2.zip`, and so on. Each part has its
+     own type folders, `_index.md` and `manifest.json`. A part can pass 500 MB by one file, and a
+     single file over 500 MB gets a part of its own. Building a part briefly needs about twice its size in
+     memory, so a part can reach about 500 MB plus one large file and about twice that in memory. For notebooks
+     with multi-GB videos, ZIP off (a folder in Downloads) is still the lightest option.
+     Folder mode is not split (files go straight to disk).
    - Reports are always Markdown (with front matter), never raw HTML.
 3. Slide decks download as PDF or PowerPoint depending on **Settings → Slide deck format**.
 
@@ -142,14 +157,18 @@ The quoted passage from the source…
 The 📦 **Full Takeout** button in the panel header exports the whole notebook in one run:
 sources, then notes, then chat, then artifacts. It scans each category first, so the progress
 shows what is coming; a category with nothing in it is reported as "none in notebook". It
-uses your Settings (versions, citation detail, slide format) and the Artifacts tab's **Zip**
-toggle (the saved "Always use ZIP" setting until you open that tab). Chat follows
-⚙️ **Citation detail** too (Full quotes gives quoted chat citations, the other levels give
-titles-only sources); the Chat tab keeps its own **Extract Full Citations** checkbox for its
-own export. Every Slides artifact is saved twice, as `.pdf` and `.pptx`, whatever the slide
-format setting says (the Artifacts tab still uses that setting).
+uses your Settings (versions, citation detail, slide format). Its own **ZIP** checkbox sits next
+to the button: ticked gives one ZIP per category (artifacts may be split into parts of about 500 MB), unticked a folder in Downloads. The choice is
+remembered; until you change it, it follows the "Always use ZIP" setting. The Artifacts tab's
+**Zip** toggle no longer affects Full Takeout (it only applies to Download Selected). Chat follows
+⚙️ **Citation detail** too, the same as the Chat tab (Full quotes, Source titles only or No
+citations). Every Slides artifact is saved twice, as `.pdf` and `.pptx`, whatever the slide
+format setting says (the Artifacts tab still uses that setting). Notes, sources and chat also
+always get their `-with-images` versions (for items that have images), whatever the image
+checkboxes in Settings say, so a takeout is complete without extra setup; the tabs still follow
+your checkboxes. The cost is bigger and slower takeouts for notebooks with many images.
 
-*With ZIP on* you get one ZIP per category plus an index ZIP:
+*With ZIP on* you get one ZIP per category (artifacts may be split into parts of about 500 MB) plus an index ZIP:
 
 ```
 New-Physics-takeout-sources-2026-11-02T15-13-06.zip
@@ -171,24 +190,30 @@ New-Physics/
 ```
 
 Each category folder is a self-contained export: it holds that category's normal ZIP layout,
-with its own `_index.md` and `manifest.json` (so the links inside stay valid). That nests one
-level deeper than you might expect:
+with its own `_index.md` and `manifest.json` (so the links inside stay valid). Note and source
+files sit directly in their category folder:
 
 ```
 New-Physics/sources/_index.md           New-Physics/notes/_index.md
-New-Physics/sources/sources/<stem>.md   New-Physics/notes/notes/<stem>.md
-New-Physics/sources/manifest.json       New-Physics/notes/combined-notes.md
-New-Physics/chat/chat.md                New-Physics/artifacts/audio/<stem>.m4a
-New-Physics/chat/_index.md              New-Physics/artifacts/reports/<stem>.md
+New-Physics/sources/<stem>.md           New-Physics/notes/<stem>.md
+New-Physics/sources/manifest.json       New-Physics/notes/mind-maps/<stem>.svg
+New-Physics/chat/chat.md                New-Physics/notes/combined-notes.md
+New-Physics/chat/_index.md              New-Physics/artifacts/audio/<stem>.m4a
 ```
+
+(The YouTube URL lists of the sources sit there too: `New-Physics/sources/youtube-urls.txt`.)
 
 A category that needed several ZIPs (batch size under
 Settings) is split into `part-1/`, `part-2/`, … subfolders and the ZIPs are named
 `…-takeout-notes-<ts>-part1of3.zip`, so the parts never overwrite each other.
 
+The artifacts category is split the same way by size: with ZIP on, each ZIP holds about 500 MB
+(`…-takeout-artifacts-<ts>-part1.zip`, `-part2.zip`, …), and a split category unpacks to
+`artifacts/part-1/`, `artifacts/part-2/`, … The takeout index links each part.
+
 *With ZIP off* everything is saved into a folder `Downloads/<Notebook> takeout <timestamp>/`
 that contains the same `<Notebook>/` tree, so the files land at
-`Downloads/<Notebook> takeout <timestamp>/<Notebook>/sources/sources/…` (the `<Notebook>/`
+`Downloads/<Notebook> takeout <timestamp>/<Notebook>/sources/…` (the `<Notebook>/`
 folder is the one the ZIPs also unpack into). Audio, video and other media go from Google's servers to disk without
 passing through memory, so this is the mode for large notebooks.
 
@@ -201,11 +226,14 @@ category fails, the others still run.
 was exported so far is kept) and skips the remaining categories. The root index and
 `errors.md` are still written, so you can see exactly what you got.
 
-### Studio tab (optional)
+### Generated tab (optional)
 
-Enable it under **Settings → Show Studio tab**. It mirrors the Studio panel as one list with
-per-row **Download** and **Delete**, plus bulk actions. Delete asks you first, then confirms
-Gemini Notebook's own dialog.
+Enable it under **Settings → Show the Generated tab**. It lists everything Gemini Notebook
+generated as one list: the items in the Studio panel (notes, audio, slides, reports and so on)
+and the notes in the Sources panel's "Notes" group (type "Note (Sources panel)"). Every row has
+**Download**, and there are bulk actions. Studio items also have **Delete**, which asks you first
+and then confirms Gemini Notebook's own dialog. Sources-panel notes can't be deleted there yet;
+**Delete Selected** skips them and says so. Delete such a note in the Sources panel.
 
 ### Cancelling
 
@@ -216,6 +244,14 @@ anything failed (a note in it records the cancellation), and the message says ho
 were exported (e.g. "Cancelled: exported 4 of 10 notes"). For a Full Takeout see
 [Full Takeout](#full-takeout).
 
+### Results and Retry
+
+When an export ends, its outcome stays in a results panel under the progress area until you
+start another export or click **Dismiss**: what was exported, the ZIP names (or the Downloads
+folder) it was saved to, and the errors grouped by kind (collapsed; the first 20 of each, the
+rest are in `errors.md`). If items failed, **Retry N failed** exports just those again.
+(Chat exports have no Retry: re-export the chat.)
+
 Only one export, scan or download runs at a time. While one runs, the panel's other buttons
 are disabled and a second click shows "… is still running".
 
@@ -224,11 +260,11 @@ are disabled and a second click shows "… is still running".
 | Setting | Default | |
 |---|---|---|
 | Show download notifications | on | In-panel toast when a single download finishes (the extension sends no system notifications) |
-| Show Studio tab | off | Adds the Studio tab |
-| Always use ZIP for batch downloads | off | Default for the Artifacts ZIP toggle, also used by Full Takeout |
+| Show the Generated tab | off | Adds the Generated tab (the former Studio tab) |
+| Always use ZIP for batch downloads | off | Default for the Artifacts ZIP toggle, and the starting value of Full Takeout's ZIP checkbox |
 | Slide deck format | PDF | PDF or PowerPoint |
 | Source versions | base + metadata | Any mix of: base, with AI summary & topics, each optionally with images |
-| Citation detail | Full quotes | "Source titles only" skips reading each citation's popup: much faster, every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. |
+| Citation detail (notes and chat) | Full quotes | "Source titles only" skips reading each citation's popup: much faster, every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. |
 | Note versions | base + code blocks | Base always; code-block quotes and an image version are added only when a note has quotes or images |
 | Sources / notes per ZIP | 25 | Batch size for large exports |
 | Clean OCR artifacts from citations | on | Strips `~~~`, `:~:` and similar noise |
@@ -287,6 +323,13 @@ formula without LaTeX source will be rebuilt from its rendered form. `[FAIL]` on
 check means that export is likely broken. Please
 [open an issue](https://github.com/bearspear/notebooklm-takeout/issues) and paste the report.
 
+## Known limitations
+
+- Citation quotes from long, unpunctuated transcript sources, such as YouTube videos, are cut at
+  about 1,000 characters and can start or end mid-word. That is the window Gemini Notebook's
+  citation popover shows for such sources, and the exported quote matches the popover exactly.
+  Structured documents quote whole paragraphs.
+
 ## Troubleshooting
 
 | Problem | Try |
@@ -342,6 +385,8 @@ Plain JavaScript Manifest V3 extension: no build step, no npm dependencies.
 ```
 manifest.json         Manifest V3
 sidebar.html/.js      Side panel UI and export orchestration (Markdown, formulas, per-category runners)
+sidebar-list.js       List toolbar: filter, type chips, sort, select all visible, remembered state
+sidebar-results.js    Results panel (outcome, saved files, errors, Retry)
 sidebar-takeout.js    File writer (ZIP/folder/single), export shell and Full Takeout
 takeout-job.js        The one export job runner: batching, cancel, errors (unit tested)
 styles.css            Side panel styles
@@ -368,6 +413,30 @@ DOM behaviour is verified in Chrome with the health check and real exports.
 contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
+
+**1.5.0 (Nov 2026)**: find, retry, finish.
+- Every list (Artifacts, Notes, Sources, Generated) has a filter box, type chips, sorting and
+  "Select all visible", with "N of M shown · K selected". Each notebook remembers its choices.
+- The Artifacts tab downloads the selected items ("Download Selected"); everything is selected
+  by default. The download button on a Notes row exports just that note.
+- Export results stay in a panel (what was saved, errors grouped by type) with
+  "Retry N failed" for notes, sources and artifacts, also after a Full Takeout.
+- Full Takeout has its own ZIP checkbox next to 📦. The Artifacts tab's Zip tick now only affects
+  Download Selected.
+- The open list rescans when you switch to another notebook (another tab, or a notebook opened from
+  the home page). A stale chat scan is cleared.
+- Chat follows ⚙️ Citation detail (full quotes, source titles only, or no citations); its own
+  checkbox is gone.
+- ZIP exports of artifacts are split into parts of about 500 MB (`-part1.zip`, `-part2.zip`; in a
+  takeout `artifacts/part-1/`, …), so a big notebook no longer builds one huge ZIP in memory.
+- Full Takeout always includes `-with-images` versions for items that have images, and puts
+  notes and sources straight into `notes/` and `sources/` (no more `notes/notes/`).
+- Fixes: the takeout index keeps parts written before a failure and links folders that hold only
+  errors; unreadable chats count the messages on the page; downloads keep their real file
+  extension (e.g. `.jpeg`); names that differ only in Unicode form no longer overwrite each other;
+  Download All and Retry use the tab they were started from.
+- The Studio tab is now the Generated tab and also lists the notes in the Sources panel (download
+  only; they can't be deleted there yet). The setting keeps its saved value.
 
 **1.4.0 (Nov 2026)**: one-click Full Takeout and one layout everywhere.
 - New **Full Takeout** (📦): sources, notes, chat and artifacts of a notebook in one run, as one
@@ -424,7 +493,7 @@ contract with Gemini Notebook, past drift and recipes.
 - Added unit tests.
 
 **1.0.x (2026)**:
-- Studio tab and mind map export.
+- Studio tab (now the Generated tab) and mind map export.
 - KaTeX conversion.
 - ProseMirror note support.
 - Domain move to `notebook.google.com`.
