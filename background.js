@@ -79,7 +79,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         type: message.artifactType,
         timestamp: Date.now(),
         requestId: interceptRequestId,
-        intercept: true  // Flag to intercept and re-download
+        intercept: true,  // Flag to intercept and re-download
+        folder: message.folder || ''
       };
       pendingDownloads.push(interceptDownload);
       console.log('[Background] Intercept download queued:', interceptDownload.name, 'ID:', interceptRequestId);
@@ -313,7 +314,8 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
     // Create new filename with type prefix
     const typePrefix = getArtifactTypePrefix(pendingRequest.type);
     console.log('[Background] Artifact type:', pendingRequest.type, '-> prefix:', typePrefix);
-    let newFilename = `[${typePrefix}]_${sanitizeFilename(pendingRequest.name || 'download')}${extension}`;
+    let newFilename = NLME.downloadFolderPath(pendingRequest.folder,
+      `[${typePrefix}]_${sanitizeFilename(pendingRequest.name || 'download')}${extension}`);
 
     // Safety check: if still no extension, we'll try to get it in onDeterminingFilename
     if (!extension) {
@@ -410,6 +412,7 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
   const namedFile = namedDownloads.get(downloadItem.url) || namedDownloads.get(downloadItem.finalUrl);
   if (namedFile) {
     namedDownloads.delete(downloadItem.url);
+    if (downloadItem.finalUrl) namedDownloads.delete(downloadItem.finalUrl);
     suggest({ filename: namedFile, conflictAction: 'uniquify' });
     return true;
   }
@@ -534,6 +537,7 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
   let batchWasCancelled = false;
   batchStatus = 'Starting...';
   const downloadedFiles = [];
+  const itemsDownloaded = new Set(); // item indexes, so a mind map (2 files) counts once
   const errors = [];
 
   // We'll collect files as base64 and create zip at the end
@@ -588,6 +592,7 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
           const data = utf8ToBase64(text);
           fileContents.push({ filename, data, size: data.length });
           downloadedFiles.push(filename);
+          itemsDownloaded.add(i);
         }
         console.log('[Background] Added mind map (app frame) to collection:', base);
         continue;
@@ -602,6 +607,7 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
           const data = utf8ToBase64(text);
           fileContents.push({ filename, data, size: data.length });
           downloadedFiles.push(filename);
+          itemsDownloaded.add(i);
         }
         console.log('[Background] Added mind map to collection:', base);
         continue;
@@ -612,6 +618,7 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
         const filename = sanitizeFilename(item.label) + '.html';
         fileContents.push({ filename, data, size: data.length });
         downloadedFiles.push(filename);
+        itemsDownloaded.add(i);
         console.log('[Background] Added extracted content to collection:', filename);
         continue;
       }
@@ -651,6 +658,7 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
             size: fetchResult.size
           });
           downloadedFiles.push(filename);
+          itemsDownloaded.add(i);
           console.log('[Background] Added to collection:', filename, fetchResult.size, 'bytes');
         } else {
           errors.push(`${item.label}: Fetch failed - ${fetchResult.error}`);
@@ -692,7 +700,7 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
       });
 
       batchStatus = `Complete: ${downloadedFiles.length} files`;
-      return { success: true, cancelled: batchWasCancelled, count: downloadedFiles.length, errors };
+      return { success: true, cancelled: batchWasCancelled, count: itemsDownloaded.size, errors };
     } catch (zipError) {
       console.error('[Background] ZIP creation failed:', zipError);
       console.log('[Background] Falling back to individual file downloads...');
@@ -749,9 +757,9 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
       if (successCount > 0) {
         return {
           success: true,
-          count: successCount,
+          count: itemsDownloaded.size,
           warning: `ZIP creation failed. Downloaded ${successCount} files individually.`,
-          errors: fallbackErrors
+          errors: [...errors, ...fallbackErrors]
         };
       } else {
         return {

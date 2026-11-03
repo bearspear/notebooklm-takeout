@@ -1508,7 +1508,9 @@
 
         leave();
         if (!(await ensureTooltipGone())) {
-          return { success: false, error: `Citation ${spanIndex}: Popover did not close` };
+          // The quote above was read correctly; keep it. The next hover
+          // closes any leftover popover before reading (see above).
+          console.warn(`[NotebookLM Takeout] Citation ${spanIndex}: popover did not close after reading`);
         }
 
         if (attempt > 1) {
@@ -1712,9 +1714,12 @@
 
     // Wait a bit for content to fully render
     // Measure the note's TEXT (markup can settle before text loads)
-    await timePhase('note.content', () => waitForStable(
+    const noteReady = await timePhase('note.content', () => waitForStable(
       () => (content.isConnected ? content.textContent.trim().length : 0),
       { interval: 50, checks: 3, minLength: 20, timeout: 5000 }));
+    if (!noteReady && !(content.isConnected && content.textContent.trim().length > 0)) {
+      throw new Error('Note content did not load');
+    }
 
     // Check if it's a mindmap viewer
     if (content.tagName.toLowerCase() === 'mindmap-viewer') {
@@ -1860,8 +1865,12 @@
       if (existingViewers.length > 0) {
         // A leftover viewer would be picked up by the wait below as the new source
         console.log(`[NotebookLM Takeout] Closing existing source viewer(s)...`);
-        await closeSourceViewer();
+        if (!(await closeSourceViewer())) {
+          // Reading on would return the previous source under this title
+          return { error: 'Previous source could not be closed' };
+        }
       }
+      const sourceViewersBefore = new Set(document.querySelectorAll('source-viewer'));
 
       // Scroll into view first
       requestTimer.start('source.open');
@@ -1895,7 +1904,9 @@
 
       // Wait for source-viewer element with longer timeout (10 seconds for large PDFs)
       console.log(`[NotebookLM Takeout] Waiting for source-viewer to appear (timeout: 10s)...`);
-      const sourceViewer = await waitForElement('source-viewer', 10000);
+      // Only a newly opened, rendered viewer counts
+      const sourceViewer = await waitForElement('source-viewer', 10000, document,
+        { exclude: sourceViewersBefore, visible: true }).catch(() => null);
       if (!sourceViewer) {
         console.error('[NotebookLM Takeout] source-viewer not found after 10 seconds');
         console.error('[NotebookLM Takeout] DOM snapshot:', {
@@ -1918,7 +1929,11 @@
         const body = sourceViewer.querySelector('.scroll-container, labs-tailwind-doc-viewer, .ql-editor');
         return body ? body.textContent.trim().length : 0;
       };
-      await waitForStable(sourceBodyLength, { interval: 50, checks: 4, minLength: 50, timeout: 10000 });
+      const sourceReady = await waitForStable(sourceBodyLength, { interval: 50, checks: 4, minLength: 50, timeout: 10000 });
+      if (!sourceReady && sourceBodyLength() === 0) {
+        // Never export an empty body as a success
+        return { error: 'Source content did not load' };
+      }
 
       requestTimer.end('source.content');
       requestTimer.start('source.guide');
@@ -2596,7 +2611,8 @@
 
       // Wait for report-viewer to appear in the DOM
       console.log('[NotebookLM Takeout] Waiting for report-viewer...');
-      const reportViewer = await waitForElement('report-viewer', 5000, document, { exclude: viewersBefore, visible: true });
+      // Scoped to the Studio panel: the visible option also observes attributes
+      const reportViewer = await waitForElement('report-viewer', 5000, document.querySelector('studio-panel') || document, { exclude: viewersBefore, visible: true });
 
       if (!reportViewer) {
         throw new Error('report-viewer did not appear');
@@ -2740,7 +2756,8 @@
 
       // Wait for table-viewer to appear in the DOM
       console.log('[NotebookLM Takeout] Waiting for table-viewer...');
-      const tableViewer = await waitForElement('table-viewer', 5000, document, { exclude: viewersBefore, visible: true });
+      // Scoped to the Studio panel: the visible option also observes attributes
+      const tableViewer = await waitForElement('table-viewer', 5000, document.querySelector('studio-panel') || document, { exclude: viewersBefore, visible: true });
 
       if (!tableViewer) {
         throw new Error('table-viewer did not appear');

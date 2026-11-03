@@ -1012,7 +1012,9 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
       await chrome.runtime.sendMessage({
         type: 'START_INTERCEPT_DOWNLOAD',
         name: artifactName,
-        artifactType: artifactType
+        artifactType: artifactType,
+        // Download All folder mode: the fallback capture must land there too
+        folder: activeDownloadFolder
       });
 
       // Send download message to content script
@@ -1370,7 +1372,13 @@ async function scanPage() {
         }
 
         try {
-          await runExclusive('Artifact download', () => triggerItemDownload(tab.id, idx, item.label, item.type));
+          const outcome = await runExclusive('Artifact download', () => triggerItemDownload(tab.id, idx, item.label, item.type));
+          if (outcome === JOB_BUSY) {
+            // Refused: another job is running; nothing was downloaded
+            if (statusSpan) { statusSpan.textContent = ''; statusSpan.className = 'download-status'; }
+            btn.disabled = false;
+            return;
+          }
 
           // Show success status
           if (statusSpan) {
@@ -2509,12 +2517,20 @@ async function generateZipTimed(zip) {
 const jobLock = NLME.createJobLock();
 let jobTabId = null;
 
+// Returned by runExclusive when another job holds the lock
+const JOB_BUSY = Symbol('job-busy');
+
 async function runExclusive(name, fn) {
   if (!jobLock.tryAcquire(name)) {
     showToast(`${jobLock.current()} is still running`, 'warning');
-    return undefined;
+    return JOB_BUSY;
   }
   document.body.classList.add('job-running');
+  // Disable (not just dim) the tab controls so keyboard activation is
+  // blocked too; restore exactly the ones this job disabled
+  const disabledByJob = Array.from(document.querySelectorAll('.tab-content button, .tab-content input'))
+    .filter(el => !el.disabled && el.id !== 'cancel-download-btn');
+  disabledByJob.forEach(el => { el.disabled = true; });
   try {
     // Remember the job's tab: Cancel must reach it even after a tab switch
     try {
@@ -2528,6 +2544,7 @@ async function runExclusive(name, fn) {
     jobLock.release(name);
     jobTabId = null;
     document.body.classList.remove('job-running');
+    disabledByJob.forEach(el => { if (el.isConnected) el.disabled = false; });
   }
 }
 
