@@ -741,7 +741,7 @@ function setupEventListeners() {
   // Its ZIP choice is saved on its own (settings.takeoutZip); the settings panel need not be open
   document.getElementById('takeout-zip-checkbox')?.addEventListener('change', (e) => {
     settings.takeoutZip = e.target.checked;
-    chrome.storage.local.set({ settings });
+    chrome.storage.local.set({ settings }).catch(e2 => console.warn('[NotebookLM Takeout] Could not save the takeout ZIP choice:', e2));
   });
 
   // Health check panel
@@ -5526,7 +5526,7 @@ async function downloadAllArtifacts(tabId, items) {
  * @param {CategoryTarget & { bothSlideFormats?: boolean }} [target]
  *   bothSlideFormats: save every Slides artifact as PDF and PowerPoint
  *   (Full Takeout); otherwise the ⚙️ slides format alone
- * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, savedOutside: number, parts: 0, packages: number }>}
+ * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, savedOutside: number, parts: number, packages: number }>}
  *   savedOutside: items Chrome saved itself (no capturable URL)
  */
 async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artifacts', folder = null, bothSlideFormats = false, written = newWritten() } = {}) {
@@ -5624,7 +5624,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
     }
   });
 
-  return { result, zips: written.zips, errors: result.errors, auditOk: true, savedOutside, parts: 0, packages: written.count };
+  return { result, zips: written.zips, errors: result.errors, auditOk: true, savedOutside, parts: written.parts, packages: written.count };
 }
 
 /**
@@ -5633,7 +5633,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
  *
  * @param {object[]} files every artifact file in the export (type-folder paths)
  * @param {object[]} exportedItems the items those files came from
- * @param {{ meta: object, info: { errors: Array, partial: boolean }, part?: number, totalParts?: number|null }} options
+ * @param {{ meta: object, info: { errors: Array, partial: boolean, multi?: boolean, isLast?: boolean }, part?: number, totalParts?: number|null }} options
  *   part/totalParts: this ZIP's place in a size-split export (totalParts null: unknown)
  */
 function artifactsRootFiles(files, exportedItems, { meta, info, part = 1, totalParts = 1 }) {
@@ -5655,6 +5655,9 @@ function artifactsRootFiles(files, exportedItems, { meta, info, part = 1, totalP
     folders.get(typeFolder).labels.push(item.label);
   }
 
+  // In a split export errors.md exists only in the last part
+  const errorsRef = info.multi && !info.isLast ? 'errors.md in the last part' : 'errors.md';
+
   let index = `# Artifacts — ${meta.notebook}\n\n`;
   index += `Generated: ${new Date().toLocaleString()}\n\n`;
   if (part > 1 || totalParts !== 1) index += `**Part ${part}**\n\n`;
@@ -5667,7 +5670,7 @@ function artifactsRootFiles(files, exportedItems, { meta, info, part = 1, totalP
       index += `### ${label}\n\n`;
       index += own.length
         ? own.map(f => `- [${f.path.slice(typeFolder.length + 1)}](${encodeURI(f.path)})`).join('\n') + '\n\n'
-        : '- Saved separately to Downloads (see errors.md)\n\n';
+        : `- Saved separately to Downloads (see ${errorsRef})\n\n`;
     }
   }
   if (errors.length > 0) {
