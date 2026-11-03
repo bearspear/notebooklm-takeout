@@ -1219,3 +1219,70 @@ test('pruneCitationBuckets keeps the most recent notebooks', () => {
 test('citationCacheBucketKey is per notebook', () => {
   assert.equal(NLME.citationCacheBucketKey('abc'), 'nlme.cite.abc');
 });
+
+// --- citation cache storage wrappers (fake chrome.storage.local) ---
+function fakeStorage(initial = {}, { failGet = false, failSet = false } = {}) {
+  const data = { ...initial };
+  return {
+    data,
+    async get(keys) {
+      if (failGet) throw new Error('get failed');
+      if (keys === null || keys === undefined) return { ...data };
+      const out = {};
+      for (const k of [].concat(keys)) if (k in data) out[k] = data[k];
+      return out;
+    },
+    async set(obj) {
+      if (failSet) throw new Error('quota');
+      Object.assign(data, JSON.parse(JSON.stringify(obj)));
+    },
+    async remove(keys) { for (const k of [].concat(keys)) delete data[k]; }
+  };
+}
+const srcs = [{ index: 1, text: 'T', quote: 'Q', href: '', sourceIndex: 1 }];
+
+test('citationCacheWrite then citationCacheRead round-trips and keeps order', async () => {
+  const st = fakeStorage();
+  const two = [{ index: 1, text: 'A', quote: 'a', sourceIndex: 3 }, { index: 2, text: 'B', quote: 'b', sourceIndex: 1 }];
+  assert.equal(await NLME.citationCacheWrite(st, 'nb1', 'note:k', two, { now: 10 }), true);
+  assert.deepEqual(await NLME.citationCacheRead(st, 'nb1', 'note:k'), two);
+  assert.equal(await NLME.citationCacheRead(st, 'nb1', 'note:other'), null);
+  assert.equal(await NLME.citationCacheRead(st, 'nb2', 'note:k'), null);
+  assert.deepEqual(st.data['nlme.cite.meta'], { 'nlme.cite.nb1': 10 });
+});
+
+test('citationCacheWrite prunes old notebooks and removes their buckets', async () => {
+  const st = fakeStorage();
+  for (let i = 1; i <= 4; i++) await NLME.citationCacheWrite(st, 'nb' + i, 'k', srcs, { now: i, keep: 2 });
+  assert.deepEqual(Object.keys(st.data).filter(k => k !== 'nlme.cite.meta').sort(), ['nlme.cite.nb3', 'nlme.cite.nb4']);
+  assert.deepEqual(Object.keys(st.data['nlme.cite.meta']).sort(), ['nlme.cite.nb3', 'nlme.cite.nb4']);
+});
+
+test('citation cache helpers never throw on storage errors or a missing notebook id', async () => {
+  const bad = fakeStorage({}, { failGet: true, failSet: true });
+  assert.equal(await NLME.citationCacheRead(bad, 'nb', 'k'), null);
+  assert.equal(await NLME.citationCacheWrite(bad, 'nb', 'k', srcs, { now: 1 }), false);
+  assert.equal(await NLME.citationCacheClear(bad), false);
+  const ok = fakeStorage();
+  assert.equal(await NLME.citationCacheRead(ok, '', 'k'), null);
+  assert.equal(await NLME.citationCacheWrite(ok, '', 'k', srcs, { now: 1 }), false);
+  assert.equal(await NLME.citationCacheRead(null, 'nb', 'k'), null);
+  assert.equal(await NLME.citationCacheWrite(undefined, 'nb', 'k', srcs, { now: 1 }), false);
+  assert.deepEqual(ok.data, {});
+});
+
+test('citationCacheClear removes every nlme.cite.* key and nothing else', async () => {
+  const st = fakeStorage({ settings: { a: 1 }, 'nlme.cite.nb1': { entries: {} }, 'nlme.cite.meta': {}, 'nlme.other': 1 });
+  assert.equal(await NLME.citationCacheClear(st), true);
+  assert.deepEqual(Object.keys(st.data).sort(), ['nlme.other', 'settings']);
+});
+
+test('citationSourcesComplete accepts only full sets with quotes', () => {
+  const ok = [{ text: 'A', quote: 'a' }, { text: 'B', quote: 'b' }];
+  assert.equal(NLME.citationSourcesComplete(ok, 2), true);
+  assert.equal(NLME.citationSourcesComplete(ok, 3), false);
+  assert.equal(NLME.citationSourcesComplete([{ text: 'A', quote: '' }], 1), false);
+  assert.equal(NLME.citationSourcesComplete([{ text: '', quote: 'a' }], 1), false);
+  assert.equal(NLME.citationSourcesComplete([], 0), false);
+  assert.equal(NLME.citationSourcesComplete(null, 1), false);
+});

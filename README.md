@@ -265,6 +265,7 @@ are disabled and a second click shows "… is still running".
 | Slide deck format | PDF | PDF or PowerPoint |
 | Source versions | base + metadata | Any mix of: base, with AI summary & topics, each optionally with images |
 | Citation detail (notes and chat) | Full quotes | "Source titles only" skips reading each citation's popup: much faster, every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. |
+| Reuse citation quotes from earlier exports | on | Notes and chat answers that have not changed since an earlier full-quote export take their citation quotes from a local cache instead of hovering every marker again (much faster re-exports). Not used for "Source titles only", "No citations" or image versions; only complete reads are stored. **Clear citation cache** empties it, for example after you edit a source. The `_audit.md` and `_index.md` show "Citations from cache: N of M items" when it was used. |
 | Note versions | base + code blocks | Base always; code-block quotes and an image version are added only when a note has quotes or images |
 | Sources / notes per ZIP | 25 | Batch size for large exports |
 | Clean OCR artifacts from citations | on | Strips `~~~`, `:~:` and similar noise |

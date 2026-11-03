@@ -498,7 +498,9 @@ let settings = {
   slidesFormat: 'pdf',
   // Note citations: 'quotes' hovers every marker; 'titles' takes source
   // titles from the markers only (no hovering); 'none' drops markers and Sources
-  citationDetail: 'quotes'
+  citationDetail: 'quotes',
+  // Milestone 3c: reuse citation quotes read by an earlier export (quotes mode, no images)
+  reuseCitations: true
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -644,6 +646,7 @@ async function loadSettings() {
   document.getElementById('show-studio-tab-checkbox').checked = settings.showStudioTab;
   document.getElementById('slides-format-select').value = settings.slidesFormat;
   document.getElementById('citation-detail-select').value = settings.citationDetail;
+  document.getElementById('reuse-citations-checkbox').checked = settings.reuseCitations !== false;
   applyStudioTabVisibility();
   updateChatCitationInfo();
 }
@@ -709,6 +712,7 @@ async function saveSettings() {
   settings.slidesFormat = document.getElementById('slides-format-select').value === 'pptx' ? 'pptx' : 'pdf';
   settings.citationDetail = ['titles', 'none'].includes(document.getElementById('citation-detail-select').value)
     ? document.getElementById('citation-detail-select').value : 'quotes';
+  settings.reuseCitations = document.getElementById('reuse-citations-checkbox').checked;
   applyStudioTabVisibility();
   updateChatCitationInfo();
 
@@ -729,6 +733,12 @@ function setupEventListeners() {
 
   document.getElementById('settings-btn').addEventListener('click', () => {
     document.getElementById('settings-panel').style.display = 'block';
+  });
+
+  document.getElementById('clear-citation-cache-btn')?.addEventListener('click', async () => {
+    if (jobLock.current()) { showToast(`${jobLock.current()} is still running`, 'warning'); return; }
+    if (await NLME.citationCacheClear(chrome.storage.local)) showToast('Citation cache cleared', 'success');
+    else showToast('Could not clear the citation cache', 'error');
   });
 
   document.getElementById('close-settings-btn').addEventListener('click', () => {
@@ -2546,9 +2556,23 @@ let exportTimer = null;
 let exportStartedAt = 0;
 let lastChatScanTiming = null;
 
+// Citation cache use this export (Milestone 3c): items whose citation quotes
+// were read (hits: reused from the cache instead of hovering)
+let citationCacheTally = { hits: 0, items: 0 };
+
+function tallyCitationCache(fromCache, audit = null) {
+  citationCacheTally.items++;
+  if (fromCache) citationCacheTally.hits++;
+  if (audit) {
+    audit.cachedItems = (audit.cachedItems || 0) + 1;
+    if (fromCache) audit.cacheHits = (audit.cacheHits || 0) + 1;
+  }
+}
+
 function startExportTiming() {
   exportTimer = NLME.createPhaseTimer();
   exportStartedAt = performance.now();
+  citationCacheTally = { hits: 0, items: 0 };
 }
 
 function mergeTiming(response) {
@@ -2559,7 +2583,9 @@ function timingSummary() {
   if (!exportTimer) return '';
   const summary = NLME.formatTimingSummary(exportTimer.totals(), performance.now() - exportStartedAt);
   console.log('[NotebookLM Takeout][timing]\n' + summary);
-  return '\n' + summary;
+  const cacheLine = citationCacheTally.hits > 0
+    ? `- Citations from cache: ${citationCacheTally.hits} of ${citationCacheTally.items} items\n` : '';
+  return '\n' + summary + cacheLine;
 }
 
 // Export audit (Milestone 2, Resilience #1): what the page showed vs what
@@ -2583,7 +2609,9 @@ function addCitationCoverage(audit, html, sources, needQuotes, page = null) {
 }
 
 function newAudit() {
-  return { expected: { items: 0, citations: 0, formulas: 0 }, written: { items: 0, citations: 0, formulas: 0 } };
+  // cacheHits / cachedItems: items whose citation quotes came from the cache
+  // / items that had citations to read (Milestone 3c)
+  return { expected: { items: 0, citations: 0, formulas: 0 }, written: { items: 0, citations: 0, formulas: 0 }, cacheHits: 0, cachedItems: 0 };
 }
 
 // Converts and counts formulas: .katex on the page vs formulas in the final
@@ -2599,7 +2627,8 @@ function convertCounted(audit, html, convert, page = null) {
 
 function auditMarkdown(title, audit) {
   const result = NLME.auditExport(audit);
-  return { ok: result.ok, text: `# ${title} Audit\n\nWhat the page showed vs what was exported:\n\n${result.lines.join('\n')}\n` };
+  const cacheLine = audit.cacheHits > 0 ? `\nCitations from cache: ${audit.cacheHits} of ${audit.cachedItems} items\n` : '';
+  return { ok: result.ok, text: `# ${title} Audit\n\nWhat the page showed vs what was exported:\n\n${result.lines.join('\n')}\n${cacheLine}` };
 }
 
 async function generateZipTimed(zip) {
@@ -3097,7 +3126,8 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
         sourceIndex: note.sourceIndex,
         // Only download images if user has enabled an image version
         includeCitationImages: !!variantSettings.exportNoteWithImages,
-        citationDetail: settings.citationDetail
+        citationDetail: settings.citationDetail,
+        reuseCitations: settings.reuseCitations !== false
       }
     });
     console.log('[NotebookLM Takeout] Note data received:', noteData);
@@ -3126,6 +3156,7 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
       }
       if (notePage.citationNumbers.length > 0 && settings.citationDetail === 'quotes') {
         state.notesWithMarkers++;
+        tallyCitationCache(noteData.fromCache === true, state.audit);
         if ((noteData.sources || []).length === 0) state.unreadNotes++;
       }
       if (state.notesWithMarkers === 3 && state.unreadNotes === 3) {
@@ -3240,7 +3271,8 @@ async function exportSingleNote(note) {
         noteTitle: note.title,
         sourceIndex: note.sourceIndex,
         includeCitationImages: needsImages,
-        citationDetail: settings.citationDetail
+        citationDetail: settings.citationDetail,
+        reuseCitations: settings.reuseCitations !== false
       }
     });
   } finally {
@@ -4483,18 +4515,20 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
  *   variantSettings: where the export* variant settings come from (default `settings`)
  * @returns {Promise<object>} ProcessedMessage: { date, userMessage,
  *   aiResponseHTML, sources: [{ sourceIndex, text, quote }], fullCitations,
- *   stats: { hasCitations, citationsFound, successfulExtractions, failedExtractions } }
+ *   stats: { hasCitations, citationsFound, successfulExtractions, failedExtractions }, fromCache }
  */
 async function extractChatPair(shell, pair, ctx, { citationMode = 'quotes', total, variantSettings = settings }) {
   const n = ctx.index + 1;
   const stats = { hasCitations: false, citationsFound: 0, successfulExtractions: 0, failedExtractions: 0 };
+  let fromCache = false; // citation quotes reused from the cache (Milestone 3c)
   const message = sources => ({
     date: pair.date,
     userMessage: pair.userMessage,
     aiResponseHTML: pair.aiResponseHTML,
     sources,
     fullCitations: citationMode === 'quotes',
-    stats
+    stats,
+    fromCache
   });
   const warn = (type, msg, extra = {}) => ctx.warn({
     message: msg,
@@ -4570,41 +4604,76 @@ async function extractChatPair(shell, pair, ctx, { citationMode = 'quotes', tota
         const sourceIndices = Array.from(messageSources.keys());
         console.log(`[NotebookLM Takeout] Message ${n}: Extracting sourceIndices:`, sourceIndices);
 
-        // Call content script to extract citations by temporarily inserting HTML
-        exportTimer?.start('chat.citations');
-        const fullCitationData = await chrome.tabs.sendMessage(shell.tab.id, {
-          type: 'EXTRACT_MESSAGE_CITATIONS',
-          data: {
-            messageIndex: pair.domIndex ?? ctx.index,
-            messageHTML: pair.aiResponseHTML,
-            sourceIndices: sourceIndices,
-            includeCitationImages: !!variantSettings.exportNoteWithImages
-          }
-        });
-
-        console.log(`[NotebookLM Takeout] Message ${n}: Received citation data:`, fullCitationData);
-        exportTimer?.end('chat.citations');
-        mergeTiming(fullCitationData);
-
-        // Merge quotes into messageSources
-        if (fullCitationData && fullCitationData.sourcesByIndex) {
-          messageSources.forEach((source, sourceIndex) => {
-            const fullData = fullCitationData.sourcesByIndex[sourceIndex];
-            if (fullData) {
-              source.text = fullData.text || source.text;
-              source.quote = fullData.quote || '';
-              stats.successfulExtractions++;
-              console.log(`[NotebookLM Takeout] Message ${n}, source ${sourceIndex}: Updated with quote (${source.quote.length} chars)`);
-            } else {
-              stats.failedExtractions++;
+        // Citation cache (Milestone 3c): same answer text and source numbers as
+        // an earlier complete read -> reuse the quotes; never with images
+        const cacheOn = settings.reuseCitations !== false && !variantSettings.exportNoteWithImages;
+        const cacheNotebookId = NLME.notebookIdFromUrl(shell.tab.url);
+        const cacheKey = cacheOn
+          ? NLME.citationCacheKey({ kind: 'chat', text: tempDiv.textContent, numbers: sourceIndices })
+          : null;
+        const cached = cacheOn ? await NLME.citationCacheRead(chrome.storage.local, cacheNotebookId, cacheKey) : null;
+        const cachedOk = !!cached && cached.length === sourceIndices.length &&
+          cached.every((c, i) => c && String(c.sourceIndex) === String(sourceIndices[i]));
+        tallyCitationCache(cachedOk);
+        if (cachedOk) {
+          fromCache = true;
+          cached.forEach(c => {
+            const source = messageSources.get(String(c.sourceIndex));
+            source.text = c.text || source.text;
+            source.quote = c.quote || '';
+            stats.successfulExtractions++;
+          });
+          console.log(`[NotebookLM Takeout] Message ${n}: Citation cache hit, ${cached.length} quote(s) reused`);
+        } else {
+          // Call content script to extract citations by temporarily inserting HTML
+          exportTimer?.start('chat.citations');
+          const fullCitationData = await chrome.tabs.sendMessage(shell.tab.id, {
+            type: 'EXTRACT_MESSAGE_CITATIONS',
+            data: {
+              messageIndex: pair.domIndex ?? ctx.index,
+              messageHTML: pair.aiResponseHTML,
+              sourceIndices: sourceIndices,
+              includeCitationImages: !!variantSettings.exportNoteWithImages
             }
           });
-        }
 
-        // Track any errors
-        if (fullCitationData && fullCitationData.errors && fullCitationData.errors.length > 0) {
-          stats.failedExtractions += fullCitationData.errors.length;
-          fullCitationData.errors.forEach(err => warn('citation_extraction', err));
+          console.log(`[NotebookLM Takeout] Message ${n}: Received citation data:`, fullCitationData);
+          exportTimer?.end('chat.citations');
+          mergeTiming(fullCitationData);
+
+          // Merge quotes into messageSources
+          if (fullCitationData && fullCitationData.sourcesByIndex) {
+            messageSources.forEach((source, sourceIndex) => {
+              const fullData = fullCitationData.sourcesByIndex[sourceIndex];
+              if (fullData) {
+                source.text = fullData.text || source.text;
+                source.quote = fullData.quote || '';
+                stats.successfulExtractions++;
+                console.log(`[NotebookLM Takeout] Message ${n}, source ${sourceIndex}: Updated with quote (${source.quote.length} chars)`);
+              } else {
+                stats.failedExtractions++;
+              }
+            });
+          }
+
+          // Track any errors
+          if (fullCitationData && fullCitationData.errors && fullCitationData.errors.length > 0) {
+            stats.failedExtractions += fullCitationData.errors.length;
+            fullCitationData.errors.forEach(err => warn('citation_extraction', err));
+          }
+
+          // Store only a complete read: every source has a filename and a quote
+          // and nothing was reported as failed (never a partial result)
+          if (cacheKey && !(fullCitationData && fullCitationData.errors && fullCitationData.errors.length > 0)) {
+            const toStore = sourceIndices.map(si => {
+              const src = messageSources.get(si);
+              return { sourceIndex: si, text: src.text, quote: src.quote };
+            });
+            const readAll = sourceIndices.every(si => fullCitationData && fullCitationData.sourcesByIndex && fullCitationData.sourcesByIndex[si]);
+            if (readAll && NLME.citationSourcesComplete(toStore, sourceIndices.length)) {
+              await NLME.citationCacheWrite(chrome.storage.local, cacheNotebookId, cacheKey, toStore);
+            }
+          }
         }
       } catch (error) {
         console.error(`[NotebookLM Takeout] Message ${n}: Error extracting full citations:`, error);
@@ -4648,6 +4717,11 @@ function buildChatAuditDoc(chatData, messages, citationMode = 'quotes') {
   const audit = newAudit();
   audit.expected.items = chatData.stats?.pairsInDom ?? chatData.messagePairs.length;
   audit.written.items = messages.length;
+  if (citationMode === 'quotes') {
+    // Answers whose quotes came from the cache (Milestone 3c)
+    audit.cachedItems = messages.filter(m => m && m.stats && m.stats.citationsFound > 0).length;
+    audit.cacheHits = messages.filter(m => m && m.fromCache).length;
+  }
   if (citationMode !== 'none') {
     chatData.messagePairs.forEach((pair, i) => {
       addCitationCoverage(audit, pair.aiResponseHTML, messages[i] ? messages[i].sources : [], citationMode === 'quotes');

@@ -328,6 +328,15 @@
         </div>
 
         <div class="setting-group">
+          <label class="toggle-setting">
+            <input type="checkbox" id="reuse-citations-checkbox" checked>
+            <span>Reuse citation quotes from earlier exports (faster re-exports)</span>
+          </label>
+          <p class="setting-help">When a note or chat answer has not changed since an earlier full-quote export, its citation quotes are read from a local cache instead of hovering every marker again. Not used when an "images" version is exported. If a source was edited, clear the cache.</p>
+          <button id="clear-citation-cache-btn" class="btn btn-secondary btn-small" type="button">Clear citation cache</button>
+        </div>
+
+        <div class="setting-group">
           <label style="font-weight: 500; display: block; margin-bottom: 8px;">Export Versions (select which file types to create)</label>
           <p class="setting-help" style="margin-top: 0; margin-bottom: 12px;">Choose which combinations of note files to export. At least one version must be selected.</p>
 

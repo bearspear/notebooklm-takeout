@@ -1452,6 +1452,70 @@ footer { margin-top: 3rem; }
       .map(x => x.m.key);
   }
 
+  // --- Citation cache storage wrappers ---------------------------------
+  // `storage` is chrome.storage.local (passed in so this stays testable).
+  // Nothing here throws: a storage failure means "no cache", never a failed
+  // export. Layout: one bucket per notebook at nlme.cite.<id>, plus
+  // nlme.cite.meta = { bucketKey: newestAt } for pruning old notebooks.
+  // Read-modify-write is not atomic across contexts; the side panel's job lock
+  // guarantees one export at a time, so content.js and sidebar.js never write
+  // concurrently.
+  const CITE_META_KEY = 'nlme.cite.meta';
+
+  async function citationCacheRead(storage, notebookId, key) {
+    if (!storage || !notebookId) return null;
+    try {
+      const bucketKey = citationCacheBucketKey(notebookId);
+      const stored = await storage.get(bucketKey);
+      return cacheGet(stored && stored[bucketKey], key);
+    } catch (e) {
+      console.warn('[NotebookLM Takeout] Citation cache read failed:', e);
+      return null;
+    }
+  }
+
+  async function citationCacheWrite(storage, notebookId, key, sources, { now = Date.now(), maxBytes, keep } = {}) {
+    if (!storage || !notebookId) return false;
+    try {
+      const bucketKey = citationCacheBucketKey(notebookId);
+      const stored = await storage.get([bucketKey, CITE_META_KEY]);
+      const putOpts = { now };
+      if (maxBytes !== undefined) putOpts.maxBytes = maxBytes;
+      const bucket = cachePut(stored && stored[bucketKey], key, sources, putOpts);
+      const meta = { ...((stored && stored[CITE_META_KEY]) || {}), [bucketKey]: now };
+      const pruneOpts = keep !== undefined ? { keep } : {};
+      const evicted = pruneCitationBuckets(Object.keys(meta).map(k => ({ key: k, at: meta[k] })), pruneOpts)
+        .filter(k => k !== bucketKey);
+      evicted.forEach(k => { delete meta[k]; });
+      await storage.set({ [bucketKey]: bucket, [CITE_META_KEY]: meta });
+      if (evicted.length) await storage.remove(evicted);
+      return true;
+    } catch (e) {
+      console.warn('[NotebookLM Takeout] Citation cache write failed:', e);
+      return false;
+    }
+  }
+
+  async function citationCacheClear(storage) {
+    if (!storage) return false;
+    try {
+      const all = await storage.get(null);
+      const keys = Object.keys(all || {}).filter(k => k.startsWith('nlme.cite.'));
+      if (keys.length) await storage.remove(keys);
+      return true;
+    } catch (e) {
+      console.warn('[NotebookLM Takeout] Citation cache clear failed:', e);
+      return false;
+    }
+  }
+
+  // A result is cacheable only when every expected marker produced a source
+  // with a filename and a non-empty quote (partial results are never stored).
+  function citationSourcesComplete(sources, expectedCount) {
+    return Array.isArray(sources) && expectedCount > 0 && sources.length === expectedCount &&
+      sources.every(s => s && typeof s.text === 'string' && s.text !== '' && typeof s.quote === 'string' && s.quote !== '');
+  }
+
   const NLME = {
     buildRootIndex,
     buildIndexHtml,
@@ -1550,7 +1614,11 @@ footer { margin-top: 3rem; }
     citationCacheBucketKey,
     cacheGet,
     cachePut,
-    pruneCitationBuckets
+    pruneCitationBuckets,
+    citationCacheRead,
+    citationCacheWrite,
+    citationCacheClear,
+    citationSourcesComplete
   };
 
   root.NLME = NLME;

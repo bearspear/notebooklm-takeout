@@ -79,6 +79,7 @@
   let exportCancelled = false;
   let includeCitationImages = false; // Global setting for including images in citations
   let citationDetailMode = 'quotes';   // 'quotes' (hover each marker) | 'titles' (no hovering; also used for 'none')
+  let reuseCitations = false;          // Milestone 3c: reuse cached citation quotes from earlier exports (quotes mode, no images)
 
   function createExportOverlay() {
     if (exportOverlay) return exportOverlay;
@@ -300,6 +301,7 @@
       // Extract note content
       // 'titles' and 'none' both skip hovering ('none' drops the markers later)
       citationDetailMode = ['titles', 'none'].includes(message.data.citationDetail) ? 'titles' : 'quotes';
+      reuseCitations = message.data.reuseCitations === true;
       withRequestTiming(() => (typeof message.data.sourceIndex === 'number'
         ? extractSourcesPanelNote(message.data.sourceIndex, message.data.noteTitle, message.data.includeCitationImages)
         : extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages)))
@@ -2535,6 +2537,22 @@
       return { html: viewer.innerHTML, sources: titleSources, errors };
     }
 
+    // Citation cache (Milestone 3c): quotes mode only, never with images.
+    // Same note text and marker numbers as an earlier complete read -> reuse
+    // its sources instead of hovering every marker. Storage trouble only logs.
+    const cacheUsable = reuseCitations && !includeCitationImages && buttonsByIndex.size > 0;
+    let cacheKey = null;
+    let cacheNotebookId = '';
+    if (cacheUsable) {
+      cacheNotebookId = NLME.notebookIdFromUrl(location.href);
+      cacheKey = NLME.citationCacheKey({ kind: 'note', text: viewer.textContent, numbers: [...buttonsByIndex.keys()] });
+      const cached = await NLME.citationCacheRead(chrome.storage.local, cacheNotebookId, cacheKey);
+      if (cached && cached.length === buttonsByIndex.size) {
+        console.log(`[NotebookLM Takeout] Citation cache hit: ${cached.length} source(s) reused without hovering`);
+        return { html: viewer.innerHTML, sources: cached, errors, fromCache: true };
+      }
+    }
+
     // Step 3: hover each marker and read its tooltip
     const sources = [];
     for (const [index, button] of buttonsByIndex) {
@@ -2556,6 +2574,13 @@
     }
 
     console.log(`[NotebookLM Takeout] Citations: ${sources.length}/${buttonsByIndex.size} extracted, ${errors.length} warning(s)`);
+
+    // Store only a complete read: every marker has a source with a quote, no
+    // warnings, and the export was not cancelled partway.
+    if (cacheKey && !isExportCancelled() && errors.length === 0 &&
+        NLME.citationSourcesComplete(sources, buttonsByIndex.size)) {
+      await NLME.citationCacheWrite(chrome.storage.local, cacheNotebookId, cacheKey, sources);
+    }
 
     return {
       html: viewer.innerHTML,
