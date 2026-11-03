@@ -3110,12 +3110,8 @@ let activeDownloadFolder = '';
 
 function downloadBlob(blob, filename) {
   if (activeDownloadFolder) {
-    const folderUrl = URL.createObjectURL(blob);
-    const target = NLME.downloadFolderPath(activeDownloadFolder, filename);
-    // Register the name first: the background's filename listener applies it
-    return chrome.runtime.sendMessage({ type: 'NAME_NEXT_DOWNLOAD', url: folderUrl, filename: target })
-      .then(() => chrome.downloads.download({ url: folderUrl, filename: target, conflictAction: 'uniquify', saveAs: false }))
-      .finally(() => setTimeout(() => URL.revokeObjectURL(folderUrl), 60000));
+    // One writer for folder saves (sidebar-takeout.js saveFiles)
+    return saveFiles([{ path: filename, data: blob }], { folder: activeDownloadFolder });
   }
   const url = URL.createObjectURL(blob);
   try {
