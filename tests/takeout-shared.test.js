@@ -704,3 +704,21 @@ test('withRealExtension swaps a guessed known extension for the real one', () =>
   assert.equal(NLME.withRealExtension('Deck.pdf', '.goog'), 'Deck.pdf');
   assert.equal(NLME.withRealExtension('Talk v1.10', '.m4a'), 'Talk v1.10');
 });
+
+test('buildRootIndex lists every category with its status and links errors', () => {
+  const meta = { notebook: 'New Math', notebook_url: '', notebook_id: '', exporter: 'NotebookLM Takeout 1.4.0', exported: 'T' };
+  const md = NLME.buildRootIndex({ meta, errorsFile: 'errors.md', categories: [
+    { name: 'Sources', folder: 'sources', status: 'done', selected: 12, exported: 12, failed: 0, zips: ['a.zip'] },
+    { name: 'Notes', folder: 'notes', status: 'partial', selected: 10, exported: 4, failed: 0, zips: ['b.zip'] },
+    { name: 'Chat', folder: 'chat', status: 'skipped', selected: 17, exported: 0, failed: 0, zips: [] },
+    { name: 'Artifacts', folder: 'artifacts', status: 'empty', selected: 0, exported: 0, failed: 0, zips: [] }
+  ] });
+  assert.match(md, /^---\n/);
+  assert.match(md, /# Takeout — New Math/);
+  assert.match(md, /\| Sources \| 12 of 12 \| 0 \| complete \| sources\/ \|/);
+  assert.match(md, /\| Notes \| 4 of 10 \| 0 \| partial \(cancelled\) \| notes\/ \|/);
+  assert.match(md, /\| Chat \| 0 of 17 \| 0 \| skipped \(cancelled earlier\) \| chat\/ \|/);
+  assert.match(md, /\| Artifacts \| 0 of 0 \| 0 \| none in notebook \| — \|/);
+  assert.match(md, /\[errors\.md\]\(errors\.md\)/);
+  assert.match(md, /Unzip every ZIP into the same folder/);
+});

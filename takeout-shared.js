@@ -877,7 +877,49 @@
     return stems;
   }
 
+  const TAKEOUT_STATUS_WORDS = {
+    done: 'complete',
+    partial: 'partial (cancelled)',
+    skipped: 'skipped (cancelled earlier)',
+    empty: 'none in notebook'
+  };
+
+  // _index.md at the root of a Full Takeout: one row per category (Sources,
+  // Notes, Chat, Artifacts) with its counts, status and folder, the ZIPs each
+  // category wrote, and a link to the combined errors.md.
+  function buildRootIndex({ meta, categories = [], errorsFile = null } = {}) {
+    let md = frontMatter({
+      title: `Takeout — ${meta.notebook}`,
+      notebook: meta.notebook,
+      notebook_url: meta.notebook_url,
+      notebook_id: meta.notebook_id,
+      exporter: meta.exporter,
+      exported: meta.exported,
+      kind: 'takeout'
+    });
+    md += `# Takeout — ${meta.notebook}\n\n`;
+    md += '| Category | Exported | Failed | Status | Folder |\n';
+    md += '| --- | --- | --- | --- | --- |\n';
+    for (const c of categories) {
+      const folder = c.status === 'empty' ? '—' : `${c.folder}/`;
+      md += `| ${c.name} | ${c.exported} of ${c.selected} | ${c.failed} | ${TAKEOUT_STATUS_WORDS[c.status] || c.status} | ${folder} |\n`;
+    }
+    md += '\n';
+    if (errorsFile) md += `Errors and notes from every category: [${errorsFile}](${encodePath(errorsFile)})\n\n`;
+    const withZips = categories.filter(c => (c.zips || []).length > 0);
+    if (withZips.length > 0) {
+      md += 'Unzip every ZIP into the same folder to get one tree.\n\n';
+      md += '## ZIPs\n\n';
+      for (const c of withZips) {
+        for (const zip of c.zips) md += `- ${c.name}: ${zip}\n`;
+      }
+      md += '\n';
+    }
+    return md;
+  }
+
   const NLME = {
+    buildRootIndex,
     frontMatter,
     uniqueStems,
     notebookIdFromUrl,
