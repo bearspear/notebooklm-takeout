@@ -668,6 +668,46 @@ test('markWindowedQuote marks one side at a time and honours min', () => {
   assert.equal(NLME.markWindowedQuote(null), '');
 });
 
+test('markWindowedQuote ignores image Markdown when measuring', () => {
+  const img = '![chart](data:image/png;base64,' + 'A'.repeat(3000) + ')';
+  assert.equal(NLME.markWindowedQuote('short quote\n\n' + img), 'short quote\n\n' + img);
+  assert.equal(NLME.markWindowedQuote(img), img);
+  assert.equal(NLME.markWindowedQuote('and then a short one ' + img + ' end'), 'and then a short one ' + img + ' end');
+  // A genuinely long window with an image still gets its mark
+  const mid = 'vanished from physics ' + 'x'.repeat(980) + ' his tra';
+  assert.equal(NLME.markWindowedQuote(mid + img), '\u2026' + mid + img);
+});
+
+test('jobRecordMode keeps a pending record of another kind', () => {
+  const pending = NLME.newJobRecord({ id: 't-1', kind: 'takeout', label: 'Full Takeout', notebookId: 'nb', keysByCategory: { notes: ['a', 'b'] }, now: 1 });
+  assert.equal(NLME.jobRecordMode(pending, 'sources'), 'update');
+  assert.equal(NLME.jobRecordMode(pending, 'takeout'), 'create');
+  const failedOnly = NLME.markJobItems(NLME.markJobItems(pending, 'notes', ['a'], { now: 2 }), 'notes', ['b'], { failed: true, now: 3 });
+  assert.equal(NLME.jobRecordMode(failedOnly, 'sources'), 'update');
+  const finished = NLME.markJobItems(NLME.markJobItems(pending, 'notes', ['a'], { now: 2 }), 'notes', ['b'], { now: 3 });
+  assert.equal(NLME.jobRecordMode(finished, 'sources'), 'create');
+  assert.equal(NLME.jobRecordMode(undefined, 'sources'), 'create');
+  assert.equal(NLME.jobRecordMode(null, 'sources'), 'create');
+  assert.equal(NLME.jobRecordMode('junk', 'sources'), 'create');
+  assert.equal(NLME.jobRecordMode({ kind: 'takeout', remaining: 'x', failed: {} }, 'sources'), 'create');
+  assert.equal(NLME.jobRecordMode({ kind: 'takeout', remaining: { notes: ['a'] } }, 'sources'), 'create');
+});
+
+test('resumeBannerView words a stopped export and a finished one with failures', () => {
+  const r = NLME.newJobRecord({ id: 'n-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a', 'b', 'c', 'd'] }, now: 1 });
+  const stopped = NLME.markJobItems(r, 'notes', ['a'], { now: 2 });
+  assert.deepEqual(NLME.resumeBannerView(stopped), {
+    text: 'An earlier Notes export stopped at 1 of 4.', actionLabel: 'Resume (3 left)', failedOnly: false });
+  let failedOnly = r;
+  for (const k of ['a', 'b']) failedOnly = NLME.markJobItems(failedOnly, 'notes', [k], { now: 2 });
+  for (const k of ['c', 'd']) failedOnly = NLME.markJobItems(failedOnly, 'notes', [k], { failed: true, now: 3 });
+  assert.deepEqual(NLME.resumeBannerView(failedOnly), {
+    text: 'An earlier Notes export finished with 2 failed.', actionLabel: 'Retry (2)', failedOnly: true });
+  const takeout = NLME.newJobRecord({ id: 't-1', kind: 'takeout', label: 'Full Takeout', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1 });
+  assert.equal(NLME.resumeBannerView(NLME.markJobItems(takeout, 'notes', ['a'], { failed: true, now: 2 })).text,
+    'An earlier Full Takeout finished with 1 failed.');
+});
+
 test('groupedSourcesMarkdown writes one line per source with every number anchored', () => {
   const entries = [{ number: '1', text: 'A' }, { number: '2', text: 'B' }, { number: '3', text: 'A' }];
   assert.equal(NLME.groupedSourcesMarkdown(entries, 'msg-0-'),

@@ -893,7 +893,10 @@
   function markWindowedQuote(text, { min = 990 } = {}) {
     const raw = text == null ? '' : String(text);
     const t = raw.trim();
-    if (t.length < min) return raw;
+    // Image Markdown (a base64 data URI can be huge) is not quote text: measure
+    // and test the ends without it
+    const bare = t.replace(/!\[[^\]]*\]\([^)]*\)/g, '').trim();
+    if (bare.length < min) return raw;
     // "1. foo" starts a Markdown list: a leading mark would break the marker
     const head = /^[\p{Ll}\p{Nd}]/u.test(t) && !/^\d+[.)]\s/.test(t) ? '\u2026' : '';
     const tail = /[\p{L}\p{N}]$/u.test(t) ? '\u2026' : '';
@@ -1013,6 +1016,17 @@
     return jobRemainingCount(record) === 0;
   }
 
+  // How a fresh (non-update) export of `kind` meets the notebook's stored record
+  // (the key is per notebook). 'update': the stored record is usable, of another
+  // kind and still has items, so it must not be replaced; the export only marks
+  // the keys that record holds. 'create': it replaces the record (same kind,
+  // finished, or nothing usable stored).
+  function jobRecordMode(stored, kind) {
+    const arrays = group => !!group && typeof group === 'object' && !Array.isArray(group) && Object.values(group).every(Array.isArray);
+    if (!stored || typeof stored !== 'object' || !arrays(stored.remaining) || !arrays(stored.failed)) return 'create';
+    return stored.kind !== kind && jobRemainingCount(stored) > 0 ? 'update' : 'create';
+  }
+
   // A stored record the banner may offer: an object for this notebook whose
   // remaining / failed are { category: keys[] } and which still has items.
   // Storage data is not trusted, so anything else is not usable.
@@ -1051,6 +1065,20 @@
     const label = String((record && record.label) || '');
     if (!label) return 'export';
     return record.kind === 'takeout' ? label : `${label} export`;
+  }
+
+  // The banner's wording. A record with nothing remaining and only failed keys
+  // is a finished export with failures (Retry re-runs those); otherwise a
+  // stopped one (Resume). Same action either way: re-run the left keys.
+  // Plain text; the caller escapes it.
+  function resumeBannerView(record) {
+    const { done, total, left } = jobResumeProgress(record);
+    const label = resumeBannerLabel(record);
+    const count = group => Object.values(group || {}).reduce((sum, keys) => sum + (Array.isArray(keys) ? keys.length : 0), 0);
+    const failedOnly = count(record.remaining) === 0 && count(record.failed) > 0;
+    return failedOnly
+      ? { text: `An earlier ${label} finished with ${left} failed.`, actionLabel: `Retry (${left})`, failedOnly }
+      : { text: `An earlier ${label} stopped at ${done} of ${total}.`, actionLabel: `Resume (${left} left)`, failedOnly };
   }
 
   // The keys a resume re-runs for one category: remaining, then failed, no repeats.
@@ -1784,9 +1812,11 @@ footer { margin-top: 3rem; }
     markJobItems,
     jobRemainingCount,
     jobRecordFinished,
+    jobRecordMode,
     jobRecordUsable,
     planResume,
     resumeBannerLabel,
+    resumeBannerView,
     jobResumeKeys,
     jobResumeProgress,
     jobKeyTitle,
