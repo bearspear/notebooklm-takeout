@@ -83,3 +83,66 @@ function hideResults() {
   panel.style.display = 'none';
   panel.innerHTML = '';
 }
+
+/**
+ * Show the "earlier export stopped" banner above the results panel (its own
+ * element, so a new results panel does not wipe it).
+ *
+ * @param {object} record the job record (NLME.resumeBannerView words it)
+ * @param {object} handlers
+ * @param {() => Promise<void>|void} handlers.onResume starts the resume; the
+ *   banner hides itself first (the finished job shows it again if items are left)
+ * @param {() => Promise<void>|void} handlers.onDiscard drops the record; the
+ *   banner hides itself after
+ * @param {boolean} [handlers.running] a job holds the lock: Resume is disabled
+ *
+ * Every string is escaped; the record is storage data, not trusted.
+ */
+function showResumeBanner(record, { onResume, onDiscard, running = false } = {}) {
+  const banner = document.getElementById('resume-banner');
+  if (!banner) return;
+  const esc = NLME.escapeHtml;
+  // Stopped: "stopped at N of M" + Resume; only failed keys left: "finished with
+  // N failed" + Retry. Both re-run the same keys.
+  const view = NLME.resumeBannerView(record);
+
+  banner.innerHTML = `
+    <p class="resume-text">${esc(view.text)}</p>
+    <div class="resume-actions">
+      <button type="button" class="btn btn-primary resume-go"${running ? ' disabled' : ''}>${esc(view.actionLabel)}</button>
+      <button type="button" class="btn btn-secondary resume-discard">Discard</button>
+    </div>`;
+  banner.style.display = 'block';
+
+  const resumeBtn = banner.querySelector('.resume-go');
+  const discardBtn = banner.querySelector('.resume-discard');
+  resumeBtn.addEventListener('click', async () => {
+    if (resumeBtn.disabled) return;
+    resumeBtn.disabled = true;
+    discardBtn.disabled = true;
+    hideResumeBanner();
+    try {
+      if (onResume) await onResume();
+    } catch (error) {
+      console.error('[NotebookLM Takeout] Resume failed:', error);
+    }
+  });
+  discardBtn.addEventListener('click', async () => {
+    discardBtn.disabled = true;
+    resumeBtn.disabled = true;
+    try {
+      if (onDiscard) await onDiscard();
+    } catch (error) {
+      console.error('[NotebookLM Takeout] Discard failed:', error);
+    } finally {
+      hideResumeBanner();
+    }
+  });
+}
+
+function hideResumeBanner() {
+  const banner = document.getElementById('resume-banner');
+  if (!banner) return;
+  banner.style.display = 'none';
+  banner.innerHTML = '';
+}

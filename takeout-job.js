@@ -1,6 +1,7 @@
 // One DOM-free runner behind every export (notes, sources, chat, Studio
 // artifacts): batching, cancel/stop, error collection, and the guarantee that
-// the errors reach exactly one package. failedItems: the items whose
+// the errors reach exactly one package. afterEach(item, { failed }) runs after every
+// item that ran, failed says whether extractOne threw. failedItems: the items whose
 // extractOne threw, in order (warnings do not count); the Retry button re-runs them.
 // packageBatch's info: batchIndex, totalBatches, isLast, partial, errors (the last
 // package only), errorsOnly, exported and failed (items so far), and multi (this
@@ -65,15 +66,17 @@
       };
       attempted++;
       let out = {};
+      let failed = false;
       try {
         out = { result: await extractOne(item, ctx) };
         exported++;
       } catch (err) {
+        failed = true;
         failedItems.push(item);
         errors.push(`[${titleOf(item)}] ${(err && err.message) || err}`);
       }
       if (afterEach) {
-        try { await afterEach(item); } catch (_) { /* cleanup must never fail the item */ }
+        try { await afterEach(item, { failed }); } catch (_) { /* cleanup must never fail the item */ }
       }
       return out;
     };
@@ -129,7 +132,97 @@
     return { attempted, exported, failed: attempted - exported, cancelled, stopped, errors, failedItems };
   }
 
+  /**
+   * The per-notebook job record writer (Milestone 3c). DOM-free; `storage` has
+   * get / set / remove returning promises (chrome.storage.local). Every storage
+   * call is caught and logged: recording never affects the export.
+   *
+   * - start(): writes the record. fail(category, key): marks a failed item.
+   * - done(category, key) stages a success, commit() applies the staged ones. Call
+   *   commit() once the package holding those items is saved, so a record never
+   *   claims an item that is not on disk yet. discard() drops the staged ones when
+   *   a runner threw before saving them (a recorder shared by several runners).
+   * - Writes are throttled to one per intervalMs; a held-back change gets one
+   *   trailing write when the interval ends (setTimer / clearTimer are injectable),
+   *   or earlier at finish(), which clears that timer first.
+   * - finish({ clean }): clean and finished removes the record, but only when the
+   *   stored id is still this job's; otherwise a final write of the held-back state.
+   */
+  function createJobRecorder({ storage, record, now = Date.now, intervalMs = 1000, log = console.warn, setTimer = setTimeout, clearTimer = clearTimeout }) {
+    const key = NLME.jobRecordKey(record.notebookId);
+    let current = record;
+    let staged = [];
+    let dirty = false;
+    let lastWrite = -Infinity;
+    let timer = null;
+    let queue = Promise.resolve();
+
+    const enqueue = op => {
+      queue = queue.then(async () => {
+        try { await op(); } catch (error) { log('[NotebookLM Takeout] Job record storage failed:', error); }
+      });
+      return queue;
+    };
+    const stopTimer = () => {
+      if (timer !== null) { clearTimer(timer); timer = null; }
+    };
+    const write = () => {
+      stopTimer();
+      dirty = false;
+      lastWrite = now();
+      const snapshot = current;
+      return enqueue(() => storage.set({ [key]: snapshot }));
+    };
+    const changed = () => {
+      dirty = true;
+      const wait = intervalMs - (now() - lastWrite);
+      if (wait <= 0) { write(); return; }
+      // Held back: one trailing write for the rest of the interval, so the last
+      // changes of a quiet stretch reach storage without waiting for the next one
+      if (timer === null) {
+        timer = setTimer(() => { timer = null; if (dirty) write(); }, wait);
+        if (timer && typeof timer.unref === 'function') timer.unref();
+      }
+    };
+
+    return {
+      start() { return write(); },
+      idle() { return queue; },
+      done(category, itemKey) { staged.push([category, itemKey]); },
+      // Drop staged successes whose package was never saved (a throwing runner)
+      discard() { staged = []; },
+      commit() {
+        if (!staged.length) return;
+        const t = now();
+        const before = current;
+        for (const [category, itemKey] of staged) current = NLME.markJobItems(current, category, [itemKey], { now: t });
+        staged = [];
+        if (current !== before) changed();
+      },
+      fail(category, itemKey) {
+        const next = NLME.markJobItems(current, category, [itemKey], { failed: true, now: now() });
+        if (next === current) return;
+        current = next;
+        changed();
+      },
+      async finish({ clean = false } = {}) {
+        stopTimer(); // before the id-guarded removal: a removed record must not come back
+        if (clean && NLME.jobRecordFinished(current)) {
+          dirty = false;
+          await enqueue(async () => {
+            const stored = (await storage.get(key))[key];
+            if (stored && stored.id === current.id) await storage.remove(key);
+          });
+        } else if (dirty) {
+          await write();
+        }
+        await queue;
+      }
+    };
+  }
+
   NLME.runExportJob = runExportJob;
+  NLME.createJobRecorder = createJobRecorder;
   root.NLME = NLME;
   if (typeof module === 'object' && module.exports) module.exports = NLME;
 })(globalThis);

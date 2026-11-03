@@ -261,3 +261,190 @@ test('size batching drops delivered results so memory can be freed', async () =>
   assert.equal(seen[0].length, 1);
   assert.notEqual(seen[0], seen[1]);
 });
+
+test('afterEach learns whether the item failed', async () => {
+  const seen = [];
+  await NLME.runExportJob({
+    kind: 'notes', items: [{ title: 'ok' }, { title: 'bad' }, { title: 'ok2' }],
+    extractOne: async item => { if (item.title === 'bad') throw new Error('boom'); return item.title; },
+    afterEach: async (item, outcome) => { seen.push([item.title, outcome.failed]); },
+    packageBatch: async () => {},
+    isCancelled: () => false
+  });
+  assert.deepEqual(seen, [['ok', false], ['bad', true], ['ok2', false]]);
+});
+
+// ---- createJobRecorder ----
+
+function fakeStorage({ failOn = [] } = {}) {
+  const data = {}; const log = [];
+  const guard = op => { if (failOn.includes(op)) throw new Error(`${op} failed`); };
+  return {
+    data, log,
+    async get(key) { guard('get'); return key in data ? { [key]: data[key] } : {}; },
+    async set(obj) { guard('set'); log.push('set'); Object.assign(data, JSON.parse(JSON.stringify(obj))); },
+    async remove(key) { guard('remove'); log.push('remove'); delete data[key]; }
+  };
+}
+
+function recorderFor(storage, clock, keys = { notes: ['a', 'b', 'c'] }, id = 'notes-1') {
+  const record = NLME.newJobRecord({ id, kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: keys, now: clock.t });
+  return NLME.createJobRecorder({ storage, record, now: () => clock.t, log: () => {} });
+}
+
+test('recorder writes the record at start and holds back writes inside a second', async () => {
+  const storage = fakeStorage(); const clock = { t: 1000 };
+  const rec = recorderFor(storage, clock);
+  await rec.start();
+  assert.equal(storage.log.length, 1);
+  rec.done('notes', 'a'); rec.commit();
+  clock.t += 200;
+  rec.fail('notes', 'b');
+  await rec.idle();
+  assert.equal(storage.log.length, 1); // throttled
+  clock.t += 900;
+  rec.done('notes', 'c'); rec.commit();
+  await rec.idle();
+  assert.equal(storage.log.length, 2);
+  assert.deepEqual(storage.data['nlme.job.nb'].remaining.notes, []);
+  assert.deepEqual(storage.data['nlme.job.nb'].failed.notes, ['b']);
+});
+
+// A fake timer pair: fire() runs the pending callbacks the way the clock would.
+function fakeTimers() {
+  const pending = new Map(); let next = 1;
+  return {
+    pending,
+    setTimer: (fn, ms) => { const id = next++; pending.set(id, { fn, ms }); return id; },
+    clearTimer: id => { pending.delete(id); },
+    fire() { for (const [id, t] of [...pending]) { pending.delete(id); t.fn(); } }
+  };
+}
+
+test('recorder writes a held-back change on a trailing timer for the rest of the interval', async () => {
+  const storage = fakeStorage(); const clock = { t: 1000 }; const timers = fakeTimers();
+  const record = NLME.newJobRecord({ id: 'notes-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a', 'b'] }, now: 1000 });
+  const rec = NLME.createJobRecorder({ storage, record, now: () => clock.t, log: () => {}, setTimer: timers.setTimer, clearTimer: timers.clearTimer });
+  await rec.start();
+  clock.t += 300;
+  rec.done('notes', 'a'); rec.commit(); // inside the window: held back
+  assert.equal(storage.log.length, 1);
+  assert.equal(timers.pending.size, 1);
+  assert.equal([...timers.pending.values()][0].ms, 700);
+  rec.fail('notes', 'b'); // a second change does not add a second timer
+  assert.equal(timers.pending.size, 1);
+  timers.fire();
+  await rec.idle();
+  assert.equal(storage.log.length, 2);
+  assert.deepEqual(storage.data['nlme.job.nb'].remaining.notes, []);
+  assert.deepEqual(storage.data['nlme.job.nb'].failed.notes, ['b']);
+  assert.equal(timers.pending.size, 0);
+});
+
+test('recorder finish clears the trailing timer so a removed record never comes back', async () => {
+  const storage = fakeStorage(); const clock = { t: 1000 }; const timers = fakeTimers();
+  const record = NLME.newJobRecord({ id: 'notes-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1000 });
+  const rec = NLME.createJobRecorder({ storage, record, now: () => clock.t, log: () => {}, setTimer: timers.setTimer, clearTimer: timers.clearTimer });
+  await rec.start();
+  clock.t += 100;
+  rec.done('notes', 'a'); rec.commit();
+  assert.equal(timers.pending.size, 1);
+  await rec.finish({ clean: true });
+  assert.equal('nlme.job.nb' in storage.data, false);
+  assert.equal(timers.pending.size, 0);
+  timers.fire();
+  await rec.idle();
+  assert.equal('nlme.job.nb' in storage.data, false);
+  assert.equal(storage.log.filter(x => x === 'set').length, 1);
+});
+
+test('recorder only counts staged successes once commit is called', async () => {
+  const storage = fakeStorage(); const clock = { t: 0 };
+  const rec = recorderFor(storage, clock);
+  await rec.start();
+  rec.done('notes', 'a');
+  clock.t += 5000;
+  rec.fail('notes', 'b'); // writes now; 'a' is staged but not saved to disk yet
+  await rec.idle();
+  assert.deepEqual(storage.data['nlme.job.nb'].remaining.notes, ['a', 'c']);
+  await rec.finish({ clean: false }); // an unclean end never commits staged items
+  assert.deepEqual(storage.data['nlme.job.nb'].remaining.notes, ['a', 'c']);
+});
+
+test('recorder final flush writes the held-back state when the job does not finish cleanly', async () => {
+  const storage = fakeStorage(); const clock = { t: 0 };
+  const rec = recorderFor(storage, clock);
+  await rec.start();
+  rec.done('notes', 'a'); rec.commit();
+  await rec.finish({ clean: false });
+  assert.deepEqual(storage.data['nlme.job.nb'].remaining.notes, ['b', 'c']);
+  assert.equal(storage.log.at(-1), 'set');
+});
+
+test('recorder removes a finished record only when the stored id is still its own', async () => {
+  const clock = { t: 0 };
+  const own = fakeStorage();
+  const rec = recorderFor(own, clock, { notes: ['a'] });
+  await rec.start();
+  rec.done('notes', 'a'); rec.commit();
+  await rec.finish({ clean: true });
+  assert.equal('nlme.job.nb' in own.data, false);
+
+  const other = fakeStorage();
+  const rec2 = recorderFor(other, clock, { notes: ['a'] });
+  await rec2.start();
+  other.data['nlme.job.nb'] = { id: 'sources-2' }; // another export replaced it
+  rec2.done('notes', 'a'); rec2.commit();
+  await rec2.finish({ clean: true });
+  assert.equal(other.data['nlme.job.nb'].id, 'sources-2');
+  assert.equal(other.log.includes('remove'), false);
+});
+
+test('recorder keeps the record on a clean end that still has remaining or failed keys', async () => {
+  const storage = fakeStorage(); const clock = { t: 0 };
+  const rec = recorderFor(storage, clock, { notes: ['a', 'b'] });
+  await rec.start();
+  rec.done('notes', 'a'); rec.commit();
+  rec.fail('notes', 'b');
+  await rec.finish({ clean: true });
+  assert.deepEqual(storage.data['nlme.job.nb'].failed.notes, ['b']);
+});
+
+test('recorder never throws when storage fails', async () => {
+  const storage = fakeStorage({ failOn: ['get', 'set', 'remove'] }); const clock = { t: 0 };
+  const rec = recorderFor(storage, clock, { notes: ['a'] });
+  await rec.start();
+  rec.done('notes', 'a'); rec.commit();
+  rec.fail('notes', 'z');
+  await rec.finish({ clean: true });
+  await rec.finish({ clean: false });
+});
+
+test('recorder on an existing record marks known keys only and writes nothing for unknown ones', async () => {
+  const storage = fakeStorage(); const clock = { t: 0 };
+  const stored = NLME.newJobRecord({ id: 'takeout-1', kind: 'takeout', label: 'Full Takeout', notebookId: 'nb', keysByCategory: { sources: ['s1'], notes: ['n1'] }, now: 0 });
+  storage.data['nlme.job.nb'] = stored;
+  const rec = NLME.createJobRecorder({ storage, record: stored, now: () => clock.t, log: () => {} });
+  rec.fail('sources', 'other'); // not in the record
+  rec.done('notes', 'other'); rec.commit();
+  await rec.finish({ clean: true });
+  assert.equal(storage.log.length, 0);
+  rec.done('sources', 's1'); rec.commit();
+  await rec.finish({ clean: true });
+  assert.deepEqual(storage.data['nlme.job.nb'].remaining, { sources: [], notes: ['n1'] }); // not finished: kept
+  rec.done('notes', 'n1'); rec.commit();
+  await rec.finish({ clean: true });
+  assert.equal('nlme.job.nb' in storage.data, false);
+});
+
+test('staged items are not committed by a later commit after discard', async () => {
+  const storage = fakeStorage(); const clock = { t: 0 };
+  const rec = recorderFor(storage, clock, { sources: ['s1', 's2'], notes: ['n1'] });
+  await rec.start();
+  rec.done('sources', 's1'); rec.commit();
+  rec.done('sources', 's2'); // its package fails to save
+  rec.discard();
+  rec.done('notes', 'n1'); clock.t += 5000; rec.commit();
+  await rec.finish({ clean: true });
+  assert.deepEqual(storage.data['nlme.job.nb'].remaining, { sources: ['s2'], notes: [] });
+});

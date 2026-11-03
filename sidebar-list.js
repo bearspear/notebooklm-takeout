@@ -8,6 +8,35 @@ const _listStates = new Map();
 let _lastListNotebookId = '';
 
 const LIST_SAVE_DELAY_MS = 300;
+const LIST_STATES_KEEP_NOTEBOOKS = 30;
+
+// Saved list states of notebooks the user stopped using are removed, once per
+// panel session: the most recent 30 notebooks stay (all tabs of one count
+// once), and the notebook on screen always does. Nothing here may throw.
+let _listStatesPruned = false;
+
+async function pruneListStatesOnce(currentId) {
+  if (_listStatesPruned) return;
+  _listStatesPruned = true;
+  try {
+    const storage = chrome.storage.local;
+    let keys;
+    if (typeof storage.getKeys === 'function') {
+      keys = await storage.getKeys();
+    } else {
+      keys = Object.keys((await storage.get(null)) || {});
+    }
+    keys = (keys || []).filter(k => typeof k === 'string' && k.startsWith('nlme.list.'));
+    if (!keys.length) return;
+    const stored = (await storage.get(keys)) || {};
+    const meta = keys.map(key => ({ key, at: stored[key] && Number(stored[key].at) || 0 }));
+    const doomed = NLME.pruneListStates(meta, { keep: LIST_STATES_KEEP_NOTEBOOKS, keepId: currentId });
+    if (doomed.length) await storage.remove(doomed);
+  } catch (_) { /* storage unavailable: old states stay */ }
+}
+
+// A restored state older than this gets its `at` refreshed
+const LIST_STATE_REFRESH_MS = 24 * 60 * 60 * 1000;
 
 function createListController({ tab, container, items, titleOf, typeOf, defaultSelected = 'none', rowHtml, onChange, canSelect }) {
   if (container._listController) container._listController.destroy();
@@ -17,6 +46,12 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
   const list = items || [];
   const keys = NLME.listItemKeys(list, accessors);
   const keyIndex = new Map(keys.map((k, i) => [k, i]));
+  // Each item remembers its key in the whole list (non-enumerable, so copies never
+  // carry it): a job record made from a selection or a retry then uses the same
+  // keys a fresh scan gives, duplicates ("#2") included.
+  list.forEach((item, i) => {
+    try { Object.defineProperty(item, '_listKey', { value: keys[i], configurable: true, writable: true }); } catch (_) { /* frozen or primitive: the record computes its own */ }
+  });
   const selectable = list.map(item => (canSelect ? !!canSelect(item) : true));
   const chipTypes = NLME.listView(list, {}, accessors).types; // the whole list, never filtered
 
@@ -76,6 +111,14 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
   const rowsEl = container.querySelector('.list-rows');
   const emptyEl = container.querySelector('.list-empty');
   const rowEls = Array.from(rowsEl.querySelectorAll('.list-row'));
+  // Drawn while a job runs (a scan inside the job redraws the list): start
+  // inert like the controls runExclusive disabled; its finally re-enables
+  // everything carrying the data-job-disabled mark.
+  if (document.body.classList.contains('job-running')) {
+    container.querySelectorAll('button, input, select').forEach(el => {
+      if (!el.disabled) { el.disabled = true; el.setAttribute('data-job-disabled', ''); }
+    });
+  }
   // data-key is set through the DOM: keys contain a NUL, which the HTML parser would replace
   rowEls.forEach((row, i) => row.setAttribute('data-key', keys[i]));
 
@@ -83,7 +126,8 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
 
   function savedShape() {
     // known: every key at save time, so restoreListState can tell a new item from an unticked one
-    return { query, types: [...activeTypes], sort, selected: [...selected], known: [...keys] };
+    // at: when it was saved, for pruneListStates
+    return { query, types: [...activeTypes], sort, selected: [...selected], known: [...keys], at: Date.now() };
   }
 
   function persist() {
@@ -155,7 +199,10 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
     chipEls.forEach((el, i) => el.setAttribute('aria-pressed', String(activeTypes.has(chipTypes[i].type))));
 
     const selectableVisible = order.filter(i => selectable[i]).length;
-    allEl.disabled = selectableVisible === 0;
+    // Marked by a job (see above): stays disabled until the job ends, unless
+    // nothing is selectable, which must outlast the job's blanket re-enable
+    if (selectableVisible === 0) allEl.removeAttribute('data-job-disabled');
+    allEl.disabled = selectableVisible === 0 || allEl.hasAttribute('data-job-disabled');
     allEl.checked = selectableVisible > 0 && selected.size === selectableVisible;
     allEl.indeterminate = selected.size > 0 && selected.size < selectableVisible;
     summaryEl.textContent = NLME.listSummary({ shown: order.length, total: list.length, selected: selected.size });
@@ -257,6 +304,7 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
     if (destroyed) return;
     notebookId = id;
     _lastListNotebookId = id;
+    if (id) pruneListStatesOnce(id); // not awaited: the restore below never waits on it
     if (!id) {
       if (guessApplied && !touched) resetToDefaults();
       return;
@@ -275,6 +323,9 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
     if (saved) {
       _listStates.set(stateKey(), saved); // a later redraw restores instantly instead of flashing the defaults
       applyState(saved);
+      // A notebook that is reopened often never ages out: refresh `at` through the
+      // throttled save, and only once the stored one is a day old (not on every redraw)
+      if (!(Date.now() - (Number(saved.at) || 0) < LIST_STATE_REFRESH_MS)) persist();
     } else if (guessApplied) {
       resetToDefaults(); // the previous notebook's filter is on screen
     }

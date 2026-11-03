@@ -498,7 +498,9 @@ let settings = {
   slidesFormat: 'pdf',
   // Note citations: 'quotes' hovers every marker; 'titles' takes source
   // titles from the markers only (no hovering); 'none' drops markers and Sources
-  citationDetail: 'quotes'
+  citationDetail: 'quotes',
+  // Milestone 3c: reuse citation quotes read by an earlier export (quotes mode, no images)
+  reuseCitations: true
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -538,6 +540,7 @@ async function init() {
     const [startTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     notebookSwitchedTo(startTab); // the first scan below covers this notebook
   } catch (_) { /* no active tab */ }
+  refreshResumeBanner(); // an earlier unfinished export of this notebook
   await scanSourcesPage(); // Start with Sources tab since it's now the default
 
   // Monitor tab changes
@@ -644,6 +647,7 @@ async function loadSettings() {
   document.getElementById('show-studio-tab-checkbox').checked = settings.showStudioTab;
   document.getElementById('slides-format-select').value = settings.slidesFormat;
   document.getElementById('citation-detail-select').value = settings.citationDetail;
+  document.getElementById('reuse-citations-checkbox').checked = settings.reuseCitations !== false;
   applyStudioTabVisibility();
   updateChatCitationInfo();
 }
@@ -709,6 +713,7 @@ async function saveSettings() {
   settings.slidesFormat = document.getElementById('slides-format-select').value === 'pptx' ? 'pptx' : 'pdf';
   settings.citationDetail = ['titles', 'none'].includes(document.getElementById('citation-detail-select').value)
     ? document.getElementById('citation-detail-select').value : 'quotes';
+  settings.reuseCitations = document.getElementById('reuse-citations-checkbox').checked;
   applyStudioTabVisibility();
   updateChatCitationInfo();
 
@@ -729,6 +734,12 @@ function setupEventListeners() {
 
   document.getElementById('settings-btn').addEventListener('click', () => {
     document.getElementById('settings-panel').style.display = 'block';
+  });
+
+  document.getElementById('clear-citation-cache-btn')?.addEventListener('click', async () => {
+    if (jobLock.current()) { showToast(`${jobLock.current()} is still running`, 'warning'); return; }
+    if (await NLME.citationCacheClear(chrome.storage.local)) showToast('Citation cache cleared', 'success');
+    else showToast('Could not clear the citation cache', 'error');
   });
 
   document.getElementById('close-settings-btn').addEventListener('click', () => {
@@ -983,7 +994,20 @@ function notebookSwitchedTo(tab) {
 // has drawn the new notebook, and the content-script scans read the DOM as it
 // is (no waits), so wait, then rescan only if the tab still shows that notebook.
 async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}) {
-  if (notebookSwitchedTo(tab)) {
+  const switched = notebookSwitchedTo(tab);
+  if (settleMs) {
+    // The URL names the new notebook before the page has drawn it: no Resume
+    // (it would scan the old notebook's lists) until the settle wait is over
+    resumeBannerSeq++; // drops a check still waiting on storage
+    hideResumeBanner();
+  } else {
+    refreshResumeBanner(); // follows the active tab's notebook, switched or not
+  }
+  if (!switched && settleMs) {
+    await new Promise(resolve => setTimeout(resolve, settleMs));
+    refreshResumeBanner();
+  }
+  if (switched) {
     resetChatPanel();
     const recordedId = lastPanelNotebookId;
     if (settleMs) {
@@ -992,8 +1016,10 @@ async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}
       if (!now || now.id !== tab.id || NLME.notebookIdFromUrl(now.url) !== recordedId) {
         // Nothing was rescanned: forget the id (unless a newer event replaced it) so the next event does
         if (lastPanelNotebookId === recordedId) lastPanelNotebookId = '';
+        refreshResumeBanner();
         return;
       }
+      refreshResumeBanner();
     }
     await rescanOpenPanelTab();
   } else if (sameNotebookScan && !jobLock.current()) {
@@ -1007,6 +1033,49 @@ async function runPendingNotebookCheck() {
   pendingNotebookCheck = false;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   await refreshForTab(tab, { sameNotebookScan: false });
+}
+
+// ---- Resume banner (Milestone 3c) ----
+// Shown above the results panel when the active tab's notebook has a job record
+// with items left and no job is running. Re-checked on panel open, on every tab
+// event (refreshForTab) and when a job ends (runExclusive). A newer check
+// supersedes an older one still waiting on storage.
+let resumeBannerSeq = 0;
+async function refreshResumeBanner() {
+  const seq = ++resumeBannerSeq;
+  try {
+    if (jobLock.current()) { hideResumeBanner(); return; }
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const notebookId = isNotebookUrl(tab?.url) ? NLME.notebookIdFromUrl(tab.url) : '';
+    let record = null;
+    if (notebookId) {
+      const key = NLME.jobRecordKey(notebookId);
+      record = (await chrome.storage.local.get(key))[key];
+    }
+    if (seq !== resumeBannerSeq) return;
+    if (jobLock.current() || !NLME.jobRecordUsable(record, notebookId)) { hideResumeBanner(); return; }
+    showResumeBanner(record, {
+      onResume: () => { resumeBannerSeq++; return resumeJob(record); }, // a check in flight must not re-show it
+      onDiscard: () => discardJobRecord(record)
+    });
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Resume banner check failed:', error);
+    if (seq === resumeBannerSeq) hideResumeBanner();
+  }
+}
+
+// Discard: remove the record the banner showed, but only if it is still that one
+// (a newer export may have replaced it since).
+async function discardJobRecord(record) {
+  resumeBannerSeq++; // a check in flight must not put the banner back
+  try {
+    const key = NLME.jobRecordKey(record.notebookId);
+    const stored = (await chrome.storage.local.get(key))[key];
+    if (stored && stored.id === record.id) await chrome.storage.local.remove(key);
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Job record not discarded:', error);
+    showToast('Could not discard the earlier export', 'warning');
+  }
 }
 
 async function handleTabChange(activeInfo) {
@@ -1256,7 +1325,7 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
 /**
  * Download one artifact (row button, Studio list): today's single-file
  * names ([report]_Title.md, [audio-overview]_Title.m4a, ...); a Data Table
- * or mind map is one ZIP ([data-table]_Title.zip, [MINDMAP]_Title.zip).
+ * or mind map is one ZIP ([data-table]_Title.zip, [mind-map]_Title.zip).
  */
 async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName) {
   const stem = `[${getArtifactTypePrefix(artifactType)}]_${sanitizeFilename(artifactName)}`;
@@ -2498,11 +2567,7 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
     // No quotes (titles-only, reports): one line per source with all its
     // numbers; every number keeps its own anchor so body links still resolve
     markdown += '\n\n---\n\n## Sources\n\n';
-    for (const group of NLME.groupCitationEntries(entries)) {
-      const anchors = group.numbers.map(n => `<a id="${anchorPrefix}src-${n}"></a>`).join('');
-      const links = group.numbers.map(n => `[[${n}]](#${anchorPrefix}cite-ref-${n}-1)`).join(' ');
-      markdown += `${anchors}\n**${links}** ${group.text}\n\n`;
-    }
+    markdown += NLME.groupedSourcesMarkdown(entries, anchorPrefix);
   } else if (entries.length > 0) {
     markdown += '\n\n---\n\n## Sources\n\n';
 
@@ -2546,9 +2611,23 @@ let exportTimer = null;
 let exportStartedAt = 0;
 let lastChatScanTiming = null;
 
+// Citation cache use this export (Milestone 3c): items whose citation quotes
+// were read (hits: reused from the cache instead of hovering)
+let citationCacheTally = { hits: 0, items: 0 };
+
+function tallyCitationCache(fromCache, audit = null) {
+  citationCacheTally.items++;
+  if (fromCache) citationCacheTally.hits++;
+  if (audit) {
+    audit.cachedItems = (audit.cachedItems || 0) + 1;
+    if (fromCache) audit.cacheHits = (audit.cacheHits || 0) + 1;
+  }
+}
+
 function startExportTiming() {
   exportTimer = NLME.createPhaseTimer();
   exportStartedAt = performance.now();
+  citationCacheTally = { hits: 0, items: 0 };
 }
 
 function mergeTiming(response) {
@@ -2559,7 +2638,9 @@ function timingSummary() {
   if (!exportTimer) return '';
   const summary = NLME.formatTimingSummary(exportTimer.totals(), performance.now() - exportStartedAt);
   console.log('[NotebookLM Takeout][timing]\n' + summary);
-  return '\n' + summary;
+  const cacheLine = citationCacheTally.hits > 0
+    ? `- Citations from cache: ${citationCacheTally.hits} of ${citationCacheTally.items} items\n` : '';
+  return '\n' + summary + cacheLine;
 }
 
 // Export audit (Milestone 2, Resilience #1): what the page showed vs what
@@ -2583,7 +2664,9 @@ function addCitationCoverage(audit, html, sources, needQuotes, page = null) {
 }
 
 function newAudit() {
-  return { expected: { items: 0, citations: 0, formulas: 0 }, written: { items: 0, citations: 0, formulas: 0 } };
+  // cacheHits / cachedItems: items whose citation quotes came from the cache
+  // / items that had citations to read (Milestone 3c)
+  return { expected: { items: 0, citations: 0, formulas: 0 }, written: { items: 0, citations: 0, formulas: 0 }, cacheHits: 0, cachedItems: 0 };
 }
 
 // Converts and counts formulas: .katex on the page vs formulas in the final
@@ -2597,9 +2680,19 @@ function convertCounted(audit, html, convert, page = null) {
   return markdown;
 }
 
-function auditMarkdown(title, audit) {
+function auditSection(audit) {
   const result = NLME.auditExport(audit);
-  return { ok: result.ok, text: `# ${title} Audit\n\nWhat the page showed vs what was exported:\n\n${result.lines.join('\n')}\n` };
+  const cacheLine = audit.cacheHits > 0 ? `\nCitations from cache: ${audit.cacheHits} of ${audit.cachedItems} items\n` : '';
+  return { ok: result.ok, body: `What the page showed vs what was exported:\n\n${result.lines.join('\n')}\n${cacheLine}` };
+}
+
+// runTotals: the run-wide audit, appended as a second section (the last part
+// of a split export carries it; every part's own audit comes first)
+function auditMarkdown(title, audit, { runTotals = null } = {}) {
+  const section = auditSection(audit);
+  let text = `# ${title} Audit\n\n${section.body}`;
+  if (runTotals) text += `\n## Whole run\n\n${auditSection(runTotals).body}`;
+  return { ok: section.ok, text };
 }
 
 async function generateZipTimed(zip) {
@@ -2626,11 +2719,12 @@ async function runExclusive(name, fn) {
     return JOB_BUSY;
   }
   document.body.classList.add('job-running');
+  hideResumeBanner(); // its numbers go stale while a job writes the record
   // Disable (not just dim) the tab controls so keyboard activation is
   // blocked too. Mark them: a scan may replace a control with a clone (the
   // chat Export button), and the clone must be re-enabled too, so restore
   // by the mark, not by the original element.
-  Array.from(document.querySelectorAll('.tab-content button, .tab-content input, #full-takeout-btn, #takeout-zip-checkbox'))
+  Array.from(document.querySelectorAll('.tab-content button, .tab-content input, .tab-content select, #full-takeout-btn, #takeout-zip-checkbox'))
     .filter(el => !el.disabled && el.id !== 'cancel-download-btn')
     .forEach(el => { el.disabled = true; el.setAttribute('data-job-disabled', ''); });
   try {
@@ -2652,6 +2746,8 @@ async function runExclusive(name, fn) {
     });
     // Blanket re-enabling above would leave K = 0 buttons enabled
     refreshListButtons();
+    // The job may have left (or finished) a record: show or hide Resume
+    refreshResumeBanner();
     // A tab switch or navigation to another notebook during the job was skipped
     runPendingNotebookCheck().catch(e => console.warn('[NotebookLM Takeout] Notebook check failed:', e));
   }
@@ -2675,12 +2771,20 @@ function refreshListButtons() {
   updateStudioBulkButtonsState();
 }
 
+// The Retry / Resume chain (sidebar-takeout.js: runChain) is running under the job
+// lock. requestCancel sets chainCancelRequested; the chain checks it before each step.
+let chainActive = false;
+let chainCancelRequested = false;
+
 // Same path as the page overlay's Cancel button: the content script flags the
 // export as cancelled and broadcasts CANCEL_EXPORT to every running exporter.
 // Target tab: activeShellTabId (sidebar-takeout.js, the running shell's tab),
 // else jobTabId (the active tab when the job started), else the current tab.
 async function requestCancel() {
   if (!jobLock.current()) return;
+  // A Retry / Resume chain has moments with no shell (between two steps): note the
+  // cancel on the chain so it does not start the next step
+  if (chainActive) chainCancelRequested = true;
   try {
     // The export shell's tab first: retries and Download Selected run on the tab
     // they were scanned on, which need not be the active one. The content script
@@ -2881,17 +2985,136 @@ async function getProjectName(tabId) {
   return 'NotebookLM';
 }
 
+// ---- Job records (Milestone 3c) ----
+// One record per notebook in chrome.storage.local (nlme.job.<notebookId>): the list
+// keys of an export's items still to do or failed, never payloads. Task 4 reads it
+// to offer "Resume". Rules: AGENT.md "Milestone 3c contracts". Recording never
+// affects an export: every storage call is caught inside NLME.createJobRecorder.
+
+// The accessors each tab's createListController uses, so keys match fresh scans
+const JOB_KEY_ACCESSORS = {
+  notes: { titleOf: n => n.title, typeOf: n => n.type },
+  sources: { titleOf: s => s.title, typeOf: s => s.type },
+  artifacts: { titleOf: a => a.label, typeOf: a => a.type }
+};
+
+// Keys of `items` (one category): the keys the tab list stamped on them (keys in
+// the whole list, so a selected subset or a retry still matches a fresh scan),
+// else computed over `items`. That fallback is only right when `items` is the
+// whole fresh scan; a subset must be stamped (see stampJobKeys) before it is cut.
+function jobItemKeys(category, items) {
+  if (items.length && items.every(item => item && typeof item._listKey === 'string')) return items.map(item => item._listKey);
+  return NLME.listItemKeys(items, JOB_KEY_ACCESSORS[category]);
+}
+
+// Stamp each item with its key in the whole `items` list (non-enumerable; what
+// createListController does for the tab lists). Full Takeout stamps its scans, so
+// a retry of a subset, or of an enabled-only list, keeps the tab's "#n" keys.
+// Keys must be stamped over the FULL fresh scan before any subset is taken: keys
+// computed over a subset differ from a fresh scan's for duplicate titles (Resume
+// in Task 4 depends on this).
+function stampJobKeys(category, items) {
+  const keys = NLME.listItemKeys(items, JOB_KEY_ACCESSORS[category]);
+  items.forEach((item, i) => {
+    try { Object.defineProperty(item, '_listKey', { value: keys[i], configurable: true, writable: true }); } catch (_) { /* the record computes its own */ }
+  });
+}
+
+/**
+ * Start recording an export. Returns null (nothing is recorded) when the tab has
+ * no notebook id or there is nothing to do; else a tracker the runners call:
+ * done(category, item) / fail(category, item) per item, commit() after a package
+ * holding the done items is saved, discard() when a runner threw before saving
+ * its staged successes, finish(clean) at the end. None of them throws.
+ *
+ * @param {{ tab: { url: string } }} shell
+ * @param {'notes'|'sources'|'artifacts'|'takeout'} kind
+ * @param {string} label
+ * @param {{ [category: string]: object[] }} itemsByCategory the items to export, by category
+ * @param {{ update?: boolean }} [options] update: a retry or resume (also taken
+ *   by a fresh export when the notebook's stored record is another kind's with
+ *   items left, NLME.jobRecordMode). It never
+ *   creates or replaces a record: it loads the notebook's existing one (none:
+ *   returns null) and marks its items done or failed on it, only for keys the
+ *   record holds, and writes nothing until one changes.
+ */
+async function startJobRecord(shell, kind, label, itemsByCategory, { update = false } = {}) {
+  try {
+    const notebookId = NLME.notebookIdFromUrl(shell.tab && shell.tab.url);
+    if (!notebookId) return null;
+    const keyOf = new Map();
+    const keysByCategory = {};
+    for (const [category, items] of Object.entries(itemsByCategory)) {
+      const keys = jobItemKeys(category, items);
+      items.forEach((item, i) => keyOf.set(item, keys[i]));
+      keysByCategory[category] = keys;
+    }
+    let record;
+    const storageKey = NLME.jobRecordKey(notebookId);
+    const stored = (await chrome.storage.local.get(storageKey))[storageKey];
+    // A fresh export never replaces a pending record of another kind (a
+    // cancelled takeout keeps its Resume offer through a small Sources export):
+    // it runs as an update, marking only the keys that record holds
+    const updating = update || NLME.jobRecordMode(stored, kind) === 'update';
+    if (updating) {
+      const arrays = group => !!group && typeof group === 'object' && !Array.isArray(group) && Object.values(group).every(Array.isArray);
+      if (!stored || !arrays(stored.remaining) || !arrays(stored.failed)) return null;
+      record = stored;
+    } else {
+      const now = Date.now();
+      record = NLME.newJobRecord({ id: `${kind}-${now}`, kind, label, notebookId, keysByCategory, now });
+      if (NLME.jobRecordFinished(record)) return null;
+    }
+    const recorder = NLME.createJobRecorder({ storage: chrome.storage.local, record });
+    if (!updating) await recorder.start();
+    // Never throws: a bad record must not skip NAVIGATE_BACK or fail a package
+    const safe = fn => (...args) => {
+      try { return fn(...args); } catch (error) { console.warn('[NotebookLM Takeout] Job record update failed:', error); }
+    };
+    return {
+      done: safe((category, item) => { if (keyOf.has(item)) recorder.done(category, keyOf.get(item)); }),
+      fail: safe((category, item) => { if (keyOf.has(item)) recorder.fail(category, keyOf.get(item)); }),
+      commit: safe(() => recorder.commit()),
+      discard: safe(() => recorder.discard()),
+      finish: async clean => { try { await recorder.finish({ clean }); } catch (error) { console.warn('[NotebookLM Takeout] Job record not finished:', error); } }
+    };
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Job record not started:', error);
+    return null;
+  }
+}
+
+// A tab export's record around its runner: `run(tracker)` returns the runner's
+// { result }. Clean = not cancelled or stopped; a throw leaves the record.
+// update (options.updateRecord of the exports, set by every retry and by resume):
+// see startJobRecord. record false: no record at all (single-item row exports).
+async function withJobRecord(shell, kind, label, category, items, run, { update = false, record = true } = {}) {
+  // record false: a one-shot row export (a single source's download) must not
+  // replace or clear a pending record
+  const tracker = record ? await startJobRecord(shell, kind, label, { [category]: items }, { update }) : null;
+  let out;
+  try {
+    out = await run(tracker);
+  } catch (error) {
+    if (tracker) { tracker.discard(); await tracker.finish(false); }
+    throw error;
+  }
+  if (tracker) await tracker.finish(!out.result.cancelled && !out.result.stopped);
+  return out;
+}
+
 // Notes export (Milestone 3a): the shared export shell around runNotesJob.
 // Each batch becomes one <Notebook>-notes-<ts>.zip from buildNotesFiles.
 // options.tabId: the tab the notes were scanned on (a retry); default the active tab.
 // Returns withExportShell's outcome ({ result, message, level, saved, errors } or
 // { declined } / { aborted }); the Full Takeout retry chain reads it.
-async function exportNotesAsMarkdown(selectedNotes, { tabId } = {}) {
+async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = false } = {}) {
   startExportTiming();
   console.log('[NotebookLM Takeout] Starting export for notes:', selectedNotes.length);
 
   return withExportShell({ label: 'notes', healthType: 'notes', overlayMessage: 'Preparing to export notes...', tabId }, async shell => {
-    const { result, zips, auditOk } = await runNotesJob(shell, selectedNotes);
+    const { result, zips, auditOk } = await withJobRecord(shell, 'notes', 'Notes', 'notes', selectedNotes,
+      tracker => runNotesJob(shell, selectedNotes, { tracker }), { update: updateRecord });
 
     return shell.finish({
       kind: 'notes',
@@ -2902,7 +3125,7 @@ async function exportNotesAsMarkdown(selectedNotes, { tabId } = {}) {
         ? `Stopped after ${result.exported} of ${selectedNotes.length} notes: citations could not be read (Gemini Notebook may have changed). Run the health check 🩺; details in errors.md.`
         : undefined,
       saved: zips,
-      retry: retryFor(result.failedItems, 'Notes export', failed => exportNotesAsMarkdown(failed, { tabId: shell.tab.id }))
+      retry: retryFor(result.failedItems, 'Notes export', failed => exportNotesAsMarkdown(failed, { tabId: shell.tab.id, updateRecord: true }))
     });
   });
 }
@@ -2986,7 +3209,7 @@ function batchPrefix(pathPrefix, info) {
  *   zips/parts/packages: what target.written holds (see newWritten)
  *   result: runExportJob's result
  */
-async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'notes', folder = null, variantSettings = settings, itemDir = 'notes/', written = newWritten() } = {}) {
+async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'notes', folder = null, variantSettings = settings, itemDir = 'notes/', written = newWritten(), tracker = null } = {}) {
   const perZip = settings.notesPerZip;
   // Shared by every extractNoteItem call: audit counters, early-stop
   // counters, and the DOM-warning decision
@@ -2999,6 +3222,10 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
     declined: false // user declined the DOM warning: stops like a Cancel
   };
   let packaged = 0; // notes written to ZIPs so far
+  // Snapshot of the run-wide audit when the previous part was packaged, and
+  // the items attempted by then: a part's audit is the difference
+  let lastPartAudit = newAudit();
+  let lastPartAttempted = 0;
 
   // Item counts go in last, once every written note is known
   const finalAudit = () => {
@@ -3015,7 +3242,8 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
     perZip,
     extractOne: (note, ctx) => extractNoteItem(shell, note, ctx, state, variantSettings),
     // Always close the note viewer, even if extraction failed
-    afterEach: async () => {
+    afterEach: async (note, { failed }) => {
+      if (tracker) (failed ? tracker.fail : tracker.done)('notes', note);
       try {
         const backResponse = await chrome.tabs.sendMessage(shell.tab.id, { type: 'NAVIGATE_BACK' });
         console.log('[NotebookLM Takeout] Navigate back response:', backResponse);
@@ -3030,9 +3258,20 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
     packageBatch: async (notes, info) => {
       packaged += notes.length;
       shell.progress(`Creating ZIP ${info.batchIndex}/${info.totalBatches}...`, 1);
-      // _audit.md goes into the last ZIP the run writes (an errors-only ZIP
-      // too: the outcome toast may point at it)
-      const auditText = info.isLast ? auditMarkdown('Notes Export', finalAudit()).text : null;
+      // Every part gets an _audit.md for its own items (what was added since
+      // the previous part); the last part (an errors-only ZIP too: the outcome
+      // toast may point at it) adds the run-wide totals as a second section.
+      // An unsplit export keeps the single run-wide audit.
+      const runAudit = finalAudit();
+      const totalNow = info.exported + info.failed;
+      const partAudit = NLME.diffAudit(runAudit, lastPartAudit);
+      partAudit.expected.items = totalNow - lastPartAttempted;
+      partAudit.written.items = notes.length;
+      lastPartAudit = JSON.parse(JSON.stringify(runAudit));
+      lastPartAttempted = totalNow;
+      const auditText = info.multi
+        ? auditMarkdown(`Notes Export (part ${info.batchIndex} of ${info.totalBatches})`, partAudit, { runTotals: info.isLast ? runAudit : null }).text
+        : auditMarkdown('Notes Export', runAudit).text;
       const files = buildNotesFiles(notes, {
         meta: shell.meta,
         errors: info.errors,
@@ -3045,6 +3284,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
       });
       await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, written });
       console.log(`[NotebookLM Takeout] Downloaded notes ZIP ${info.batchIndex}/${info.totalBatches}`);
+      if (tracker) tracker.commit(); // these notes are on disk now
 
       // CRITICAL: free each batch's memory before the next one
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -3097,7 +3337,8 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
         sourceIndex: note.sourceIndex,
         // Only download images if user has enabled an image version
         includeCitationImages: !!variantSettings.exportNoteWithImages,
-        citationDetail: settings.citationDetail
+        citationDetail: settings.citationDetail,
+        reuseCitations: settings.reuseCitations !== false
       }
     });
     console.log('[NotebookLM Takeout] Note data received:', noteData);
@@ -3125,8 +3366,14 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
         addCitationCoverage(state.audit, noteData.html, noteData.sources, settings.citationDetail === 'quotes', notePage);
       }
       if (notePage.citationNumbers.length > 0 && settings.citationDetail === 'quotes') {
-        state.notesWithMarkers++;
-        if ((noteData.sources || []).length === 0) state.unreadNotes++;
+        const fromCache = noteData.fromCache === true;
+        tallyCitationCache(fromCache, state.audit);
+        // Only hovered notes can show drift: a cache hit always has sources, so
+        // counting it would keep this guard from ever firing
+        if (!fromCache) {
+          state.notesWithMarkers++;
+          if ((noteData.sources || []).length === 0) state.unreadNotes++;
+        }
       }
       if (state.notesWithMarkers === 3 && state.unreadNotes === 3) {
         // The first three notes with citations all failed: the page has
@@ -3240,7 +3487,8 @@ async function exportSingleNote(note) {
         noteTitle: note.title,
         sourceIndex: note.sourceIndex,
         includeCitationImages: needsImages,
-        citationDetail: settings.citationDetail
+        citationDetail: settings.citationDetail,
+        reuseCitations: settings.reuseCitations !== false
       }
     });
   } finally {
@@ -3256,7 +3504,7 @@ async function exportSingleNote(note) {
   let filesWritten = 0;
 
   if (noteData.isMindmap) {
-    const files = await mindmapFiles(`[MINDMAP]_${sanitizedTitle}`, noteData.svgContent, noteData.treeData, note.title);
+    const files = await mindmapFiles(`[mind-map]_${sanitizedTitle}`, noteData.svgContent, noteData.treeData, note.title);
     await saveFiles(files);
     return { success: true, filesWritten: files.length };
   }
@@ -3709,7 +3957,7 @@ function renderSourcesList(sources, skippedNotes = 0) {
     const btn = e.target.closest('.download-single-btn');
     if (!btn) return;
     const source = sources[parseInt(btn.dataset.index, 10)];
-    if (source) await runExclusive('Sources export', () => exportSources([source]));
+    if (source) await runExclusive('Sources export', () => exportSources([source], { record: false }));
   });
 
   // The button is static markup: bind once, read the current controller on click
@@ -3733,12 +3981,13 @@ function renderSourcesList(sources, skippedNotes = 0) {
 // buildSourcesFiles.
 // options.tabId: the tab the sources were scanned on (a retry); default the active tab.
 // Returns withExportShell's outcome, like exportNotesAsMarkdown.
-async function exportSources(selectedSources, { tabId } = {}) {
+async function exportSources(selectedSources, { tabId, updateRecord = false, record = true } = {}) {
   startExportTiming();
   console.log(`[NotebookLM Takeout] Exporting ${selectedSources.length} sources...`);
 
   return withExportShell({ label: 'sources', healthType: 'sources', overlayMessage: 'Preparing to export sources...', tabId }, async shell => {
-    const { result, zips, auditOk } = await runSourcesJob(shell, selectedSources);
+    const { result, zips, auditOk } = await withJobRecord(shell, 'sources', 'Sources', 'sources', selectedSources,
+      tracker => runSourcesJob(shell, selectedSources, { tracker }), { update: updateRecord, record });
 
     return shell.finish({
       kind: 'sources',
@@ -3746,7 +3995,7 @@ async function exportSources(selectedSources, { tabId } = {}) {
       result,
       auditOk,
       saved: zips,
-      retry: retryFor(result.failedItems, 'Sources export', failed => exportSources(failed, { tabId: shell.tab.id }))
+      retry: retryFor(result.failedItems, 'Sources export', failed => exportSources(failed, { tabId: shell.tab.id, updateRecord: true }))
     });
   });
 }
@@ -3760,7 +4009,7 @@ async function exportSources(selectedSources, { tabId } = {}) {
  * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, parts: number, packages: number }>}
  *   zips/parts/packages: what target.written holds (see newWritten)
  */
-async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind = 'sources', folder = null, variantSettings = settings, itemDir = 'sources/', written = newWritten() } = {}) {
+async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind = 'sources', folder = null, variantSettings = settings, itemDir = 'sources/', written = newWritten(), tracker = null } = {}) {
   const perZip = settings.sourcesPerZip;
   // Shared by every extractSourceItem call: audit counters and the
   // DOM-warning decision
@@ -3787,7 +4036,8 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
     perZip,
     extractOne: (source, ctx) => extractSourceItem(shell, source, ctx, state, variantSettings),
     // Close the source viewer once per source, whether extraction worked or not
-    afterEach: async () => {
+    afterEach: async (source, { failed }) => {
+      if (tracker) (failed ? tracker.fail : tracker.done)('sources', source);
       try {
         const backResponse = await chrome.tabs.sendMessage(shell.tab.id, { type: 'NAVIGATE_BACK' });
         console.log('[NotebookLM Takeout] NAVIGATE_BACK response:', backResponse);
@@ -3817,6 +4067,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
       });
       await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, written });
       console.log(`[NotebookLM Takeout] Downloaded sources ZIP ${info.batchIndex}/${info.totalBatches}`);
+      if (tracker) tracker.commit(); // these sources are on disk now
 
       // CRITICAL: free each batch's memory before the next one
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -4109,11 +4360,12 @@ function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batch
       youtubeContent += `${idx + 1}. ${item.title}\n`;
       youtubeContent += `   ${item.url}\n\n`;
     });
-    files.push({ path: `${itemDir}youtube-urls.txt`, data: youtubeContent, title: 'YouTube Source URLs (formatted)' });
+    files.push({ path: `${itemDir}youtube-urls.txt`, data: youtubeContent, title: 'YouTube Source URLs (formatted)', itemKind: 'source-urls' });
     files.push({
       path: `${itemDir}youtube-urls.raw.txt`,
       data: youtubeUrls.map(item => item.url).join('\n') + '\n',
-      title: 'YouTube Source URLs (raw list)'
+      title: 'YouTube Source URLs (raw list)',
+      itemKind: 'source-urls'
     });
   }
 
@@ -4483,18 +4735,20 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
  *   variantSettings: where the export* variant settings come from (default `settings`)
  * @returns {Promise<object>} ProcessedMessage: { date, userMessage,
  *   aiResponseHTML, sources: [{ sourceIndex, text, quote }], fullCitations,
- *   stats: { hasCitations, citationsFound, successfulExtractions, failedExtractions } }
+ *   stats: { hasCitations, citationsFound, successfulExtractions, failedExtractions }, fromCache }
  */
 async function extractChatPair(shell, pair, ctx, { citationMode = 'quotes', total, variantSettings = settings }) {
   const n = ctx.index + 1;
   const stats = { hasCitations: false, citationsFound: 0, successfulExtractions: 0, failedExtractions: 0 };
+  let fromCache = false; // citation quotes reused from the cache (Milestone 3c)
   const message = sources => ({
     date: pair.date,
     userMessage: pair.userMessage,
     aiResponseHTML: pair.aiResponseHTML,
     sources,
     fullCitations: citationMode === 'quotes',
-    stats
+    stats,
+    fromCache
   });
   const warn = (type, msg, extra = {}) => ctx.warn({
     message: msg,
@@ -4570,41 +4824,76 @@ async function extractChatPair(shell, pair, ctx, { citationMode = 'quotes', tota
         const sourceIndices = Array.from(messageSources.keys());
         console.log(`[NotebookLM Takeout] Message ${n}: Extracting sourceIndices:`, sourceIndices);
 
-        // Call content script to extract citations by temporarily inserting HTML
-        exportTimer?.start('chat.citations');
-        const fullCitationData = await chrome.tabs.sendMessage(shell.tab.id, {
-          type: 'EXTRACT_MESSAGE_CITATIONS',
-          data: {
-            messageIndex: pair.domIndex ?? ctx.index,
-            messageHTML: pair.aiResponseHTML,
-            sourceIndices: sourceIndices,
-            includeCitationImages: !!variantSettings.exportNoteWithImages
-          }
-        });
-
-        console.log(`[NotebookLM Takeout] Message ${n}: Received citation data:`, fullCitationData);
-        exportTimer?.end('chat.citations');
-        mergeTiming(fullCitationData);
-
-        // Merge quotes into messageSources
-        if (fullCitationData && fullCitationData.sourcesByIndex) {
-          messageSources.forEach((source, sourceIndex) => {
-            const fullData = fullCitationData.sourcesByIndex[sourceIndex];
-            if (fullData) {
-              source.text = fullData.text || source.text;
-              source.quote = fullData.quote || '';
-              stats.successfulExtractions++;
-              console.log(`[NotebookLM Takeout] Message ${n}, source ${sourceIndex}: Updated with quote (${source.quote.length} chars)`);
-            } else {
-              stats.failedExtractions++;
+        // Citation cache (Milestone 3c): same answer text and source numbers as
+        // an earlier complete read -> reuse the quotes; never with images
+        const cacheOn = settings.reuseCitations !== false && !variantSettings.exportNoteWithImages;
+        const cacheNotebookId = NLME.notebookIdFromUrl(shell.tab.url);
+        const cacheKey = cacheOn
+          ? NLME.citationCacheKey({ kind: 'chat', text: tempDiv.textContent, numbers: sourceIndices })
+          : null;
+        const cached = cacheOn ? await NLME.citationCacheRead(chrome.storage.local, cacheNotebookId, cacheKey) : null;
+        const cachedOk = !!cached && cached.length === sourceIndices.length &&
+          cached.every((c, i) => c && String(c.sourceIndex) === String(sourceIndices[i]));
+        tallyCitationCache(cachedOk);
+        if (cachedOk) {
+          fromCache = true;
+          cached.forEach(c => {
+            const source = messageSources.get(String(c.sourceIndex));
+            source.text = c.text || source.text;
+            source.quote = c.quote || '';
+            stats.successfulExtractions++;
+          });
+          console.log(`[NotebookLM Takeout] Message ${n}: Citation cache hit, ${cached.length} quote(s) reused`);
+        } else {
+          // Call content script to extract citations by temporarily inserting HTML
+          exportTimer?.start('chat.citations');
+          const fullCitationData = await chrome.tabs.sendMessage(shell.tab.id, {
+            type: 'EXTRACT_MESSAGE_CITATIONS',
+            data: {
+              messageIndex: pair.domIndex ?? ctx.index,
+              messageHTML: pair.aiResponseHTML,
+              sourceIndices: sourceIndices,
+              includeCitationImages: !!variantSettings.exportNoteWithImages
             }
           });
-        }
 
-        // Track any errors
-        if (fullCitationData && fullCitationData.errors && fullCitationData.errors.length > 0) {
-          stats.failedExtractions += fullCitationData.errors.length;
-          fullCitationData.errors.forEach(err => warn('citation_extraction', err));
+          console.log(`[NotebookLM Takeout] Message ${n}: Received citation data:`, fullCitationData);
+          exportTimer?.end('chat.citations');
+          mergeTiming(fullCitationData);
+
+          // Merge quotes into messageSources
+          if (fullCitationData && fullCitationData.sourcesByIndex) {
+            messageSources.forEach((source, sourceIndex) => {
+              const fullData = fullCitationData.sourcesByIndex[sourceIndex];
+              if (fullData) {
+                source.text = fullData.text || source.text;
+                source.quote = fullData.quote || '';
+                stats.successfulExtractions++;
+                console.log(`[NotebookLM Takeout] Message ${n}, source ${sourceIndex}: Updated with quote (${source.quote.length} chars)`);
+              } else {
+                stats.failedExtractions++;
+              }
+            });
+          }
+
+          // Track any errors
+          if (fullCitationData && fullCitationData.errors && fullCitationData.errors.length > 0) {
+            stats.failedExtractions += fullCitationData.errors.length;
+            fullCitationData.errors.forEach(err => warn('citation_extraction', err));
+          }
+
+          // Store only a complete read: every source has a filename and a quote
+          // and nothing was reported as failed (never a partial result)
+          if (cacheKey && !(fullCitationData && fullCitationData.errors && fullCitationData.errors.length > 0)) {
+            const toStore = sourceIndices.map(si => {
+              const src = messageSources.get(si);
+              return { sourceIndex: si, text: src.text, quote: src.quote };
+            });
+            const readAll = sourceIndices.every(si => fullCitationData && fullCitationData.sourcesByIndex && fullCitationData.sourcesByIndex[si]);
+            if (readAll && NLME.citationSourcesComplete(toStore, sourceIndices.length)) {
+              await NLME.citationCacheWrite(chrome.storage.local, cacheNotebookId, cacheKey, toStore);
+            }
+          }
         }
       } catch (error) {
         console.error(`[NotebookLM Takeout] Message ${n}: Error extracting full citations:`, error);
@@ -4648,6 +4937,11 @@ function buildChatAuditDoc(chatData, messages, citationMode = 'quotes') {
   const audit = newAudit();
   audit.expected.items = chatData.stats?.pairsInDom ?? chatData.messagePairs.length;
   audit.written.items = messages.length;
+  if (citationMode === 'quotes') {
+    // Answers whose quotes came from the cache (Milestone 3c)
+    audit.cachedItems = messages.filter(m => m && m.stats && m.stats.citationsFound > 0).length;
+    audit.cacheHits = messages.filter(m => m && m.fromCache).length;
+  }
   if (citationMode !== 'none') {
     chatData.messagePairs.forEach((pair, i) => {
       addCitationCoverage(audit, pair.aiResponseHTML, messages[i] ? messages[i].sources : [], citationMode === 'quotes');
@@ -4655,7 +4949,7 @@ function buildChatAuditDoc(chatData, messages, citationMode = 'quotes') {
   }
   const chatHtml = chatData.messagePairs.map(p => p.aiResponseHTML || '').join('\n');
   convertCounted(audit, chatHtml, () => convertChatToMarkdown(
-    chatData.notebookTitle, chatData.notebookSummary, messages, false, citationMode === 'none'));
+    chatData.notebookTitle, chatData.notebookSummary, messages, false, citationMode === 'none', citationMode === 'titles'));
   return auditMarkdown('Chat Export', audit);
 }
 
@@ -4703,7 +4997,7 @@ function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, parti
   // answer has quotes; with-images only when the Markdown has images
   const versionFiles = [];
   if (messages.length > 0) {
-    const toMarkdown = codeBlocks => convertChatToMarkdown(chatData.notebookTitle, chatData.notebookSummary, messages, codeBlocks, citationMode === 'none');
+    const toMarkdown = codeBlocks => convertChatToMarkdown(chatData.notebookTitle, chatData.notebookSummary, messages, codeBlocks, citationMode === 'none', citationMode === 'titles');
     const baseMarkdown = toMarkdown(false);
     const hasQuotes = messages.some(m => (m.sources || []).some(src => src.quote && src.quote.trim()));
     const hasImages = /!\[/.test(baseMarkdown);
@@ -4825,8 +5119,9 @@ function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, parti
  * Convert chat data to markdown format
  * dropCitations: Citation detail 'none' — remove the [n] markers and the
  * Sources section (the same meaning as convertToMarkdown's last parameter).
+ * groupTitles: Citation detail 'titles' — one Sources line per source title.
  */
-function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citationsCodeBlock = true, dropCitations = false) {
+function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citationsCodeBlock = true, dropCitations = false, groupTitles = false) {
   logger.info('Markdown', `Converting chat to markdown: "${notebookTitle}"`);
   logger.info('Markdown', `  - Message count: ${messages.length}`);
 
@@ -4899,7 +5194,11 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
     // Add sources for this message
     if (!dropCitations && msg.sources && msg.sources.length > 0) {
       markdown += '**Sources:**\n\n';
-      msg.sources.forEach(source => {
+      if (groupTitles) {
+        // Titles only: one line per source title, as in notes
+        markdown += NLME.groupedSourcesMarkdown(
+          msg.sources.map(source => ({ number: source.sourceIndex, text: source.text })), `msg-${idx}-`);
+      } else msg.sources.forEach(source => {
         // Add anchor for source with message-specific ID
         markdown += `<a id="msg-${idx}-src-${source.sourceIndex}"></a>\n`;
         markdown += `**[[${source.sourceIndex}]](#msg-${idx}-cite-ref-${source.sourceIndex}-1)** ${source.text}\n`;
@@ -5307,9 +5606,6 @@ function renderStudioList(items) {
   const rowHtml = (item, idx) => {
     const iconSvg = getIconForType(item.type);
     const detailsStr = item.details ? ` · ${escapeHtml(item.details)}` : '';
-    const deleteBtnAttrs = isStudioItemDeletable(item)
-      ? `title="Delete ${escapeHtml(item.label)}"`
-      : 'disabled title="Delete this note in the Sources panel"';
     return `
         <div class="scan-item-icon">${iconSvg}</div>
         <div class="scan-item-info">
@@ -5322,7 +5618,7 @@ function renderStudioList(items) {
           </svg>
           <span class="download-status"></span>
         </button>
-        <button class="btn-icon studio-delete-btn" data-idx="${idx}" ${deleteBtnAttrs}>
+        <button class="btn-icon studio-delete-btn" data-idx="${idx}" title="Delete ${escapeHtml(item.label)}">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
             <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
           </svg>
@@ -5351,18 +5647,31 @@ function renderStudioList(items) {
     }
     const deleteBtn = e.target.closest('.studio-delete-btn');
     if (deleteBtn) {
-      handleStudioDeleteRow(parseInt(deleteBtn.dataset.idx, 10), deleteBtn);
+      runExclusive('Generated delete', () => handleStudioDeleteRow(parseInt(deleteBtn.dataset.idx, 10), deleteBtn));
     }
   });
 }
 
-// Sources-panel notes can be downloaded but not deleted here yet (Milestone 3c)
+// Every Generated item can be deleted: Studio items by label, Sources-panel
+// notes (kind 'source-note') by sourceIndex + title.
 function isStudioItemDeletable(item) {
-  return item.kind !== 'source-note';
+  return !!item;
+}
+
+// One delete request for a Generated item; throws on failure. Bulk delete passes
+// useIndex false for Studio items: by label only, a stale index could hit another item.
+async function sendStudioDelete(item, { useIndex = true } = {}) {
+  const message = item.kind === 'source-note'
+    ? { type: 'DELETE_SOURCE_NOTE', data: { sourceIndex: item.sourceIndex, title: item.label } }
+    : { type: 'DELETE_STUDIO_ITEM', data: useIndex ? { label: item.label, combinedIndex: item.combinedIndex } : { label: item.label } };
+  const response = await chrome.tabs.sendMessage(_studioTabId, message);
+  if (!response || !response.success) {
+    throw new Error(response?.error || 'Delete failed');
+  }
 }
 
 // The bulk buttons follow the selection: disabled at 0, otherwise "... Selected (K)".
-// Delete counts only the deletable selected items (Sources-panel notes never are).
+// Delete counts the deletable selected items (all of them).
 function updateStudioBulkButtonsState(controller = _studioListController) {
   const n = controller ? controller.selectedCount() : 0;
   const deletableN = controller ? controller.selectedItems().filter(isStudioItemDeletable).length : 0;
@@ -5429,14 +5738,7 @@ async function handleStudioDeleteRow(idx, btn) {
 
   if (btn) btn.disabled = true;
   try {
-    await chrome.tabs.sendMessage(_studioTabId, {
-      type: 'DELETE_STUDIO_ITEM',
-      data: { label: item.label, combinedIndex: item.combinedIndex }
-    }).then(response => {
-      if (!response || !response.success) {
-        throw new Error(response?.error || 'Delete failed');
-      }
-    });
+    await sendStudioDelete(item);
     showToast(`Deleted "${item.label}"`, 'success');
     // Refresh the list so indices are re-aligned with the DOM.
     await scanStudioPage();
@@ -5472,45 +5774,48 @@ async function handleStudioBulkDownload() {
 
 async function handleStudioBulkDelete() {
   // Only what is selected (and so visible) is deleted; the dialog names that count.
-  // Sources-panel notes cannot be deleted here yet: they are skipped, never sent.
   const selectedItems = _studioListController ? _studioListController.selectedItems() : [];
-  const selectedLabels = selectedItems.filter(isStudioItemDeletable).map(item => item.label);
-  const skippedCount = selectedItems.length - selectedLabels.length;
-  if (selectedLabels.length === 0) return;
+  // An untitled Studio item only has a made-up label ("Item 3"): deleting by it
+  // could hit a real item with that title, so a bulk delete skips it
+  const skippedUntitled = selectedItems.filter(item => item && item.untitled === true && item.kind !== 'source-note').length;
+  const deletable = selectedItems.filter(item => isStudioItemDeletable(item) && !(item.untitled === true && item.kind !== 'source-note'));
+  if (deletable.length === 0) {
+    if (skippedUntitled > 0) showToast(`Skipped ${skippedUntitled} untitled item(s): delete them one by one`, 'warning');
+    return;
+  }
 
-  const skippedNote = skippedCount > 0
-    ? ` ${skippedCount} Sources-panel note${skippedCount === 1 ? '' : 's'} will be skipped.`
-    : '';
-  if (!confirm(`Delete ${selectedLabels.length} item(s)${skippedNote} This cannot be undone.`)) return;
+  const skippedNote = skippedUntitled > 0 ? `\n\n${skippedUntitled} untitled item(s) will be skipped; delete those one by one.` : '';
+  if (!confirm(`Delete ${deletable.length} item(s)? This cannot be undone.${skippedNote}`)) return;
 
   const bulkBtn = document.getElementById('studio-delete-selected-btn');
   if (bulkBtn) bulkBtn.disabled = true;
 
+  // Studio items first (resolved by label each time, to survive index shifts),
+  // then Sources-panel notes from the highest sourceIndex down so the lower
+  // indexes stay valid while rows disappear.
+  const studioItems = deletable.filter(item => item.kind !== 'source-note');
+  const sourceNotes = deletable.filter(item => item.kind === 'source-note')
+    .sort((a, b) => (b.sourceIndex ?? -1) - (a.sourceIndex ?? -1));
+  const queue = [...studioItems, ...sourceNotes];
+
   let okCount = 0;
-  // Resolve by label each iteration to survive index shifts as rows disappear.
-  for (let i = 0; i < selectedLabels.length; i++) {
-    const label = selectedLabels[i];
+  for (let i = 0; i < queue.length; i++) {
+    const item = queue[i];
     try {
-      const response = await chrome.tabs.sendMessage(_studioTabId, {
-        type: 'DELETE_STUDIO_ITEM',
-        data: { label }
-      });
-      if (response && response.success) {
-        okCount++;
-      } else {
-        console.warn('[NotebookLM Takeout] Bulk delete skipped:', label, response?.error);
-      }
+      await sendStudioDelete(item, { useIndex: false });
+      okCount++;
     } catch (e) {
-      console.warn('[NotebookLM Takeout] Bulk delete error:', label, e);
+      console.warn('[NotebookLM Takeout] Bulk delete skipped:', item.label, e?.message || e);
     }
     // Let NotebookLM's undo toast dismiss and the list re-render before the next
-    // label lookup. Skip the delay on the last iteration.
-    if (i < selectedLabels.length - 1) {
+    // lookup. Skip the delay on the last iteration.
+    if (i < queue.length - 1) {
       await new Promise(r => setTimeout(r, 1000));
     }
   }
 
-  showToast(`Deleted ${okCount}/${selectedLabels.length} generated item(s)`, okCount === selectedLabels.length ? 'success' : 'warning');
+  const skippedText = skippedUntitled > 0 ? `, skipped ${skippedUntitled} untitled` : '';
+  showToast(`Deleted ${okCount}/${queue.length} generated item(s)${skippedText}`, okCount === queue.length && skippedUntitled === 0 ? 'success' : 'warning');
   await scanStudioPage();
 }
 
@@ -5524,7 +5829,7 @@ const ARTIFACT_ZIP_MAX_BYTES = 500 * 1024 * 1024;
 // <Notebook>-artifacts-<ts>.zip, or -partN.zip parts past the size cap; ZIP off: Downloads/<Notebook>/, one item
 // per call. Either way: <type folder>/<stem>.<ext>, _index.md, errors.md,
 // manifest.json. Returns withExportShell's outcome, like exportNotesAsMarkdown.
-async function downloadAllArtifacts(tabId, items) {
+async function downloadAllArtifacts(tabId, items, { updateRecord = false } = {}) {
   await preflightWarn(tabId, 'artifacts');
   const zipEnabled = document.getElementById('zip-checkbox')?.checked || false;
   const downloadBtn = document.getElementById('download-all-btn');
@@ -5534,7 +5839,8 @@ async function downloadAllArtifacts(tabId, items) {
   try {
     return await withExportShell({ label: 'artifacts', overlayMessage: 'Preparing to download artifacts...', tabId }, async shell => {
       const folder = zipEnabled ? null : (shell.projectName || 'NotebookLM');
-      const { result, zips, savedOutside } = await runArtifactsJob(shell, items, { folder });
+      const { result, zips, savedOutside } = await withJobRecord(shell, 'artifacts', 'Artifacts', 'artifacts', items,
+        tracker => runArtifactsJob(shell, items, { folder, tracker }), { update: updateRecord });
 
       return shell.finish({
         kind: 'artifacts',
@@ -5543,7 +5849,7 @@ async function downloadAllArtifacts(tabId, items) {
         errorNote: savedOutside > 0 ? `${savedOutside} saved separately to Downloads, see errors.md` : undefined,
         // ZIP mode: the ZIP names; folder mode: the folder, once it holds a file
         saved: folder ? (result.exported > 0 || result.errors.length > 0 ? [folder] : []) : zips,
-        retry: retryFor(result.failedItems, 'Download All', failed => downloadAllArtifacts(shell.tab.id, failed))
+        retry: retryFor(result.failedItems, 'Download All', failed => downloadAllArtifacts(shell.tab.id, failed, { updateRecord: true }))
       });
     });
   } finally {
@@ -5567,7 +5873,7 @@ async function downloadAllArtifacts(tabId, items) {
  * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, savedOutside: number, parts: number, packages: number }>}
  *   savedOutside: items Chrome saved itself (no capturable URL)
  */
-async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artifacts', folder = null, bothSlideFormats = false, written = newWritten() } = {}) {
+async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artifacts', folder = null, bothSlideFormats = false, written = newWritten(), tracker = null } = {}) {
   const zipMode = !folder;
   const place = files => (pathPrefix ? files.map(f => ({ ...f, path: pathPrefix + f.path })) : files);
   const stems = NLME.artifactStems(items);
@@ -5630,7 +5936,8 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
       return { item, files };
     },
     // Pause between items so Gemini Notebook is not hammered
-    afterEach: async item => {
+    afterEach: async (item, { failed }) => {
+      if (tracker) (failed ? tracker.fail : tracker.done)('artifacts', item);
       if (item !== items[items.length - 1]) await new Promise(resolve => setTimeout(resolve, 800));
     },
     packageBatch: async (results, info) => {
@@ -5644,10 +5951,12 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
         // Memory: the Blobs live only in this call; the runner drops `results`
         // once it returns, and `written` keeps names and counts only
         await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder: null, written });
+        if (tracker) tracker.commit(); // this part's items are on disk now
         return;
       }
       // Folder mode (one item per call): the item is already saved; the
       // last call adds the root files
+      if (tracker) tracker.commit();
       if (info.isLast) {
         const all = saved.flatMap(r => r.files);
         await saveFiles(place(artifactsRootFiles(all, saved.map(r => r.item), { meta: shell.meta, info })), { folder });

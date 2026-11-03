@@ -587,6 +587,16 @@ test('auditExport flags missing citations', () => {
   assert.ok(r.lines.some(l => l.includes('280 of 294') && l.startsWith('- ⚠️')));
 });
 
+test('diffAudit returns what one part added to the run-wide audit', () => {
+  const before = { expected: { items: 3, citations: 10, formulas: 1 }, written: { items: 3, citations: 9, formulas: 1 }, cacheHits: 2, cachedItems: 3 };
+  const now = { expected: { items: 5, citations: 14, formulas: 1 }, written: { items: 4, citations: 12, formulas: 1 }, cacheHits: 3, cachedItems: 4 };
+  assert.deepEqual(NLME.diffAudit(now, before), {
+    expected: { items: 2, citations: 4, formulas: 0 }, written: { items: 1, citations: 3, formulas: 0 }, cacheHits: 1, cachedItems: 1
+  });
+  // No earlier snapshot: the whole audit
+  assert.deepEqual(NLME.diffAudit(now, undefined), now);
+});
+
 test('unknownStudioIcons lists only unmapped icons', () => {
   assert.deepEqual(NLME.unknownStudioIcons(['tablet', 'copy', 'new_shape', 'article', 'new_shape', '']), ['new_shape']);
 });
@@ -627,6 +637,87 @@ test('groupCitationEntries keeps unavailable placeholders apart from real source
     { number: '3', text: 'A' }
   ]);
   assert.deepEqual(groups.map(g => g.numbers), [['1', '2'], ['3']]);
+});
+
+test('markWindowedQuote marks cut transcript windows only', () => {
+  const mid = 'vanished from physics ' + 'x'.repeat(980) + ' his tra';
+  assert.equal(NLME.markWindowedQuote(mid), '\u2026' + mid + '\u2026');
+  const sentence = 'The ' + 'y'.repeat(990) + ' end.';
+  assert.equal(NLME.markWindowedQuote(sentence), sentence);
+  assert.equal(NLME.markWindowedQuote('short quote'), 'short quote');
+});
+
+test('markWindowedQuote keeps an ordered-list marker at the start', () => {
+  const body = 'foo bar baz '.repeat(90);
+  const dot = '1. ' + body + 'end.';
+  assert.equal(NLME.markWindowedQuote(dot), dot);
+  const paren = '12) ' + body + 'end.';
+  assert.equal(NLME.markWindowedQuote(paren), paren);
+  // The tail mark still applies; a plain digit start still gets the head mark
+  assert.equal(NLME.markWindowedQuote('1. ' + body + 'cut'), '1. ' + body + 'cut\u2026');
+  assert.equal(NLME.markWindowedQuote('2024 ' + body + 'end.'), '\u20262024 ' + body + 'end.');
+});
+
+test('markWindowedQuote marks one side at a time and honours min', () => {
+  const startsMid = 'and then ' + 'x'.repeat(990) + ' end.';
+  assert.equal(NLME.markWindowedQuote(startsMid), '\u2026' + startsMid);
+  const endsMid = 'Start ' + 'x'.repeat(990) + ' mid';
+  assert.equal(NLME.markWindowedQuote(endsMid), endsMid + '\u2026');
+  assert.equal(NLME.markWindowedQuote('1 digit start and end 2', { min: 5 }), '\u20261 digit start and end 2\u2026');
+  assert.equal(NLME.markWindowedQuote(''), '');
+  assert.equal(NLME.markWindowedQuote(null), '');
+});
+
+test('markWindowedQuote ignores image Markdown when measuring', () => {
+  const img = '![chart](data:image/png;base64,' + 'A'.repeat(3000) + ')';
+  assert.equal(NLME.markWindowedQuote('short quote\n\n' + img), 'short quote\n\n' + img);
+  assert.equal(NLME.markWindowedQuote(img), img);
+  assert.equal(NLME.markWindowedQuote('and then a short one ' + img + ' end'), 'and then a short one ' + img + ' end');
+  // A genuinely long window with an image still gets its mark
+  const mid = 'vanished from physics ' + 'x'.repeat(980) + ' his tra';
+  assert.equal(NLME.markWindowedQuote(mid + img), '\u2026' + mid + img);
+});
+
+test('jobRecordMode keeps a pending record of another kind', () => {
+  const pending = NLME.newJobRecord({ id: 't-1', kind: 'takeout', label: 'Full Takeout', notebookId: 'nb', keysByCategory: { notes: ['a', 'b'] }, now: 1 });
+  assert.equal(NLME.jobRecordMode(pending, 'sources'), 'update');
+  assert.equal(NLME.jobRecordMode(pending, 'takeout'), 'create');
+  const failedOnly = NLME.markJobItems(NLME.markJobItems(pending, 'notes', ['a'], { now: 2 }), 'notes', ['b'], { failed: true, now: 3 });
+  assert.equal(NLME.jobRecordMode(failedOnly, 'sources'), 'update');
+  const finished = NLME.markJobItems(NLME.markJobItems(pending, 'notes', ['a'], { now: 2 }), 'notes', ['b'], { now: 3 });
+  assert.equal(NLME.jobRecordMode(finished, 'sources'), 'create');
+  // A Full Takeout supersedes partial tab-export records
+  const notesPending = NLME.newJobRecord({ id: 'n-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1 });
+  assert.equal(NLME.jobRecordMode(notesPending, 'takeout'), 'create');
+  assert.equal(NLME.jobRecordMode(notesPending, 'sources'), 'update');
+  assert.equal(NLME.jobRecordMode(undefined, 'sources'), 'create');
+  assert.equal(NLME.jobRecordMode(null, 'sources'), 'create');
+  assert.equal(NLME.jobRecordMode('junk', 'sources'), 'create');
+  assert.equal(NLME.jobRecordMode({ kind: 'takeout', remaining: 'x', failed: {} }, 'sources'), 'create');
+  assert.equal(NLME.jobRecordMode({ kind: 'takeout', remaining: { notes: ['a'] } }, 'sources'), 'create');
+});
+
+test('resumeBannerView words a stopped export and a finished one with failures', () => {
+  const r = NLME.newJobRecord({ id: 'n-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a', 'b', 'c', 'd'] }, now: 1 });
+  const stopped = NLME.markJobItems(r, 'notes', ['a'], { now: 2 });
+  assert.deepEqual(NLME.resumeBannerView(stopped), {
+    text: 'An earlier Notes export stopped at 1 of 4.', actionLabel: 'Resume (3 left)', failedOnly: false });
+  let failedOnly = r;
+  for (const k of ['a', 'b']) failedOnly = NLME.markJobItems(failedOnly, 'notes', [k], { now: 2 });
+  for (const k of ['c', 'd']) failedOnly = NLME.markJobItems(failedOnly, 'notes', [k], { failed: true, now: 3 });
+  assert.deepEqual(NLME.resumeBannerView(failedOnly), {
+    text: 'An earlier Notes export finished with 2 failed.', actionLabel: 'Retry (2)', failedOnly: true });
+  const takeout = NLME.newJobRecord({ id: 't-1', kind: 'takeout', label: 'Full Takeout', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1 });
+  assert.equal(NLME.resumeBannerView(NLME.markJobItems(takeout, 'notes', ['a'], { failed: true, now: 2 })).text,
+    'An earlier Full Takeout finished with 1 failed.');
+});
+
+test('groupedSourcesMarkdown writes one line per source with every number anchored', () => {
+  const entries = [{ number: '1', text: 'A' }, { number: '2', text: 'B' }, { number: '3', text: 'A' }];
+  assert.equal(NLME.groupedSourcesMarkdown(entries, 'msg-0-'),
+    '<a id="msg-0-src-1"></a><a id="msg-0-src-3"></a>\n**[[1]](#msg-0-cite-ref-1-1) [[3]](#msg-0-cite-ref-3-1)** A\n\n' +
+    '<a id="msg-0-src-2"></a>\n**[[2]](#msg-0-cite-ref-2-1)** B\n\n');
+  assert.equal(NLME.groupedSourcesMarkdown([], ''), '');
 });
 
 test('frontMatter quotes strings so any title stays valid YAML', () => {
@@ -851,7 +942,7 @@ test('buildIndexHtml groups files by folder and encodes links', () => {
   const html = NLME.buildIndexHtml({ meta, heading: 'Notes — New Math', files: [
     { path: 'notes/A b.md', title: 'A <script>b', variant: 'base', data: 'hello' },
     { path: 'notes/A b-code-blocks.md', title: 'A b', variant: 'code-blocks' },
-    { path: 'mind-maps/[MINDMAP]_M#1.svg' },
+    { path: 'mind-maps/[mind-map]_M#1.svg' },
     { path: 'slides/D.pdf', url: 'https://x/d.pdf' },
     { path: 'combined-notes.md', title: 'Combined' },
     { path: 'manifest.json' },
@@ -861,7 +952,7 @@ test('buildIndexHtml groups files by folder and encodes links', () => {
   assert.match(html, /<meta charset="utf-8">/);
   assert.match(html, /<title>Notes — New Math<\/title>/);
   assert.match(html, /href="notes\/A%20b\.md"/);
-  assert.match(html, /href="mind-maps\/%5BMINDMAP%5D_M%231\.svg"/);
+  assert.match(html, /href="mind-maps\/%5Bmind-map%5D_M%231\.svg"/);
   assert.match(html, /<h2>notes<\/h2>/);
   assert.match(html, /<h2>mind-maps<\/h2>/);
   assert.match(html, /<h2>Files<\/h2>/);
@@ -874,6 +965,57 @@ test('buildIndexHtml groups files by folder and encodes links', () => {
   assert.match(html, /<span class="type">SVG image<\/span>/);
   assert.doesNotMatch(html, /<script/);
   assert.doesNotMatch(html, /https?:\/\/[^"' ]*\.(css|js)/);
+});
+
+test('buildIndexHtml groups flattened files by itemKind', () => {
+  const meta = { notebook: 'NB', notebook_url: '', notebook_id: '', exporter: 'E', exported: 'T' };
+  const html = NLME.buildIndexHtml({ meta, heading: 'Takeout', files: [
+    { path: 'A.md', itemKind: 'note' },
+    { path: 'mind-maps/M.svg', itemKind: 'mindmap' },
+    { path: 'S.md', itemKind: 'source' },
+    { path: 'combined-notes.md', itemKind: 'combined-notes' },
+    { path: 'slides/D.pdf' }
+  ] });
+  const heading = name => html.indexOf(`<h2>${name}</h2>`);
+  assert.ok(heading('Notes') >= 0 && heading('Sources') >= 0 && heading('Mind maps') >= 0 && heading('Combined') >= 0);
+  // Fixed order, then the path-grouped rest
+  assert.ok(heading('Notes') < heading('Sources') && heading('Sources') < heading('Mind maps')
+    && heading('Mind maps') < heading('Combined') && heading('Combined') < heading('slides'));
+  const group = name => html.slice(heading(name), html.indexOf('</ul>', heading(name)));
+  assert.match(group('Notes'), /href="A\.md"/);
+  assert.match(group('Mind maps'), /href="mind-maps\/M\.svg"/);
+  assert.match(group('Combined'), /href="combined-notes\.md"/);
+  // An entry without itemKind still groups by its first path segment
+  assert.match(group('slides'), /href="slides\/D\.pdf"/);
+  // The spelling in the plan works too
+  assert.match(NLME.buildIndexHtml({ meta, heading: 'T', files: [{ path: 'm.svg', itemKind: 'mind-map' }] }), /<h2>Mind maps<\/h2>/);
+});
+
+test('buildIndexHtml groups source-urls files with the sources', () => {
+  const meta = { notebook: 'NB', notebook_url: '', notebook_id: '', exporter: 'E', exported: 'T' };
+  const html = NLME.buildIndexHtml({ meta, heading: 'Sources', files: [
+    { path: 'sources/S.md', itemKind: 'source' },
+    { path: 'sources/youtube-urls.txt', itemKind: 'source-urls' },
+    { path: 'sources/youtube-urls.raw.txt', itemKind: 'source-urls' }
+  ] });
+  assert.equal((html.match(/<h2>/g) || []).length, 1);
+  assert.match(html, /<h2>Sources<\/h2>/);
+  assert.doesNotMatch(html, /<h2>sources<\/h2>/);
+  assert.match(html, /youtube-urls\.raw\.txt/);
+});
+
+test('buildIndexHtml reads sensibly for a tab export under notes/ and sources/', () => {
+  const meta = { notebook: 'NB', notebook_url: '', notebook_id: '', exporter: 'E', exported: 'T' };
+  const html = NLME.buildIndexHtml({ meta, heading: 'Notes', files: [
+    { path: 'notes/A.md', itemKind: 'note' },
+    { path: 'notes/A-code-blocks.md', itemKind: 'note', variant: 'code-blocks' },
+    { path: 'sources/S.md', itemKind: 'source' },
+    { path: 'errors.md' }
+  ] });
+  assert.equal(html.split('<h2>Notes</h2>').length, 2); // one Notes group, not notes/ plus Notes
+  assert.match(html, /<h2>Sources<\/h2>/);
+  assert.doesNotMatch(html, /<h2>notes<\/h2>/);
+  assert.match(html, /href="notes\/A-code-blocks\.md"/);
 });
 
 test('fileTypeLabel names common export types', () => {
@@ -1008,9 +1150,9 @@ test('singleArtifactPackage bundles data tables and mind maps like before', () =
       { path: '[mind-map]_Big-Ideas.html', data: '<html/>' }
     ]
   });
-  assert.equal(map.zipName, '[MINDMAP]_Big-Ideas.zip');
+  assert.equal(map.zipName, '[mind-map]_Big-Ideas.zip');
   assert.deepEqual(map.entries.map(e => e.path),
-    ['[MINDMAP]_Big-Ideas.svg', '[MINDMAP]_Big-Ideas.json', '[MINDMAP]_Big-Ideas.html']);
+    ['[mind-map]_Big-Ideas.svg', '[mind-map]_Big-Ideas.json', '[mind-map]_Big-Ideas.html']);
   assert.equal(map.entries[1].data, '{}');
 
   // A lone CSV (no footnotes, no structured data) stays a plain file
@@ -1174,4 +1316,396 @@ test('filesByteSize sums the data size of each file entry', () => {
     { path: 'f', url: 'https://x/y' },
     { path: 'g' }
   ]), 5 + 10 + 7 + 3 + 100);
+});
+
+test('fnv1a is stable 8-digit hex', () => {
+  assert.equal(NLME.fnv1a(''), '811c9dc5');
+  assert.equal(NLME.fnv1a('a'), 'e40c292c');
+  assert.match(NLME.fnv1a('Gemini Notebook'), /^[0-9a-f]{8}$/);
+});
+test('citationCacheKey normalises whitespace', () => {
+  const a = NLME.citationCacheKey({ kind: 'note', text: ' A  b\n c ', numbers: [1, 2] });
+  const b = NLME.citationCacheKey({ kind: 'note', text: 'A b c', numbers: [1, 2] });
+  assert.equal(a, b);
+  assert.match(a, /^note:[0-9a-f]{8}:5:1\.2$/);
+});
+test('citationCacheKey changes when the text or the citation numbers change', () => {
+  const base = { kind: 'note', text: 'Same text', numbers: [1, 2] };
+  const k = NLME.citationCacheKey(base);
+  assert.notEqual(k, NLME.citationCacheKey({ ...base, text: 'Same text!' }));
+  assert.notEqual(k, NLME.citationCacheKey({ ...base, numbers: [1, 2, 3] }));
+  assert.notEqual(k, NLME.citationCacheKey({ ...base, kind: 'chat' }));
+});
+test('cacheGet returns a copy or null', () => {
+  const bucket = NLME.cachePut(null, 'k', [{ text: 'T', quote: 'Q' }], { now: 1 });
+  const got = NLME.cacheGet(bucket, 'k');
+  assert.deepEqual(got, [{ text: 'T', quote: 'Q' }]);
+  got[0].quote = 'changed';
+  assert.equal(NLME.cacheGet(bucket, 'k')[0].quote, 'Q');
+  assert.equal(NLME.cacheGet(bucket, 'missing'), null);
+  assert.equal(NLME.cacheGet('garbage', 'k'), null);
+});
+test('cachePut prunes oldest entries to stay under the cap', () => {
+  const s = q => [{ text: 'T', quote: q }];
+  let b = NLME.cachePut(null, 'a', s('x'.repeat(40)), { now: 1, maxBytes: 150 });
+  b = NLME.cachePut(b, 'b', s('y'.repeat(40)), { now: 2, maxBytes: 150 });
+  b = NLME.cachePut(b, 'c', s('z'.repeat(40)), { now: 3, maxBytes: 150 });
+  assert.deepEqual(Object.keys(b.entries).sort(), ['b', 'c']);
+  const big = NLME.cachePut(b, 'huge', s('w'.repeat(500)), { now: 4, maxBytes: 150 });
+  assert.deepEqual(Object.keys(big.entries).sort(), ['b', 'c']);
+});
+test('pruneCitationBuckets keeps the most recent notebooks', () => {
+  const meta = [{ key: 'nlme.cite.a', at: 5 }, { key: 'nlme.cite.b', at: 9 }, { key: 'nlme.cite.c', at: 1 }];
+  assert.deepEqual(NLME.pruneCitationBuckets(meta, { keep: 2 }), ['nlme.cite.c']);
+});
+test('pruneListStates counts a notebook once, however many tabs it saved', () => {
+  const k = (id, tab) => `nlme.list.${id}.${tab}`;
+  const meta = [
+    { key: k('a-1', 'notes'), at: 5 }, { key: k('a-1', 'sources'), at: 1 }, { key: k('a-1', 'generated'), at: 2 }, { key: k('a-1', 'chat'), at: 3 },
+    { key: k('b-2', 'notes'), at: 9 },
+    { key: k('c-3', 'notes'), at: 4 }, { key: k('c-3', 'sources'), at: 2 }
+  ];
+  // Newest per notebook: b-2 (9), a-1 (5), c-3 (4); keep 2 drops all of c-3
+  assert.deepEqual(NLME.pruneListStates(meta, { keep: 2 }).sort(), [k('c-3', 'notes'), k('c-3', 'sources')]);
+  // Under the cap: nothing to remove
+  assert.deepEqual(NLME.pruneListStates(meta), []);
+  assert.deepEqual(NLME.pruneListStates(null), []);
+});
+test('pruneListStates drops states without a timestamp first and never the current notebook', () => {
+  const meta = [{ key: 'nlme.list.old.notes' }, { key: 'nlme.list.new.notes', at: 7 }, { key: 'nlme.list.mid.notes', at: 3 }];
+  assert.deepEqual(NLME.pruneListStates(meta, { keep: 2 }), ['nlme.list.old.notes']);
+  // The current notebook counts toward the cap but is never returned
+  assert.deepEqual(NLME.pruneListStates(meta, { keep: 1, keepId: 'old' }).sort(), ['nlme.list.mid.notes', 'nlme.list.new.notes']);
+  assert.deepEqual(NLME.pruneListStates(meta, { keep: 1, keepId: 'old' }).includes('nlme.list.old.notes'), false);
+});
+test('citationCacheBucketKey is per notebook', () => {
+  assert.equal(NLME.citationCacheBucketKey('abc'), 'nlme.cite.abc');
+});
+
+// --- citation cache storage wrappers (fake chrome.storage.local) ---
+function fakeStorage(initial = {}, { failGet = false, failSet = false } = {}) {
+  const data = { ...initial };
+  return {
+    data,
+    async get(keys) {
+      if (failGet) throw new Error('get failed');
+      if (keys === null || keys === undefined) return { ...data };
+      const out = {};
+      for (const k of [].concat(keys)) if (k in data) out[k] = data[k];
+      return out;
+    },
+    async set(obj) {
+      if (failSet) throw new Error('quota');
+      Object.assign(data, JSON.parse(JSON.stringify(obj)));
+    },
+    async remove(keys) { for (const k of [].concat(keys)) delete data[k]; }
+  };
+}
+const srcs = [{ index: 1, text: 'T', quote: 'Q', href: '', sourceIndex: 1 }];
+
+test('citationCacheWrite then citationCacheRead round-trips and keeps order', async () => {
+  const st = fakeStorage();
+  const two = [{ index: 1, text: 'A', quote: 'a', sourceIndex: 3 }, { index: 2, text: 'B', quote: 'b', sourceIndex: 1 }];
+  assert.equal(await NLME.citationCacheWrite(st, 'nb1', 'note:k', two, { now: 10 }), true);
+  assert.deepEqual(await NLME.citationCacheRead(st, 'nb1', 'note:k'), two);
+  assert.equal(await NLME.citationCacheRead(st, 'nb1', 'note:other'), null);
+  assert.equal(await NLME.citationCacheRead(st, 'nb2', 'note:k'), null);
+  assert.deepEqual(st.data['nlme.cite.meta'], { 'nlme.cite.nb1': 10 });
+});
+
+test('citationCacheWrite prunes old notebooks and removes their buckets', async () => {
+  const st = fakeStorage();
+  for (let i = 1; i <= 4; i++) await NLME.citationCacheWrite(st, 'nb' + i, 'k', srcs, { now: i, keep: 2 });
+  assert.deepEqual(Object.keys(st.data).filter(k => k !== 'nlme.cite.meta').sort(), ['nlme.cite.nb3', 'nlme.cite.nb4']);
+  assert.deepEqual(Object.keys(st.data['nlme.cite.meta']).sort(), ['nlme.cite.nb3', 'nlme.cite.nb4']);
+});
+
+test('citation cache helpers never throw on storage errors or a missing notebook id', async () => {
+  const bad = fakeStorage({}, { failGet: true, failSet: true });
+  assert.equal(await NLME.citationCacheRead(bad, 'nb', 'k'), null);
+  assert.equal(await NLME.citationCacheWrite(bad, 'nb', 'k', srcs, { now: 1 }), false);
+  assert.equal(await NLME.citationCacheClear(bad), false);
+  const ok = fakeStorage();
+  assert.equal(await NLME.citationCacheRead(ok, '', 'k'), null);
+  assert.equal(await NLME.citationCacheWrite(ok, '', 'k', srcs, { now: 1 }), false);
+  assert.equal(await NLME.citationCacheRead(null, 'nb', 'k'), null);
+  assert.equal(await NLME.citationCacheWrite(undefined, 'nb', 'k', srcs, { now: 1 }), false);
+  assert.deepEqual(ok.data, {});
+});
+
+test('citationCacheClear removes every nlme.cite.* key and nothing else', async () => {
+  const st = fakeStorage({ settings: { a: 1 }, 'nlme.cite.nb1': { entries: {} }, 'nlme.cite.meta': { 'nlme.cite.nb1': 1 }, 'nlme.other': 1 });
+  assert.equal(await NLME.citationCacheClear(st), true);
+  assert.deepEqual(Object.keys(st.data).sort(), ['nlme.other', 'settings']);
+});
+
+test('citationCacheClear lists keys with getKeys instead of loading all of storage', async () => {
+  const st = fakeStorage({ settings: { a: 1 }, 'nlme.cite.nb1': { entries: {} }, 'nlme.cite.meta': {}, 'nlme.other': 1 });
+  const plainGet = st.get;
+  st.get = async keys => { if (keys === null || keys === undefined) throw new Error('get(null) must not be used'); return plainGet(keys); };
+  st.getKeys = async () => Object.keys(st.data);
+  assert.equal(await NLME.citationCacheClear(st), true);
+  assert.deepEqual(Object.keys(st.data).sort(), ['nlme.other', 'settings']);
+});
+
+test('citationCacheClear without getKeys removes the buckets the meta map lists, then the meta', async () => {
+  const st = fakeStorage({ settings: { a: 1 }, 'nlme.cite.nb1': { entries: {} }, 'nlme.cite.nb2': { entries: {} },
+    'nlme.cite.meta': { 'nlme.cite.nb1': 1, 'nlme.cite.nb2': 2 }, 'nlme.other': 1 });
+  const plainGet = st.get;
+  st.get = async keys => { if (keys === null || keys === undefined) throw new Error('get(null) must not be used'); return plainGet(keys); };
+  assert.equal(await NLME.citationCacheClear(st), true);
+  assert.deepEqual(Object.keys(st.data).sort(), ['nlme.other', 'settings']);
+});
+
+test('citationCacheClear falls back to get(null) only when nothing else tells the keys', async () => {
+  const st = fakeStorage({ settings: { a: 1 }, 'nlme.cite.nb1': { entries: {} } });
+  assert.equal(await NLME.citationCacheClear(st), true);
+  assert.deepEqual(Object.keys(st.data), ['settings']);
+});
+
+test('citationSourcesComplete accepts only full sets with quotes', () => {
+  const ok = [{ text: 'A', quote: 'a' }, { text: 'B', quote: 'b' }];
+  assert.equal(NLME.citationSourcesComplete(ok, 2), true);
+  assert.equal(NLME.citationSourcesComplete(ok, 3), false);
+  assert.equal(NLME.citationSourcesComplete([{ text: 'A', quote: '' }], 1), false);
+  assert.equal(NLME.citationSourcesComplete([{ text: '', quote: 'a' }], 1), false);
+  assert.equal(NLME.citationSourcesComplete([], 0), false);
+  assert.equal(NLME.citationSourcesComplete(null, 1), false);
+});
+
+test('citationCacheRead lists an unlisted bucket in the meta map', async () => {
+  const st = fakeStorage({ 'nlme.cite.nb1': { entries: { k: { sources: srcs, at: 1, bytes: 10 } } } });
+  assert.deepEqual(await NLME.citationCacheRead(st, 'nb1', 'k'), srcs);
+  assert.ok(typeof st.data['nlme.cite.meta']['nlme.cite.nb1'] === 'number');
+  const before = st.data['nlme.cite.meta']['nlme.cite.nb1'];
+  await NLME.citationCacheRead(st, 'nb1', 'k');
+  assert.equal(st.data['nlme.cite.meta']['nlme.cite.nb1'], before);
+  const empty = fakeStorage();
+  await NLME.citationCacheRead(empty, 'nb9', 'k');
+  assert.deepEqual(empty.data, {});
+});
+
+test('citation cache limits are 10 MB per notebook and 20 notebooks', () => {
+  assert.equal(NLME.CITE_MAX_BYTES_PER_NOTEBOOK, 10 * 1024 * 1024);
+  assert.equal(NLME.CITE_KEEP_NOTEBOOKS, 20);
+});
+
+test('jobRecord helpers track remaining and failed keys', () => {
+  let r = NLME.newJobRecord({ id: 'notes-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a', 'b', 'c'] }, now: 1 });
+  assert.equal(NLME.jobRemainingCount(r), 3);
+  r = NLME.markJobItem(r, 'notes', 'a', { now: 2 });
+  r = NLME.markJobItem(r, 'notes', 'b', { failed: true, now: 3 });
+  assert.deepEqual(r.remaining.notes, ['c']);
+  assert.deepEqual(r.failed.notes, ['b']);
+  assert.equal(NLME.jobRemainingCount(r), 2);
+  assert.equal(r.updatedAt, 3);
+  r = NLME.markJobItem(r, 'notes', 'c', { now: 4 });
+  assert.equal(NLME.jobRecordFinished(r), false); // 'b' is still failed
+  r = NLME.markJobItem(r, 'notes', 'b', { now: 5 }); // a later success clears the failure
+  assert.deepEqual(r.failed.notes, []);
+  assert.equal(NLME.jobRecordFinished(r), true);
+});
+
+test('jobRecord helpers replace and clear by id', () => {
+  assert.equal(NLME.jobRecordKey('nb'), 'nlme.job.nb');
+  const r = NLME.newJobRecord({ id: 'takeout-9', kind: 'takeout', label: 'Full Takeout', notebookId: 'nb', keysByCategory: { sources: ['s'], notes: [], artifacts: ['x'] }, now: 9 });
+  assert.deepEqual(Object.keys(r.remaining), ['sources', 'notes', 'artifacts']);
+  assert.deepEqual(r.failed, { sources: [], notes: [], artifacts: [] });
+  assert.equal(r.startedAt, 9);
+  assert.equal(NLME.jobRemainingCount(r), 2);
+});
+
+test('markJobItem does not change the record it is given', () => {
+  const r = NLME.newJobRecord({ id: 'n-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a', 'b'] }, now: 1 });
+  const next = NLME.markJobItem(r, 'notes', 'a', { failed: true, now: 2 });
+  assert.deepEqual(r.remaining.notes, ['a', 'b']);
+  assert.deepEqual(r.failed.notes, []);
+  assert.deepEqual(next.remaining.notes, ['b']);
+  assert.deepEqual(next.failed.notes, ['a']);
+});
+
+test('markJobItem tolerates a category the record does not have', () => {
+  const r = NLME.newJobRecord({ id: 'n-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1 });
+  const next = NLME.markJobItem(r, 'sources', 'z', { failed: true, now: 2 });
+  assert.deepEqual(next.failed.sources, ['z']);
+  assert.deepEqual(next.remaining.notes, ['a']);
+});
+
+test('markJobItems marks only keys the record holds', () => {
+  const r = NLME.newJobRecord({ id: 'takeout-1', kind: 'takeout', label: 'Full Takeout', notebookId: 'nb', keysByCategory: { sources: ['s1', 's2'], notes: ['n1'] }, now: 1 });
+  const failedOnce = NLME.markJobItems(r, 'sources', ['s1', 'zzz'], { failed: true, now: 2 });
+  assert.deepEqual(failedOnce.remaining.sources, ['s2']);
+  assert.deepEqual(failedOnce.failed.sources, ['s1']); // 'zzz' is not in the record: ignored
+  assert.deepEqual(failedOnce.remaining.notes, ['n1']); // other categories untouched
+  const cleared = NLME.markJobItems(failedOnce, 'sources', ['s1', 's2'], { now: 3 });
+  assert.deepEqual(cleared.failed.sources, []);
+  assert.equal(NLME.jobRemainingCount(cleared), 1);
+  assert.equal(cleared.updatedAt, 3);
+});
+
+test('markJobItems returns the same record when nothing matches', () => {
+  const r = NLME.newJobRecord({ id: 'n-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1 });
+  assert.equal(NLME.markJobItems(r, 'notes', ['x'], { now: 2 }), r);
+  assert.equal(NLME.markJobItems(r, 'sources', ['a'], { now: 2 }), r);
+  assert.equal(NLME.markJobItems(r, 'notes', [], { now: 2 }), r);
+});
+
+test('matchResumeItems reports keys that no longer exist', () => {
+  const by = { titleOf: i => i.title, typeOf: i => i.type };
+  const items = [{ title: 'A', type: 'Note' }, { title: 'B', type: 'Note' }];
+  const keys = NLME.listItemKeys(items, by);
+  const r = NLME.matchResumeItems([keys[1], 'Note\u0000Gone'], items, by);
+  assert.deepEqual(r.matched, [items[1]]);
+  assert.deepEqual(r.missing, ['Note\u0000Gone']);
+});
+
+test('matchResumeItems keeps duplicates apart by their #n suffix and returns scan order', () => {
+  const by = { titleOf: i => i.title, typeOf: i => i.type };
+  const items = [{ title: 'A', type: 'Note', id: 1 }, { title: 'A', type: 'Note', id: 2 }, { title: 'B', type: 'Note', id: 3 }];
+  const keys = NLME.listItemKeys(items, by);
+  const r = NLME.matchResumeItems([keys[2], keys[1]], items, by);
+  assert.deepEqual(r.matched.map(i => i.id), [2, 3]);
+  assert.deepEqual(r.missing, []);
+  // Only one "A" left: its "#2" is gone, never matched to the first
+  const fewer = [items[0], items[2]];
+  const r2 = NLME.matchResumeItems([keys[1]], fewer, by);
+  assert.deepEqual(r2.matched, []);
+  assert.deepEqual(r2.missing, [keys[1]]);
+});
+
+test('matchResumeItems ignores repeated keys and empty input', () => {
+  const by = { titleOf: i => i.title, typeOf: i => i.type };
+  const items = [{ title: 'A', type: 'T' }];
+  const key = NLME.listItemKeys(items, by)[0];
+  assert.deepEqual(NLME.matchResumeItems([key, key], items, by), { matched: items, missing: [] });
+  assert.deepEqual(NLME.matchResumeItems([], items, by), { matched: [], missing: [] });
+  assert.deepEqual(NLME.matchResumeItems(['x', 'x'], [], by), { matched: [], missing: ['x'] });
+  assert.deepEqual(NLME.matchResumeItems(null, null, by), { matched: [], missing: [] });
+});
+
+test('jobResumeKeys lists remaining then failed keys of a category without repeats', () => {
+  const r = { remaining: { notes: ['a', 'b'] }, failed: { notes: ['b', 'c'], sources: ['s'] } };
+  assert.deepEqual(NLME.jobResumeKeys(r, 'notes'), ['a', 'b', 'c']);
+  assert.deepEqual(NLME.jobResumeKeys(r, 'sources'), ['s']);
+  assert.deepEqual(NLME.jobResumeKeys(r, 'artifacts'), []);
+});
+
+test('newJobRecord stores total, the number of keys it started with', () => {
+  const r = NLME.newJobRecord({ id: 't-1', kind: 'takeout', label: 'Full Takeout', notebookId: 'nb', keysByCategory: { sources: ['s1', 's2'], notes: ['n'], artifacts: [] }, now: 1 });
+  assert.equal(r.total, 3);
+});
+
+test('jobResumeProgress gives done and total, tolerating a record without total', () => {
+  const r = NLME.newJobRecord({ id: 'n-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a', 'b', 'c', 'd'] }, now: 1 });
+  const part = NLME.markJobItems(r, 'notes', ['a'], { now: 2 });
+  assert.deepEqual(NLME.jobResumeProgress(part), { done: 1, total: 4, left: 3 });
+  const old = { ...part }; delete old.total;
+  assert.deepEqual(NLME.jobResumeProgress(old), { done: 0, total: 3, left: 3 });
+});
+
+test('jobKeyTitle shows the title part of a key', () => {
+  assert.equal(NLME.jobKeyTitle('Note\u0000My note'), 'My note');
+  assert.equal(NLME.jobKeyTitle('Note\u0000My note#2'), 'My note#2');
+  assert.equal(NLME.jobKeyTitle('plain'), 'plain');
+});
+
+test('combineRetryOutcomes names a resume and lists keys that are gone', () => {
+  const ok = { name: 'Notes', message: '3 notes', level: 'success', saved: ['n.zip'], errors: [], failedItems: [] };
+  const c = NLME.combineRetryOutcomes({ steps: [ok], verb: 'Resume', extraErrors: [{ type: 'not_found', title: 'Notes', message: 'X is no longer in the notebook' }] });
+  assert.equal(c.message, 'Resume finished');
+  assert.equal(c.level, 'warning');
+  assert.equal(c.errors.length, 1);
+  assert.equal(c.errors[0].type, 'not_found');
+  const stopped = NLME.combineRetryOutcomes({ steps: [ok], notRun: [{ name: 'Artifacts', failedItems: [1] }], verb: 'Resume' });
+  assert.match(stopped.message, /^Resume stopped before artifacts/);
+  // Default verb unchanged
+  assert.equal(NLME.combineRetryOutcomes({ steps: [ok] }).message, 'Retry finished');
+});
+
+test('combineRetryOutcomes with no step run still reports the extra errors', () => {
+  const c = NLME.combineRetryOutcomes({ steps: [], verb: 'Resume', extraErrors: [{ type: 'not_found', title: 'Notes', message: 'X is no longer in the notebook' }] });
+  assert.equal(c.errors.length, 1);
+  assert.equal(c.remainingCount, 0);
+});
+
+test('jobRecordUsable accepts only a whole record of this notebook with items left', () => {
+  const r = NLME.newJobRecord({ id: 'n-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1 });
+  assert.equal(NLME.jobRecordUsable(r, 'nb'), true);
+  assert.equal(NLME.jobRecordUsable(r, 'other'), false);
+  assert.equal(NLME.jobRecordUsable(r, ''), false);
+  assert.equal(NLME.jobRecordUsable(NLME.markJobItems(r, 'notes', ['a'], { now: 2 }), 'nb'), false); // nothing left
+  assert.equal(NLME.jobRecordUsable(null, 'nb'), false);
+  assert.equal(NLME.jobRecordUsable({ notebookId: 'nb', remaining: { notes: 'a' }, failed: {} }, 'nb'), false);
+  assert.equal(NLME.jobRecordUsable({ notebookId: 'nb', remaining: [], failed: {} }, 'nb'), false);
+  assert.equal(NLME.jobRecordUsable({ notebookId: 'nb', id: 'x' }, 'nb'), false);
+});
+
+test('planResume: a scan that matches nothing proves nothing is gone', () => {
+  const by = { titleOf: i => i.title, typeOf: i => i.type };
+  const items = [{ title: 'Other', type: 'Note' }];
+  const r = NLME.planResume(['Note\u0000A', 'Note\u0000B'], items, by);
+  assert.deepEqual(r, { matched: [], missing: [], unknown: ['Note\u0000A', 'Note\u0000B'] });
+});
+
+test('planResume: with matches, absent keys are missing', () => {
+  const by = { titleOf: i => i.title, typeOf: i => i.type };
+  const items = [{ title: 'A', type: 'Note' }, { title: 'B', type: 'Note' }];
+  const r = NLME.planResume(['Note\u0000A', 'Note\u0000Gone'], items, by);
+  assert.deepEqual(r.matched, [items[0]]);
+  assert.deepEqual(r.missing, ['Note\u0000Gone']);
+  assert.deepEqual(r.unknown, []);
+});
+
+test('planResume decides missing per region when regionOfType is given', () => {
+  const SRC = 'Note (Sources panel)';
+  const by = { titleOf: i => i.title, typeOf: i => i.type, regionOfType: t => (t === SRC ? 'sources' : 'studio') };
+  // Only the Sources-panel notes were drawn: Studio keys are unknown, not missing
+  const onlySourcePanel = [{ title: 'S1', type: SRC }];
+  const keys = ['Note\u0000Studio1', `${SRC}\u0000S1`, `${SRC}\u0000S-gone`];
+  const r = NLME.planResume(keys, onlySourcePanel, by);
+  assert.deepEqual(r.matched, onlySourcePanel);
+  assert.deepEqual(r.unknown, ['Note\u0000Studio1']);
+  assert.deepEqual(r.missing, [`${SRC}\u0000S-gone`]);
+  // Both regions drawn: a gone Studio key is missing
+  const both = [{ title: 'S1', type: SRC }, { title: 'Other', type: 'Note' }];
+  const r2 = NLME.planResume(keys, both, by);
+  assert.deepEqual(r2.missing.sort(), ['Note\u0000Studio1', `${SRC}\u0000S-gone`].sort());
+  assert.deepEqual(r2.unknown, []);
+});
+
+test('groupErrorsForPanel lists panel-only resume errors in full', () => {
+  const errs = Array.from({ length: 25 }, (_, i) => ({ type: 'not_found', title: 'Notes', message: `n${i} is no longer in the notebook` }));
+  const g = NLME.groupErrorsForPanel(errs);
+  assert.equal(g[0].entries.length, 25);
+  assert.equal(g[0].more, 0);
+  const real = NLME.groupErrorsForPanel(Array.from({ length: 25 }, (_, i) => `[x${i}] boom`));
+  assert.equal(real[0].more, 5);
+});
+
+test('resumeBannerText says export unless the label is a takeout', () => {
+  assert.equal(NLME.resumeBannerLabel({ kind: 'notes', label: 'Notes' }), 'Notes export');
+  assert.equal(NLME.resumeBannerLabel({ kind: 'takeout', label: 'Full Takeout' }), 'Full Takeout');
+  assert.equal(NLME.resumeBannerLabel({}), 'export');
+});
+
+test('isNotesHeaderText matches the Notes group header only', () => {
+  assert.equal(NLME.isNotesHeaderText('Notes'), true);
+  assert.equal(NLME.isNotesHeaderText('  Notes \n'), true);
+  assert.equal(NLME.isNotesHeaderText('Notes (3)'), true);
+  assert.equal(NLME.isNotesHeaderText('Notes(12)'), true);
+  assert.equal(NLME.isNotesHeaderText('Notes and Papers'), false);
+  assert.equal(NLME.isNotesHeaderText('Notes on Physics'), false);
+  assert.equal(NLME.isNotesHeaderText('keyboard_arrow_downNotes'), false);
+  assert.equal(NLME.isNotesHeaderText('Sources'), false);
+  assert.equal(NLME.isNotesHeaderText(''), false);
+  assert.equal(NLME.isNotesHeaderText(null), false);
+});
+
+test('studioTargetMatches needs the exact label', () => {
+  assert.equal(NLME.studioTargetMatches('  My note \n', 'My note'), true);
+  assert.equal(NLME.studioTargetMatches('My note 2', 'My note'), false);
+  assert.equal(NLME.studioTargetMatches('', 'My note'), false);
+  assert.equal(NLME.studioTargetMatches(null, 'My note'), false);
+  assert.equal(NLME.studioTargetMatches('My note', ''), false);
+  assert.equal(NLME.studioTargetMatches('My note', undefined), false);
 });

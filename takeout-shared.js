@@ -355,11 +355,14 @@
   // { name, failedItems } (their items still failed). Returns the panel's
   // content: one line per category, the worst level, every ZIP, every error
   // prefixed with its category, and what a further Retry would re-run.
-  function combineRetryOutcomes({ steps = [], notRun = [] } = {}) {
+  // verb: 'Retry' (default) or 'Resume' for the message. extraErrors: errors
+  // that belong to no step (a resume's items that left the notebook), already
+  // in the panel's { type, title, message } shape.
+  function combineRetryOutcomes({ steps = [], notRun = [], verb = 'Retry', extraErrors = [] } = {}) {
     const rank = { success: 0, info: 0, warning: 1, error: 2 };
     let level = 'success';
     for (const s of steps) if ((rank[s.level] || 0) > rank[level]) level = s.level;
-    if (notRun.length && level === 'success') level = 'warning';
+    if ((notRun.length || extraErrors.length) && level === 'success') level = 'warning';
 
     const remaining = {};
     for (const s of steps) remaining[s.name] = s.failedItems || [];
@@ -367,8 +370,8 @@
     const remainingCount = Object.values(remaining).reduce((sum, list) => sum + list.length, 0);
 
     let message = notRun.length
-      ? `Retry stopped before ${notRun.map(n => n.name.toLowerCase()).join(' and ')}`
-      : 'Retry finished';
+      ? `${verb} stopped before ${notRun.map(n => n.name.toLowerCase()).join(' and ')}`
+      : `${verb} finished`;
     if (remainingCount > 0) message += ` \u2014 ${remainingCount} still failed`;
 
     return {
@@ -376,11 +379,15 @@
       level,
       lines: steps.map(s => `${s.name}: ${s.message}`),
       saved: steps.flatMap(s => s.saved || []),
-      errors: steps.flatMap(s => prefixExportErrors(s.name, s.errors)),
+      errors: [...steps.flatMap(s => prefixExportErrors(s.name, s.errors)), ...extraErrors],
       remaining,
       remainingCount
     };
   }
+
+  // Error types a Resume adds to its panel and that no errors.md holds: key gone
+  // from the notebook, artifact not ready, scan failed / incomplete.
+  const PANEL_ONLY_ERROR_TYPES = ['not_found', 'not_ready', 'scan_failed'];
 
   // The results panel's error list: groups by error type in first-seen
   // order, at most perGroup entries each; `more` entries are in errors.md.
@@ -393,11 +400,13 @@
     }
     return [...groups].map(([type, list]) => {
       const words = type.replace(/_/g, ' ');
+      // Resume's own notes exist only in the panel (not in any errors.md): list all
+      const cap = PANEL_ONLY_ERROR_TYPES.includes(type) ? Infinity : perGroup;
       return {
         heading: words.charAt(0).toUpperCase() + words.slice(1),
         count: list.length,
-        entries: list.slice(0, perGroup),
-        more: Math.max(0, list.length - perGroup)
+        entries: list.slice(0, cap),
+        more: Math.max(0, list.length - cap)
       };
     });
   }
@@ -658,7 +667,7 @@
     if ((type !== 'Data Table' && type !== 'Mind Map') || !files || files.length < 2) return null;
     const clean = sanitizeFilename(title);
     const isTable = type === 'Data Table';
-    const base = isTable ? clean : `[MINDMAP]_${clean}`;
+    const base = isTable ? clean : `[${artifactTypePrefix(type)}]_${clean}`;
     const entries = files.map(file => {
       const path = String(file.path || '');
       if (isTable && /-references\.txt$/i.test(path)) return { ...file, path: 'references.txt' };
@@ -799,6 +808,22 @@
     return { ok, lines };
   }
 
+  // What one part of a split export added to a run-wide audit: current minus
+  // the snapshot taken when the previous part was packaged. Keeps every numeric
+  // field of the audit shape (expected/written counters, cacheHits, cachedItems).
+  function diffAudit(current, before) {
+    const sub = (a, b) => {
+      const out = {};
+      for (const key of Object.keys(a || {})) {
+        out[key] = (a[key] && typeof a[key] === 'object')
+          ? sub(a[key], (b || {})[key])
+          : (Number(a[key]) || 0) - (Number((b || {})[key]) || 0);
+      }
+      return out;
+    };
+    return sub(current, before);
+  }
+
   // Studio icons the extension cannot classify (new artifact types appear
   // this way first); notes' icons count as known
   function unknownStudioIcons(iconTexts) {
@@ -845,6 +870,37 @@
       groups.get(key).numbers.push(String(e.number));
     }
     return [...groups.values()];
+  }
+
+  // The Sources section of a titles-only export: one line per source with
+  // all its numbers; every number keeps its own anchor so body links still
+  // resolve. anchorPrefix: '' for notes, 'msg-<n>-' for a chat answer.
+  function groupedSourcesMarkdown(entries, anchorPrefix = '') {
+    let out = '';
+    for (const group of groupCitationEntries(entries)) {
+      const anchors = group.numbers.map(n => `<a id="${anchorPrefix}src-${n}"></a>`).join('');
+      const links = group.numbers.map(n => `[[${n}]](#${anchorPrefix}cite-ref-${n}-1)`).join(' ');
+      out += `${anchors}\n**${links}** ${group.text}\n\n`;
+    }
+    return out;
+  }
+
+  // The citation popover of a long, unpunctuated source (a YouTube
+  // transcript) shows only a window of about 1,000 characters, cut
+  // mid-word. Mark such a quote with "\u2026" where it was cut. Short
+  // quotes, and ones that start with a capital or end with punctuation,
+  // are left alone.
+  function markWindowedQuote(text, { min = 990 } = {}) {
+    const raw = text == null ? '' : String(text);
+    const t = raw.trim();
+    // Image Markdown (a base64 data URI can be huge) is not quote text: measure
+    // and test the ends without it
+    const bare = t.replace(/!\[[^\]]*\]\([^)]*\)/g, '').trim();
+    if (bare.length < min) return raw;
+    // "1. foo" starts a Markdown list: a leading mark would break the marker
+    const head = /^[\p{Ll}\p{Nd}]/u.test(t) && !/^\d+[.)]\s/.test(t) ? '\u2026' : '';
+    const tail = /[\p{L}\p{N}]$/u.test(t) ? '\u2026' : '';
+    return head || tail ? head + t + tail : raw;
   }
 
   // YAML front matter for exported notes and sources. Strings go through
@@ -910,6 +966,161 @@
     });
   }
 
+  // ---- Job records (Milestone 3c): one per notebook in chrome.storage.local ----
+  // List keys only (listItemKeys), never payloads. See AGENT.md "Milestone 3c contracts".
+
+  function jobRecordKey(notebookId) {
+    return `nlme.job.${notebookId}`;
+  }
+
+  function newJobRecord({ id, kind, label, notebookId, keysByCategory, now }) {
+    const remaining = {};
+    const failed = {};
+    for (const [category, keys] of Object.entries(keysByCategory || {})) {
+      remaining[category] = [...keys];
+      failed[category] = [];
+    }
+    // total: how many keys the job started with (the banner's "stopped at N of total")
+    const total = Object.values(remaining).reduce((sum, keys) => sum + keys.length, 0);
+    return { id, kind, label, notebookId, startedAt: now, updatedAt: now, total, remaining, failed };
+  }
+
+  // A new record with `key` done: removed from remaining, and from failed unless
+  // it failed again (a later success clears an earlier failure).
+  function markJobItem(record, category, key, { failed = false, now } = {}) {
+    const without = list => (list || []).filter(k => k !== key);
+    return {
+      ...record,
+      updatedAt: now,
+      remaining: { ...record.remaining, [category]: without(record.remaining && record.remaining[category]) },
+      failed: { ...record.failed, [category]: failed ? [...without(record.failed && record.failed[category]), key] : without(record.failed && record.failed[category]) }
+    };
+  }
+
+  // markJobItem for several keys of one category, ignoring keys the record does
+  // not hold (a retry or resume marks only what the record knows). Returns the
+  // same record when nothing matched.
+  function markJobItems(record, category, keys, { failed = false, now } = {}) {
+    const holds = key => ((record.remaining && record.remaining[category]) || []).includes(key)
+      || ((record.failed && record.failed[category]) || []).includes(key);
+    const known = (keys || []).filter(holds);
+    return known.reduce((rec, key) => markJobItem(rec, category, key, { failed, now }), record);
+  }
+
+  function jobRemainingCount(record) {
+    const count = group => Object.values(group || {}).reduce((sum, keys) => sum + keys.length, 0);
+    return count(record.remaining) + count(record.failed);
+  }
+
+  function jobRecordFinished(record) {
+    return jobRemainingCount(record) === 0;
+  }
+
+  // How a fresh (non-update) export of `kind` meets the notebook's stored record
+  // (the key is per notebook). 'update': the stored record is usable, of another
+  // kind and still has items, so it must not be replaced (a Full Takeout always
+  // creates its own); the export only marks
+  // the keys that record holds. 'create': it replaces the record (same kind,
+  // finished, or nothing usable stored).
+  function jobRecordMode(stored, kind) {
+    const arrays = group => !!group && typeof group === 'object' && !Array.isArray(group) && Object.values(group).every(Array.isArray);
+    if (!stored || typeof stored !== 'object' || !arrays(stored.remaining) || !arrays(stored.failed)) return 'create';
+    // A Full Takeout re-exports everything, so it supersedes any pending record
+    if (kind === 'takeout') return 'create';
+    return stored.kind !== kind && jobRemainingCount(stored) > 0 ? 'update' : 'create';
+  }
+
+  // A stored record the banner may offer: an object for this notebook whose
+  // remaining / failed are { category: keys[] } and which still has items.
+  // Storage data is not trusted, so anything else is not usable.
+  function jobRecordUsable(record, notebookId) {
+    const arrays = group => !!group && typeof group === 'object' && !Array.isArray(group) && Object.values(group).every(Array.isArray);
+    return !!record && typeof record === 'object' && !!notebookId && record.notebookId === notebookId
+      && typeof record.id === 'string' && arrays(record.remaining) && arrays(record.failed)
+      && jobRemainingCount(record) > 0;
+  }
+
+  // matchResumeItems that will not call a key gone on thin evidence. A partial
+  // scan (a list not drawn yet, the previous notebook's page) must not clear
+  // items that still exist, so:
+  // - a scan that matches nothing proves nothing: every key is `unknown`;
+  // - with regionOfType(type) -> region (Notes: Studio notes vs the Sources
+  //   panel's notes), a key is `missing` only if the scan has at least one item
+  //   in the key's region, else `unknown`.
+  // matched / missing as in matchResumeItems; unknown keys stay in the record.
+  function planResume(keys, items, { titleOf, typeOf, regionOfType } = {}) {
+    const m = matchResumeItems(keys, items, { titleOf, typeOf });
+    if (m.matched.length === 0) return { matched: [], missing: [], unknown: m.missing };
+    if (typeof regionOfType !== 'function') return { matched: m.matched, missing: m.missing, unknown: [] };
+    const present = new Set((items || []).map(item => regionOfType(typeOf(item))));
+    const missing = [];
+    const unknown = [];
+    for (const key of m.missing) {
+      const at = key.indexOf('\u0000');
+      (present.has(regionOfType(at >= 0 ? key.slice(0, at) : '')) ? missing : unknown).push(key);
+    }
+    return { matched: m.matched, missing, unknown };
+  }
+
+  // The banner's "An earlier <this> stopped at": a takeout's label already
+  // names it; the others are an export.
+  function resumeBannerLabel(record) {
+    const label = String((record && record.label) || '');
+    if (!label) return 'export';
+    return record.kind === 'takeout' ? label : `${label} export`;
+  }
+
+  // The banner's wording. A record with nothing remaining and only failed keys
+  // is a finished export with failures (Retry re-runs those); otherwise a
+  // stopped one (Resume). Same action either way: re-run the left keys.
+  // Plain text; the caller escapes it.
+  function resumeBannerView(record) {
+    const { done, total, left } = jobResumeProgress(record);
+    const label = resumeBannerLabel(record);
+    const count = group => Object.values(group || {}).reduce((sum, keys) => sum + (Array.isArray(keys) ? keys.length : 0), 0);
+    const failedOnly = count(record.remaining) === 0 && count(record.failed) > 0;
+    return failedOnly
+      ? { text: `An earlier ${label} finished with ${left} failed.`, actionLabel: `Retry (${left})`, failedOnly }
+      : { text: `An earlier ${label} stopped at ${done} of ${total}.`, actionLabel: `Resume (${left} left)`, failedOnly };
+  }
+
+  // The keys a resume re-runs for one category: remaining, then failed, no repeats.
+  function jobResumeKeys(record, category) {
+    const list = group => (group && Array.isArray(group[category]) ? group[category] : []);
+    return [...new Set([...list(record && record.remaining), ...list(record && record.failed)])];
+  }
+
+  // The banner's numbers. A record without `total` (written before it existed)
+  // counts what is left as the whole job.
+  function jobResumeProgress(record) {
+    const left = jobRemainingCount(record);
+    const total = Math.max(Number.isFinite(record.total) ? record.total : 0, left);
+    return { done: total - left, total, left };
+  }
+
+  // The title part of a key ("<type>\0<title>[#n]"), for messages.
+  function jobKeyTitle(key) {
+    const s = String(key == null ? '' : key);
+    const at = s.indexOf('\u0000');
+    return at >= 0 ? s.slice(at + 1) : s;
+  }
+
+  // Resume: which of the recorded `keys` are still in the fresh `items` (scanned
+  // now, in full, so listItemKeys numbers duplicates the way the record did).
+  // matched: those items in scan order; missing: the keys with no item, in
+  // `keys` order. A key never matches an item with a different key.
+  function matchResumeItems(keys, items, { titleOf, typeOf } = {}) {
+    const wanted = new Set(keys || []);
+    const list = items || [];
+    const itemKeys = listItemKeys(list, { titleOf, typeOf });
+    const found = new Set();
+    const matched = [];
+    list.forEach((item, i) => {
+      if (wanted.has(itemKeys[i])) { matched.push(item); found.add(itemKeys[i]); }
+    });
+    return { matched, missing: [...wanted].filter(k => !found.has(k)) };
+  }
+
   // Visible indices (filtered and sorted) plus the type chips of the whole list.
   function listView(items, { query = '', types = [], sort = 'notebook' } = {}, { titleOf, typeOf } = {}) {
     const list = items || [];
@@ -957,6 +1168,33 @@
 
   function listStateKey(notebookId, tab) {
     return `nlme.list.${notebookId}.${tab}`;
+  }
+
+  // meta: [{ key: 'nlme.list.<notebookId>.<tab>', at }] -> keys to remove. A
+  // notebook counts once (its newest `at`, or 0 when the state predates the
+  // timestamp); everything beyond the `keep` most recent notebooks goes.
+  // keepId: the notebook on screen; it takes a slot but its keys are never returned.
+  function pruneListStates(meta, { keep = 30, keepId = '' } = {}) {
+    const prefix = 'nlme.list.';
+    const byNotebook = new Map();
+    (meta || []).forEach((m, i) => {
+      const key = m && m.key;
+      if (typeof key !== 'string' || !key.startsWith(prefix)) return;
+      const dot = key.lastIndexOf('.');
+      const id = dot > prefix.length ? key.slice(prefix.length, dot) : key.slice(prefix.length);
+      if (!byNotebook.has(id)) byNotebook.set(id, { id, at: 0, first: i, keys: [] });
+      const group = byNotebook.get(id);
+      group.keys.push(key);
+      group.at = Math.max(group.at, Number(m.at) || 0);
+    });
+    const groups = [...byNotebook.values()];
+    // The notebook on screen counts as the newest
+    groups.forEach(g => { if (keepId && g.id === keepId) g.at = Infinity; });
+    return groups
+      .sort((a, b) => (b.at - a.at) || (a.first - b.first))
+      .slice(Math.max(0, keep))
+      .filter(g => !(keepId && g.id === keepId))
+      .flatMap(g => g.keys);
   }
 
   // Rebuilds a list's toolbar state from storage, tolerating missing or malformed data.
@@ -1306,16 +1544,30 @@ footer { margin-top: 3rem; }
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
+  // itemKind values the builders set (buildNotesFiles / buildSourcesFiles) and
+  // the heading each lands under in _index.html
+  const INDEX_KIND_GROUPS = ['Notes', 'Sources', 'Mind maps', 'Combined'];
+  const INDEX_KIND_HEADINGS = {
+    note: 'Notes', source: 'Sources', 'source-urls': 'Sources', mindmap: 'Mind maps', 'mind-map': 'Mind maps',
+    'combined-notes': 'Combined', combined: 'Combined'
+  };
+
   function buildIndexHtml({ meta, heading, files = [], links = [] } = {}) {
     const linked = new Set(links.map(l => l.href));
-    const groups = new Map();
+    // Entries with an itemKind group under a kind heading (flattened Takeout
+    // folders hold several kinds); the rest group by first path segment
+    const kindGroups = new Map(INDEX_KIND_GROUPS.map(g => [g, []]));
+    const pathGroups = new Map();
     for (const f of files) {
       if (!f || f.path === '_index.html' || f.path === 'manifest.json' || linked.has(f.path)) continue;
+      const kindGroup = INDEX_KIND_HEADINGS[f.itemKind];
+      if (kindGroup) { kindGroups.get(kindGroup).push(f); continue; }
       const parts = String(f.path).split('/');
       const group = parts.length > 1 ? parts[0] : 'Files';
-      if (!groups.has(group)) groups.set(group, []);
-      groups.get(group).push(f);
+      if (!pathGroups.has(group)) pathGroups.set(group, []);
+      pathGroups.get(group).push(f);
     }
+    const groups = new Map([...kindGroups].filter(([, list]) => list.length).concat([...pathGroups]));
     let body = indexHtmlLinks(links);
     for (const [group, list] of groups) {
       body += `<h2>${escapeHtml(group)}</h2>\n<ul class="files">\n`;
@@ -1390,7 +1642,169 @@ footer { margin-top: 3rem; }
     return { level, message };
   }
 
+  // --- Citation cache (pure) ---------------------------------------------
+  // Limits (needs the "unlimitedStorage" permission): bytes per notebook bucket
+  // and how many notebook buckets are kept.
+  const CITE_MAX_BYTES_PER_NOTEBOOK = 10 * 1024 * 1024;
+  const CITE_KEEP_NOTEBOOKS = 20;
+
+  // 32-bit FNV-1a over UTF-16 code units (equals byte FNV-1a for ASCII).
+  function fnv1a(text) {
+    const str = String(text == null ? '' : text);
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h.toString(16).padStart(8, '0');
+  }
+
+  function citationCacheKey({ kind, text, numbers }) {
+    const norm = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+    return `${kind}:${fnv1a(norm)}:${norm.length}:${(numbers || []).join('.')}`;
+  }
+
+  function citationCacheBucketKey(notebookId) {
+    return 'nlme.cite.' + notebookId;
+  }
+
+  function isCacheBucket(bucket) {
+    return !!bucket && typeof bucket === 'object' && !!bucket.entries && typeof bucket.entries === 'object';
+  }
+
+  function cacheGet(bucket, key) {
+    if (!isCacheBucket(bucket)) return null;
+    if (!Object.prototype.hasOwnProperty.call(bucket.entries, key)) return null;
+    const entry = bucket.entries[key];
+    if (!entry || !Array.isArray(entry.sources)) return null;
+    return JSON.parse(JSON.stringify(entry.sources));
+  }
+
+  function cachePut(bucket, key, sources, { now, maxBytes = CITE_MAX_BYTES_PER_NOTEBOOK } = {}) {
+    const entries = isCacheBucket(bucket) ? { ...bucket.entries } : {};
+    const bytes = JSON.stringify(sources).length;
+    if (bytes > maxBytes) return { entries };
+    delete entries[key];
+    const keep = JSON.parse(JSON.stringify(sources));
+    let total = bytes;
+    for (const k of Object.keys(entries)) total += (entries[k] && entries[k].bytes) || 0;
+    if (total > maxBytes) {
+      const oldestFirst = Object.keys(entries).sort((a, b) => ((entries[a] && entries[a].at) || 0) - ((entries[b] && entries[b].at) || 0));
+      for (const k of oldestFirst) {
+        if (total <= maxBytes) break;
+        total -= (entries[k] && entries[k].bytes) || 0;
+        delete entries[k];
+      }
+    }
+    entries[key] = { sources: keep, at: now, bytes };
+    return { entries };
+  }
+
+  // bucketMeta: [{ key, at }] -> keys to remove (everything beyond the `keep` most recent).
+  function pruneCitationBuckets(bucketMeta, { keep = CITE_KEEP_NOTEBOOKS } = {}) {
+    return (bucketMeta || [])
+      .map((m, i) => ({ m, i }))
+      .sort((a, b) => (b.m.at - a.m.at) || (a.i - b.i))
+      .slice(keep)
+      .map(x => x.m.key);
+  }
+
+  // --- Citation cache storage wrappers ---------------------------------
+  // `storage` is chrome.storage.local (passed in so this stays testable).
+  // Nothing here throws: a storage failure means "no cache", never a failed
+  // export. Layout: one bucket per notebook at nlme.cite.<id>, plus
+  // nlme.cite.meta = { bucketKey: newestAt } for pruning old notebooks.
+  // Read-modify-write is not atomic across contexts; the side panel's job lock
+  // guarantees one export at a time, so content.js and sidebar.js never write
+  // concurrently.
+  const CITE_META_KEY = 'nlme.cite.meta';
+
+  async function citationCacheRead(storage, notebookId, key) {
+    if (!storage || !notebookId) return null;
+    try {
+      const bucketKey = citationCacheBucketKey(notebookId);
+      const stored = await storage.get([bucketKey, CITE_META_KEY]);
+      const bucket = stored && stored[bucketKey];
+      if (bucket) {
+        // A bucket the meta map does not know yet (e.g. meta was lost): list it
+        // now (at = now) so it can be pruned later
+        const meta = (stored && stored[CITE_META_KEY]) || {};
+        if (!(bucketKey in meta)) {
+          try { await storage.set({ [CITE_META_KEY]: { ...meta, [bucketKey]: Date.now() } }); } catch (e) { /* best effort */ }
+        }
+      }
+      return cacheGet(bucket, key);
+    } catch (e) {
+      console.warn('[NotebookLM Takeout] Citation cache read failed:', e);
+      return null;
+    }
+  }
+
+  async function citationCacheWrite(storage, notebookId, key, sources, { now = Date.now(), maxBytes, keep } = {}) {
+    if (!storage || !notebookId) return false;
+    try {
+      const bucketKey = citationCacheBucketKey(notebookId);
+      const stored = await storage.get([bucketKey, CITE_META_KEY]);
+      const putOpts = { now };
+      if (maxBytes !== undefined) putOpts.maxBytes = maxBytes;
+      const bucket = cachePut(stored && stored[bucketKey], key, sources, putOpts);
+      const meta = { ...((stored && stored[CITE_META_KEY]) || {}), [bucketKey]: now };
+      const pruneOpts = keep !== undefined ? { keep } : {};
+      const evicted = pruneCitationBuckets(Object.keys(meta).map(k => ({ key: k, at: meta[k] })), pruneOpts)
+        .filter(k => k !== bucketKey);
+      evicted.forEach(k => { delete meta[k]; });
+      await storage.set({ [bucketKey]: bucket, [CITE_META_KEY]: meta });
+      if (evicted.length) await storage.remove(evicted);
+      return true;
+    } catch (e) {
+      console.warn('[NotebookLM Takeout] Citation cache write failed:', e);
+      return false;
+    }
+  }
+
+  async function citationCacheClear(storage) {
+    if (!storage) return false;
+    try {
+      // Never load all of storage when the keys can be listed another way:
+      // getKeys (newer Chrome), else the buckets the meta map lists
+      let names = null;
+      if (typeof storage.getKeys === 'function') {
+        names = await storage.getKeys();
+      } else {
+        const meta = ((await storage.get(CITE_META_KEY)) || {})[CITE_META_KEY];
+        if (meta && typeof meta === 'object') names = [...Object.keys(meta), CITE_META_KEY];
+      }
+      if (!Array.isArray(names)) names = Object.keys((await storage.get(null)) || {});
+      const keys = names.filter(k => typeof k === 'string' && k.startsWith('nlme.cite.'));
+      if (keys.length) await storage.remove(keys);
+      return true;
+    } catch (e) {
+      console.warn('[NotebookLM Takeout] Citation cache clear failed:', e);
+      return false;
+    }
+  }
+
+  // A result is cacheable only when every expected marker produced a source
+  // with a filename and a non-empty quote (partial results are never stored).
+  function citationSourcesComplete(sources, expectedCount) {
+    return Array.isArray(sources) && expectedCount > 0 && sources.length === expectedCount &&
+      sources.every(s => s && typeof s.text === 'string' && s.text !== '' && typeof s.quote === 'string' && s.quote !== '');
+  }
+
+  // Header text of the Sources panel's "Notes" group, with its mat-icons already
+  // removed: "Notes" or "Notes (3)", nothing else ("Notes and Papers" is a source group).
+  function isNotesHeaderText(text) {
+    return /^Notes(\s*\(\d+\))?$/.test(String(text == null ? '' : text).trim());
+  }
+
+  // A Generated item's title element must read exactly the label the delete was asked for.
+  function studioTargetMatches(titleText, label) {
+    return typeof label === 'string' && label !== '' && String(titleText == null ? '' : titleText).trim() === label;
+  }
+
   const NLME = {
+    studioTargetMatches,
+    isNotesHeaderText,
     buildRootIndex,
     buildIndexHtml,
     fileTypeLabel,
@@ -1404,10 +1818,26 @@ footer { margin-top: 3rem; }
     uniqueStems,
     notebookIdFromUrl,
     listItemKeys,
+    jobRecordKey,
+    newJobRecord,
+    markJobItem,
+    markJobItems,
+    jobRemainingCount,
+    jobRecordFinished,
+    jobRecordMode,
+    jobRecordUsable,
+    planResume,
+    resumeBannerLabel,
+    resumeBannerView,
+    jobResumeKeys,
+    jobResumeProgress,
+    jobKeyTitle,
+    matchResumeItems,
     listView,
     pruneSelection,
     listSummary,
     listStateKey,
+    pruneListStates,
     restoreListState,
     exportMeta,
     buildManifest,
@@ -1419,11 +1849,14 @@ footer { margin-top: 3rem; }
     withRealExtension,
     artifactStems,
     groupCitationEntries,
+    groupedSourcesMarkdown,
+    markWindowedQuote,
     noteHasImages,
     countMarkdownFormulas,
     citationCoverage,
     unknownStudioIcons,
     auditExport,
+    diffAudit,
     buildSourcesIndex,
     citationTitleFromAriaLabel,
     fenceFor,
@@ -1482,7 +1915,19 @@ footer { margin-top: 3rem; }
     CITATION_TOOLTIP_SELECTOR,
     isCitationExpander,
     parseCitationIndex,
-    mimeForPath
+    mimeForPath,
+    fnv1a,
+    citationCacheKey,
+    citationCacheBucketKey,
+    cacheGet,
+    cachePut,
+    pruneCitationBuckets,
+    citationCacheRead,
+    citationCacheWrite,
+    citationCacheClear,
+    citationSourcesComplete,
+    CITE_MAX_BYTES_PER_NOTEBOOK,
+    CITE_KEEP_NOTEBOOKS
   };
 
   root.NLME = NLME;

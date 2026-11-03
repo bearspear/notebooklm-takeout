@@ -1670,9 +1670,44 @@ footer {
    export, scan or download runs. The Cancel button stays usable. */
 body.job-running .tab-content button,
 body.job-running .tab-content input,
+body.job-running .tab-content select,
 body.job-running #rescan-btn {
   pointer-events: none;
   opacity: 0.5;
+}
+
+/* List rows, chips, the sort select and the filter box ignore input during a
+   job too (the controls above are also disabled; this covers rows, which are
+   not form controls, and any control drawn after the job started). Rows are
+   not dimmed again: the controls inside them already are. */
+body.job-running .list-row {
+  pointer-events: none;
+}
+
+/* ========== RESUME BANNER (above the results panel) ========== */
+.resume-banner {
+  background: #fef7e0;
+  border: 1px solid #fde293;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #3c4043;
+}
+
+.resume-banner .resume-text {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+
+.resume-banner .resume-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.resume-banner .btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 /* ========== RESULTS PANEL ========== */

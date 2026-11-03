@@ -135,7 +135,7 @@ The quoted passage from the source…
    selected; filter, sort or untick rows to choose what you want.
 2. Click **Download** on a row, or **Download Selected (N)** for the ticked rows.
    - **Download** saves one file named `[type]_Title.ext` (for example `[report]_Title.md`,
-     `[mind-map]_Title.svg`). A Data Table or mind map saves as one ZIP (`[data-table]_Title.zip`, `[MINDMAP]_Title.zip`).
+     `[mind-map]_Title.svg`). A Data Table or mind map saves as one ZIP (`[data-table]_Title.zip`, `[mind-map]_Title.zip`).
    - With **ZIP off** (recommended for whole notebooks), **Download Selected** saves every ticked file into
      `Downloads/<Notebook name>/<type>/…`, one file at a time, so even large audio and video
      overviews work.
@@ -231,9 +231,10 @@ was exported so far is kept) and skips the remaining categories. The root index 
 Enable it under **Settings → Show the Generated tab**. It lists everything Gemini Notebook
 generated as one list: the items in the Studio panel (notes, audio, slides, reports and so on)
 and the notes in the Sources panel's "Notes" group (type "Note (Sources panel)"). Every row has
-**Download**, and there are bulk actions. Studio items also have **Delete**, which asks you first
-and then confirms Gemini Notebook's own dialog. Sources-panel notes can't be deleted there yet;
-**Delete Selected** skips them and says so. Delete such a note in the Sources panel.
+**Download** and **Delete**, and there are bulk actions. Delete asks you first and then confirms
+Gemini Notebook's own dialog if it shows one. This includes the notes in the Sources panel: the
+tab removes them through the panel's "Remove note" menu item. Delete Selected removes the Sources-panel
+notes last, from the bottom of the list up.
 
 ### Cancelling
 
@@ -252,6 +253,28 @@ folder) it was saved to, and the errors grouped by kind (collapsed; the first 20
 rest are in `errors.md`). If items failed, **Retry N failed** exports just those again.
 (Chat exports have no Retry: re-export the chat.)
 
+### Resume an unfinished export
+
+If an export stops early (you cancel it, the tab closes, the panel closes or a Full Takeout
+runs into failures), the side panel remembers which items were left. When you open that
+notebook again, a banner above the results shows "An earlier Notes export stopped at 12 of
+40" (a Full Takeout reads "An earlier Full Takeout stopped at …") with **Resume (28 left)** and **Discard**.
+When the export ran to the end and only failed items are left, it reads "An earlier Notes export
+finished with 3 failed." with **Retry (3)**, which does the same as Resume for those items. It appears only while the active tab is that
+notebook, no export is running, and something is left; it goes away when you switch to
+another notebook (or a page that is not a notebook), and comes back when you return.
+
+**Resume** looks the left-over and failed items up again in the notebook (by type and title,
+so a renamed or deleted item is not guessed at), then exports them as an ordinary new export:
+Sources, then Notes, then Artifacts, ending in one results panel. Items that are no longer in
+the notebook are listed there as "no longer in the notebook" and dropped from the banner;
+items that fail again stay in it. If the page looks only partly loaded (a list not drawn yet),
+those items are reported as "could not be checked" and stay in the banner instead of being
+dropped. The files come as new ZIPs or folders; a resume never
+adds to the earlier export's files. Resume uses your current ⚙️ settings (citation detail,
+versions, ZIP), not the ones of the stopped export. **Discard** forgets the earlier export. Chat exports are
+never resumed. Cancel stops a resume between its steps, too.
+
 Only one export, scan or download runs at a time. While one runs, the panel's other buttons
 are disabled and a second click shows "… is still running".
 
@@ -265,6 +288,7 @@ are disabled and a second click shows "… is still running".
 | Slide deck format | PDF | PDF or PowerPoint |
 | Source versions | base + metadata | Any mix of: base, with AI summary & topics, each optionally with images |
 | Citation detail (notes and chat) | Full quotes | "Source titles only" skips reading each citation's popup: much faster, every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. |
+| Reuse citation quotes from earlier exports | on | Notes and chat answers that have not changed since an earlier full-quote export take their citation quotes from a local cache instead of hovering every marker again (much faster re-exports). Not used for "Source titles only", "No citations" or image versions; only complete reads are stored. **Clear citation cache** empties it, for example after you edit a source. The cache needs the "unlimitedStorage" permission (no install warning), so reused quotes are kept for up to 20 notebooks. The `_audit.md` and `_index.md` show "Citations from cache: N of M items" when it was used. |
 | Note versions | base + code blocks | Base always; code-block quotes and an image version are added only when a note has quotes or images |
 | Sources / notes per ZIP | 25 | Batch size for large exports |
 | Clean OCR artifacts from citations | on | Strips `~~~`, `:~:` and similar noise |
@@ -372,7 +396,8 @@ causes no extra requests to Gemini Notebook.
   links for media files.
 
 **Permissions:** `sidePanel`, `tabs`, `scripting` (run inside the notebook tab), `downloads`
-and `storage` (settings). Host access is limited to `notebook.google.com` /
+`storage` (settings, unfinished-export records and list settings) and `unlimitedStorage` (the
+citation cache; no install warning). Host access is limited to `notebook.google.com` /
 `notebooklm.google.com` and the hosts Gemini Notebook serves downloads from
 (`contribution.usercontent.google.com`, `*.googleusercontent.com`, and
 `*.scf.usercontent.goog` for mind maps). Downloads from any other host, or from other tabs,
@@ -413,6 +438,20 @@ DOM behaviour is verified in Chrome with the health check and real exports.
 contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
+
+**1.6.0 (Nov 2026)**: faster re-exports, resume, and a complete Generated tab.
+- Re-exports reuse citation quotes read before (⚙️ "Reuse citation quotes from earlier exports", with a
+  Clear button); only new or edited notes and answers are hovered again. `_audit.md` says how many came
+  from the cache. Adds the `unlimitedStorage` permission so the cache can hold large notebooks.
+- An export that was cancelled, stopped or cut off can be resumed: a banner offers "Resume (N left)",
+  rescans, and exports only what is left; items removed from the notebook are reported, never swapped.
+  Cancel between two retry or resume steps now stops the rest.
+- The Generated tab can delete notes in the Sources panel. Deletes refuse when the item changed since the
+  scan, close any open page menu first, and only click the item's own menu entry.
+- Long transcript quotes cut by Gemini Notebook's ~1,000-character window are marked with "…"; chat in
+  "Source titles only" mode groups its sources like notes; single mind maps download as `[mind-map]_Title`.
+- Split notes exports get an `_audit.md` per part; takeout indexes group files under Notes, Sources and
+  Mind maps; old per-notebook list settings are cleaned up; lists ignore clicks while an export runs.
 
 **1.5.0 (Nov 2026)**: find, retry, finish.
 - Every list (Artifacts, Notes, Sources, Generated) has a filter box, type chips, sorting and

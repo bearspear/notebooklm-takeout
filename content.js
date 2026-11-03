@@ -79,6 +79,7 @@
   let exportCancelled = false;
   let includeCitationImages = false; // Global setting for including images in citations
   let citationDetailMode = 'quotes';   // 'quotes' (hover each marker) | 'titles' (no hovering; also used for 'none')
+  let reuseCitations = false;          // Milestone 3c: reuse cached citation quotes from earlier exports (quotes mode, no images)
 
   function createExportOverlay() {
     if (exportOverlay) return exportOverlay;
@@ -300,6 +301,7 @@
       // Extract note content
       // 'titles' and 'none' both skip hovering ('none' drops the markers later)
       citationDetailMode = ['titles', 'none'].includes(message.data.citationDetail) ? 'titles' : 'quotes';
+      reuseCitations = message.data.reuseCitations === true;
       withRequestTiming(() => (typeof message.data.sourceIndex === 'number'
         ? extractSourcesPanelNote(message.data.sourceIndex, message.data.noteTitle, message.data.includeCitationImages)
         : extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages)))
@@ -442,9 +444,16 @@
         sendResponse({ items: [], error: e.message });
       }
     } else if (message.type === 'DELETE_STUDIO_ITEM') {
-      // Resolve by label (preferred when provided — resilient to index shifts)
-      // or by combined DOM index as a fallback.
+      // Resolve by label plus combined index (row delete: the title at that index
+      // must match the label, otherwise the delete is refused) or by label alone
+      // (bulk delete). When a label is given there is no index-only fallback.
       deleteStudioItem(message.data || {})
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ success: false, error: error.message || 'Delete failed' }));
+      return true;
+    } else if (message.type === 'DELETE_SOURCE_NOTE') {
+      // A note in the Sources panel's "Notes" group (Milestone 3c)
+      deleteSourceNote(message.data || {})
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ success: false, error: error.message || 'Delete failed' }));
       return true;
@@ -1505,7 +1514,8 @@
         } else {
           quoteMarkdown = await htmlToMarkdownWithImages(textEl, includeImages);
         }
-        quoteMarkdown = quoteMarkdown.trim();
+        // A long unpunctuated source shows only a cut window: mark it with "…"
+        quoteMarkdown = NLME.markWindowedQuote(quoteMarkdown.trim());
 
         leave();
         if (!(await ensureTooltipGone())) {
@@ -1753,7 +1763,7 @@
     if (!header) return false;
     const clone = header.cloneNode(true);
     clone.querySelectorAll('mat-icon').forEach(icon => icon.remove());
-    return clone.textContent.trim().startsWith('Notes');
+    return NLME.isNotesHeaderText(clone.textContent);
   }
 
   function getSourceContainerTitle(container) {
@@ -2535,6 +2545,22 @@
       return { html: viewer.innerHTML, sources: titleSources, errors };
     }
 
+    // Citation cache (Milestone 3c): quotes mode only, never with images.
+    // Same note text and marker numbers as an earlier complete read -> reuse
+    // its sources instead of hovering every marker. Storage trouble only logs.
+    const cacheUsable = reuseCitations && !includeCitationImages && buttonsByIndex.size > 0;
+    let cacheKey = null;
+    let cacheNotebookId = '';
+    if (cacheUsable) {
+      cacheNotebookId = NLME.notebookIdFromUrl(location.href);
+      cacheKey = NLME.citationCacheKey({ kind: 'note', text: viewer.textContent, numbers: [...buttonsByIndex.keys()] });
+      const cached = await NLME.citationCacheRead(chrome.storage.local, cacheNotebookId, cacheKey);
+      if (cached && cached.length === buttonsByIndex.size) {
+        console.log(`[NotebookLM Takeout] Citation cache hit: ${cached.length} source(s) reused without hovering`);
+        return { html: viewer.innerHTML, sources: cached, errors, fromCache: true };
+      }
+    }
+
     // Step 3: hover each marker and read its tooltip
     const sources = [];
     for (const [index, button] of buttonsByIndex) {
@@ -2556,6 +2582,13 @@
     }
 
     console.log(`[NotebookLM Takeout] Citations: ${sources.length}/${buttonsByIndex.size} extracted, ${errors.length} warning(s)`);
+
+    // Store only a complete read: every marker has a source with a quote, no
+    // warnings, and the export was not cancelled partway.
+    if (cacheKey && !isExportCancelled() && errors.length === 0 &&
+        NLME.citationSourcesComplete(sources, buttonsByIndex.size)) {
+      await NLME.citationCacheWrite(chrome.storage.local, cacheNotebookId, cacheKey, sources);
+    }
 
     return {
       html: viewer.innerHTML,
@@ -3300,7 +3333,10 @@
     nodes.forEach((el, combinedIndex) => {
       const tag = el.tagName.toLowerCase();
       const titleEl = el.querySelector('.artifact-title, .note-title');
-      const label = titleEl?.textContent?.trim() || `Item ${combinedIndex + 1}`;
+      const title = titleEl?.textContent?.trim() || '';
+      // untitled: the label is made up for display; a delete by label must never use it
+      const untitled = title === '';
+      const label = title || `Item ${combinedIndex + 1}`;
       const detailsEl = el.querySelector('.artifact-details');
       const details = detailsEl?.textContent?.trim() || '';
       const iconEl = el.querySelector('mat-icon');
@@ -3320,6 +3356,7 @@
           moreIndex: hasMoreButton ? moreCursor : -1,
           kind: 'artifact',
           label,
+          untitled,
           details,
           type,
           downloadable: NLME.isDownloadableType(type),
@@ -3336,6 +3373,7 @@
           kindIndex: noteCursor,
           kind: 'note',
           label,
+          untitled,
           details,
           type,
           hasMoreButton
@@ -3347,9 +3385,61 @@
     return items;
   }
 
+  // --- Menu binding for deletes -------------------------------------------
+  // A More menu is opened by a trigger and bound to it through aria-controls.
+  // Delete items from different menus share classes ("Remove source" has the
+  // same one as "Remove note"), so a delete item is only ever taken from the
+  // panel of the trigger just clicked, never from "the first panel".
+
+  const DIALOG_SELECTOR = 'mat-dialog-container, mat-mdc-dialog-container, [role="dialog"], [role="alertdialog"], .cdk-dialog-container, .cdk-overlay-pane';
+
+  function snapshotDialogPanes() {
+    return new Set(document.querySelectorAll(DIALOG_SELECTOR));
+  }
+
+  function closeMenuBackdrops() {
+    document.querySelectorAll('.cdk-overlay-backdrop').forEach(b => b.click());
+  }
+
+  // Close every open menu panel; false if one is still open after ~1 s.
+  async function closeOpenMenus() {
+    const deadline = Date.now() + 1000;
+    while (document.querySelector('.mat-mdc-menu-panel')) {
+      if (Date.now() > deadline) return false;
+      closeMenuBackdrops();
+      await new Promise(r => setTimeout(r, 100));
+    }
+    return true;
+  }
+
+  // Click the More trigger and return the menu panel it controls. Throws
+  // (after closing the menu) if the panel cannot be tied to this trigger.
+  async function openMenuForTrigger(trigger) {
+    trigger.click();
+    const deadline = Date.now() + 2000;
+    while (trigger.getAttribute('aria-expanded') !== 'true') {
+      if (Date.now() > deadline) {
+        closeMenuBackdrops();
+        throw new Error('More menu did not open');
+      }
+      await new Promise(r => setTimeout(r, 50));
+    }
+    // Let the panel render its items
+    await new Promise(r => setTimeout(r, 150));
+    const panelId = trigger.getAttribute('aria-controls');
+    const panel = panelId ? document.getElementById(panelId) : null;
+    if (!panel || !panel.classList.contains('mat-mdc-menu-panel')) {
+      closeMenuBackdrops();
+      throw new Error('More menu could not be identified');
+    }
+    return panel;
+  }
+
   /**
    * Delete one studio item:
-   *   1. Resolve target element (by label first, else combined index).
+   *   1. Resolve target element: label plus combined index must match (the title at
+   *      that index must equal the label); a label alone picks the first title match
+   *      (bulk delete). Anything else is refused, never guessed.
    *   2. Open its "More" menu.
    *   3. Click the "Delete" menu item.
    *   4. Wait for the native confirmation dialog and auto-click its confirm button.
@@ -3362,22 +3452,32 @@
     const { label, combinedIndex } = data || {};
     const all = Array.from(document.querySelectorAll('artifact-library-item, artifact-library-note'));
     if (all.length === 0) {
-      throw new Error('No studio items found on the page');
+      throw new Error('No Generated items found on the page');
     }
 
-    // Resolve target — prefer label (stable across deletes) but fall back to index.
+    // Resolve target. The title of the element must equal the label whenever a
+    // label is given: a combinedIndex is only a hint that picks between
+    // same-titled items, never a fallback (the page may have changed since the scan).
+    const titleOf = el => el.querySelector('.artifact-title, .note-title')?.textContent;
+    const hasIndex = typeof combinedIndex === 'number' && combinedIndex >= 0 && combinedIndex < all.length;
     let target = null;
     if (label) {
-      target = all.find(el => {
-        const t = el.querySelector('.artifact-title, .note-title');
-        return t && t.textContent?.trim() === label;
-      }) || null;
-    }
-    if (!target && typeof combinedIndex === 'number' && combinedIndex >= 0 && combinedIndex < all.length) {
+      if (typeof combinedIndex === 'number') {
+        // Row delete: the item at that index, or nothing
+        if (!hasIndex || !NLME.studioTargetMatches(titleOf(all[combinedIndex]), label)) {
+          throw new Error('Item changed \u2014 rescan and try again');
+        }
+        target = all[combinedIndex];
+      } else {
+        // Bulk delete: by label alone
+        target = all.find(el => NLME.studioTargetMatches(titleOf(el), label)) || null;
+      }
+    } else if (hasIndex) {
+      // No caller sends an index without a label (sendStudioDelete always sends the label)
       target = all[combinedIndex];
     }
     if (!target) {
-      throw new Error(`Studio item not found${label ? ` (label: "${label}")` : ''}`);
+      throw new Error(`Generated item not found${label ? ` (label: "${label}")` : ''}`);
     }
 
     const moreButton = target.querySelector('button[aria-label="More"]');
@@ -3385,22 +3485,25 @@
       throw new Error('More button not found on this item');
     }
 
-    moreButton.click();
-
-    try {
-      await waitForElement('.mat-mdc-menu-panel, .cdk-overlay-pane', 2000);
-    } catch (e) {
-      throw new Error('More menu did not open');
+    if (!(await closeOpenMenus())) {
+      throw new Error('Close the open menu and try again');
     }
 
-    // Small yield so menu items populate.
-    await new Promise(r => setTimeout(r, 150));
+    // The page may have changed while menus were closing.
+    if (!target.isConnected || (label && !NLME.studioTargetMatches(titleOf(target), label))) {
+      throw new Error('Item changed \u2014 rescan and try again');
+    }
 
-    const deleteItem = findMenuItemByText('delete');
+    const panel = await openMenuForTrigger(moreButton);
+
+    // Only this trigger's own menu: its item whose text says delete.
+    const deleteItem = Array.from(panel.querySelectorAll('.mat-mdc-menu-item, [role="menuitem"]'))
+      .find(el => (el.textContent || '').toLowerCase().includes('delete')) || null;
     if (!deleteItem) {
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      closeMenuBackdrops();
       throw new Error('Delete menu item not found');
     }
+    const existingDialogs = snapshotDialogPanes();
     deleteItem.click();
 
     // NotebookLM's behavior varies per item type:
@@ -3420,7 +3523,7 @@
       if (isGone()) return { success: true };
 
       if (!confirmed) {
-        const confirmBtn = findConfirmDialogButton();
+        const confirmBtn = findConfirmDialogButton(existingDialogs);
         if (confirmBtn) {
           confirmBtn.click();
           confirmed = true;
@@ -3430,9 +3533,104 @@
       await new Promise(r => setTimeout(r, 100));
     }
 
+    closeMenuBackdrops();
     throw new Error(confirmed
       ? 'Item did not disappear after clicking confirm'
       : 'Delete did not take effect (no dialog, no removal)');
+  }
+
+  /**
+   * Delete one note from the Sources panel's "Notes" group:
+   *   1. The container at sourceIndex must be a note container whose title is
+   *      `title` (no click otherwise: the list may have changed since the scan).
+   *   2. Open its "More" menu, click "Remove note", click the confirm button if
+   *      a dialog appears.
+   *   3. Wait (5 s) until no more note containers with that title are left than
+   *      before, re-finding them by title each time.
+   * A failure closes the menu (backdrop click; Escape does not close it).
+   *
+   * @param {{sourceIndex?: number, title?: string}} data
+   * @returns {Promise<{success: boolean, error?: string}>}
+   */
+  async function deleteSourceNote(data) {
+    const { sourceIndex, title } = data || {};
+    const STALE = 'Note changed — rescan and try again';
+    if (typeof title !== 'string' || !title || typeof sourceIndex !== 'number') {
+      return { success: false, error: STALE };
+    }
+
+    const listNotes = () => Array.from(document.querySelectorAll('.single-source-container'))
+      .filter(c => isNoteSourceContainer(c) && getSourceContainerTitle(c) === title);
+
+    const container = document.querySelectorAll('.single-source-container')[sourceIndex];
+    if (!container || !isNoteSourceContainer(container) || getSourceContainerTitle(container) !== title) {
+      return { success: false, error: STALE };
+    }
+
+    const closeMenu = closeMenuBackdrops;
+    const guardOk = () => container.isConnected && isNoteSourceContainer(container) &&
+      getSourceContainerTitle(container) === title;
+
+    if (findOpenStudioViewer()) await closeStudioViewer(500);
+
+    // A menu left open (it may belong to a real source) must never be used.
+    if (!(await closeOpenMenus())) {
+      return { success: false, error: 'Close the open menu and try again' };
+    }
+
+    const moreButton = container.querySelector('button[aria-label="More"]');
+    if (!moreButton) {
+      return { success: false, error: 'More button not found on this note' };
+    }
+
+    // The page may have changed while the viewer / menus were closing.
+    if (!guardOk()) return { success: false, error: STALE };
+
+    const initialCount = listNotes().length;
+    let panel;
+    try {
+      panel = await openMenuForTrigger(moreButton);
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+
+    // Only an item of this trigger's own menu that says "Remove note": never
+    // one that mentions "source" (a real source's "Remove source" has the same class).
+    const deleteItem = Array.from(panel.querySelectorAll('.more-menu-delete-source-button'))
+      .find(el => {
+        const text = (el.textContent || '').toLowerCase();
+        return text.includes('remove note') && !text.includes('source');
+      }) || null;
+    if (!deleteItem) {
+      closeMenu();
+      return { success: false, error: 'Remove note menu item not found' };
+    }
+    const existingDialogs = snapshotDialogPanes();
+    deleteItem.click();
+
+    // A confirm dialog may or may not appear: click it if it does (only a new
+    // one), and succeed as soon as the note is gone either way.
+    let confirmed = false;
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if (listNotes().length < initialCount) return { success: true };
+      if (!confirmed) {
+        const confirmBtn = findConfirmDialogButton(existingDialogs);
+        if (confirmBtn) {
+          confirmBtn.click();
+          confirmed = true;
+        }
+      }
+      await new Promise(r => setTimeout(r, 100));
+    }
+
+    closeMenu();
+    return {
+      success: false,
+      error: confirmed
+        ? 'Note did not disappear after clicking confirm'
+        : 'Delete did not take effect (no dialog, no removal)'
+    };
   }
 
   /**
@@ -3443,14 +3641,16 @@
    * container that has a Cancel sibling (the strongest confirm-dialog signal)
    * and skipping the more-options menu panel we just used.
    */
-  function findConfirmDialogButton() {
+  function findConfirmDialogButton(exclude = null) {
     const DESTRUCTIVE = ['delete', 'confirm', 'remove'];
     const exactMatch = (t) => DESTRUCTIVE.includes(t);
     const looseMatch = (t) => DESTRUCTIVE.some(w => t.includes(w));
 
-    const candidates = document.querySelectorAll(
+    // exclude: dialog elements that were already open before the delete click
+    // (a leftover dialog must never be confirmed by the next delete).
+    const candidates = Array.from(document.querySelectorAll(
       'mat-dialog-container, mat-mdc-dialog-container, [role="dialog"], [role="alertdialog"], .cdk-dialog-container, .cdk-overlay-pane'
-    );
+    )).filter(el => !exclude || ![...exclude].some(old => old === el || old.contains(el)));
 
     for (const container of candidates) {
       // Skip the more-options menu panel (it has .mat-mdc-menu-panel descendants).

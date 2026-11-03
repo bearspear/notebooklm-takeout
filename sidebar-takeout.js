@@ -378,7 +378,8 @@ function takeoutZipEnabled() {
  * (or the folder) and the combined errors, and offers "Retry N failed" for the
  * Sources, Notes and Artifacts items that failed (never chat). A retry is an
  * ordinary tab export of those items (own ZIPs or folders) on the tab the takeout
- * ran on; it does not rewrite the takeout or its index.
+ * ran on; it does not rewrite the takeout or its index. It marks its items on the
+ * takeout's job record (updateRecord) without replacing it.
  */
 async function runFullTakeout() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -410,13 +411,21 @@ async function runFullTakeout() {
     const categories = [
       {
         name: 'Sources', folder: 'sources',
-        scan: async () => (await scanSourcesData(tabId)).sources,
+        scan: async () => {
+          const sources = (await scanSourcesData(tabId)).sources;
+          stampJobKeys('sources', sources);
+          return sources;
+        },
         // itemDir '': the category folder is already sources/ (notes/), no second one inside it
         run: (catShell, items, target) => runSourcesJob(catShell, items, { ...target, variantSettings, itemDir: '' })
       },
       {
         name: 'Notes', folder: 'notes',
-        scan: () => scanNotesData(tabId),
+        scan: async () => {
+          const notes = await scanNotesData(tabId);
+          stampJobKeys('notes', notes);
+          return notes;
+        },
         run: (catShell, items, target) => runNotesJob(catShell, items, { ...target, variantSettings, itemDir: '' })
       },
       {
@@ -435,7 +444,13 @@ async function runFullTakeout() {
       },
       {
         name: 'Artifacts', folder: 'artifacts',
-        scan: async () => (await scanArtifactsData(tabId)).filter(item => !item.disabled),
+        // Keys over the whole list, disabled items included (the Generated tab's
+        // list), then only the enabled items are exported and recorded
+        scan: async () => {
+          const all = await scanArtifactsData(tabId);
+          stampJobKeys('artifacts', all);
+          return all.filter(item => !item.disabled);
+        },
         run: (catShell, items, target) => runArtifactsJob(catShell, items, { ...target, bothSlideFormats: true })
       }
     ].map(c => ({ ...c, status: null, selected: 0, exported: 0, failed: 0, zips: [], parts: 0, packages: 0, errors: [], auditOk: true, items: null, failedItems: [] }));
@@ -464,6 +479,20 @@ async function runFullTakeout() {
     }
     console.log('[NotebookLM Takeout] Full Takeout scan:', categories.map(c => `${c.name} ${c.selected}`).join(', '));
 
+    // Job record (Milestone 3c): one for the whole takeout, made from the scanned
+    // items. A category that is empty, failed to scan or was never scanned
+    // (cancelled during the scan) has an empty list; chat is never recorded.
+    const recordedItems = name => {
+      const c = categories.find(cat => cat.name === name);
+      return !c.status && c.items ? c.items : [];
+    };
+    const tracker = stopRest ? null : await startJobRecord(shell, 'takeout', 'Full Takeout', {
+      sources: recordedItems('Sources'),
+      notes: recordedItems('Notes'),
+      artifacts: recordedItems('Artifacts')
+    });
+    let uncleanEnd = false; // a runner was cancelled or stopped
+
     // 2. One runner per category, in order; a cancel skips the rest
     for (const c of categories) {
       if (c.status) continue; // empty, or the scan failed
@@ -482,7 +511,7 @@ async function runFullTakeout() {
       // so the index still links the parts already written
       const written = newWritten();
       try {
-        const out = await c.run(catShell, c.items, { pathPrefix: `${root}/${c.folder}/`, zipKind: `takeout-${c.folder}`, folder, written });
+        const out = await c.run(catShell, c.items, { pathPrefix: `${root}/${c.folder}/`, zipKind: `takeout-${c.folder}`, folder, written, tracker });
         c.exported = out.result.exported;
         c.failed = out.result.failed;
         c.errors.push(...out.errors);
@@ -498,6 +527,7 @@ async function runFullTakeout() {
           cancelled: out.result.cancelled,
           stopped: out.result.stopped
         });
+        if (out.result.cancelled || out.result.stopped) uncleanEnd = true;
         if (out.result.cancelled) stopRest = true;
       } catch (error) {
         // A package that could not be written: this category fails, the
@@ -505,12 +535,17 @@ async function runFullTakeout() {
         console.error(`[NotebookLM Takeout] Full Takeout: ${c.name} failed:`, error);
         c.status = 'failed';
         c.errors.push(`Export failed: ${error.message || error}`);
+        if (tracker) tracker.discard(); // successes staged for a package that was never saved
       }
       c.zips = written.zips;
       c.parts = written.parts;
       c.packages = written.count;
       c.items = null; // free the scan data before the next category
     }
+
+    // Clean end: nothing cancelled, stopped or skipped. The record goes only when
+    // every recorded item is done (a failed item or a failed category keeps it)
+    if (tracker) await tracker.finish(!stopRest && !uncleanEnd);
 
     // 3. Root files, also after a cancel
     const summary = categories.map(({ name, folder: catFolder, status, selected, exported, failed, zips, parts, packages }) =>
@@ -597,9 +632,9 @@ async function runFullTakeout() {
 // ordinary tab export of the failed items on the takeout's tab, and returns
 // its outcome (see withExportShell) so the chain can combine them.
 const TAKEOUT_RETRY_STEPS = [
-  { name: 'Sources', run: (items, tabId) => exportSources(items, { tabId }) },
-  { name: 'Notes', run: (items, tabId) => exportNotesAsMarkdown(items, { tabId }) },
-  { name: 'Artifacts', run: (items, tabId) => downloadAllArtifacts(tabId, items) }
+  { name: 'Sources', run: (items, tabId) => exportSources(items, { tabId, updateRecord: true }) },
+  { name: 'Notes', run: (items, tabId) => exportNotesAsMarkdown(items, { tabId, updateRecord: true }) },
+  { name: 'Artifacts', run: (items, tabId) => downloadAllArtifacts(tabId, items, { updateRecord: true }) }
 ];
 
 // Show a takeout-level results panel with "Retry N failed" for `failed`
@@ -607,6 +642,66 @@ const TAKEOUT_RETRY_STEPS = [
 function showTakeoutResults(panel, failed, tabId) {
   const shown = { ...panel, retry: takeoutRetry(failed, tabId, () => showResults({ ...shown, notify: false })) };
   showResults(shown);
+}
+
+/**
+ * Run `fn` as a Retry / Resume chain: while it runs, requestCancel (sidebar.js)
+ * notes a Cancel on the chain, so one pressed between two steps (no shell
+ * active) still stops it. The flag is reset when the chain starts and ends.
+ */
+async function runChain(fn) {
+  chainActive = true;
+  chainCancelRequested = false;
+  try {
+    return await fn();
+  } finally {
+    chainActive = false;
+    chainCancelRequested = false;
+  }
+}
+
+/**
+ * The steps shared by the takeout Retry and Resume, in TAKEOUT_RETRY_STEPS order,
+ * each an ordinary tab export of `itemsByName[step.name]` on `tabId`. Empty
+ * categories are skipped. A cancel (the step's own, or the chain flag set between
+ * steps), a declined health-check dialog or an aborted step ends the chain: later
+ * categories do not run. Call it inside runChain.
+ *
+ * @returns {{ steps: object[], notRun: object[] }} the inputs of
+ *   NLME.combineRetryOutcomes
+ */
+async function runRetryChain(itemsByName, tabId, verb = 'Retry') {
+  const steps = [];
+  const notRun = [];
+  let stopped = false;
+  for (const step of TAKEOUT_RETRY_STEPS) {
+    const items = itemsByName[step.name] || [];
+    if (items.length === 0) continue;
+    if (chainCancelRequested) stopped = true;
+    if (stopped) { notRun.push({ name: step.name, failedItems: items }); continue; }
+    let out;
+    try {
+      out = await step.run(items, tabId);
+    } catch (error) {
+      console.error(`[NotebookLM Takeout] ${verb} ${step.name} failed:`, error);
+      showToast('Export failed. Please try again.', 'error');
+    }
+    if (!out || !out.result) { // declined, aborted (tab closed, export threw)
+      stopped = true;
+      notRun.push({ name: step.name, failedItems: items });
+      continue;
+    }
+    steps.push({
+      name: step.name,
+      message: out.message,
+      level: out.level,
+      saved: out.saved,
+      errors: out.errors,
+      failedItems: out.result.failedItems || []
+    });
+    if (out.result.cancelled) stopped = true;
+  }
+  return { steps, notRun };
 }
 
 /**
@@ -627,35 +722,7 @@ function takeoutRetry(failed, tabId, restore) {
   return {
     count,
     run: () => runExclusive('Retry failed', async () => {
-      const steps = [];
-      const notRun = [];
-      let stopped = false;
-      for (const step of TAKEOUT_RETRY_STEPS) {
-        const items = failed[step.name] || [];
-        if (items.length === 0) continue;
-        if (stopped) { notRun.push({ name: step.name, failedItems: items }); continue; }
-        let out;
-        try {
-          out = await step.run(items, tabId);
-        } catch (error) {
-          console.error(`[NotebookLM Takeout] Retry ${step.name} failed:`, error);
-          showToast('Export failed. Please try again.', 'error');
-        }
-        if (!out || !out.result) { // declined, aborted (tab closed, export threw)
-          stopped = true;
-          notRun.push({ name: step.name, failedItems: items });
-          continue;
-        }
-        steps.push({
-          name: step.name,
-          message: out.message,
-          level: out.level,
-          saved: out.saved,
-          errors: out.errors,
-          failedItems: out.result.failedItems || []
-        });
-        if (out.result.cancelled) stopped = true;
-      }
+      const { steps, notRun } = await runChain(() => runRetryChain(failed, tabId, 'Retry'));
       if (steps.length === 0) {
         restore(); // the first step never ran: keep the panel and its Retry
         return;
@@ -670,4 +737,150 @@ function takeoutRetry(failed, tabId, restore) {
       }, combined.remaining, tabId);
     })
   };
+}
+
+// ---- Resume (Milestone 3c) ----
+
+// Resume's fresh scan per job-record category (full lists, like the tab lists).
+const RESUME_CATEGORIES = [
+  { category: 'sources', name: 'Sources', scan: async tabId => (await scanSourcesData(tabId)).sources },
+  // Studio notes and the Sources panel's notes are drawn separately: a key is gone
+  // only if the scan shows its own region (see NLME.planResume)
+  { category: 'notes', name: 'Notes', scan: tabId => scanNotesData(tabId), regionOfType: type => (type === 'Note (Sources panel)' ? 'sources-panel' : 'studio') },
+  { category: 'artifacts', name: 'Artifacts', scan: tabId => scanArtifactsData(tabId) }
+];
+
+// The notebook's stored record, only when it is still `record` (same id) and usable.
+async function loadResumableRecord(record) {
+  try {
+    const key = NLME.jobRecordKey(record.notebookId);
+    const stored = (await chrome.storage.local.get(key))[key];
+    return stored && stored.id === record.id && NLME.jobRecordUsable(stored, record.notebookId) ? stored : null;
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Job record not read:', error);
+    return null;
+  }
+}
+
+// Keys a resume found gone from the notebook are resolved: cleared from the
+// record (the banner stops offering them); the record is removed when that was
+// everything. Awaited before the exports start, which load the record themselves.
+// Never throws: on a storage failure the keys simply stay in the record.
+async function clearMissingFromRecord(record, missingByCategory) {
+  try {
+    const key = NLME.jobRecordKey(record.notebookId);
+    const stored = (await chrome.storage.local.get(key))[key];
+    if (!stored || stored.id !== record.id || !NLME.jobRecordUsable(stored, record.notebookId)) return;
+    let next = stored;
+    const now = Date.now();
+    for (const [category, keys] of Object.entries(missingByCategory)) next = NLME.markJobItems(next, category, keys, { now });
+    if (next === stored) return;
+    if (NLME.jobRecordFinished(next)) await chrome.storage.local.remove(key);
+    else await chrome.storage.local.set({ [key]: next });
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Job record not updated:', error);
+  }
+}
+
+/**
+ * The banner's Resume: re-runs what an unfinished export left (remaining +
+ * failed) as the same chain as the takeout Retry (sources, notes, artifacts), on
+ * the active tab, which must show the record's notebook. Items are found again by
+ * key in a fresh scan of each category (NLME.matchResumeItems, keys stamped over
+ * the FULL scan, artifacts over the unfiltered one); keys no longer in the
+ * notebook are cleared from the record and listed in the panel as "not_found".
+ * The exports run with updateRecord, so the record ends as the outcome: successes
+ * cleared, failures kept. Like a retry it makes ordinary tab exports; it never
+ * writes back into the original takeout's files. One combined results panel.
+ */
+function resumeJob(record) {
+  return runExclusive('Resume', () => runChain(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !isNotebookUrl(tab.url) || NLME.notebookIdFromUrl(tab.url) !== record.notebookId) {
+      showToast('Open the notebook this export was running on to resume it', 'warning');
+      return;
+    }
+    const tabId = tab.id;
+    const live = await loadResumableRecord(record);
+    if (!live) {
+      showToast('That earlier export is no longer pending', 'info');
+      return;
+    }
+
+    // Find the items again, category by category
+    showToast('Checking what is left\u2026', 'info');
+    // The tab must still show the record's notebook right before each scan and
+    // again after it (in-app navigation changes the URL before the page is drawn)
+    const onNotebook = async () => {
+      try {
+        const now = await chrome.tabs.get(tabId);
+        return isNotebookUrl(now.url) && NLME.notebookIdFromUrl(now.url) === record.notebookId;
+      } catch (_) { return false; }
+    };
+    const itemsByName = {};
+    const missingByCategory = {};
+    const extraErrors = [];
+    for (const { category, name, scan, regionOfType } of RESUME_CATEGORIES) {
+      const keys = NLME.jobResumeKeys(live, category);
+      if (keys.length === 0) continue;
+      if (chainCancelRequested) { showToast('Resume cancelled', 'info'); return; }
+      if (!(await onNotebook())) {
+        showToast('The tab left that notebook; resume stopped', 'warning');
+        return;
+      }
+      let items;
+      try {
+        items = await scan(tabId);
+      } catch (error) {
+        console.error(`[NotebookLM Takeout] Resume: ${name} scan failed:`, error);
+        extraErrors.push({ type: 'scan_failed', title: name, message: `Could not scan ${name.toLowerCase()} (${(error && error.message) || error}); its items stay in the list to resume` });
+        continue;
+      }
+      if (!(await onNotebook())) {
+        showToast('The tab left that notebook; resume stopped', 'warning');
+        return;
+      }
+      stampJobKeys(category, items); // over the full scan, before any subset is cut
+      // NLME.planResume: a scan that matches nothing (empty, still drawing, the wrong
+      // page) or lacks a whole region (Studio notes not drawn) cannot say a key is
+      // gone; those keys are `unknown`, reported and kept in the record
+      const { matched, missing, unknown } = NLME.planResume(keys, items, { ...JOB_KEY_ACCESSORS[category], regionOfType });
+      let runnable = matched;
+      if (category === 'artifacts') {
+        runnable = matched.filter(item => !item.disabled);
+        for (const item of matched.filter(item => item.disabled)) {
+          extraErrors.push({ type: 'not_ready', title: name, message: `${item.label} is not ready to download; it stays in the list to resume` });
+        }
+      }
+      if (runnable.length) itemsByName[name] = runnable;
+      if (unknown.length) {
+        for (const key of unknown) extraErrors.push({ type: 'scan_failed', title: name, message: `${NLME.jobKeyTitle(key)} could not be checked (the ${name.toLowerCase()} list looks incomplete; the page may still be loading); it stays in the list to resume` });
+      }
+      if (missing.length) {
+        missingByCategory[category] = missing;
+        for (const key of missing) extraErrors.push({ type: 'not_found', title: name, message: `${NLME.jobKeyTitle(key)} is no longer in the notebook` });
+      }
+    }
+    if (chainCancelRequested) { showToast('Resume cancelled', 'info'); return; }
+    await clearMissingFromRecord(live, missingByCategory);
+
+    const { steps, notRun } = await runRetryChain(itemsByName, tabId, 'Resume');
+    if (steps.length === 0 && notRun.length === 0 && extraErrors.length === 0) {
+      showToast('Nothing left to resume', 'info');
+      return;
+    }
+    if (steps.length === 0 && extraErrors.length === 0) {
+      showToast('Resume stopped', 'info'); // cancelled or declined before any step ran
+      return;
+    }
+    const combined = NLME.combineRetryOutcomes({ steps, notRun, verb: 'Resume', extraErrors });
+    if (steps.length === 0 && notRun.length === 0) combined.message = 'Nothing was resumed'; // only notes about items
+    showTakeoutResults({
+      message: combined.message,
+      level: combined.level,
+      lines: combined.lines,
+      saved: combined.saved,
+      errors: combined.errors
+    }, combined.remaining, tabId);
+  }));
 }
