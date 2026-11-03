@@ -2406,31 +2406,19 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
         // Optionally clean OCR artifacts, then escape markdown
         const cleanedQuote = settings.cleanOCRArtifacts ? cleanOCRArtifacts(entry.quote) : entry.quote;
         if (citationsCodeBlock) {
-          // Wrap in markdown code block for data separation
-          markdown += `\`\`\`markdown\n${cleanedQuote}\n\`\`\`\n\n`;
+          // Fence longer than any backtick run in the quote, so code inside
+          // the quote can't close it early and invert the rest of the file
+          const fence = NLME.fenceFor(cleanedQuote);
+          markdown += `${fence}markdown\n${cleanedQuote}\n${fence}\n\n`;
         } else {
-          // Escape markdown chars to prevent quote content from breaking formatting
-          markdown += `${escapeMarkdownInQuote(cleanedQuote)}\n\n`;
+          // Blockquote keeps the quote's own Markdown (lists, tables, emphasis)
+          markdown += `${NLME.toBlockquote(cleanedQuote)}\n\n`;
         }
       }
     });
   }
 
   return markdown;
-}
-
-/**
- * Escape markdown special characters in quote content to prevent rendering issues
- * @param {string} text - The quote text to escape
- * @returns {string} - Text with markdown characters escaped
- */
-function escapeMarkdownInQuote(text) {
-  if (!text) return '';
-  return text
-    .replace(/^(#{1,6})\s/gm, '\\$1 ')   // Escape headers
-    .replace(/^(\s*[-*+])\s/gm, '\\$1 ') // Escape list markers
-    .replace(/^>/gm, '\\>')              // Escape blockquotes
-    .replace(/\|/g, '\\|');              // Escape table pipes
 }
 
 /**
@@ -4950,11 +4938,10 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
           // Optionally clean OCR artifacts, then escape markdown
           const cleanedQuote = settings.cleanOCRArtifacts ? cleanOCRArtifacts(source.quote) : source.quote;
           if (citationsCodeBlock) {
-            // Wrap in markdown code block for data separation (same as note export)
-            markdown += `\`\`\`markdown\n${cleanedQuote}\n\`\`\`\n\n`;
+            const fence = NLME.fenceFor(cleanedQuote);
+            markdown += `${fence}markdown\n${cleanedQuote}\n${fence}\n\n`;
           } else {
-            // Escape markdown chars to prevent quote content from breaking formatting
-            markdown += `\n${escapeMarkdownInQuote(cleanedQuote)}\n\n`;
+            markdown += `\n${NLME.toBlockquote(cleanedQuote)}\n\n`;
           }
         }
         markdown += '\n';

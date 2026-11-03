@@ -614,7 +614,23 @@
     return variants;
   }
 
+  // A code fence the quote cannot close early: longer than its longest
+  // backtick run, at least three.
+  function fenceFor(text) {
+    const runs = String(text || '').match(/`+/g) || [];
+    const longest = runs.reduce((max, r) => Math.max(max, r.length), 0);
+    return '`'.repeat(Math.max(3, longest + 1));
+  }
+
+  // Quote as a Markdown blockquote, keeping its own Markdown (lists,
+  // emphasis, tables) intact instead of escaping it.
+  function toBlockquote(text) {
+    return String(text || '').split('\n').map(line => (line.trim() ? `> ${line}` : '>')).join('\n');
+  }
+
   const NLME = {
+    fenceFor,
+    toBlockquote,
     noteVariants,
     sourceVariants,
     isAllowedDownloadUrl,

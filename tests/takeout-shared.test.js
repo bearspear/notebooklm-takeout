@@ -539,3 +539,14 @@ test('sourceVariants needs images for image variants', () => {
   assert.deepEqual(suffixes(NLME.sourceVariants(all, { hasImages: false })), ['', '-plus-meta']);
   assert.deepEqual(suffixes(NLME.sourceVariants(all, { hasImages: true })), ['', '-plus-meta', '-with-images', '-plus-meta-with-images']);
 });
+
+test('fenceFor outgrows backtick runs in the quote', () => {
+  assert.equal(NLME.fenceFor('a ```js x``` b'), '````');
+  assert.equal(NLME.fenceFor('plain'), '```');
+  assert.equal(NLME.fenceFor('````` five'), '``````');
+});
+
+test('toBlockquote prefixes every line', () => {
+  assert.equal(NLME.toBlockquote('a\n\nb'), '> a\n>\n> b');
+  assert.equal(NLME.toBlockquote('- item\n- item 2'), '> - item\n> - item 2');
+});
