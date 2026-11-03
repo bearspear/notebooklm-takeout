@@ -2,7 +2,7 @@
 //
 // saveFiles / fetchDownload: one way to write files (one ZIP, a Downloads
 // subfolder, or single downloads). withExportShell: the pre-flight, progress,
-// cancel, outcome-toast and cleanup every export needs, written once.
+// cancel, results-panel outcome and cleanup every export needs, written once.
 // runFullTakeout: the whole notebook (sources, notes, chat, artifacts) in one
 // shell, through the per-category runners in sidebar.js (runSourcesJob, ...).
 //
@@ -186,7 +186,15 @@ async function saveFiles(files, { zipName, folder } = {}) {
  *                              // retry: { count, run } for "Retry N failed"
  *                              // (runFullTakeout builds its own results panel
  *                              // and does not call finish)
+ *                              // Returns the outcome { kind, selected, message,
+ *                              // level, result, saved, errors }
  * }
+ *
+ * Returns what `run` returns (the export functions return shell.finish's
+ * outcome, so a chained retry can combine them), or { declined: true } when
+ * the user declined the DOM-health dialog, or { aborted: true } when the tab
+ * was gone or the export threw (a toast says so). Callers that ignore the
+ * return value are unaffected.
  *
  * @param {{ label: string, healthType?: string, preflight?: string, overlayMessage?: string, tabId?: number }} options
  *   label names the export in logs; healthType ('notes', 'sources', ...) runs
@@ -194,7 +202,8 @@ async function saveFiles(files, { zipName, folder } = {}) {
  *   toast after the tab lookup; tabId: the tab the items were scanned on
  *   (Download All, every Retry), used instead of the active tab, also for
  *   shell.meta (notebook title and URL). Omitted: the active tab.
- * @param {(shell: object) => Promise<void>} run
+ * @param {(shell: object) => Promise<any>} run
+ * @returns {Promise<any>} see above
  */
 async function withExportShell({ label, healthType, preflight, overlayMessage, tabId: requestedTabId }, run) {
   let tab = null;
@@ -202,18 +211,30 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
   let panelShown = false;
   let cancelled = false;
   let cancelListener = null;
+  let outcome;
 
   const progressPanel = document.getElementById('download-progress');
   const progressFill = document.getElementById('progress-fill');
   const progressText = document.getElementById('progress-text');
 
-  // A new export replaces the last one's results
-  hideResults();
-
   try {
     // The tab the caller scanned (tabId), else the one in front. Everything below
     // (project name, URL, health check, overlay) comes from this tab
-    tab = requestedTabId != null ? await chrome.tabs.get(requestedTabId) : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+    try {
+      tab = requestedTabId != null ? await chrome.tabs.get(requestedTabId) : (await chrome.tabs.query({ active: true, currentWindow: true }))[0];
+    } catch (error) {
+      tab = null; // a closed tab: chrome.tabs.get rejects
+    }
+    if (!tab || (requestedTabId != null && !isNotebookUrl(tab.url))) {
+      // Before hideResults: a retry on a closed tab keeps the panel and its Retry button
+      showToast(requestedTabId != null
+        ? 'The notebook tab for this export is closed. Open it and try again.'
+        : 'Please open NotebookLM first', 'error');
+      return { aborted: true };
+    }
+
+    // A new export replaces the last one's results (only once the tab is known to be there)
+    hideResults();
 
     // Pre-flight warning (the DOM-health type, e.g. 'chat'): after the tab lookup, inside
     // the shell, so its cleanup covers it
@@ -241,7 +262,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
         const proceed = await showDOMWarningDialog(healthCheck.issues);
         if (!proceed) {
           showToast('Export cancelled', 'info');
-          return;
+          return { declined: true };
         }
       }
     }
@@ -287,17 +308,20 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
       finish({ kind, selected, result = {}, auditOk = true, stoppedMessage, errorNote, saved = [], retry = null } = {}) {
         // The outcome stays in the results panel; a stopped job's message
         // leads it, and the errors still follow
-        const outcome = stoppedMessage
+        const composed = stoppedMessage
           ? { message: stoppedMessage, level: 'error' }
           : NLME.composeOutcome({ kind, selected, result, auditOk, errorNote });
-        showResults({ message: outcome.message, level: outcome.level, saved, errors: result.errors || [], retry });
+        const errors = result.errors || [];
+        showResults({ message: composed.message, level: composed.level, saved, errors, retry });
+        return { kind, selected, message: composed.message, level: composed.level, result, saved, errors };
       }
     };
 
-    await run(shell);
+    outcome = await run(shell);
   } catch (error) {
     console.error(`${label} export failed:`, error);
     showToast('Export failed. Please try again.', 'error');
+    outcome = { aborted: true };
   } finally {
     if (cancelListener) chrome.runtime.onMessage.removeListener(cancelListener);
     activeShellTabId = null;
@@ -314,6 +338,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
     // Hide sidebar progress panel
     if (panelShown) progressPanel.style.display = 'none';
   }
+  return outcome;
 }
 
 // ---- Full Takeout (Milestone 3a) ----
@@ -562,22 +587,86 @@ async function runFullTakeout() {
     const failedSources = failedOf('Sources');
     const failedNotes = failedOf('Notes');
     const failedArtifacts = failedOf('Artifacts');
-    const retryCount = failedSources.length + failedNotes.length + failedArtifacts.length;
-    showResults({
-      message,
-      level,
-      saved,
-      errors,
-      retry: retryCount > 0 ? {
-        count: retryCount,
-        // Each export replaces the panel, so the last one retried stays visible
-        run: () => runExclusive('Retry failed', async () => {
-          // On the tab the takeout scanned, not whichever tab is active now
-          if (failedSources.length) await exportSources(failedSources, { tabId });
-          if (failedNotes.length) await exportNotesAsMarkdown(failedNotes, { tabId });
-          if (failedArtifacts.length) await downloadAllArtifacts(tabId, failedArtifacts);
-        })
-      } : null
-    });
+    showTakeoutResults({ message, level, saved, errors },
+      { Sources: failedSources, Notes: failedNotes, Artifacts: failedArtifacts }, tabId);
   });
+}
+
+// The Full Takeout's "Retry N failed" chain, in this order. Each step is an
+// ordinary tab export of the failed items on the takeout's tab, and returns
+// its outcome (see withExportShell) so the chain can combine them.
+const TAKEOUT_RETRY_STEPS = [
+  { name: 'Sources', run: (items, tabId) => exportSources(items, { tabId }) },
+  { name: 'Notes', run: (items, tabId) => exportNotesAsMarkdown(items, { tabId }) },
+  { name: 'Artifacts', run: (items, tabId) => downloadAllArtifacts(tabId, items) }
+];
+
+// Show a takeout-level results panel with "Retry N failed" for `failed`
+// ({ Sources: [...], Notes: [...], Artifacts: [...] }; chat is never retried).
+function showTakeoutResults(panel, failed, tabId) {
+  const shown = { ...panel, retry: takeoutRetry(failed, tabId, () => showResults({ ...shown, notify: false })) };
+  showResults(shown);
+}
+
+/**
+ * The takeout panel's Retry: runs the failed Sources, Notes and Artifacts
+ * exports one after another under one job lock, on the tab the takeout
+ * scanned (not whichever tab is active now). A cancel or a declined
+ * health-check dialog in one step ends the chain: later categories do not run.
+ * It ends in ONE combined results panel (NLME.combineRetryOutcomes): a line
+ * per category, the worst level, every ZIP and error, and a Retry for
+ * everything still failed (including categories that did not run). When no
+ * category ran at all, `restore` puts the previous panel back.
+ *
+ * @returns {{ count: number, run: () => Promise<any> }|null}
+ */
+function takeoutRetry(failed, tabId, restore) {
+  const count = TAKEOUT_RETRY_STEPS.reduce((sum, step) => sum + (failed[step.name] || []).length, 0);
+  if (count === 0) return null;
+  return {
+    count,
+    run: () => runExclusive('Retry failed', async () => {
+      const steps = [];
+      const notRun = [];
+      let stopped = false;
+      for (const step of TAKEOUT_RETRY_STEPS) {
+        const items = failed[step.name] || [];
+        if (items.length === 0) continue;
+        if (stopped) { notRun.push({ name: step.name, failedItems: items }); continue; }
+        let out;
+        try {
+          out = await step.run(items, tabId);
+        } catch (error) {
+          console.error(`[NotebookLM Takeout] Retry ${step.name} failed:`, error);
+          showToast('Export failed. Please try again.', 'error');
+        }
+        if (!out || !out.result) { // declined, aborted (tab closed, export threw)
+          stopped = true;
+          notRun.push({ name: step.name, failedItems: items });
+          continue;
+        }
+        steps.push({
+          name: step.name,
+          message: out.message,
+          level: out.level,
+          saved: out.saved,
+          errors: out.errors,
+          failedItems: out.result.failedItems || []
+        });
+        if (out.result.cancelled) stopped = true;
+      }
+      if (steps.length === 0) {
+        restore(); // the first step never ran: keep the panel and its Retry
+        return;
+      }
+      const combined = NLME.combineRetryOutcomes({ steps, notRun });
+      showTakeoutResults({
+        message: combined.message,
+        level: combined.level,
+        lines: combined.lines,
+        saved: combined.saved,
+        errors: combined.errors
+      }, combined.remaining, tabId);
+    })
+  };
 }

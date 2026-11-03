@@ -2791,14 +2791,16 @@ async function getProjectName(tabId) {
 // Notes export (Milestone 3a): the shared export shell around runNotesJob.
 // Each batch becomes one <Notebook>-notes-<ts>.zip from buildNotesFiles.
 // options.tabId: the tab the notes were scanned on (a retry); default the active tab.
+// Returns withExportShell's outcome ({ result, message, level, saved, errors } or
+// { declined } / { aborted }); the Full Takeout retry chain reads it.
 async function exportNotesAsMarkdown(selectedNotes, { tabId } = {}) {
   startExportTiming();
   console.log('[NotebookLM Takeout] Starting export for notes:', selectedNotes.length);
 
-  await withExportShell({ label: 'notes', healthType: 'notes', overlayMessage: 'Preparing to export notes...', tabId }, async shell => {
+  return withExportShell({ label: 'notes', healthType: 'notes', overlayMessage: 'Preparing to export notes...', tabId }, async shell => {
     const { result, zips, auditOk } = await runNotesJob(shell, selectedNotes);
 
-    shell.finish({
+    return shell.finish({
       kind: 'notes',
       selected: selectedNotes.length,
       result,
@@ -3635,14 +3637,15 @@ function renderSourcesList(sources, skippedNotes = 0) {
 // runSourcesJob. Each batch becomes one <Notebook>-sources-<ts>.zip from
 // buildSourcesFiles.
 // options.tabId: the tab the sources were scanned on (a retry); default the active tab.
+// Returns withExportShell's outcome, like exportNotesAsMarkdown.
 async function exportSources(selectedSources, { tabId } = {}) {
   startExportTiming();
   console.log(`[NotebookLM Takeout] Exporting ${selectedSources.length} sources...`);
 
-  await withExportShell({ label: 'sources', healthType: 'sources', overlayMessage: 'Preparing to export sources...', tabId }, async shell => {
+  return withExportShell({ label: 'sources', healthType: 'sources', overlayMessage: 'Preparing to export sources...', tabId }, async shell => {
     const { result, zips, auditOk } = await runSourcesJob(shell, selectedSources);
 
-    shell.finish({
+    return shell.finish({
       kind: 'sources',
       selected: selectedSources.length,
       result,
@@ -5382,7 +5385,7 @@ async function handleStudioBulkDelete() {
 // Download All (Milestone 3a): every artifact on the job runner. ZIP on: one
 // <Notebook>-artifacts-<ts>.zip; ZIP off: Downloads/<Notebook>/, one item
 // per call. Either way: <type folder>/<stem>.<ext>, _index.md, errors.md,
-// manifest.json.
+// manifest.json. Returns withExportShell's outcome, like exportNotesAsMarkdown.
 async function downloadAllArtifacts(tabId, items) {
   await preflightWarn(tabId, 'artifacts');
   const zipEnabled = document.getElementById('zip-checkbox')?.checked || false;
@@ -5391,11 +5394,11 @@ async function downloadAllArtifacts(tabId, items) {
   startExportTiming();
 
   try {
-    await withExportShell({ label: 'artifacts', overlayMessage: 'Preparing to download artifacts...', tabId }, async shell => {
+    return await withExportShell({ label: 'artifacts', overlayMessage: 'Preparing to download artifacts...', tabId }, async shell => {
       const folder = zipEnabled ? null : (shell.projectName || 'NotebookLM');
       const { result, zips, savedOutside } = await runArtifactsJob(shell, items, { folder });
 
-      shell.finish({
+      return shell.finish({
         kind: 'artifacts',
         selected: items.length,
         result,
