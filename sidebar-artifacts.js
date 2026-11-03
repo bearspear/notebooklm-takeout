@@ -1074,7 +1074,14 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
       if (info.isLast) {
         if (pendingSizes.length) {
           shell.progress('Reading file sizes...', 1);
-          await Promise.all(pendingSizes);
+          // A cancel must not hold the job for the sizes (up to 120 s): they stay null
+          let sizesDone = false;
+          await Promise.race([
+            Promise.all(pendingSizes).then(() => { sizesDone = true; }),
+            (async () => {
+              while (!sizesDone && !shell.isCancelled()) await new Promise(resolve => setTimeout(resolve, 500));
+            })()
+          ]);
         }
         const all = saved.flatMap(r => r.files);
         await saveFiles(place(artifactsRootFiles(all, saved.map(r => r.item), { meta: shell.meta, info })), { folder });
