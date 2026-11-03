@@ -101,3 +101,13 @@ test('runExportJob cancel at a batch boundary sends errors in a new batch index'
     [[], 2, 3, true, true, true]);
   assert.match(calls[1].errors[0], /Cancelled by user after 2 of 5 notes/);
 });
+
+test('runExportJob errors-only call after a skipped batch uses the ending batch index', async () => {
+  const { run, calls } = harness({ items: items(5), perZip: 2, fail: ['N1', 'N2', 'N5'] });
+  await run;
+  assert.equal(calls.length, 2);
+  assert.deepEqual([calls[0].results, calls[0].batchIndex, calls[0].isLast], [['N3', 'N4'], 2, false]);
+  assert.deepEqual(
+    [calls[1].results, calls[1].batchIndex, calls[1].totalBatches, calls[1].isLast, calls[1].errorsOnly, calls[1].errors],
+    [[], 3, 3, true, true, ['[N1] boom', '[N2] boom', '[N5] boom']]);
+});
