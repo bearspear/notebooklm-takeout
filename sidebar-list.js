@@ -108,6 +108,14 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
   const rowsEl = container.querySelector('.list-rows');
   const emptyEl = container.querySelector('.list-empty');
   const rowEls = Array.from(rowsEl.querySelectorAll('.list-row'));
+  // Drawn while a job runs (a scan inside the job redraws the list): start
+  // inert like the controls runExclusive disabled; its finally re-enables
+  // everything carrying the data-job-disabled mark.
+  if (document.body.classList.contains('job-running')) {
+    container.querySelectorAll('button, input, select').forEach(el => {
+      if (!el.disabled) { el.disabled = true; el.setAttribute('data-job-disabled', ''); }
+    });
+  }
   // data-key is set through the DOM: keys contain a NUL, which the HTML parser would replace
   rowEls.forEach((row, i) => row.setAttribute('data-key', keys[i]));
 
@@ -188,7 +196,10 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
     chipEls.forEach((el, i) => el.setAttribute('aria-pressed', String(activeTypes.has(chipTypes[i].type))));
 
     const selectableVisible = order.filter(i => selectable[i]).length;
-    allEl.disabled = selectableVisible === 0;
+    // Marked by a job (see above): stays disabled until the job ends, unless
+    // nothing is selectable, which must outlast the job's blanket re-enable
+    if (selectableVisible === 0) allEl.removeAttribute('data-job-disabled');
+    allEl.disabled = selectableVisible === 0 || allEl.hasAttribute('data-job-disabled');
     allEl.checked = selectableVisible > 0 && selected.size === selectableVisible;
     allEl.indeterminate = selected.size > 0 && selected.size < selectableVisible;
     summaryEl.textContent = NLME.listSummary({ shown: order.length, total: list.length, selected: selected.size });
