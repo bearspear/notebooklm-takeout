@@ -535,6 +535,7 @@ async function runFullTakeout() {
         console.error(`[NotebookLM Takeout] Full Takeout: ${c.name} failed:`, error);
         c.status = 'failed';
         c.errors.push(`Export failed: ${error.message || error}`);
+        if (tracker) tracker.discard(); // successes staged for a package that was never saved
       }
       c.zips = written.zips;
       c.parts = written.parts;

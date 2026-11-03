@@ -140,7 +140,8 @@
    * - start(): writes the record. fail(category, key): marks a failed item.
    * - done(category, key) stages a success, commit() applies the staged ones. Call
    *   commit() once the package holding those items is saved, so a record never
-   *   claims an item that is not on disk yet.
+   *   claims an item that is not on disk yet. discard() drops the staged ones when
+   *   a runner threw before saving them (a recorder shared by several runners).
    * - Writes are throttled to one per intervalMs; the rest wait for the next
    *   change or finish().
    * - finish({ clean }): clean and finished removes the record, but only when the
@@ -175,6 +176,8 @@
       start() { return write(); },
       idle() { return queue; },
       done(category, itemKey) { staged.push([category, itemKey]); },
+      // Drop staged successes whose package was never saved (a throwing runner)
+      discard() { staged = []; },
       commit() {
         if (!staged.length) return;
         const t = now();

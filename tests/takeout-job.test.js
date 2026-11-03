@@ -388,3 +388,15 @@ test('recorder on an existing record marks known keys only and writes nothing fo
   await rec.finish({ clean: true });
   assert.equal('nlme.job.nb' in storage.data, false);
 });
+
+test('staged items are not committed by a later commit after discard', async () => {
+  const storage = fakeStorage(); const clock = { t: 0 };
+  const rec = recorderFor(storage, clock, { sources: ['s1', 's2'], notes: ['n1'] });
+  await rec.start();
+  rec.done('sources', 's1'); rec.commit();
+  rec.done('sources', 's2'); // its package fails to save
+  rec.discard();
+  rec.done('notes', 'n1'); clock.t += 5000; rec.commit();
+  await rec.finish({ clean: true });
+  assert.deepEqual(storage.data['nlme.job.nb'].remaining, { sources: ['s2'], notes: [] });
+});

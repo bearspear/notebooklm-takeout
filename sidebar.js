@@ -2925,7 +2925,8 @@ const JOB_KEY_ACCESSORS = {
 
 // Keys of `items` (one category): the keys the tab list stamped on them (keys in
 // the whole list, so a selected subset or a retry still matches a fresh scan),
-// else computed over `items` (Full Takeout: the whole scan).
+// else computed over `items`. That fallback is only right when `items` is the
+// whole fresh scan; a subset must be stamped (see stampJobKeys) before it is cut.
 function jobItemKeys(category, items) {
   if (items.length && items.every(item => item && typeof item._listKey === 'string')) return items.map(item => item._listKey);
   return NLME.listItemKeys(items, JOB_KEY_ACCESSORS[category]);
@@ -2934,6 +2935,9 @@ function jobItemKeys(category, items) {
 // Stamp each item with its key in the whole `items` list (non-enumerable; what
 // createListController does for the tab lists). Full Takeout stamps its scans, so
 // a retry of a subset, or of an enabled-only list, keeps the tab's "#n" keys.
+// Keys must be stamped over the FULL fresh scan before any subset is taken: keys
+// computed over a subset differ from a fresh scan's for duplicate titles (Resume
+// in Task 4 depends on this).
 function stampJobKeys(category, items) {
   const keys = NLME.listItemKeys(items, JOB_KEY_ACCESSORS[category]);
   items.forEach((item, i) => {
@@ -2945,7 +2949,8 @@ function stampJobKeys(category, items) {
  * Start recording an export. Returns null (nothing is recorded) when the tab has
  * no notebook id or there is nothing to do; else a tracker the runners call:
  * done(category, item) / fail(category, item) per item, commit() after a package
- * holding the done items is saved, finish(clean) at the end. None of them throws.
+ * holding the done items is saved, discard() when a runner threw before saving
+ * its staged successes, finish(clean) at the end. None of them throws.
  *
  * @param {{ tab: { url: string } }} shell
  * @param {'notes'|'sources'|'artifacts'|'takeout'} kind
@@ -2971,7 +2976,8 @@ async function startJobRecord(shell, kind, label, itemsByCategory, { update = fa
     if (update) {
       const storageKey = NLME.jobRecordKey(notebookId);
       const stored = (await chrome.storage.local.get(storageKey))[storageKey];
-      if (!stored || !stored.remaining || !stored.failed) return null;
+      const arrays = group => !!group && typeof group === 'object' && !Array.isArray(group) && Object.values(group).every(Array.isArray);
+      if (!stored || !arrays(stored.remaining) || !arrays(stored.failed)) return null;
       record = stored;
     } else {
       const now = Date.now();
@@ -2980,11 +2986,16 @@ async function startJobRecord(shell, kind, label, itemsByCategory, { update = fa
     }
     const recorder = NLME.createJobRecorder({ storage: chrome.storage.local, record });
     if (!update) await recorder.start();
+    // Never throws: a bad record must not skip NAVIGATE_BACK or fail a package
+    const safe = fn => (...args) => {
+      try { return fn(...args); } catch (error) { console.warn('[NotebookLM Takeout] Job record update failed:', error); }
+    };
     return {
-      done: (category, item) => { if (keyOf.has(item)) recorder.done(category, keyOf.get(item)); },
-      fail: (category, item) => { if (keyOf.has(item)) recorder.fail(category, keyOf.get(item)); },
-      commit: () => recorder.commit(),
-      finish: clean => recorder.finish({ clean })
+      done: safe((category, item) => { if (keyOf.has(item)) recorder.done(category, keyOf.get(item)); }),
+      fail: safe((category, item) => { if (keyOf.has(item)) recorder.fail(category, keyOf.get(item)); }),
+      commit: safe(() => recorder.commit()),
+      discard: safe(() => recorder.discard()),
+      finish: async clean => { try { await recorder.finish({ clean }); } catch (error) { console.warn('[NotebookLM Takeout] Job record not finished:', error); } }
     };
   } catch (error) {
     console.warn('[NotebookLM Takeout] Job record not started:', error);
@@ -2995,14 +3006,16 @@ async function startJobRecord(shell, kind, label, itemsByCategory, { update = fa
 // A tab export's record around its runner: `run(tracker)` returns the runner's
 // { result }. Clean = not cancelled or stopped; a throw leaves the record.
 // update (options.updateRecord of the exports, set by every retry and by resume):
-// see startJobRecord.
-async function withJobRecord(shell, kind, label, category, items, run, { update = false } = {}) {
-  const tracker = await startJobRecord(shell, kind, label, { [category]: items }, { update });
+// see startJobRecord. record false: no record at all (single-item row exports).
+async function withJobRecord(shell, kind, label, category, items, run, { update = false, record = true } = {}) {
+  // record false: a one-shot row export (a single source's download) must not
+  // replace or clear a pending record
+  const tracker = record ? await startJobRecord(shell, kind, label, { [category]: items }, { update }) : null;
   let out;
   try {
     out = await run(tracker);
   } catch (error) {
-    if (tracker) await tracker.finish(false);
+    if (tracker) { tracker.discard(); await tracker.finish(false); }
     throw error;
   }
   if (tracker) await tracker.finish(!out.result.cancelled && !out.result.stopped);
@@ -3843,7 +3856,7 @@ function renderSourcesList(sources, skippedNotes = 0) {
     const btn = e.target.closest('.download-single-btn');
     if (!btn) return;
     const source = sources[parseInt(btn.dataset.index, 10)];
-    if (source) await runExclusive('Sources export', () => exportSources([source]));
+    if (source) await runExclusive('Sources export', () => exportSources([source], { record: false }));
   });
 
   // The button is static markup: bind once, read the current controller on click
@@ -3867,13 +3880,13 @@ function renderSourcesList(sources, skippedNotes = 0) {
 // buildSourcesFiles.
 // options.tabId: the tab the sources were scanned on (a retry); default the active tab.
 // Returns withExportShell's outcome, like exportNotesAsMarkdown.
-async function exportSources(selectedSources, { tabId, updateRecord = false } = {}) {
+async function exportSources(selectedSources, { tabId, updateRecord = false, record = true } = {}) {
   startExportTiming();
   console.log(`[NotebookLM Takeout] Exporting ${selectedSources.length} sources...`);
 
   return withExportShell({ label: 'sources', healthType: 'sources', overlayMessage: 'Preparing to export sources...', tabId }, async shell => {
     const { result, zips, auditOk } = await withJobRecord(shell, 'sources', 'Sources', 'sources', selectedSources,
-      tracker => runSourcesJob(shell, selectedSources, { tracker }), { update: updateRecord });
+      tracker => runSourcesJob(shell, selectedSources, { tracker }), { update: updateRecord, record });
 
     return shell.finish({
       kind: 'sources',
