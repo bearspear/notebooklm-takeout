@@ -407,7 +407,7 @@ async function runFullTakeout() {
         scan: async () => (await scanArtifactsData(tabId)).filter(item => !item.disabled),
         run: (catShell, items, target) => runArtifactsJob(catShell, items, { ...target, bothSlideFormats: true })
       }
-    ].map(c => ({ ...c, status: null, selected: 0, exported: 0, failed: 0, zips: [], errors: [], auditOk: true, items: null, failedItems: [] }));
+    ].map(c => ({ ...c, status: null, selected: 0, exported: 0, failed: 0, zips: [], parts: 0, packages: 0, errors: [], auditOk: true, items: null, failedItems: [] }));
     const takeoutErrors = []; // not tied to one category
     // Set once a cancellation is on record (scan, a runner's own note, or
     // between categories): every later category is skipped
@@ -447,12 +447,13 @@ async function runFullTakeout() {
         continue;
       }
       const catShell = { ...shell, progress: (text, fraction) => shell.progress(`${c.name}: ${text}`, fraction) };
+      // Filled by the runner as each package is saved: read after a throw too,
+      // so the index still links the parts already written
+      const written = newWritten();
       try {
-        const out = await c.run(catShell, c.items, { pathPrefix: `${root}/${c.folder}/`, zipKind: `takeout-${c.folder}`, folder });
+        const out = await c.run(catShell, c.items, { pathPrefix: `${root}/${c.folder}/`, zipKind: `takeout-${c.folder}`, folder, written });
         c.exported = out.result.exported;
         c.failed = out.result.failed;
-        c.zips = out.zips;
-        c.parts = out.parts || 0;
         c.errors.push(...out.errors);
         c.failedItems = out.result.failedItems || []; // small; kept past `c.items = null`, for Retry
         c.auditOk = out.auditOk;
@@ -474,12 +475,15 @@ async function runFullTakeout() {
         c.status = 'failed';
         c.errors.push(`Export failed: ${error.message || error}`);
       }
+      c.zips = written.zips;
+      c.parts = written.parts;
+      c.packages = written.count;
       c.items = null; // free the scan data before the next category
     }
 
     // 3. Root files, also after a cancel
-    const summary = categories.map(({ name, folder: catFolder, status, selected, exported, failed, zips, parts }) =>
-      ({ name, folder: catFolder, status, selected, exported, failed, zips, parts }));
+    const summary = categories.map(({ name, folder: catFolder, status, selected, exported, failed, zips, parts, packages }) =>
+      ({ name, folder: catFolder, status, selected, exported, failed, zips, parts, packages }));
     const errors = [
       ...NLME.prefixExportErrors('Takeout', takeoutErrors),
       ...categories.flatMap(c => NLME.prefixExportErrors(c.name, c.errors))

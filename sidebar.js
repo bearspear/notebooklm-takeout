@@ -2817,19 +2817,36 @@ async function exportNotesAsMarkdown(selectedNotes) {
  * category folder, not in a notes/ or sources/ folder inside it).
  *
  * @typedef {{ pathPrefix?: string, zipKind?: string, folder?: string|null,
- *   variantSettings?: object, itemDir?: string }} CategoryTarget
+ *   variantSettings?: object, itemDir?: string, written?: Written }} CategoryTarget
  *   itemDir: folder (with trailing '/') of the note or source files inside the
  *   package; default 'notes/' / 'sources/'. mind-maps/ and the combined files
  *   keep their package-relative paths; sources' youtube-urls*.txt follow itemDir.
+ *   written: filled as each package is saved (see newWritten), so a caller that
+ *   gets a throw from the runner still knows what reached disk.
  */
 
-// One batch of a category's files to its ZIP (name pushed to `zips`) or, with
-// target.folder, into that Downloads folder; every path gets `prefix`
-async function saveCategoryBatch(shell, files, info, { prefix = '', zipKind, folder = null, zips, written = null }) {
+// What a category runner has saved so far. A caller (Full Takeout) passes its
+// own in target.written and reads it after a throw; otherwise the runner makes
+// one. zips: ZIP names; count: packages saved (a ZIP, or a batch written to the
+// folder, an errors-only package included); multi/parts: the takeout's part-N/
+// folders (parts = count when the category was saved in several batches and has a
+// path prefix, else 0).
+function newWritten() {
+  return { zips: [], count: 0, multi: false, parts: 0 };
+}
+
+// One batch of a category's files to its ZIP (name pushed to written.zips) or,
+// with target.folder, into that Downloads folder; every path gets `prefix`
+async function saveCategoryBatch(shell, files, info, { prefix = '', zipKind, folder = null, written }) {
   const placed = prefix ? files.map(f => ({ ...f, path: prefix + f.path })) : files;
+  const record = () => {
+    written.count++;
+    written.multi = info.totalBatches > 1;
+    written.parts = prefix && written.multi ? written.count : 0;
+  };
   if (folder) {
     await saveFiles(placed, { folder });
-    if (written) { written.count++; written.multi = info.totalBatches > 1; }
+    record();
     return;
   }
   const zipName = NLME.zipName({
@@ -2841,8 +2858,8 @@ async function saveCategoryBatch(shell, files, info, { prefix = '', zipKind, fol
     totalParts: info.totalBatches
   });
   await saveFiles(placed, { zipName });
-  zips.push(zipName);
-  if (written) { written.count++; written.multi = info.totalBatches > 1; }
+  written.zips.push(zipName);
+  record();
 }
 
 // A takeout category written in several batches puts each batch in its own
@@ -2861,10 +2878,11 @@ function batchPrefix(pathPrefix, info) {
  * @param {object} shell withExportShell's shell (tab, meta, progress, isCancelled)
  * @param {object[]} selectedNotes notes as SCAN_NOTES returns them
  * @param {CategoryTarget} [target]
- * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean }>}
+ * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, parts: number, packages: number }>}
+ *   zips/parts/packages: what target.written holds (see newWritten)
  *   result: runExportJob's result
  */
-async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'notes', folder = null, variantSettings = settings, itemDir = 'notes/' } = {}) {
+async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'notes', folder = null, variantSettings = settings, itemDir = 'notes/', written = newWritten() } = {}) {
   const perZip = settings.notesPerZip;
   // Shared by every extractNoteItem call: audit counters, early-stop
   // counters, and the DOM-warning decision
@@ -2877,8 +2895,6 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
     declined: false // user declined the DOM warning: stops like a Cancel
   };
   let packaged = 0; // notes written to ZIPs so far
-  const zips = [];
-  const written = { count: 0, multi: false }; // batches saved: part-N/ folders for the takeout root index
 
   // Item counts go in last, once every written note is known
   const finalAudit = () => {
@@ -2923,7 +2939,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
         variantSettings,
         itemDir
       });
-      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, zips, written });
+      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, written });
       console.log(`[NotebookLM Takeout] Downloaded notes ZIP ${info.batchIndex}/${info.totalBatches}`);
 
       // CRITICAL: free each batch's memory before the next one
@@ -2948,7 +2964,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
     }
   });
 
-  return { result, zips, errors: result.errors, auditOk: NLME.auditExport(finalAudit()).ok, parts: pathPrefix && written.multi ? written.count : 0 };
+  return { result, zips: written.zips, errors: result.errors, auditOk: NLME.auditExport(finalAudit()).ok, parts: written.parts, packages: written.count };
 }
 
 /**
@@ -3635,9 +3651,10 @@ async function exportSources(selectedSources) {
  * @param {object} shell withExportShell's shell
  * @param {object[]} selectedSources sources as SCAN_SOURCES returns them
  * @param {CategoryTarget} [target]
- * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean }>}
+ * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, parts: number, packages: number }>}
+ *   zips/parts/packages: what target.written holds (see newWritten)
  */
-async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind = 'sources', folder = null, variantSettings = settings, itemDir = 'sources/' } = {}) {
+async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind = 'sources', folder = null, variantSettings = settings, itemDir = 'sources/', written = newWritten() } = {}) {
   const perZip = settings.sourcesPerZip;
   // Shared by every extractSourceItem call: audit counters and the
   // DOM-warning decision
@@ -3648,8 +3665,6 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
     declined: false // user declined the DOM warning: stops like a Cancel
   };
   let packaged = 0; // sources written to ZIPs so far
-  const zips = [];
-  const written = { count: 0, multi: false }; // batches saved: part-N/ folders for the takeout root index
 
   // Item counts go in last, once every written source is known
   const finalAudit = () => {
@@ -3692,7 +3707,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
         variantSettings,
         itemDir
       });
-      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, zips, written });
+      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, written });
       console.log(`[NotebookLM Takeout] Downloaded sources ZIP ${info.batchIndex}/${info.totalBatches}`);
 
       // CRITICAL: free each batch's memory before the next one
@@ -3714,7 +3729,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
     }
   });
 
-  return { result, zips, errors: result.errors, auditOk: NLME.auditExport(finalAudit()).ok, parts: pathPrefix && written.multi ? written.count : 0 };
+  return { result, zips: written.zips, errors: result.errors, auditOk: NLME.auditExport(finalAudit()).ok, parts: written.parts, packages: written.count };
 }
 
 /**
@@ -4289,9 +4304,10 @@ async function exportChat(chatData) {
  *   quote; 'titles' keeps the [n] markers and source titles without hovering;
  *   'none' drops the markers and the Sources section (no hovering either).
  *   forceZip: always the full file set (Full Takeout), never one loose .md
- * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean }>}
+ * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, parts: number, packages: number }>}
+ *   zips/parts/packages: what target.written holds (see newWritten)
  */
-async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip = false, pathPrefix = '', zipKind = 'chat', folder = null, variantSettings = settings } = {}) {
+async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip = false, pathPrefix = '', zipKind = 'chat', folder = null, variantSettings = settings, written = newWritten() } = {}) {
   const messagePairs = chatData.messagePairs;
   // Scan completeness (Milestone 2, Resilience #2): known before the job
   // starts, so they lead errors.md
@@ -4302,7 +4318,6 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
     seedErrors.push({ type: 'collapsed_citations', message: `${chatData.stats.collapsedRemaining} citation group(s) were still collapsed after the scan; their citations are missing` });
   }
   let auditDoc = null;
-  const zips = [];
 
   console.log('[NotebookLM Takeout] Processing messages and extracting citations...');
   const result = await NLME.runExportJob({
@@ -4330,7 +4345,7 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
         await saveFiles([{ ...single, path: `${sanitizeFilename(shell.projectName)}-chat-${shell.timestamp}.md` }]);
       } else {
         // One package: totalBatches is 1, so no -partNofM
-        await saveCategoryBatch(shell, files, info, { prefix: pathPrefix, zipKind, folder, zips });
+        await saveCategoryBatch(shell, files, info, { prefix: pathPrefix, zipKind, folder, written });
       }
     },
     isCancelled: shell.isCancelled,
@@ -4340,7 +4355,7 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
     }
   });
 
-  return { result, zips, errors: result.errors, auditOk: auditDoc ? auditDoc.ok : true };
+  return { result, zips: written.zips, errors: result.errors, auditOk: auditDoc ? auditDoc.ok : true, parts: written.parts, packages: written.count };
 }
 
 /**
@@ -5393,10 +5408,10 @@ async function downloadAllArtifacts(tabId, items) {
  * @param {CategoryTarget & { bothSlideFormats?: boolean }} [target]
  *   bothSlideFormats: save every Slides artifact as PDF and PowerPoint
  *   (Full Takeout); otherwise the ⚙️ slides format alone
- * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, savedOutside: number }>}
+ * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, savedOutside: number, parts: 0, packages: number }>}
  *   savedOutside: items Chrome saved itself (no capturable URL)
  */
-async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artifacts', folder = null, bothSlideFormats = false } = {}) {
+async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artifacts', folder = null, bothSlideFormats = false, written = newWritten() } = {}) {
   const zipMode = !folder;
   const place = files => (pathPrefix ? files.map(f => ({ ...f, path: pathPrefix + f.path })) : files);
   const stems = NLME.artifactStems(items);
@@ -5404,7 +5419,6 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
   // Folder mode: what earlier items saved, for _index.md and manifest.json
   // (Blobs replaced by their size: the manifest needs no more)
   const saved = [];
-  const zips = [];
   let savedOutside = 0;
 
   const result = await NLME.runExportJob({
@@ -5452,6 +5466,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
         // Saved here, not in packageBatch, so a failed save fails this
         // item (errors.md) instead of ending the whole job
         await saveFiles(place(files), { folder });
+        written.count++;
         saved.push({ item, files: files.map(f => (f.data instanceof Blob ? { ...f, data: { byteLength: f.data.size } } : f)) });
       }
       return { item, files };
@@ -5467,7 +5482,8 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
         files.push(...artifactsRootFiles(files, results.map(r => r.item), { meta: shell.meta, info }));
         const zipName = NLME.zipName({ notebook: shell.projectName, kind: zipKind, timestamp: shell.timestamp, partial: info.partial });
         await saveFiles(place(files), { zipName });
-        zips.push(zipName);
+        written.zips.push(zipName);
+        written.count++;
         return;
       }
       // Folder mode (one item per call): the item is already saved; the
@@ -5483,7 +5499,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
     }
   });
 
-  return { result, zips, errors: result.errors, auditOk: true, savedOutside };
+  return { result, zips: written.zips, errors: result.errors, auditOk: true, savedOutside, parts: 0, packages: written.count };
 }
 
 /**
