@@ -1443,7 +1443,8 @@ not Citation detail 'none') or on `obsidianNames`.
   last one, before `clearMissingFromRecord` and `runRetryChain`.
 - **Settle gate.** `NLME.createSettleGate()` hands `refreshForTab` a token per `settleMs` navigation
   (`current()`, `owesRescan`, `settled()`). After a wait, and after the `chrome.tabs.query` that follows
-  it, a stale token returns without touching the banner or rescanning; a discarded switched-notebook
+  it, a stale token returns without touching the banner or rescanning; `settled()` runs only after that
+  post-query check, so a navigation that began during the query still inherits the debt; a discarded switched-notebook
   settle passes its owed rescan to the newer one.
 - **Menu and dialog cleanup in deletes (content.js).** `closeMenuBackdrops(panels)` clicks only the
   backdrops of the given menu panels' own overlays (`overlayBackdropsOf`: the previous sibling of the
