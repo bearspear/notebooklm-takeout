@@ -336,10 +336,12 @@ function takeoutZipEnabled() {
  *   run in folder mode (CDN media straight to disk).
  *
  * Every category is scanned first (0 items: 'empty', nothing written; a scan
- * error: 'failed'), then runs on its own runner (runSourcesJob, runNotesJob,
+ * error: 'failed'; chat with only unreadable messages still runs, so they
+ * reach errors.md), then runs on its own runner (runSourcesJob, runNotesJob,
  * runChatJob, runArtifactsJob) in that order, unchanged builders included.
- * Cancel ends the current category as 'partial' (its ZIP -PARTIAL) and
- * marks every later one 'skipped'; the root files are written anyway.
+ * Status after a runner: NLME.takeoutCategoryStatus. Cancel ends the current
+ * category as 'partial' (its ZIP -PARTIAL) and marks every later one
+ * 'skipped'; the root files are written anyway.
  *
  * One combined toast at the end, shown here with showToast: shell.finish
  * reports a single category's outcome, so the takeout does not use it.
@@ -388,6 +390,9 @@ async function runFullTakeout() {
           return chatData;
         },
         count: chatData => chatData.messagePairs.length,
+        // Messages that could not be read are not "none in notebook": the
+        // job still runs and writes them to errors.md
+        isEmpty: chatData => NLME.chatScanIsEmpty(chatData),
         run: (catShell, chatData, target) => runChatJob(catShell, chatData, { ...target, extractFullCitations, forceZip: true })
       },
       {
@@ -408,7 +413,7 @@ async function runFullTakeout() {
       try {
         c.items = await c.scan();
         c.selected = c.count ? c.count(c.items) : c.items.length;
-        if (c.selected === 0) c.status = 'empty';
+        if (c.isEmpty ? c.isEmpty(c.items) : c.selected === 0) c.status = 'empty';
       } catch (error) {
         console.error(`[NotebookLM Takeout] Full Takeout: ${c.name} scan failed:`, error);
         c.status = 'failed';
@@ -435,15 +440,17 @@ async function runFullTakeout() {
         c.parts = out.parts || 0;
         c.errors.push(...out.errors);
         c.auditOk = out.auditOk;
-        if (out.result.cancelled) {
-          c.status = 'partial';
-          stopRest = true;
-        } else if (out.result.stopped) {
-          c.status = 'stopped';
-        } else {
-          // Every item failed: not "complete"
-          c.status = c.exported === 0 && c.failed > 0 ? 'failed' : 'done';
-        }
+        // Nothing exported but items failed or errors recorded (e.g. chat
+        // messages that could not be read): 'failed', not "complete"
+        c.status = NLME.takeoutCategoryStatus({
+          selected: c.selected,
+          exported: c.exported,
+          failed: c.failed,
+          errorCount: c.errors.length,
+          cancelled: out.result.cancelled,
+          stopped: out.result.stopped
+        });
+        if (out.result.cancelled) stopRest = true;
       } catch (error) {
         // A package that could not be written: this category fails, the
         // others still run

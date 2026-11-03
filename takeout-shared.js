@@ -947,6 +947,28 @@
     failed: 'failed (see errors)'
   };
 
+  // A Full Takeout category's status after its runner: 'partial' (cancelled),
+  // 'stopped' (the job stopped itself), 'failed' (nothing exported but items
+  // failed or errors were recorded, e.g. chat messages that could not be
+  // read), 'empty' (nothing to export, no errors), else 'done'. 'skipped'
+  // and scan failures are decided by runFullTakeout itself.
+  function takeoutCategoryStatus({ selected = 0, exported = 0, failed = 0, errorCount = 0, cancelled = false, stopped = false } = {}) {
+    if (cancelled) return 'partial';
+    if (stopped) return 'stopped';
+    if (exported === 0 && (failed > 0 || errorCount > 0)) return 'failed';
+    if (selected === 0) return 'empty';
+    return 'done';
+  }
+
+  // A chat scan with nothing to export: no message pairs AND no message that
+  // could not be read AND no citation group left collapsed. Otherwise the
+  // chat job still runs, so those problems reach errors.md.
+  function chatScanIsEmpty(chatData) {
+    const stats = (chatData && chatData.stats) || {};
+    return ((chatData && chatData.messagePairs) || []).length === 0 &&
+      !((stats.skipped || []).length) && !(stats.collapsedRemaining > 0);
+  }
+
   // _index.md at the root of a Full Takeout: one row per category (Sources,
   // Notes, Chat, Artifacts) with its counts, status and folder, the ZIPs each
   // category wrote, and a link to the combined errors.md.
@@ -1132,6 +1154,8 @@ footer { margin-top: 3rem; }
     fileTypeLabel,
     buildRootIndexHtml,
     summarizeTakeoutOutcome,
+    takeoutCategoryStatus,
+    chatScanIsEmpty,
     frontMatter,
     uniqueStems,
     notebookIdFromUrl,

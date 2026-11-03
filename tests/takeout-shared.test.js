@@ -723,6 +723,26 @@ test('buildRootIndex lists every category with its status and links errors', () 
   assert.match(md, /Unzip every ZIP into the same folder/);
 });
 
+test('chatScanIsEmpty only when nothing was skipped', () => {
+  assert.equal(NLME.chatScanIsEmpty({ messagePairs: [], stats: {} }), true);
+  assert.equal(NLME.chatScanIsEmpty({ messagePairs: [] }), true);
+  assert.equal(NLME.chatScanIsEmpty({ messagePairs: [], stats: { skipped: ['q1'] } }), false);
+  assert.equal(NLME.chatScanIsEmpty({ messagePairs: [], stats: { skipped: [], collapsedRemaining: 2 } }), false);
+  assert.equal(NLME.chatScanIsEmpty({ messagePairs: [{ userMessage: 'q', aiResponseHTML: 'a' }], stats: {} }), false);
+});
+
+test('takeoutCategoryStatus marks a run with no exports but errors as failed', () => {
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 0, exported: 0, failed: 0, errorCount: 3 }), 'failed');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 4, exported: 0, failed: 0, errorCount: 3 }), 'failed');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 4, exported: 0, failed: 4, errorCount: 4 }), 'failed');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 5, exported: 5, failed: 0, errorCount: 0 }), 'done');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 5, exported: 3, failed: 2, errorCount: 2 }), 'done');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 5, exported: 2, failed: 0, errorCount: 1, cancelled: true }), 'partial');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 5, exported: 0, failed: 0, errorCount: 1, cancelled: true }), 'partial');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 5, exported: 2, failed: 0, errorCount: 1, stopped: true }), 'stopped');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 0, exported: 0, failed: 0, errorCount: 0 }), 'empty');
+});
+
 test('buildIndexHtml groups files by folder and encodes links', () => {
   const meta = { notebook: 'New Math', notebook_url: '', notebook_id: '', exporter: 'NotebookLM Takeout 1.4.0', exported: 'T' };
   const html = NLME.buildIndexHtml({ meta, heading: 'Notes — New Math', files: [
