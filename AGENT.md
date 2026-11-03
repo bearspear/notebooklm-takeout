@@ -1047,8 +1047,8 @@ notes, chat and artifacts up front (`scan*Data`; 0 items is `empty`, a scan erro
 then runs `runSourcesJob`, `runNotesJob`, `runChatJob` (with `forceZip`) and `runArtifactsJob`
 in that order inside one shell, then writes the root `_index.md`
 (`NLME.buildRootIndex`), `errors.md` (`NLME.prefixExportErrors` labels each error with its
-category) and `manifest.json`. It does not call `shell.finish`: one combined toast comes from
-`NLME.summarizeTakeoutOutcome`.
+category) and `manifest.json`. It does not call `shell.finish`: one combined outcome comes from
+`NLME.summarizeTakeoutOutcome` and is shown in the results panel (`showResults`).
 
 - **Slides in both formats:** it passes `bothSlideFormats: true` to `runArtifactsJob`, whose `extractOne`
   loops `NLME.slideFormatsFor(type, …)` and calls `fetchArtifactFiles(…, { slidesFormat })` once per
@@ -1158,7 +1158,7 @@ user clicks Dismiss.
   notes, sources and Download All (`downloadAllArtifacts(shell.tab.id, failed)`); chat passes none
   (its messages do not fail as a whole; re-export the chat).
 - Toasts remain for short notices (job refused, no tab, cancelled at the health check, unexpected
-  failure), single-item exports and Full Takeout's combined toast (Task 5 moves that too).
+  failure), and single-item exports. Full Takeout shows its combined outcome in the results panel (`showResults`).
 
 ## Known issues and latent bugs
 

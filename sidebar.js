@@ -4267,7 +4267,8 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
   // starts, so they lead errors.md
   const seedErrors = (chatData.stats?.skipped || [])
     .map(skippedMessage => ({ type: 'message_skipped', message: skippedMessage }));
-  if (chatData.stats?.collapsedRemaining > 0) {
+  // 'none' drops citations on purpose: nothing is missing there
+  if (citationMode !== 'none' && chatData.stats?.collapsedRemaining > 0) {
     seedErrors.push({ type: 'collapsed_citations', message: `${chatData.stats.collapsedRemaining} citation group(s) were still collapsed after the scan; their citations are missing` });
   }
   let auditDoc = null;
