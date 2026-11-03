@@ -561,3 +561,19 @@ test('citationTitleFromAriaLabel falls back to Source N', () => {
   assert.equal(NLME.citationTitleFromAriaLabel(null, 4), 'Source 4');
   assert.equal(NLME.citationTitleFromAriaLabel('4:', 4), 'Source 4');
 });
+
+test('buildSourcesIndex links each same-titled source to its own file', () => {
+  const md = NLME.buildSourcesIndex([
+    { title: 'Electric Universe', files: [{ label: 'Base', path: 'sources/Electric-Universe.md' }] },
+    { title: 'Electric Universe', files: [{ label: 'Base', path: 'sources/Electric-Universe (2).md' }] }
+  ]);
+  assert.match(md, /### 1\. Electric Universe/);
+  assert.match(md, /### 2\. Electric Universe/);
+  assert.ok(md.includes('(sources/Electric-Universe.md)'));
+  assert.ok(md.includes('(sources/Electric-Universe%20(2).md)'));
+});
+
+test('buildSourcesIndex never throws on odd characters', () => {
+  const md = NLME.buildSourcesIndex([{ title: 'Ω \ud83d', files: [{ label: 'Base', path: 'sources/\ud83d-x.md' }] }]);
+  assert.match(md, /### 1\./);
+});

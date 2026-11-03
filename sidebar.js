@@ -3928,6 +3928,7 @@ async function exportSources(selectedSources) {
         if (sourceVersionSet.has('')) {
           const baseFilename1 = getUniqueFilename();
           sourcesFolder.file(baseFilename1, source.versions.base);
+          (source.writtenFiles || (source.writtenFiles = [])).push({ variant: 'base', filename: baseFilename1 });
           indexFiles.push({
             path: `sources/${baseFilename1}`,
             title: source.title,
@@ -3941,6 +3942,7 @@ async function exportSources(selectedSources) {
         if (sourceVersionSet.has('-plus-meta')) {
           const plusMetaFilename = getUniqueFilename('-plus-meta');
           sourcesFolder.file(plusMetaFilename, source.versions.plusMeta);
+          (source.writtenFiles || (source.writtenFiles = [])).push({ variant: 'plusMeta', filename: plusMetaFilename });
           indexFiles.push({
             path: `sources/${plusMetaFilename}`,
             title: source.title,
@@ -3955,6 +3957,7 @@ async function exportSources(selectedSources) {
         if (sourceVersionSet.has('-with-images') && source.versions.withImages) {
           const withImagesFilename = getUniqueFilename('-with-images');
           sourcesFolder.file(withImagesFilename, source.versions.withImages);
+          (source.writtenFiles || (source.writtenFiles = [])).push({ variant: 'withImages', filename: withImagesFilename });
           indexFiles.push({
             path: `sources/${withImagesFilename}`,
             title: source.title,
@@ -3969,6 +3972,7 @@ async function exportSources(selectedSources) {
         if (sourceVersionSet.has('-plus-meta-with-images') && source.versions.plusMetaWithImages) {
           const plusMetaWithImagesFilename = getUniqueFilename('-plus-meta-with-images');
           sourcesFolder.file(plusMetaWithImagesFilename, source.versions.plusMetaWithImages);
+          (source.writtenFiles || (source.writtenFiles = [])).push({ variant: 'plusMetaWithImages', filename: plusMetaWithImagesFilename });
           indexFiles.push({
             path: `sources/${plusMetaWithImagesFilename}`,
             title: source.title,
@@ -4162,68 +4166,27 @@ async function exportSources(selectedSources) {
 
       indexContent += '## Sources\n\n';
 
-      // Group sources by title for display (only for THIS batch)
-      exportedSources.forEach((source, idx) => {
-        if (idx > 0) indexContent += '---\n\n';
-
-        indexContent += `### ${source.title}\n\n`;
-
-        // Add YouTube URL if present
-        if (source.youtubeUrl) {
-          indexContent += `**YouTube Video:** ${source.youtubeUrl}\n\n`;
-        }
-
-        // Add summary if present
-        if (source.summary && source.summary.trim().length > 0) {
-          indexContent += `**Summary:**\n\n${source.summary}\n\n`;
-        }
-
-        // Add key topics if present
+      // One numbered entry per exported source, linking the files actually
+      // written for it (same-titled sources no longer share links)
+      const VARIANT_LABELS = {
+        base: 'Base version (no metadata, no images)',
+        plusMeta: 'With metadata, no images',
+        withImages: 'No metadata, with images',
+        plusMetaWithImages: 'With metadata and images'
+      };
+      indexContent += NLME.buildSourcesIndex(exportedSources.map(source => {
+        let details = '';
+        if (source.youtubeUrl) details += `**YouTube Video:** ${source.youtubeUrl}\n\n`;
+        if (source.summary && source.summary.trim().length > 0) details += `**Summary:**\n\n${source.summary}\n\n`;
         if (source.keyTopics && source.keyTopics.length > 0) {
-          indexContent += `**Key Topics:**\n\n`;
-          source.keyTopics.forEach(topic => {
-            indexContent += `- ${topic}\n`;
-          });
-          indexContent += '\n';
+          details += `**Key Topics:**\n\n${source.keyTopics.map(topic => `- ${topic}`).join('\n')}\n`;
         }
-
-        // Find all versions of this source
-        const versions = indexFiles.filter(f => f.title === source.title && f.path.startsWith('sources/'));
-
-        if (versions.length > 0) {
-          indexContent += `**Files:**\n\n`;
-
-          // Always show base version first
-          const baseVersion = versions.find(v => v.variant === 'base');
-          if (baseVersion) {
-            const filename = baseVersion.path.replace('sources/', '');
-            indexContent += `- [${filename}](${encodeURI(filename)}) - Base version (no metadata, no images)\n`;
-          }
-
-          // Show plus-meta if it exists
-          const plusMetaVersion = versions.find(v => v.variant === 'plusMeta');
-          if (plusMetaVersion) {
-            const filename = plusMetaVersion.path.replace('sources/', '');
-            indexContent += `- [${filename}](${encodeURI(filename)}) - With metadata, no images\n`;
-          }
-
-          // Show with-images if it exists
-          const withImagesVersion = versions.find(v => v.variant === 'withImages');
-          if (withImagesVersion) {
-            const filename = withImagesVersion.path.replace('sources/', '');
-            indexContent += `- [${filename}](${encodeURI(filename)}) - No metadata, with images\n`;
-          }
-
-          // Show plus-meta-with-images if it exists
-          const plusMetaWithImagesVersion = versions.find(v => v.variant === 'plusMetaWithImages');
-          if (plusMetaWithImagesVersion) {
-            const filename = plusMetaWithImagesVersion.path.replace('sources/', '');
-            indexContent += `- [${filename}](${encodeURI(filename)}) - With metadata and images\n`;
-          }
-
-          indexContent += '\n';
-        }
-      });
+        return {
+          title: source.title,
+          details,
+          files: (source.writtenFiles || []).map(f => ({ label: `${f.filename} - ${VARIANT_LABELS[f.variant]}`, path: f.filename }))
+        };
+      }));
 
       // Move _index.md to sources/ folder
       sourcesFolder.file('_index.md', indexContent + timingSummary());

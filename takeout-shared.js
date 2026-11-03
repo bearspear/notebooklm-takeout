@@ -635,7 +635,33 @@
     return title || `Source ${number}`;
   }
 
+  // Encode each path segment separately; a lone surrogate (from a cut emoji)
+  // would make encodeURI throw, so it is replaced first.
+  function encodePath(path) {
+    return String(path || '').split('/').map(seg => {
+      const safe = seg.replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '\ufffd');
+      return encodeURIComponent(safe).replace(/%28/g, '(').replace(/%29/g, ')');
+    }).join('/');
+  }
+
+  // Sources _index.md from the files actually written, in export order, so
+  // two same-titled sources each link to their own file
+  function buildSourcesIndex(entries) {
+    const lines = [];
+    (entries || []).forEach((entry, i) => {
+      lines.push(`### ${i + 1}. ${entry.title}`, '');
+      if (entry.details) lines.push(entry.details.trimEnd(), '');
+      if ((entry.files || []).length > 0) {
+        lines.push('**Files:**', '');
+        for (const file of entry.files) lines.push(`- [${file.label}](${encodePath(file.path)})`);
+        lines.push('');
+      }
+    });
+    return lines.join('\n');
+  }
+
   const NLME = {
+    buildSourcesIndex,
     citationTitleFromAriaLabel,
     fenceFor,
     toBlockquote,
