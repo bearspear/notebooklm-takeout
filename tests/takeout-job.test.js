@@ -90,3 +90,14 @@ test('runExportJob keeps an item that called ctx.warn and reports the warning', 
   assert.equal(r.exported, 1);
   assert.deepEqual(calls, [{ results: ['data'], errors: ['[N1] missing summary'] }]);
 });
+
+test('runExportJob cancel at a batch boundary sends errors in a new batch index', async () => {
+  const { run, calls } = harness({ items: items(5), perZip: 2, cancelAfter: 2 });
+  await run;
+  assert.equal(calls.length, 2);
+  assert.deepEqual([calls[0].results, calls[0].batchIndex, calls[0].isLast], [['N1', 'N2'], 1, false]);
+  assert.deepEqual(
+    [calls[1].results, calls[1].batchIndex, calls[1].totalBatches, calls[1].isLast, calls[1].partial, calls[1].errorsOnly],
+    [[], 2, 3, true, true, true]);
+  assert.match(calls[1].errors[0], /Cancelled by user after 2 of 5 notes/);
+});

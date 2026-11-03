@@ -17,9 +17,11 @@
     let attempted = 0, exported = 0;
     let cancelled = false, stopped = false;
     let errorsDelivered = false;
+    let delivered = 0;
 
     const deliver = async (results, batchIndex, isLast, extra = {}) => {
       if (isLast) errorsDelivered = true;
+      delivered++;
       await packageBatch(results, {
         batchIndex, totalBatches, isLast,
         partial: cancelled || stopped,
@@ -63,9 +65,10 @@
       if (results.length) await deliver(results, b + 1, isLast);
     }
 
-    // Errors exist but the last batch had no successes to carry them
+    // Errors exist but the last batch had no successes to carry them; use the
+    // next unused batch index so file names never collide with a delivered batch
     if (errors.length && !errorsDelivered) {
-      await deliver([], Math.min(totalBatches, Math.ceil(attempted / size) || 1), true, { errorsOnly: true });
+      await deliver([], Math.min(totalBatches, delivered + 1), true, { errorsOnly: true });
     }
 
     return { attempted, exported, failed: attempted - exported, cancelled, stopped, errors };
