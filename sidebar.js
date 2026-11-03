@@ -2678,111 +2678,158 @@ async function getProjectName(tabId) {
   return 'NotebookLM';
 }
 
-// Notes export (Milestone 3a): the shared export shell around the shared job
-// runner. Each batch becomes one ZIP from buildNotesFiles.
+// Notes export (Milestone 3a): the shared export shell around runNotesJob.
+// Each batch becomes one <Notebook>-notes-<ts>.zip from buildNotesFiles.
 async function exportNotesAsMarkdown(selectedNotes) {
   startExportTiming();
   console.log('[NotebookLM Takeout] Starting export for notes:', selectedNotes.length);
 
   await withExportShell({ label: 'notes', healthType: 'notes', overlayMessage: 'Preparing to export notes...' }, async shell => {
-    const perZip = settings.notesPerZip;
-    // Shared by every extractNoteItem call: audit counters, early-stop
-    // counters, and the DOM-warning decision
-    const state = {
-      audit: newAudit(),
-      notesWithMarkers: 0,
-      unreadNotes: 0,
-      failures: 0,
-      domWarningShown: false,
-      declined: false // user declined the DOM warning: stops like a Cancel
-    };
-    let packaged = 0; // notes written to ZIPs so far
-
-    // Item counts go in last, once every written note is known
-    const finalAudit = () => {
-      state.audit.expected.items = selectedNotes.length;
-      state.audit.written.items = packaged;
-      return state.audit;
-    };
-
-    console.log(`[NotebookLM Takeout] Will create ${Math.ceil(selectedNotes.length / perZip)} ZIP(s) for ${selectedNotes.length} notes (${perZip} per ZIP)`);
-
-    const result = await NLME.runExportJob({
-      kind: 'notes',
-      items: selectedNotes,
-      perZip,
-      extractOne: (note, ctx) => extractNoteItem(shell, note, ctx, state),
-      // Always close the note viewer, even if extraction failed
-      afterEach: async () => {
-        try {
-          const backResponse = await chrome.tabs.sendMessage(shell.tab.id, { type: 'NAVIGATE_BACK' });
-          console.log('[NotebookLM Takeout] Navigate back response:', backResponse);
-          // NAVIGATE_BACK resolves once the viewer is closed and the list is
-          // back; the next EXTRACT_NOTE waits for a stable list itself
-          // (Milestone 1: was a fixed 3 s per note)
-        } catch (backError) {
-          console.error('[NotebookLM Takeout] Failed to navigate back:', backError);
-          // Continue: EXTRACT_NOTE fails the next note cleanly if a viewer is stuck
-        }
-      },
-      packageBatch: async (notes, info) => {
-        packaged += notes.length;
-        shell.progress(`Creating ZIP ${info.batchIndex}/${info.totalBatches}...`, 1);
-        // _audit.md goes into the last ZIP the run writes (an errors-only ZIP
-        // too: the outcome toast may point at it)
-        const auditText = info.isLast ? auditMarkdown('Notes Export', finalAudit()).text : null;
-        const files = buildNotesFiles(notes, {
-          meta: shell.meta,
-          errors: info.errors,
-          auditText,
-          batchIndex: info.batchIndex,
-          totalBatches: info.totalBatches,
-          partial: info.partial
-        });
-        await saveFiles(files, {
-          zipName: NLME.zipName({
-            notebook: shell.projectName,
-            kind: 'notes',
-            timestamp: shell.timestamp,
-            partial: info.partial,
-            part: info.batchIndex,
-            totalParts: info.totalBatches
-          })
-        });
-        console.log(`[NotebookLM Takeout] Downloaded notes ZIP ${info.batchIndex}/${info.totalBatches}`);
-
-        // CRITICAL: free each batch's memory before the next one
-        await new Promise(resolve => setTimeout(resolve, 500));
-        notes.forEach(note => {
-          note.markdown = null;
-          note.html = null;
-          note.sources = null;
-          note.svgContent = null;
-          note.treeData = null;
-        });
-        // Give GC time to work between batches
-        if (!info.isLast) await new Promise(resolve => setTimeout(resolve, 1000));
-      },
-      isCancelled: () => shell.isCancelled() || state.declined,
-      onProgress: ({ done, total, batchIndex, totalBatches, item }) => {
-        const batchStart = (batchIndex - 1) * perZip;
-        const batchSize = Math.min(perZip, total - batchStart);
-        shell.progress(`Batch ${batchIndex}/${totalBatches}: Processing ${done - batchStart + 1}/${batchSize}: ${item.title}`,
-          (done + 1) / total);
-        console.log(`[NotebookLM Takeout] Processing note ${done + 1}/${total}:`, item.title, 'index:', item.index);
-      }
-    });
+    const { result, auditOk } = await runNotesJob(shell, selectedNotes);
 
     shell.finish({
       kind: 'notes',
       selected: selectedNotes.length,
       result,
-      auditOk: NLME.auditExport(finalAudit()).ok,
+      auditOk,
       stoppedMessage: result.stopped
         ? `Stopped after ${result.exported} of ${selectedNotes.length} notes: citations could not be read (Gemini Notebook may have changed). Run the health check 🩺; details in errors.md.`
         : undefined
     });
   });
+}
+
+/**
+ * Where a category runner writes (runNotesJob, runSourcesJob, runChatJob,
+ * runArtifactsJob). Tab exports use the defaults: their own ZIPs,
+ * <Notebook>-<kind>-<ts>.zip, paths as the builders return them. Full
+ * Takeout passes pathPrefix '<root>/<category>/', zipKind
+ * 'takeout-<category>' and, with ZIP off, the takeout's Downloads folder.
+ *
+ * @typedef {{ pathPrefix?: string, zipKind?: string, folder?: string|null }} CategoryTarget
+ */
+
+// One batch of a category's files to its ZIP (name pushed to `zips`) or, with
+// target.folder, into that Downloads folder; every path gets `prefix`
+async function saveCategoryBatch(shell, files, info, { prefix = '', zipKind, folder = null, zips }) {
+  const placed = prefix ? files.map(f => ({ ...f, path: prefix + f.path })) : files;
+  if (folder) {
+    await saveFiles(placed, { folder });
+    return;
+  }
+  const zipName = NLME.zipName({
+    notebook: shell.projectName,
+    kind: zipKind,
+    timestamp: shell.timestamp,
+    partial: info.partial,
+    part: info.batchIndex,
+    totalParts: info.totalBatches
+  });
+  await saveFiles(placed, { zipName });
+  zips.push(zipName);
+}
+
+// A takeout category written in several batches puts each batch in its own
+// part-N/ folder: every batch has its own _index.md and manifest.json, and
+// note/source stems are only unique within a batch, so parts unzipped into one
+// tree (or saved into one folder) must not share a folder. Tab exports (no
+// prefix) keep their separate ZIPs as before.
+function batchPrefix(pathPrefix, info) {
+  if (!pathPrefix || info.totalBatches <= 1) return pathPrefix;
+  return `${pathPrefix}part-${info.batchIndex}/`;
+}
+
+/**
+ * Run the notes job (extract, batch, package) inside an export shell.
+ *
+ * @param {object} shell withExportShell's shell (tab, meta, progress, isCancelled)
+ * @param {object[]} selectedNotes notes as SCAN_NOTES returns them
+ * @param {CategoryTarget} [target]
+ * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean }>}
+ *   result: runExportJob's result
+ */
+async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'notes', folder = null } = {}) {
+  const perZip = settings.notesPerZip;
+  // Shared by every extractNoteItem call: audit counters, early-stop
+  // counters, and the DOM-warning decision
+  const state = {
+    audit: newAudit(),
+    notesWithMarkers: 0,
+    unreadNotes: 0,
+    failures: 0,
+    domWarningShown: false,
+    declined: false // user declined the DOM warning: stops like a Cancel
+  };
+  let packaged = 0; // notes written to ZIPs so far
+  const zips = [];
+
+  // Item counts go in last, once every written note is known
+  const finalAudit = () => {
+    state.audit.expected.items = selectedNotes.length;
+    state.audit.written.items = packaged;
+    return state.audit;
+  };
+
+  console.log(`[NotebookLM Takeout] Will create ${Math.ceil(selectedNotes.length / perZip)} ZIP(s) for ${selectedNotes.length} notes (${perZip} per ZIP)`);
+
+  const result = await NLME.runExportJob({
+    kind: 'notes',
+    items: selectedNotes,
+    perZip,
+    extractOne: (note, ctx) => extractNoteItem(shell, note, ctx, state),
+    // Always close the note viewer, even if extraction failed
+    afterEach: async () => {
+      try {
+        const backResponse = await chrome.tabs.sendMessage(shell.tab.id, { type: 'NAVIGATE_BACK' });
+        console.log('[NotebookLM Takeout] Navigate back response:', backResponse);
+        // NAVIGATE_BACK resolves once the viewer is closed and the list is
+        // back; the next EXTRACT_NOTE waits for a stable list itself
+        // (Milestone 1: was a fixed 3 s per note)
+      } catch (backError) {
+        console.error('[NotebookLM Takeout] Failed to navigate back:', backError);
+        // Continue: EXTRACT_NOTE fails the next note cleanly if a viewer is stuck
+      }
+    },
+    packageBatch: async (notes, info) => {
+      packaged += notes.length;
+      shell.progress(`Creating ZIP ${info.batchIndex}/${info.totalBatches}...`, 1);
+      // _audit.md goes into the last ZIP the run writes (an errors-only ZIP
+      // too: the outcome toast may point at it)
+      const auditText = info.isLast ? auditMarkdown('Notes Export', finalAudit()).text : null;
+      const files = buildNotesFiles(notes, {
+        meta: shell.meta,
+        errors: info.errors,
+        auditText,
+        batchIndex: info.batchIndex,
+        totalBatches: info.totalBatches,
+        partial: info.partial
+      });
+      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, zips });
+      console.log(`[NotebookLM Takeout] Downloaded notes ZIP ${info.batchIndex}/${info.totalBatches}`);
+
+      // CRITICAL: free each batch's memory before the next one
+      await new Promise(resolve => setTimeout(resolve, 500));
+      notes.forEach(note => {
+        note.markdown = null;
+        note.html = null;
+        note.sources = null;
+        note.svgContent = null;
+        note.treeData = null;
+      });
+      // Give GC time to work between batches
+      if (!info.isLast) await new Promise(resolve => setTimeout(resolve, 1000));
+    },
+    isCancelled: () => shell.isCancelled() || state.declined,
+    onProgress: ({ done, total, batchIndex, totalBatches, item }) => {
+      const batchStart = (batchIndex - 1) * perZip;
+      const batchSize = Math.min(perZip, total - batchStart);
+      shell.progress(`Batch ${batchIndex}/${totalBatches}: Processing ${done - batchStart + 1}/${batchSize}: ${item.title}`,
+        (done + 1) / total);
+      console.log(`[NotebookLM Takeout] Processing note ${done + 1}/${total}:`, item.title, 'index:', item.index);
+    }
+  });
+
+  return { result, zips, errors: result.errors, auditOk: NLME.auditExport(finalAudit()).ok };
 }
 
 /**
@@ -3460,100 +3507,108 @@ function setupSourcesEventListeners(sources) {
   }
 }
 
-// Sources export (Milestone 3a): the shared export shell around the shared
-// job runner. Each batch becomes one ZIP from buildSourcesFiles.
+// Sources export (Milestone 3a): the shared export shell around
+// runSourcesJob. Each batch becomes one <Notebook>-sources-<ts>.zip from
+// buildSourcesFiles.
 async function exportSources(selectedSources) {
   startExportTiming();
   console.log(`[NotebookLM Takeout] Exporting ${selectedSources.length} sources...`);
 
   await withExportShell({ label: 'sources', healthType: 'sources', overlayMessage: 'Preparing to export sources...' }, async shell => {
-    const perZip = settings.sourcesPerZip;
-    // Shared by every extractSourceItem call: audit counters and the
-    // DOM-warning decision
-    const state = {
-      audit: newAudit(),
-      failures: 0,
-      domWarningShown: false,
-      declined: false // user declined the DOM warning: stops like a Cancel
-    };
-    let packaged = 0; // sources written to ZIPs so far
-
-    // Item counts go in last, once every written source is known
-    const finalAudit = () => {
-      state.audit.expected.items = selectedSources.length;
-      state.audit.written.items = packaged;
-      return state.audit;
-    };
-
-    console.log(`[NotebookLM Takeout] Will create ${Math.ceil(selectedSources.length / perZip)} ZIP(s) for ${selectedSources.length} sources (${perZip} per ZIP)`);
-
-    const result = await NLME.runExportJob({
-      kind: 'sources',
-      items: selectedSources,
-      perZip,
-      extractOne: (source, ctx) => extractSourceItem(shell, source, ctx, state),
-      // Close the source viewer once per source, whether extraction worked or not
-      afterEach: async () => {
-        try {
-          const backResponse = await chrome.tabs.sendMessage(shell.tab.id, { type: 'NAVIGATE_BACK' });
-          console.log('[NotebookLM Takeout] NAVIGATE_BACK response:', backResponse);
-          // NAVIGATE_BACK resolves once the viewer is closed (Milestone 1: no
-          // extra fixed 1.5 s)
-        } catch (backError) {
-          console.error('[NotebookLM Takeout] Failed to close source panel:', backError);
-        }
-      },
-      packageBatch: async (sources, info) => {
-        packaged += sources.length;
-        shell.progress(`Creating ZIP ${info.batchIndex}/${info.totalBatches}...`, 1);
-        // _audit.md goes into the last ZIP the run writes (an errors-only ZIP
-        // too, so a run where every source failed still explains its toast)
-        const auditText = info.isLast ? auditMarkdown('Sources Export', finalAudit()).text : null;
-        await saveFiles(buildSourcesFiles(sources, {
-          meta: shell.meta,
-          errors: info.errors,
-          auditText,
-          batchIndex: info.batchIndex,
-          totalBatches: info.totalBatches,
-          partial: info.partial
-        }), {
-          zipName: NLME.zipName({
-            notebook: shell.projectName,
-            kind: 'sources',
-            timestamp: shell.timestamp,
-            partial: info.partial,
-            part: info.batchIndex,
-            totalParts: info.totalBatches
-          })
-        });
-        console.log(`[NotebookLM Takeout] Downloaded sources ZIP ${info.batchIndex}/${info.totalBatches}`);
-
-        // CRITICAL: free each batch's memory before the next one
-        await new Promise(resolve => setTimeout(resolve, 500));
-        sources.forEach(source => {
-          source.versions = { base: null, plusMeta: null, withImages: null, plusMetaWithImages: null };
-          source.summary = null;
-        });
-        // Give GC time to work between batches
-        if (!info.isLast) await new Promise(resolve => setTimeout(resolve, 1000));
-      },
-      isCancelled: () => shell.isCancelled() || state.declined,
-      onProgress: ({ done, total, batchIndex, totalBatches, item }) => {
-        const batchStart = (batchIndex - 1) * perZip;
-        const batchSize = Math.min(perZip, total - batchStart);
-        shell.progress(`Batch ${batchIndex}/${totalBatches}: Extracting ${done - batchStart + 1}/${batchSize}: ${item.title}`,
-          (done + 1) / total);
-        console.log(`[NotebookLM Takeout] Extracting source: "${item.title}"`);
-      }
-    });
+    const { result, auditOk } = await runSourcesJob(shell, selectedSources);
 
     shell.finish({
       kind: 'sources',
       selected: selectedSources.length,
       result,
-      auditOk: NLME.auditExport(finalAudit()).ok
+      auditOk
     });
   });
+}
+
+/**
+ * Run the sources job (extract, batch, package) inside an export shell.
+ *
+ * @param {object} shell withExportShell's shell
+ * @param {object[]} selectedSources sources as SCAN_SOURCES returns them
+ * @param {CategoryTarget} [target]
+ * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean }>}
+ */
+async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind = 'sources', folder = null } = {}) {
+  const perZip = settings.sourcesPerZip;
+  // Shared by every extractSourceItem call: audit counters and the
+  // DOM-warning decision
+  const state = {
+    audit: newAudit(),
+    failures: 0,
+    domWarningShown: false,
+    declined: false // user declined the DOM warning: stops like a Cancel
+  };
+  let packaged = 0; // sources written to ZIPs so far
+  const zips = [];
+
+  // Item counts go in last, once every written source is known
+  const finalAudit = () => {
+    state.audit.expected.items = selectedSources.length;
+    state.audit.written.items = packaged;
+    return state.audit;
+  };
+
+  console.log(`[NotebookLM Takeout] Will create ${Math.ceil(selectedSources.length / perZip)} ZIP(s) for ${selectedSources.length} sources (${perZip} per ZIP)`);
+
+  const result = await NLME.runExportJob({
+    kind: 'sources',
+    items: selectedSources,
+    perZip,
+    extractOne: (source, ctx) => extractSourceItem(shell, source, ctx, state),
+    // Close the source viewer once per source, whether extraction worked or not
+    afterEach: async () => {
+      try {
+        const backResponse = await chrome.tabs.sendMessage(shell.tab.id, { type: 'NAVIGATE_BACK' });
+        console.log('[NotebookLM Takeout] NAVIGATE_BACK response:', backResponse);
+        // NAVIGATE_BACK resolves once the viewer is closed (Milestone 1: no
+        // extra fixed 1.5 s)
+      } catch (backError) {
+        console.error('[NotebookLM Takeout] Failed to close source panel:', backError);
+      }
+    },
+    packageBatch: async (sources, info) => {
+      packaged += sources.length;
+      shell.progress(`Creating ZIP ${info.batchIndex}/${info.totalBatches}...`, 1);
+      // _audit.md goes into the last ZIP the run writes (an errors-only ZIP
+      // too, so a run where every source failed still explains its toast)
+      const auditText = info.isLast ? auditMarkdown('Sources Export', finalAudit()).text : null;
+      const files = buildSourcesFiles(sources, {
+        meta: shell.meta,
+        errors: info.errors,
+        auditText,
+        batchIndex: info.batchIndex,
+        totalBatches: info.totalBatches,
+        partial: info.partial
+      });
+      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, zips });
+      console.log(`[NotebookLM Takeout] Downloaded sources ZIP ${info.batchIndex}/${info.totalBatches}`);
+
+      // CRITICAL: free each batch's memory before the next one
+      await new Promise(resolve => setTimeout(resolve, 500));
+      sources.forEach(source => {
+        source.versions = { base: null, plusMeta: null, withImages: null, plusMetaWithImages: null };
+        source.summary = null;
+      });
+      // Give GC time to work between batches
+      if (!info.isLast) await new Promise(resolve => setTimeout(resolve, 1000));
+    },
+    isCancelled: () => shell.isCancelled() || state.declined,
+    onProgress: ({ done, total, batchIndex, totalBatches, item }) => {
+      const batchStart = (batchIndex - 1) * perZip;
+      const batchSize = Math.min(perZip, total - batchStart);
+      shell.progress(`Batch ${batchIndex}/${totalBatches}: Extracting ${done - batchStart + 1}/${batchSize}: ${item.title}`,
+        (done + 1) / total);
+      console.log(`[NotebookLM Takeout] Extracting source: "${item.title}"`);
+    }
+  });
+
+  return { result, zips, errors: result.errors, auditOk: NLME.auditExport(finalAudit()).ok };
 }
 
 /**
@@ -4070,8 +4125,8 @@ function renderChatSummary(chatData) {
   });
 }
 
-// Chat export (Milestone 3a): the shared export shell around the shared job
-// runner. One package: a single Markdown file, or a ZIP from buildChatFiles.
+// Chat export (Milestone 3a): the shared export shell around runChatJob.
+// One package: a single Markdown file, or a ZIP from buildChatFiles.
 async function exportChat(chatData, extractFullCitations = false) {
   startExportTiming();
   {
@@ -4082,64 +4137,77 @@ async function exportChat(chatData, extractFullCitations = false) {
   console.log('[NotebookLM Takeout] Starting chat export...');
 
   await withExportShell({ label: 'chat', overlayMessage: 'Preparing to export chat...' }, async shell => {
-    const messagePairs = chatData.messagePairs;
-    // Scan completeness (Milestone 2, Resilience #2): known before the job
-    // starts, so they lead errors.md
-    const seedErrors = (chatData.stats?.skipped || [])
-      .map(skippedMessage => ({ type: 'message_skipped', message: skippedMessage }));
-    if (chatData.stats?.collapsedRemaining > 0) {
-      seedErrors.push({ type: 'collapsed_citations', message: `${chatData.stats.collapsedRemaining} citation group(s) were still collapsed after the scan; their citations are missing` });
-    }
-    let auditDoc = null;
-
-    console.log('[NotebookLM Takeout] Processing messages and extracting citations...');
-    const result = await NLME.runExportJob({
-      kind: 'messages',
-      items: messagePairs,
-      perZip: Infinity,
-      seedErrors,
-      extractOne: (pair, ctx) => extractChatPair(shell, pair, ctx, { extractFullCitations, total: messagePairs.length }),
-      packageBatch: async (messages, info) => {
-        console.log(`[NotebookLM Takeout] Processing complete: ${messages.length} messages`);
-        shell.progress('Creating export...', 1);
-        auditDoc = buildChatAuditDoc(chatData, messages, !!extractFullCitations);
-        const { files, single } = buildChatFiles(messages, {
-          meta: shell.meta,
-          chatData,
-          errors: info.errors,
-          auditDoc,
-          partial: info.partial
-        });
-        if (single) {
-          // Today's download name for the single file
-          await saveFiles([{ ...single, path: `${sanitizeFilename(shell.projectName)}-chat-${shell.timestamp}.md` }]);
-        } else {
-          await saveFiles(files, {
-            zipName: NLME.zipName({
-              notebook: shell.projectName,
-              kind: 'chat',
-              timestamp: shell.timestamp,
-              partial: info.partial
-            })
-          });
-        }
-      },
-      isCancelled: shell.isCancelled,
-      onProgress: ({ done, total }) => {
-        shell.progress(`Processing message ${done + 1}/${total}`, (done + 1) / total);
-        console.log(`[NotebookLM Takeout] Message ${done + 1}: Processing...`);
-      }
-    });
+    const { result, auditOk } = await runChatJob(shell, chatData, { extractFullCitations });
 
     shell.finish({
       kind: 'messages',
-      selected: messagePairs.length,
+      selected: chatData.messagePairs.length,
       result,
-      auditOk: auditDoc ? auditDoc.ok : true,
+      auditOk,
       // Citation problems leave every message exported, so name the errors
       errorNote: result.errors.length > 0 ? `${result.errors.length} citation error(s), see errors.md` : undefined
     });
   });
+}
+
+/**
+ * Run the chat job (citations per message, one package) inside an export
+ * shell. Scan problems (unread messages, collapsed citation groups) lead the
+ * error list.
+ *
+ * @param {object} shell withExportShell's shell
+ * @param {object} chatData SCAN_CHAT's chatData (messagePairs, stats, ...)
+ * @param {CategoryTarget & { extractFullCitations?: boolean, forceZip?: boolean }} [options]
+ *   forceZip: always the full file set (Full Takeout), never one loose .md
+ * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean }>}
+ */
+async function runChatJob(shell, chatData, { extractFullCitations = false, forceZip = false, pathPrefix = '', zipKind = 'chat', folder = null } = {}) {
+  const messagePairs = chatData.messagePairs;
+  // Scan completeness (Milestone 2, Resilience #2): known before the job
+  // starts, so they lead errors.md
+  const seedErrors = (chatData.stats?.skipped || [])
+    .map(skippedMessage => ({ type: 'message_skipped', message: skippedMessage }));
+  if (chatData.stats?.collapsedRemaining > 0) {
+    seedErrors.push({ type: 'collapsed_citations', message: `${chatData.stats.collapsedRemaining} citation group(s) were still collapsed after the scan; their citations are missing` });
+  }
+  let auditDoc = null;
+  const zips = [];
+
+  console.log('[NotebookLM Takeout] Processing messages and extracting citations...');
+  const result = await NLME.runExportJob({
+    kind: 'messages',
+    items: messagePairs,
+    perZip: Infinity,
+    seedErrors,
+    extractOne: (pair, ctx) => extractChatPair(shell, pair, ctx, { extractFullCitations, total: messagePairs.length }),
+    packageBatch: async (messages, info) => {
+      console.log(`[NotebookLM Takeout] Processing complete: ${messages.length} messages`);
+      shell.progress('Creating export...', 1);
+      auditDoc = buildChatAuditDoc(chatData, messages, !!extractFullCitations);
+      const { files, single } = buildChatFiles(messages, {
+        meta: shell.meta,
+        chatData,
+        errors: info.errors,
+        auditDoc,
+        partial: info.partial,
+        forceZip
+      });
+      if (single) {
+        // Today's download name for the single file
+        await saveFiles([{ ...single, path: `${sanitizeFilename(shell.projectName)}-chat-${shell.timestamp}.md` }]);
+      } else {
+        // One package: totalBatches is 1, so no -partNofM
+        await saveCategoryBatch(shell, files, info, { prefix: pathPrefix, zipKind, folder, zips });
+      }
+    },
+    isCancelled: shell.isCancelled,
+    onProgress: ({ done, total }) => {
+      shell.progress(`Processing message ${done + 1}/${total}`, (done + 1) / total);
+      console.log(`[NotebookLM Takeout] Message ${done + 1}: Processing...`);
+    }
+  });
+
+  return { result, zips, errors: result.errors, auditOk: auditDoc ? auditDoc.ok : true };
 }
 
 /**
@@ -5137,67 +5205,8 @@ async function downloadAllArtifacts(tabId, items) {
 
   try {
     await withExportShell({ label: 'artifacts', overlayMessage: 'Preparing to download artifacts...' }, async shell => {
-      const folder = shell.projectName || 'NotebookLM';
-      const stems = NLME.artifactStems(items);
-      const stemOf = new Map(items.map((item, idx) => [item, stems[idx]]));
-      // Folder mode: what earlier items saved, for _index.md and manifest.json
-      // (Blobs replaced by their size: the manifest needs no more)
-      const saved = [];
-      let savedOutside = 0;
-
-      const result = await NLME.runExportJob({
-        kind: 'artifacts',
-        items,
-        perZip: zipEnabled ? Infinity : 1,
-        titleOf: item => item.label,
-        extractOne: async (item, ctx) => {
-          const typeFolder = NLME.artifactFolder(item.type);
-          const fetched = await retryDownload(() => fetchArtifactFiles(shell.tab.id, item, {
-            stem: stemOf.get(item),
-            mode: zipEnabled ? 'zip' : 'folder',
-            meta: shell.meta,
-            folder: zipEnabled ? '' : folder
-          }), 3, item.label);
-          if (fetched.savedOutside) {
-            savedOutside++;
-            // Folder mode: the background captured it into the notebook folder
-            const where = zipEnabled ? 'Downloads' : `Downloads/${NLME.downloadFolderPath(folder, '').replace(/\/$/, '')}`;
-            ctx.warn(`[${item.label}] saved separately to ${where} (no capturable URL)`);
-          }
-          const files = fetched.files.map(f => ({ ...f, path: `${typeFolder}/${f.path}`, title: item.label, itemKind: 'artifact' }));
-          if (!zipEnabled) {
-            // Saved here, not in packageBatch, so a failed save fails this
-            // item (errors.md) instead of ending the whole job
-            await saveFiles(files, { folder });
-            saved.push({ item, files: files.map(f => (f.data instanceof Blob ? { ...f, data: { byteLength: f.data.size } } : f)) });
-          }
-          return { item, files };
-        },
-        // Pause between items so Gemini Notebook is not hammered
-        afterEach: async item => {
-          if (item !== items[items.length - 1]) await new Promise(resolve => setTimeout(resolve, 800));
-        },
-        packageBatch: async (results, info) => {
-          if (zipEnabled) {
-            const files = results.flatMap(r => r.files);
-            shell.progress('Creating ZIP...', 1);
-            files.push(...artifactsRootFiles(files, results.map(r => r.item), { meta: shell.meta, info }));
-            await saveFiles(files, {
-              zipName: NLME.zipName({ notebook: shell.projectName, kind: 'artifacts', timestamp: shell.timestamp, partial: info.partial })
-            });
-            return;
-          }
-          // Folder mode (one item per call): the item is already saved; the
-          // last call adds the root files
-          if (info.isLast) {
-            const all = saved.flatMap(r => r.files);
-            await saveFiles(artifactsRootFiles(all, saved.map(r => r.item), { meta: shell.meta, info }), { folder });
-          }
-        },
-        isCancelled: shell.isCancelled,
-        onProgress: ({ done, total, item }) => {
-          shell.progress(`Downloading ${done + 1}/${total}: ${item.label}`, (done + 1) / total);
-        }
+      const { result, savedOutside } = await runArtifactsJob(shell, items, {
+        folder: zipEnabled ? null : (shell.projectName || 'NotebookLM')
       });
 
       shell.finish({
@@ -5210,6 +5219,87 @@ async function downloadAllArtifacts(tabId, items) {
   } finally {
     if (downloadBtn) downloadBtn.disabled = false;
   }
+}
+
+/**
+ * Run the artifacts job inside an export shell. ZIP mode (no target.folder):
+ * every file is fetched and packed into one ZIP with the root files. Folder
+ * mode: each item is saved into the folder as it is fetched (CDN media
+ * straight to disk), the root files after the last one.
+ *
+ * @param {object} shell withExportShell's shell
+ * @param {Array<{ index, label, type }>} items downloadable artifacts (scanArtifactsData)
+ * @param {CategoryTarget} [target]
+ * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, savedOutside: number }>}
+ *   savedOutside: items Chrome saved itself (no capturable URL)
+ */
+async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artifacts', folder = null } = {}) {
+  const zipMode = !folder;
+  const place = files => (pathPrefix ? files.map(f => ({ ...f, path: pathPrefix + f.path })) : files);
+  const stems = NLME.artifactStems(items);
+  const stemOf = new Map(items.map((item, idx) => [item, stems[idx]]));
+  // Folder mode: what earlier items saved, for _index.md and manifest.json
+  // (Blobs replaced by their size: the manifest needs no more)
+  const saved = [];
+  const zips = [];
+  let savedOutside = 0;
+
+  const result = await NLME.runExportJob({
+    kind: 'artifacts',
+    items,
+    perZip: zipMode ? Infinity : 1,
+    titleOf: item => item.label,
+    extractOne: async (item, ctx) => {
+      const typeFolder = NLME.artifactFolder(item.type);
+      const fetched = await retryDownload(() => fetchArtifactFiles(shell.tab.id, item, {
+        stem: stemOf.get(item),
+        mode: zipMode ? 'zip' : 'folder',
+        meta: shell.meta,
+        folder: zipMode ? '' : folder
+      }), 3, item.label);
+      if (fetched.savedOutside) {
+        savedOutside++;
+        // Folder mode: the background captured it into the folder's top level
+        const where = zipMode ? 'Downloads' : `Downloads/${NLME.downloadFolderPath(folder, '').replace(/\/$/, '')}`;
+        ctx.warn(`[${item.label}] saved separately to ${where} (no capturable URL)`);
+      }
+      const files = fetched.files.map(f => ({ ...f, path: `${typeFolder}/${f.path}`, title: item.label, itemKind: 'artifact' }));
+      if (!zipMode) {
+        // Saved here, not in packageBatch, so a failed save fails this
+        // item (errors.md) instead of ending the whole job
+        await saveFiles(place(files), { folder });
+        saved.push({ item, files: files.map(f => (f.data instanceof Blob ? { ...f, data: { byteLength: f.data.size } } : f)) });
+      }
+      return { item, files };
+    },
+    // Pause between items so Gemini Notebook is not hammered
+    afterEach: async item => {
+      if (item !== items[items.length - 1]) await new Promise(resolve => setTimeout(resolve, 800));
+    },
+    packageBatch: async (results, info) => {
+      if (zipMode) {
+        const files = results.flatMap(r => r.files);
+        shell.progress('Creating ZIP...', 1);
+        files.push(...artifactsRootFiles(files, results.map(r => r.item), { meta: shell.meta, info }));
+        const zipName = NLME.zipName({ notebook: shell.projectName, kind: zipKind, timestamp: shell.timestamp, partial: info.partial });
+        await saveFiles(place(files), { zipName });
+        zips.push(zipName);
+        return;
+      }
+      // Folder mode (one item per call): the item is already saved; the
+      // last call adds the root files
+      if (info.isLast) {
+        const all = saved.flatMap(r => r.files);
+        await saveFiles(place(artifactsRootFiles(all, saved.map(r => r.item), { meta: shell.meta, info })), { folder });
+      }
+    },
+    isCancelled: shell.isCancelled,
+    onProgress: ({ done, total, item }) => {
+      shell.progress(`Downloading ${done + 1}/${total}: ${item.label}`, (done + 1) / total);
+    }
+  });
+
+  return { result, zips, errors: result.errors, auditOk: true, savedOutside };
 }
 
 /**
