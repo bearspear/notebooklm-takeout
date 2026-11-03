@@ -4236,18 +4236,14 @@ async function exportChat(chatData, extractFullCitations = false) {
       }
     });
 
-    const auditOk = auditDoc ? auditDoc.ok : true;
-    if (!result.cancelled && result.errors.length > 0) {
-      // Citation problems leave every message exported, so the shell's toast
-      // would read as a clean success; name the errors
-      const outcome = NLME.summarizeExportOutcome({
-        kind: 'messages', selected: messagePairs.length, exported: result.exported, failed: result.failed
-      });
-      showToast(`${outcome.message} (${result.errors.length} citation error(s), see errors.md)${auditOk ? '' : ' — some content is missing, see _audit.md'}`,
-        outcome.level === 'error' ? 'error' : 'warning');
-    } else {
-      shell.finish({ kind: 'messages', selected: messagePairs.length, result, auditOk });
-    }
+    shell.finish({
+      kind: 'messages',
+      selected: messagePairs.length,
+      result,
+      auditOk: auditDoc ? auditDoc.ok : true,
+      // Citation problems leave every message exported, so name the errors
+      errorNote: result.errors.length > 0 ? `${result.errors.length} citation error(s), see errors.md` : undefined
+    });
   });
 }
 

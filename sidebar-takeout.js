@@ -157,10 +157,14 @@ async function saveFiles(files, { zipName, folder } = {}) {
  *   tab, projectName, timestamp, meta,
  *   isCancelled()              // true after Cancel (overlay or side panel)
  *   progress(text, fraction)   // fraction 0..1: side-panel bar + page overlay
- *   finish({ kind, selected, result, auditOk = true, stoppedMessage })
+ *   finish({ kind, selected, result, auditOk = true, stoppedMessage, errorNote })
  *                              // result: { exported, failed, cancelled };
  *                              // stoppedMessage replaces the outcome toast
  *                              // when the extension stopped the job itself
+ *                              // errorNote ('2 citation error(s), see
+ *                              // errors.md'): errors on items that were
+ *                              // still exported; appended in brackets and
+ *                              // raises success to warning (not on cancel)
  * }
  *
  * @param {{ label: string, healthType?: string, overlayMessage?: string }} options
@@ -247,7 +251,7 @@ async function withExportShell({ label, healthType, overlayMessage }, run) {
           progress: percent
         }).catch(() => {}); // overlay is cosmetic; never abort the job
       },
-      finish({ kind, selected, result = {}, auditOk = true, stoppedMessage } = {}) {
+      finish({ kind, selected, result = {}, auditOk = true, stoppedMessage, errorNote } = {}) {
         if (stoppedMessage) {
           showToast(stoppedMessage, 'error');
           return;
@@ -259,8 +263,16 @@ async function withExportShell({ label, healthType, overlayMessage }, run) {
           failed: result.failed,
           cancelled: result.cancelled
         });
-        showToast(auditOk ? outcome.message : `${outcome.message} — some content is missing, see _audit.md`,
-          auditOk ? outcome.level : (outcome.level === 'error' ? 'error' : 'warning'));
+        let message = outcome.message;
+        let level = outcome.level;
+        // Each note on top of the outcome is at least a warning
+        const note = text => {
+          message += text;
+          if (level !== 'error') level = 'warning';
+        };
+        if (errorNote && !result.cancelled) note(` (${errorNote})`);
+        if (!auditOk) note(' — some content is missing, see _audit.md');
+        showToast(message, level);
       }
     };
 
