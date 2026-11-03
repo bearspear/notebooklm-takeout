@@ -984,6 +984,7 @@ h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid var(--line); 
 .meta, .variant, footer { color: var(--muted); font-size: .9rem; }
 .top { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; padding: 0; list-style: none; }
 ul.files { padding-left: 1.25rem; }
+.type { font-size: .75rem; color: var(--muted); border: 1px solid var(--line); border-radius: .75rem; padding: 0 .5rem; white-space: nowrap; }
 table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
 th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); }
 footer { margin-top: 3rem; }
@@ -1008,6 +1009,29 @@ footer { margin-top: 3rem; }
       '</ul>\n';
   }
 
+  const FILE_TYPE_LABELS = {
+    md: 'Markdown', json: 'JSON', csv: 'CSV', html: 'HTML', svg: 'SVG image',
+    png: 'Image', jpg: 'Image', jpeg: 'Image', webp: 'Image', pdf: 'PDF',
+    pptx: 'PowerPoint', docx: 'Word', xlsx: 'Excel',
+    m4a: 'Audio', mp3: 'Audio', wav: 'Audio', mp4: 'Video', webm: 'Video',
+    txt: 'Text', zip: 'ZIP'
+  };
+
+  // "Markdown", "PDF", ... for a file path, from its extension.
+  function fileTypeLabel(path) {
+    const name = String(path || '').split('/').pop();
+    const dot = name.lastIndexOf('.');
+    if (dot <= 0 || dot === name.length - 1) return 'File';
+    const ext = name.slice(dot + 1).toLowerCase();
+    return FILE_TYPE_LABELS[ext] || ext.toUpperCase();
+  }
+
+  function humanSize(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
   function buildIndexHtml({ meta, heading, files = [], links = [] } = {}) {
     const linked = new Set(links.map(l => l.href));
     const groups = new Map();
@@ -1023,7 +1047,9 @@ footer { margin-top: 3rem; }
       body += `<h2>${escapeHtml(group)}</h2>\n<ul class="files">\n`;
       for (const f of list) {
         const label = f.title || String(f.path).split('/').pop();
-        body += `<li><a href="${encodePath(f.path)}">${escapeHtml(label)}</a>` +
+        const size = byteLength(f);
+        const type = fileTypeLabel(f.path) + (size == null ? '' : ` · ${humanSize(size)}`);
+        body += `<li><a href="${encodePath(f.path)}">${escapeHtml(label)}</a> <span class="type">${escapeHtml(type)}</span>` +
           (f.variant ? ` <span class="variant">${escapeHtml(f.variant)}</span>` : '') + '</li>\n';
       }
       body += '</ul>\n';
@@ -1093,6 +1119,7 @@ footer { margin-top: 3rem; }
   const NLME = {
     buildRootIndex,
     buildIndexHtml,
+    fileTypeLabel,
     buildRootIndexHtml,
     summarizeTakeoutOutcome,
     frontMatter,

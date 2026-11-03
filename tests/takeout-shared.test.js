@@ -726,9 +726,10 @@ test('buildRootIndex lists every category with its status and links errors', () 
 test('buildIndexHtml groups files by folder and encodes links', () => {
   const meta = { notebook: 'New Math', notebook_url: '', notebook_id: '', exporter: 'NotebookLM Takeout 1.4.0', exported: 'T' };
   const html = NLME.buildIndexHtml({ meta, heading: 'Notes — New Math', files: [
-    { path: 'notes/A b.md', title: 'A <script>b', variant: 'base' },
+    { path: 'notes/A b.md', title: 'A <script>b', variant: 'base', data: 'hello' },
     { path: 'notes/A b-code-blocks.md', title: 'A b', variant: 'code-blocks' },
     { path: 'mind-maps/[MINDMAP]_M#1.svg' },
+    { path: 'slides/D.pdf', url: 'https://x/d.pdf' },
     { path: 'combined-notes.md', title: 'Combined' },
     { path: 'manifest.json' },
     { path: '_index.html' }
@@ -745,8 +746,22 @@ test('buildIndexHtml groups files by folder and encodes links', () => {
   assert.match(html, /href="manifest\.json"/); // footer link only
   assert.equal(html.split('href="manifest.json"').length, 2);
   assert.match(html, /A &lt;script&gt;b/);
+  assert.match(html, /<span class="type">Markdown · 5 B<\/span>/);
+  assert.match(html, /<span class="type">PDF<\/span>/);
+  assert.match(html, /<span class="type">SVG image<\/span>/);
   assert.doesNotMatch(html, /<script/);
   assert.doesNotMatch(html, /https?:\/\/[^"' ]*\.(css|js)/);
+});
+
+test('fileTypeLabel names common export types', () => {
+  assert.equal(NLME.fileTypeLabel('a.md'), 'Markdown');
+  assert.equal(NLME.fileTypeLabel('deck.PPTX'), 'PowerPoint');
+  assert.equal(NLME.fileTypeLabel('x.m4a'), 'Audio');
+  assert.equal(NLME.fileTypeLabel('t.csv'), 'CSV');
+  assert.equal(NLME.fileTypeLabel('m.svg'), 'SVG image');
+  assert.equal(NLME.fileTypeLabel('f.xyz'), 'XYZ');
+  assert.equal(NLME.fileTypeLabel('noext'), 'File');
+  assert.equal(NLME.fileTypeLabel('dir.v2/noext'), 'File');
 });
 
 test('buildIndexHtml links the notebook and extra links', () => {
