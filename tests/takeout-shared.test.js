@@ -710,6 +710,21 @@ test('artifactFolder and extensionFor', () => {
   assert.equal(NLME.extensionFor({}), '');
 });
 
+test('extensionFor keeps a real URL path extension that no list knows, lower-cased', () => {
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/photo.JPEG' }), '.jpeg');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/photo.JPEG?size=large' }), '.jpeg');
+  // The known lists still come first
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/photo.JPEG', mime: 'audio/mp4' }), '.m4a');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/photo.JPEG', type: 'Infographic' }), '.png');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/a.pptx?filename=Deck.pdf' }), '.pdf');
+  // No extension (or not one): today's result
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/noext' }), '');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/noext', type: 'Video Overview' }), '.mp4');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y.z/noext' }), '');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/archive.toolongext' }), '');
+  assert.equal(NLME.extensionFor({ url: 'not a url' }), '');
+});
+
 test('artifactStems makes stems unique per type folder only', () => {
   const items = [
     { type: 'Report', label: 'Overview' },
