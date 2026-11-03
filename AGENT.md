@@ -43,8 +43,8 @@ the table of contents to jump.
 
 A Chrome side-panel extension that scrapes content out of `notebook.google.com` (formerly
 `notebooklm.google.com`, renamed to "Gemini Notebook" in Aug 2026) into local
-files. Five user-facing surfaces: Sources, Notes, Artifacts, Chat, and the optional Studio
-tab. The Studio tab gives a unified flat list with per-item Download / Delete; everything
+files. Five user-facing surfaces: Sources, Notes, Artifacts, Chat, and the optional Generated
+tab (internal id `studio`). The Generated tab gives a unified flat list with per-item Download / Delete; everything
 else uses tab-specific batch exports producing ZIPs. A 📦 Full Takeout button in the header
 runs all four categories in one go.
 
@@ -252,7 +252,7 @@ Markup (`sidebar.html`):
   <button class="tab-btn" data-tab="notes">Notes</button>
   <button class="tab-btn" data-tab="artifacts">Artifacts</button>
   <button class="tab-btn" data-tab="chat">Chat</button>
-  <button class="tab-btn" data-tab="studio" hidden>Studio</button>
+  <button class="tab-btn" data-tab="studio" hidden>Generated</button>
 </div>
 
 <div class="tab-content" data-tab-content="{name}">...</div>
@@ -269,7 +269,7 @@ else if (targetTab === 'studio')  await scanStudioPage();
 // chat: manual via Scan Chat button
 ```
 
-Studio visibility is gated by `settings.showStudioTab`. `applyStudioTabVisibility()` toggles
+Generated-tab visibility is gated by `settings.showStudioTab` (the tab was called Studio before 1.5.0; ids, classes, functions and the setting key kept the old name). `applyStudioTabVisibility()` toggles
 the `hidden` attribute on both the tab button and the tab-content, and falls back to Sources
 if Studio was active when disabled. Called from `loadSettings` and `saveSettings`.
 
@@ -786,7 +786,7 @@ checks.push({
 Then register a recommendation in `runComprehensiveHealthCheck` if the failure should suggest
 something specific.
 
-## Studio tab internals
+## Studio tab internals (the Generated tab)
 
 Already covered in [Export pipelines](#export-pipelines-deep), but the wiring:
 
@@ -1112,6 +1112,8 @@ The `notifications` permission was removed in 1.4.0: nothing used `chrome.notifi
 download (`triggerItemDownload`); it is not a system notification.
 
 ## Milestone 3b contracts (v1.5.0)
+
+- Generated tab (id `studio`, user-facing name only changed): `scanStudioPage` appends the `elementType === 'source-note'` entries of `scanNotesData` as `{ kind: 'source-note', label, type: 'Note (Sources panel)', sourceIndex }` after the `SCAN_STUDIO_ITEMS` items (a failed notes scan only logs a warning); they download through `exportSingleNote({ index: -1, sourceIndex })` and are never deletable (`isStudioItemDeletable`; row Delete disabled, `handleStudioBulkDelete` skips them and never sends them to `DELETE_STUDIO_ITEM`) until Milestone 3c.
 
 - Full Takeout's ZIP choice is its own: `NLME.takeoutZipChoice(settings)` returns `settings.takeoutZip` when it is a boolean, else `!!settings.autoZip`. The header's `#takeout-zip-checkbox` shows it and saves `settings.takeoutZip` on change (outside `saveSettings`); the Artifacts tab's `#zip-checkbox` only affects Download Selected.
 

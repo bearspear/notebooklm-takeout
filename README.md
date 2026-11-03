@@ -73,7 +73,7 @@ permissions or content scripts.
 
 Open a notebook, then use the tabs in the side panel.
 
-The Notes, Sources, Artifacts and Studio lists each have a toolbar with a filter box that matches
+The Notes, Sources, Artifacts and Generated lists each have a toolbar with a filter box that matches
 titles and types, type chips with counts (shown when there is more than one type), a sort menu
 (notebook order, title A-Z, type) and a **Select all visible** checkbox that only touches the rows
 the filter leaves showing. Rows the filter hides are deselected, so an export never includes
@@ -226,11 +226,14 @@ category fails, the others still run.
 was exported so far is kept) and skips the remaining categories. The root index and
 `errors.md` are still written, so you can see exactly what you got.
 
-### Studio tab (optional)
+### Generated tab (optional)
 
-Enable it under **Settings → Show Studio tab**. It mirrors the Studio panel as one list with
-per-row **Download** and **Delete**, plus bulk actions. Delete asks you first, then confirms
-Gemini Notebook's own dialog.
+Enable it under **Settings → Show the Generated tab**. It lists everything Gemini Notebook
+generated as one list: the items in the Studio panel (notes, audio, slides, reports and so on)
+and the notes in the Sources panel's "Notes" group (type "Note (Sources panel)"). Every row has
+**Download**, and there are bulk actions. Studio items also have **Delete**, which asks you first
+and then confirms Gemini Notebook's own dialog. Sources-panel notes can't be deleted there yet;
+**Delete Selected** skips them and says so. Delete such a note in the Sources panel.
 
 ### Cancelling
 
@@ -257,7 +260,7 @@ are disabled and a second click shows "… is still running".
 | Setting | Default | |
 |---|---|---|
 | Show download notifications | on | In-panel toast when a single download finishes (the extension sends no system notifications) |
-| Show Studio tab | off | Adds the Studio tab |
+| Show the Generated tab | off | Adds the Generated tab (the former Studio tab) |
 | Always use ZIP for batch downloads | off | Default for the Artifacts ZIP toggle, and the starting value of Full Takeout's ZIP checkbox |
 | Slide deck format | PDF | PDF or PowerPoint |
 | Source versions | base + metadata | Any mix of: base, with AI summary & topics, each optionally with images |
@@ -412,7 +415,7 @@ contract with Gemini Notebook, past drift and recipes.
 ## Version history
 
 **1.5.0 (Nov 2026)**: find, retry, finish.
-- Every list (Artifacts, Notes, Sources, Studio) has a filter box, type chips, sorting and
+- Every list (Artifacts, Notes, Sources, Generated) has a filter box, type chips, sorting and
   "Select all visible", with "N of M shown · K selected". Each notebook remembers its choices.
 - The Artifacts tab downloads the selected items ("Download Selected"); everything is selected
   by default. The download button on a Notes row exports just that note.
@@ -484,11 +487,13 @@ contract with Gemini Notebook, past drift and recipes.
 - Sources-panel notes can be exported.
 - New: PDF/PowerPoint choice for slide decks, data table and Flashcards/Quiz detection, and
   the right item is exported when titles repeat.
+- The Studio tab is now the Generated tab and also lists the notes in the Sources panel (download
+  only; they can't be deleted there yet). The setting keeps its saved value.
 - Removed the background polling and the toolbar badge.
 - Added unit tests.
 
 **1.0.x (2026)**:
-- Studio tab and mind map export.
+- Studio tab (now the Generated tab) and mind map export.
 - KaTeX conversion.
 - ProseMirror note support.
 - Domain move to `notebook.google.com`.

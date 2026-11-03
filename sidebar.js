@@ -493,7 +493,7 @@ let settings = {
   // Text cleanup
   cleanOCRArtifacts: true, // Clean OCR garbage (~~~, :~:, etc.) from citation quotes
   // Interface
-  showStudioTab: false, // Show the Studio tab (unified per-item list with delete)
+  showStudioTab: false, // Show the Generated tab (internal id and key stay 'studio'; unified per-item list with delete)
   // Slide deck download format offered by the More menu ('pdf' | 'pptx')
   slidesFormat: 'pdf',
   // Note citations: 'quotes' hovers every marker; 'titles' takes source
@@ -667,7 +667,7 @@ function applyStudioTabVisibility() {
   } else {
     tabBtn.hidden = true;
     tabContent.hidden = true;
-    // If Studio was the active tab, fall back to Sources.
+    // If the Generated tab was the active tab, fall back to Sources.
     if (tabBtn.classList.contains('active')) {
       tabBtn.classList.remove('active');
       tabContent.classList.remove('active');
@@ -865,18 +865,18 @@ function setupEventListeners() {
     dismissWarningBtn.addEventListener('click', hideWarningBanner);
   }
 
-  // Studio tab buttons
+  // Generated tab buttons (internal id 'studio')
   const scanStudioBtn = document.getElementById('scan-studio-btn');
   if (scanStudioBtn) {
     scanStudioBtn.addEventListener('click', scanStudioPage);
   }
   const studioDownloadSelectedBtn = document.getElementById('studio-download-selected-btn');
   if (studioDownloadSelectedBtn) {
-    studioDownloadSelectedBtn.addEventListener('click', () => runExclusive('Studio download', handleStudioBulkDownload));
+    studioDownloadSelectedBtn.addEventListener('click', () => runExclusive('Generated download', handleStudioBulkDownload));
   }
   const studioDeleteSelectedBtn = document.getElementById('studio-delete-selected-btn');
   if (studioDeleteSelectedBtn) {
-    studioDeleteSelectedBtn.addEventListener('click', () => runExclusive('Studio delete', handleStudioBulkDelete));
+    studioDeleteSelectedBtn.addEventListener('click', () => runExclusive('Generated delete', handleStudioBulkDelete));
   }
 }
 
@@ -5216,11 +5216,14 @@ async function triggerItemDownload(tabId, itemIndex, artifactName, artifactType)
   }
 }
 
-// ==================== STUDIO TAB ====================
+// ==================== GENERATED TAB (internal id 'studio') ====================
+// Lists everything Gemini Notebook generated: Studio panel items (SCAN_STUDIO_ITEMS)
+// plus the notes in the Sources panel's "Notes" group (the source-note entries of
+// SCAN_NOTES, download only).
 
 let _studioItems = [];
 let _studioTabId = null;
-// The Studio tab's list controller (sidebar-list.js); replaced on every redraw
+// The Generated tab's list controller (sidebar-list.js); replaced on every redraw
 let _studioListController = null;
 
 function dropStudioList() {
@@ -5237,7 +5240,7 @@ async function scanStudioPage() {
   if (!resultsEl || !countBadge) return;
 
   dropStudioList();
-  resultsEl.innerHTML = '<p class="scanning">Scanning studio items...</p>';
+  resultsEl.innerHTML = '<p class="scanning">Scanning generated items...</p>';
   countBadge.textContent = '0';
 
   try {
@@ -5249,15 +5252,32 @@ async function scanStudioPage() {
 
     await ensureContentScriptLoaded(tab.id);
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_STUDIO_ITEMS' });
-    const items = response?.items || [];
+    const items = [...(response?.items || [])];
+
+    // Notes in the Sources panel's "Notes" group are not in the Studio list. If this
+    // extra scan fails, the Studio items still render.
+    try {
+      const notes = await scanNotesData(tab.id);
+      for (const note of notes) {
+        if (note.elementType !== 'source-note') continue;
+        items.push({
+          kind: 'source-note',
+          label: note.title,
+          type: note.type || 'Note (Sources panel)',
+          sourceIndex: note.sourceIndex
+        });
+      }
+    } catch (noteError) {
+      console.warn('[NotebookLM Takeout] Sources-panel notes scan failed; listing Studio items only:', noteError);
+    }
 
     _studioItems = items;
     _studioTabId = tab.id;
 
     renderStudioList(items);
   } catch (error) {
-    console.error('[NotebookLM Takeout] Studio scan failed:', error);
-    resultsEl.innerHTML = `<p class="error-message">Studio scan failed: ${escapeHtml(error.message || String(error))}</p>`;
+    console.error('[NotebookLM Takeout] Generated scan failed:', error);
+    resultsEl.innerHTML = `<p class="error-message">Generated scan failed: ${escapeHtml(error.message || String(error))}</p>`;
   }
 }
 
@@ -5272,7 +5292,7 @@ function renderStudioList(items) {
   countBadge.textContent = items.length;
 
   if (items.length === 0) {
-    resultsEl.innerHTML = '<p class="empty-message">No studio items found. Generate content in NotebookLM first.</p>';
+    resultsEl.innerHTML = '<p class="empty-message">No generated items found. Generate content in NotebookLM first.</p>';
     if (downloadBulkBtn) downloadBulkBtn.style.display = 'none';
     if (deleteBulkBtn) deleteBulkBtn.style.display = 'none';
     return;
@@ -5287,6 +5307,9 @@ function renderStudioList(items) {
   const rowHtml = (item, idx) => {
     const iconSvg = getIconForType(item.type);
     const detailsStr = item.details ? ` · ${escapeHtml(item.details)}` : '';
+    const deleteBtnAttrs = isStudioItemDeletable(item)
+      ? `title="Delete ${escapeHtml(item.label)}"`
+      : 'disabled title="Delete this note in the Sources panel"';
     return `
         <div class="scan-item-icon">${iconSvg}</div>
         <div class="scan-item-info">
@@ -5299,7 +5322,7 @@ function renderStudioList(items) {
           </svg>
           <span class="download-status"></span>
         </button>
-        <button class="btn-icon studio-delete-btn" data-idx="${idx}" title="Delete ${escapeHtml(item.label)}">
+        <button class="btn-icon studio-delete-btn" data-idx="${idx}" ${deleteBtnAttrs}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
             <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
           </svg>
@@ -5323,7 +5346,7 @@ function renderStudioList(items) {
     const downloadBtn = e.target.closest('.studio-download-btn');
     if (downloadBtn) {
       const idx = parseInt(downloadBtn.dataset.idx, 10);
-      runExclusive('Studio download', () => handleStudioDownloadRow(idx, downloadBtn));
+      runExclusive('Generated download', () => handleStudioDownloadRow(idx, downloadBtn));
       return;
     }
     const deleteBtn = e.target.closest('.studio-delete-btn');
@@ -5333,9 +5356,16 @@ function renderStudioList(items) {
   });
 }
 
-// The bulk buttons follow the selection: disabled at 0, otherwise "... Selected (K)"
+// Sources-panel notes can be downloaded but not deleted here yet (Milestone 3c)
+function isStudioItemDeletable(item) {
+  return item.kind !== 'source-note';
+}
+
+// The bulk buttons follow the selection: disabled at 0, otherwise "... Selected (K)".
+// Delete counts only the deletable selected items (Sources-panel notes never are).
 function updateStudioBulkButtonsState(controller = _studioListController) {
   const n = controller ? controller.selectedCount() : 0;
+  const deletableN = controller ? controller.selectedItems().filter(isStudioItemDeletable).length : 0;
   const downloadBulkBtn = document.getElementById('studio-download-selected-btn');
   const deleteBulkBtn = document.getElementById('studio-delete-selected-btn');
   if (downloadBulkBtn) {
@@ -5343,8 +5373,8 @@ function updateStudioBulkButtonsState(controller = _studioListController) {
     setButtonLabel(downloadBulkBtn, n > 0 ? `Download Selected (${n})` : 'Download Selected');
   }
   if (deleteBulkBtn) {
-    deleteBulkBtn.disabled = n === 0;
-    setButtonLabel(deleteBulkBtn, n > 0 ? `Delete Selected (${n})` : 'Delete Selected');
+    deleteBulkBtn.disabled = deletableN === 0;
+    setButtonLabel(deleteBulkBtn, deletableN > 0 ? `Delete Selected (${deletableN})` : 'Delete Selected');
   }
 }
 
@@ -5375,6 +5405,9 @@ async function handleStudioDownloadRow(idx, btn) {
     if (item.kind === 'artifact') {
       // moreIndex: same index space as the Artifacts tab and DOWNLOAD_ARTIFACT
       await downloadArtifact(_studioTabId, item.moreIndex, item.type, item.label);
+    } else if (item.kind === 'source-note') {
+      // A note from the Sources panel: EXTRACT_NOTE opens it by sourceIndex (as the Notes tab does)
+      await exportSingleNote({ index: -1, sourceIndex: item.sourceIndex, title: item.label, type: item.type });
     } else {
       // kind === 'note' — regular note or mindmap
       await exportSingleNote({ index: item.kindIndex, title: item.label, type: item.type });
@@ -5390,7 +5423,7 @@ async function handleStudioDownloadRow(idx, btn) {
 
 async function handleStudioDeleteRow(idx, btn) {
   const item = _studioItems[idx];
-  if (!item) return;
+  if (!item || !isStudioItemDeletable(item)) return;
 
   if (!confirm(`Delete "${item.label}"? This cannot be undone.`)) return;
 
@@ -5433,17 +5466,22 @@ async function handleStudioBulkDownload() {
     }
   }
 
-  showToast(`Downloaded ${okCount}/${selectedIdxs.length} studio item(s)`, okCount === selectedIdxs.length ? 'success' : 'warning');
+  showToast(`Downloaded ${okCount}/${selectedIdxs.length} generated item(s)`, okCount === selectedIdxs.length ? 'success' : 'warning');
   updateStudioBulkButtonsState();
 }
 
 async function handleStudioBulkDelete() {
-  // Only what is selected (and so visible) is deleted; the dialog names that count
-  const selectedLabels = (_studioListController ? _studioListController.selectedItems() : [])
-    .map(item => item.label);
+  // Only what is selected (and so visible) is deleted; the dialog names that count.
+  // Sources-panel notes cannot be deleted here yet: they are skipped, never sent.
+  const selectedItems = _studioListController ? _studioListController.selectedItems() : [];
+  const selectedLabels = selectedItems.filter(isStudioItemDeletable).map(item => item.label);
+  const skippedCount = selectedItems.length - selectedLabels.length;
   if (selectedLabels.length === 0) return;
 
-  if (!confirm(`Delete ${selectedLabels.length} item(s)? This cannot be undone.`)) return;
+  const skippedNote = skippedCount > 0
+    ? ` ${skippedCount} Sources-panel note${skippedCount === 1 ? '' : 's'} will be skipped.`
+    : '';
+  if (!confirm(`Delete ${selectedLabels.length} item(s)${skippedNote} This cannot be undone.`)) return;
 
   const bulkBtn = document.getElementById('studio-delete-selected-btn');
   if (bulkBtn) bulkBtn.disabled = true;
@@ -5472,7 +5510,7 @@ async function handleStudioBulkDelete() {
     }
   }
 
-  showToast(`Deleted ${okCount}/${selectedLabels.length} studio item(s)`, okCount === selectedLabels.length ? 'success' : 'warning');
+  showToast(`Deleted ${okCount}/${selectedLabels.length} generated item(s)`, okCount === selectedLabels.length ? 'success' : 'warning');
   await scanStudioPage();
 }
 
