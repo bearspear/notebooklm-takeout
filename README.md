@@ -152,8 +152,10 @@ The quoted passage from the source…
 The 📦 **Full Takeout** button in the panel header exports the whole notebook in one run:
 sources, then notes, then chat, then artifacts. It scans each category first, so the progress
 shows what is coming; a category with nothing in it is reported as "none in notebook". It
-uses your Settings (versions, citation detail, slide format) and the Artifacts tab's **Zip**
-toggle (the saved "Always use ZIP" setting until you open that tab). Chat follows
+uses your Settings (versions, citation detail, slide format). Its own **ZIP** checkbox sits next
+to the button: ticked gives one ZIP per category, unticked a folder in Downloads. The choice is
+remembered; until you change it, it follows the "Always use ZIP" setting. The Artifacts tab's
+**Zip** toggle no longer affects Full Takeout (it only applies to Download Selected). Chat follows
 ⚙️ **Citation detail** too, the same as the Chat tab (Full quotes, Source titles only or No
 citations). Every Slides artifact is saved twice, as `.pdf` and `.pptx`, whatever the slide
 format setting says (the Artifacts tab still uses that setting). Notes, sources and chat also
@@ -247,7 +249,7 @@ are disabled and a second click shows "… is still running".
 |---|---|---|
 | Show download notifications | on | In-panel toast when a single download finishes (the extension sends no system notifications) |
 | Show Studio tab | off | Adds the Studio tab |
-| Always use ZIP for batch downloads | off | Default for the Artifacts ZIP toggle, also used by Full Takeout |
+| Always use ZIP for batch downloads | off | Default for the Artifacts ZIP toggle, and the starting value of Full Takeout's ZIP checkbox |
 | Slide deck format | PDF | PDF or PowerPoint |
 | Source versions | base + metadata | Any mix of: base, with AI summary & topics, each optionally with images |
 | Citation detail (notes and chat) | Full quotes | "Source titles only" skips reading each citation's popup: much faster, every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. |

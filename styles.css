@@ -465,6 +465,30 @@ footer {
   flex: 1;
 }
 
+/* Full Takeout button with its own ZIP choice, in the header */
+.takeout-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.takeout-zip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.takeout-zip input {
+  cursor: pointer;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
 .zip-checkbox {
   display: flex;
   align-items: center;

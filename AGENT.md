@@ -1056,8 +1056,8 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined out
   loops `NLME.slideFormatsFor(type, …)` and calls `fetchArtifactFiles(…, { slidesFormat })` once per
   format with the same stem (`extensionFor({ format })` guesses `.pdf`/`.pptx`); one format failing
   warns, all failing fails the item. Tab downloads keep the single `settings.slidesFormat`.
-- **ZIP on** (`takeoutZipEnabled`: the Artifacts tab's Zip checkbox once rendered, else
-  `settings.autoZip`): one ZIP per category, `<Notebook>-takeout-<category>-<ts>[-PARTIAL]
+- **ZIP on** (`takeoutZipEnabled`: the header's `#takeout-zip-checkbox`, else
+  `NLME.takeoutZipChoice(settings)`): one ZIP per category, `<Notebook>-takeout-<category>-<ts>[-PARTIAL]
   [-partNofM].zip`, plus `<Notebook>-takeout-index-<ts>.zip`. Paths are prefixed
   `<Notebook>/<category>/`, so unzipping everything into one folder gives one tree.
 - **ZIP off**: `Downloads/<Notebook> takeout <ts>/<root>/…`: the same `<root>/` tree sits
@@ -1108,6 +1108,8 @@ The `notifications` permission was removed in 1.4.0: nothing used `chrome.notifi
 download (`triggerItemDownload`); it is not a system notification.
 
 ## Milestone 3b contracts (v1.5.0)
+
+- Full Takeout's ZIP choice is its own: `NLME.takeoutZipChoice(settings)` returns `settings.takeoutZip` when it is a boolean, else `!!settings.autoZip`. The header's `#takeout-zip-checkbox` shows it and saves `settings.takeoutZip` on change (outside `saveSettings`); the Artifacts tab's `#zip-checkbox` only affects Download Selected.
 
 ### List controller (`sidebar-list.js`)
 

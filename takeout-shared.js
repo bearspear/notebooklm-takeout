@@ -53,6 +53,13 @@
     return detail === 'titles' || detail === 'none' ? detail : 'quotes';
   }
 
+  // Full Takeout's own ZIP choice (the checkbox next to its button): takeoutZip when it has
+  // been set (a boolean), else the "Always use ZIP" setting (autoZip).
+  function takeoutZipChoice(settings) {
+    if (settings && typeof settings.takeoutZip === 'boolean') return settings.takeoutZip;
+    return !!(settings && settings.autoZip);
+  }
+
   function isDownloadableType(type) {
     return !NOT_DOWNLOADABLE.includes(type);
   }
@@ -1454,6 +1461,7 @@ footer { margin-top: 3rem; }
     resolveArtifactType,
     isDownloadableType,
     chatCitationMode,
+    takeoutZipChoice,
     CITATION_TOOLTIP_SELECTOR,
     isCitationExpander,
     parseCitationIndex,

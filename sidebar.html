@@ -27,7 +27,10 @@
       </div>
       <h1>NotebookLM Takeout</h1>
       <p class="subtitle">Export audio, slides, notes & sources</p>
-      <button id="full-takeout-btn" class="btn btn-primary btn-small" style="margin-top: 8px;" title="Export all sources, notes, chat and artifacts of this notebook in one run">📦 Full Takeout</button>
+      <div class="takeout-row">
+        <button id="full-takeout-btn" class="btn btn-primary btn-small" title="Export all sources, notes, chat and artifacts of this notebook in one run">📦 Full Takeout</button>
+        <label class="takeout-zip" title="Save the takeout as one ZIP per category (unchecked: a folder in Downloads)"><input type="checkbox" id="takeout-zip-checkbox"> ZIP</label>
+      </div>
     </header>
 
     <div id="status" class="status">

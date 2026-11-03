@@ -1147,3 +1147,10 @@ test('composeOutcome leaves the error note off a cancelled run', () => {
   const o = NLME.composeOutcome({ kind: 'notes', selected: 4, result: { exported: 2, failed: 0, cancelled: true }, errorNote: 'x' });
   assert.doesNotMatch(o.message, /\(x\)/);
 });
+
+test('takeoutZipChoice uses takeoutZip when it is a boolean, else autoZip', () => {
+  assert.equal(NLME.takeoutZipChoice({ takeoutZip: true, autoZip: false }), true);
+  assert.equal(NLME.takeoutZipChoice({ takeoutZip: false, autoZip: true }), false);
+  assert.equal(NLME.takeoutZipChoice({ autoZip: true }), true);
+  assert.equal(NLME.takeoutZipChoice({}), false);
+});

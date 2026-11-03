@@ -475,6 +475,7 @@ let autoRefreshInterval = null;
 let settingsLoaded = false;
 let settings = {
   autoZip: false,
+  takeoutZip: undefined, // Full Takeout's own ZIP choice; not set until the user ticks its checkbox
   showNotifications: true,
   refreshInterval: 10,
   // Source export versions (which combinations to create)
@@ -551,7 +552,8 @@ function disableExportButtons() {
     'export-chat-btn',
     'scan-sources-btn',
     'scan-chat-btn',
-    'full-takeout-btn'
+    'full-takeout-btn',
+    'takeout-zip-checkbox'
   ];
 
   exportButtons.forEach(id => {
@@ -570,7 +572,8 @@ function enableExportButtons() {
     'export-chat-btn',
     'scan-sources-btn',
     'scan-chat-btn',
-    'full-takeout-btn'
+    'full-takeout-btn',
+    'takeout-zip-checkbox'
   ];
 
   exportButtons.forEach(id => {
@@ -613,6 +616,7 @@ async function loadSettings() {
 
   // Apply settings to UI
   document.getElementById('auto-zip-checkbox').checked = settings.autoZip;
+  document.getElementById('takeout-zip-checkbox').checked = NLME.takeoutZipChoice(settings);
   document.getElementById('show-notifications-checkbox').checked = settings.showNotifications;
   document.getElementById('refresh-interval-input').value = settings.refreshInterval;
 
@@ -734,6 +738,11 @@ function setupEventListeners() {
 
   // Full Takeout: the whole notebook in one run (sidebar-takeout.js)
   document.getElementById('full-takeout-btn')?.addEventListener('click', () => runExclusive('Full Takeout', runFullTakeout));
+  // Its ZIP choice is saved on its own (settings.takeoutZip); the settings panel need not be open
+  document.getElementById('takeout-zip-checkbox')?.addEventListener('change', (e) => {
+    settings.takeoutZip = e.target.checked;
+    chrome.storage.local.set({ settings });
+  });
 
   // Health check panel
   // The health check hovers real citations, so it must never run during an
@@ -2621,7 +2630,7 @@ async function runExclusive(name, fn) {
   // blocked too. Mark them: a scan may replace a control with a clone (the
   // chat Export button), and the clone must be re-enabled too, so restore
   // by the mark, not by the original element.
-  Array.from(document.querySelectorAll('.tab-content button, .tab-content input, #full-takeout-btn'))
+  Array.from(document.querySelectorAll('.tab-content button, .tab-content input, #full-takeout-btn, #takeout-zip-checkbox'))
     .filter(el => !el.disabled && el.id !== 'cancel-download-btn')
     .forEach(el => { el.disabled = true; el.setAttribute('data-job-disabled', ''); });
   try {

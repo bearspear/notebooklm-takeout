@@ -343,11 +343,12 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
 
 // ---- Full Takeout (Milestone 3a) ----
 
-// The ZIP setting: the Artifacts tab's Zip checkbox when that tab has been
-// scanned (the checkbox is rendered with its results), else the saved setting
+// The ZIP setting: the checkbox next to the Full Takeout button, else the saved
+// choice (takeoutZip, falling back to autoZip). The Artifacts tab's Zip tick
+// only affects Download Selected.
 function takeoutZipEnabled() {
-  const checkbox = document.getElementById('zip-checkbox');
-  return checkbox ? checkbox.checked : !!settings.autoZip;
+  const checkbox = document.getElementById('takeout-zip-checkbox');
+  return checkbox ? checkbox.checked : NLME.takeoutZipChoice(settings);
 }
 
 /**
