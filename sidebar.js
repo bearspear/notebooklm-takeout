@@ -5414,7 +5414,7 @@ async function handleStudioDownloadRow(idx, btn) {
     }
     setStudioRowStatus(btn, 'success');
   } catch (error) {
-    console.error('[NotebookLM Takeout] Studio download failed:', error);
+    console.error('[NotebookLM Takeout] Generated download failed:', error);
     showToast(`✗ Failed to download ${item.label}: ${error.message || error}`, 'error');
     setStudioRowStatus(btn, 'error');
     throw error;
@@ -5441,7 +5441,7 @@ async function handleStudioDeleteRow(idx, btn) {
     // Refresh the list so indices are re-aligned with the DOM.
     await scanStudioPage();
   } catch (error) {
-    console.error('[NotebookLM Takeout] Studio delete failed:', error);
+    console.error('[NotebookLM Takeout] Generated delete failed:', error);
     showToast(`✗ Failed to delete ${item.label}: ${error.message || error}`, 'error');
     if (btn) btn.disabled = false;
   }

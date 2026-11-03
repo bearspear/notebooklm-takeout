@@ -435,6 +435,8 @@ contract with Gemini Notebook, past drift and recipes.
   errors; unreadable chats count the messages on the page; downloads keep their real file
   extension (e.g. `.jpeg`); names that differ only in Unicode form no longer overwrite each other;
   Download All and Retry use the tab they were started from.
+- The Studio tab is now the Generated tab and also lists the notes in the Sources panel (download
+  only; they can't be deleted there yet). The setting keeps its saved value.
 
 **1.4.0 (Nov 2026)**: one-click Full Takeout and one layout everywhere.
 - New **Full Takeout** (📦): sources, notes, chat and artifacts of a notebook in one run, as one
@@ -487,8 +489,6 @@ contract with Gemini Notebook, past drift and recipes.
 - Sources-panel notes can be exported.
 - New: PDF/PowerPoint choice for slide decks, data table and Flashcards/Quiz detection, and
   the right item is exported when titles repeat.
-- The Studio tab is now the Generated tab and also lists the notes in the Sources panel (download
-  only; they can't be deleted there yet). The setting keeps its saved value.
 - Removed the background polling and the toolbar badge.
 - Added unit tests.
 

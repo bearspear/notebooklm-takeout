@@ -29,7 +29,7 @@ the table of contents to jump.
 11. [KaTeX → LaTeX conversion](#katex--latex-conversion)
 12. [Mindmap extraction](#mindmap-extraction)
 13. [DOM health check](#dom-health-check)
-14. [Studio tab internals](#studio-tab-internals)
+14. [Studio tab internals](#studio-tab-internals-the-generated-tab)
 15. [Drift patterns Google has shipped](#drift-patterns-google-has-shipped)
 16. [Known issues and latent bugs](#known-issues-and-latent-bugs)
 17. [Recipes](#recipes)
@@ -173,7 +173,7 @@ Line numbers drift with every change, so anchors are names: `grep -n "<name>" <f
 | Extract / build / scan data | `extractSourceItem` / `buildSourcesFiles`, `extractNoteItem` / `buildNotesFiles`, `extractChatPair` / `buildChatAuditDoc` / `buildChatFiles`, `fetchArtifactFiles`; `scanSourcesData`, `scanNotesData`, `scanChatData`, `scanArtifactsData` (sidebar.js) |
 | File writer, shell, Full Takeout | `saveFiles`, `fetchDownload`, `withExportShell`, `runFullTakeout` (sidebar-takeout.js); `NLME.runExportJob` (takeout-job.js) |
 | Note Markdown (citations, Sources section) | `function convertToMarkdown` (sidebar.js) |
-| Studio tab | `scanStudioPage`, `handleStudioDownloadRow`, `exportSingleNote` (sidebar.js) |
+| Generated tab (id `studio`) | `scanStudioPage`, `handleStudioDownloadRow`, `exportSingleNote` (sidebar.js) |
 | Content message dispatcher | `chrome.runtime.onMessage.addListener` near the top of content.js |
 | Note extraction | `extractNoteContent`, `extractTailwindNoteContent`, `extractSourcesPanelNote` (content.js) |
 | Citation hover | `extractSingleCitationWithRetry` (content.js) |
@@ -213,7 +213,7 @@ Storage: `chrome.storage.local`, single key `settings`. Defaults in `let setting
   cleanOCRArtifacts: true,                   // scrub ~~~, :~:, etc. from quotes
 
   // Interface
-  showStudioTab: false,                      // gate the optional Studio tab
+  showStudioTab: false,                      // gate the optional Generated tab
 
   // Downloads
   slidesFormat: 'pdf',                       // 'pdf' | 'pptx' — slide deck More-menu item
@@ -343,7 +343,7 @@ side panel.
 
 1. `scanNotesPage` → `SCAN_NOTES` → content returns notes from the Studio list
    (`artifact-library-note`, icon in `NLME.NOTE_ICONS`) plus Sources-panel notes
-   (`index: -1`, `sourceIndex`). Mind maps are Studio artifacts now (Artifacts tab).
+   (`index: -1`, `sourceIndex`, `elementType: 'source-note'`; the Generated tab reads those entries too). Mind maps are Studio artifacts now (Artifacts tab).
 2. `exportNotesAsMarkdown(selected)`:
    - Pre-flight: `CHECK_DOM_HEALTH` with type=notes; if unhealthy, show warning dialog.
    - Show page overlay (`SHOW_EXPORT_OVERLAY`).
@@ -476,7 +476,7 @@ repeats become `-2`, `-3` (`NLME.uniqueStems`).
    - `combinedIndex` — position in the combined DOM walk (stable identifier for delete)
    - `kindIndex` — position within its own kind (`artifact` or `note`)
    - `moreIndex` — index among `artifact-library-item`s that have a More button; this is
-     the index every artifact download uses (Artifacts tab, Studio tab, batch)
+     the index every artifact download uses (Artifacts tab, Generated tab, batch)
    - `downloadable` — false for Flashcards / Quiz
    - `kind` — `'artifact'` | `'note'`
    - `label` (title), `details`, `type`, `hasMoreButton`
@@ -1314,7 +1314,7 @@ loose files in `mind-maps/`. This asymmetry is intentional but worth knowing.
 ### 7. Flashcards and Quiz are not exportable
 
 They have no Download item in the More menu. They are listed but disabled in the
-Artifacts tab. Rows in the Studio tab are still clickable and fail with an error.
+Artifacts tab. Rows in the Generated tab are still clickable and fail with an error.
 
 ### 8. Follow-ups from the PR #2 review (deferred, minor)
 
@@ -1432,16 +1432,17 @@ Export checks that catch real bugs (scripted against the unzipped export):
 7. Export one artifact of each type. Confirm files land with correct prefix and extension.
 8. Export chat. Confirm filename uses the real project title.
 
-### Studio tab check (when touching Studio code)
+### Generated tab check (when touching Studio code)
 
-1. Enable Show Studio tab in Settings.
-2. Switch to Studio → Scan Studio. Confirm the list mirrors NotebookLM's right column.
+1. Enable Show the Generated tab in Settings.
+2. Switch to Generated → Scan Generated. Confirm the list mirrors NotebookLM's right column plus the notes in the Sources panel's "Notes" group.
 3. Row download for each kind: artifact, note, mindmap.
 4. Row delete on a disposable note. Confirm the sidebar confirm appears, NotebookLM's
    dialog auto-confirms, the row disappears, and the rescan completes.
 5. Bulk select 2–3 items → Download Selected. Confirm sequential downloads with status.
 6. Bulk delete 2–3 items. Confirm 1s settle delay between deletes.
-7. Disable Show Studio tab. Confirm the tab disappears and a non-studio tab activates.
+7. Sources-panel notes: confirm they appear (type "Note (Sources panel)"), download, and have a disabled row Delete; Delete Selected skips them and the confirm says so.
+8. Disable Show the Generated tab. Confirm the tab disappears and a non-Generated tab activates.
 
 ### Syntax and unit tests
 
