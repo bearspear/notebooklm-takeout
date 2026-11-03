@@ -1762,8 +1762,17 @@ footer { margin-top: 3rem; }
   async function citationCacheClear(storage) {
     if (!storage) return false;
     try {
-      const all = await storage.get(null);
-      const keys = Object.keys(all || {}).filter(k => k.startsWith('nlme.cite.'));
+      // Never load all of storage when the keys can be listed another way:
+      // getKeys (newer Chrome), else the buckets the meta map lists
+      let names = null;
+      if (typeof storage.getKeys === 'function') {
+        names = await storage.getKeys();
+      } else {
+        const meta = ((await storage.get(CITE_META_KEY)) || {})[CITE_META_KEY];
+        if (meta && typeof meta === 'object') names = [...Object.keys(meta), CITE_META_KEY];
+      }
+      if (!Array.isArray(names)) names = Object.keys((await storage.get(null)) || {});
+      const keys = names.filter(k => typeof k === 'string' && k.startsWith('nlme.cite.'));
       if (keys.length) await storage.remove(keys);
       return true;
     } catch (e) {

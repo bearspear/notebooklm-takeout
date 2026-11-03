@@ -1430,9 +1430,33 @@ test('citation cache helpers never throw on storage errors or a missing notebook
 });
 
 test('citationCacheClear removes every nlme.cite.* key and nothing else', async () => {
-  const st = fakeStorage({ settings: { a: 1 }, 'nlme.cite.nb1': { entries: {} }, 'nlme.cite.meta': {}, 'nlme.other': 1 });
+  const st = fakeStorage({ settings: { a: 1 }, 'nlme.cite.nb1': { entries: {} }, 'nlme.cite.meta': { 'nlme.cite.nb1': 1 }, 'nlme.other': 1 });
   assert.equal(await NLME.citationCacheClear(st), true);
   assert.deepEqual(Object.keys(st.data).sort(), ['nlme.other', 'settings']);
+});
+
+test('citationCacheClear lists keys with getKeys instead of loading all of storage', async () => {
+  const st = fakeStorage({ settings: { a: 1 }, 'nlme.cite.nb1': { entries: {} }, 'nlme.cite.meta': {}, 'nlme.other': 1 });
+  const plainGet = st.get;
+  st.get = async keys => { if (keys === null || keys === undefined) throw new Error('get(null) must not be used'); return plainGet(keys); };
+  st.getKeys = async () => Object.keys(st.data);
+  assert.equal(await NLME.citationCacheClear(st), true);
+  assert.deepEqual(Object.keys(st.data).sort(), ['nlme.other', 'settings']);
+});
+
+test('citationCacheClear without getKeys removes the buckets the meta map lists, then the meta', async () => {
+  const st = fakeStorage({ settings: { a: 1 }, 'nlme.cite.nb1': { entries: {} }, 'nlme.cite.nb2': { entries: {} },
+    'nlme.cite.meta': { 'nlme.cite.nb1': 1, 'nlme.cite.nb2': 2 }, 'nlme.other': 1 });
+  const plainGet = st.get;
+  st.get = async keys => { if (keys === null || keys === undefined) throw new Error('get(null) must not be used'); return plainGet(keys); };
+  assert.equal(await NLME.citationCacheClear(st), true);
+  assert.deepEqual(Object.keys(st.data).sort(), ['nlme.other', 'settings']);
+});
+
+test('citationCacheClear falls back to get(null) only when nothing else tells the keys', async () => {
+  const st = fakeStorage({ settings: { a: 1 }, 'nlme.cite.nb1': { entries: {} } });
+  assert.equal(await NLME.citationCacheClear(st), true);
+  assert.deepEqual(Object.keys(st.data), ['settings']);
 });
 
 test('citationSourcesComplete accepts only full sets with quotes', () => {
