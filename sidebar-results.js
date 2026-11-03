@@ -9,18 +9,28 @@
  *
  * @param {object} options
  * @param {string} options.message the outcome line (NLME.composeOutcome)
+ * @param {string[]} [options.lines] more lines under it, one per category
+ *   (a Full Takeout retry's combined panel); plain text, escaped here
  * @param {'success'|'warning'|'error'|'info'} [options.level] its colour
  * @param {string[]} [options.saved] ZIP names, or the Downloads folder name
  * @param {Array} [options.errors] the runner's errors (strings and objects)
  * @param {{ count: number, run: () => Promise<void> }|null} [options.retry]
  *   a "Retry N failed" button; `run` starts the retry (it clears this panel
  *   itself by starting an export)
+ * @param {boolean} [options.notify] show the short "finished" toast (default
+ *   true; false when an earlier panel is put back)
+ *
+ * The panel can sit below a long list: it is scrolled into view and a short
+ * toast points at it (the panel holds the detail).
  */
-function showResults({ message, level = 'info', saved = [], errors = [], retry = null } = {}) {
+function showResults({ message, lines = [], level = 'info', saved = [], errors = [], retry = null, notify = true } = {}) {
   const panel = document.getElementById('results-panel');
   if (!panel) return;
   const esc = NLME.escapeHtml;
 
+  const linesHtml = lines.length
+    ? `<ul class="results-lines">${lines.map(line => `<li>${esc(String(line))}</li>`).join('')}</ul>`
+    : '';
   const groups = NLME.groupErrorsForPanel(errors);
   const savedHtml = saved.length
     ? `<div class="results-saved"><strong>Saved:</strong><ul>${saved.map(name => `<li>${esc(String(name))}</li>`).join('')}</ul></div>`
@@ -37,6 +47,7 @@ function showResults({ message, level = 'info', saved = [], errors = [], retry =
 
   panel.innerHTML = `
     <p class="results-message results-${esc(level)}">${esc(message || '')}</p>
+    ${linesHtml}
     ${savedHtml}
     ${groupsHtml}
     <div class="results-actions">
@@ -44,6 +55,8 @@ function showResults({ message, level = 'info', saved = [], errors = [], retry =
       <button type="button" class="btn btn-secondary results-dismiss">Dismiss</button>
     </div>`;
   panel.style.display = 'block';
+  panel.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  if (notify) showToast('Export finished \u2014 see results below', level);
 
   panel.querySelector('.results-dismiss').addEventListener('click', hideResults);
 

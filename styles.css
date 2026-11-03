@@ -1677,6 +1677,16 @@ body.job-running #rescan-btn {
   color: #3c4043;
 }
 
+.results-lines {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  color: #3c4043;
+}
+
+.results-lines li {
+  overflow-wrap: anywhere;
+}
+
 .results-saved ul,
 .results-group ul {
   margin: 4px 0 0;
