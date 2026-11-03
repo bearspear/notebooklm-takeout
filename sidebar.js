@@ -994,8 +994,20 @@ function notebookSwitchedTo(tab) {
 // has drawn the new notebook, and the content-script scans read the DOM as it
 // is (no waits), so wait, then rescan only if the tab still shows that notebook.
 async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}) {
-  refreshResumeBanner(); // follows the active tab's notebook, switched or not
-  if (notebookSwitchedTo(tab)) {
+  const switched = notebookSwitchedTo(tab);
+  if (settleMs) {
+    // The URL names the new notebook before the page has drawn it: no Resume
+    // (it would scan the old notebook's lists) until the settle wait is over
+    resumeBannerSeq++; // drops a check still waiting on storage
+    hideResumeBanner();
+  } else {
+    refreshResumeBanner(); // follows the active tab's notebook, switched or not
+  }
+  if (!switched && settleMs) {
+    await new Promise(resolve => setTimeout(resolve, settleMs));
+    refreshResumeBanner();
+  }
+  if (switched) {
     resetChatPanel();
     const recordedId = lastPanelNotebookId;
     if (settleMs) {
@@ -1004,8 +1016,10 @@ async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}
       if (!now || now.id !== tab.id || NLME.notebookIdFromUrl(now.url) !== recordedId) {
         // Nothing was rescanned: forget the id (unless a newer event replaced it) so the next event does
         if (lastPanelNotebookId === recordedId) lastPanelNotebookId = '';
+        refreshResumeBanner();
         return;
       }
+      refreshResumeBanner();
     }
     await rescanOpenPanelTab();
   } else if (sameNotebookScan && !jobLock.current()) {
@@ -1041,7 +1055,7 @@ async function refreshResumeBanner() {
     if (seq !== resumeBannerSeq) return;
     if (jobLock.current() || !NLME.jobRecordUsable(record, notebookId)) { hideResumeBanner(); return; }
     showResumeBanner(record, {
-      onResume: () => resumeJob(record),
+      onResume: () => { resumeBannerSeq++; return resumeJob(record); }, // a check in flight must not re-show it
       onDiscard: () => discardJobRecord(record)
     });
   } catch (error) {
@@ -1053,6 +1067,7 @@ async function refreshResumeBanner() {
 // Discard: remove the record the banner showed, but only if it is still that one
 // (a newer export may have replaced it since).
 async function discardJobRecord(record) {
+  resumeBannerSeq++; // a check in flight must not put the banner back
   try {
     const key = NLME.jobRecordKey(record.notebookId);
     const stored = (await chrome.storage.local.get(key))[key];

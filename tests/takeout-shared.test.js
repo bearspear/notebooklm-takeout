@@ -1453,3 +1453,51 @@ test('jobRecordUsable accepts only a whole record of this notebook with items le
   assert.equal(NLME.jobRecordUsable({ notebookId: 'nb', remaining: [], failed: {} }, 'nb'), false);
   assert.equal(NLME.jobRecordUsable({ notebookId: 'nb', id: 'x' }, 'nb'), false);
 });
+
+test('planResume: a scan that matches nothing proves nothing is gone', () => {
+  const by = { titleOf: i => i.title, typeOf: i => i.type };
+  const items = [{ title: 'Other', type: 'Note' }];
+  const r = NLME.planResume(['Note\u0000A', 'Note\u0000B'], items, by);
+  assert.deepEqual(r, { matched: [], missing: [], unknown: ['Note\u0000A', 'Note\u0000B'] });
+});
+
+test('planResume: with matches, absent keys are missing', () => {
+  const by = { titleOf: i => i.title, typeOf: i => i.type };
+  const items = [{ title: 'A', type: 'Note' }, { title: 'B', type: 'Note' }];
+  const r = NLME.planResume(['Note\u0000A', 'Note\u0000Gone'], items, by);
+  assert.deepEqual(r.matched, [items[0]]);
+  assert.deepEqual(r.missing, ['Note\u0000Gone']);
+  assert.deepEqual(r.unknown, []);
+});
+
+test('planResume decides missing per region when regionOfType is given', () => {
+  const SRC = 'Note (Sources panel)';
+  const by = { titleOf: i => i.title, typeOf: i => i.type, regionOfType: t => (t === SRC ? 'sources' : 'studio') };
+  // Only the Sources-panel notes were drawn: Studio keys are unknown, not missing
+  const onlySourcePanel = [{ title: 'S1', type: SRC }];
+  const keys = ['Note\u0000Studio1', `${SRC}\u0000S1`, `${SRC}\u0000S-gone`];
+  const r = NLME.planResume(keys, onlySourcePanel, by);
+  assert.deepEqual(r.matched, onlySourcePanel);
+  assert.deepEqual(r.unknown, ['Note\u0000Studio1']);
+  assert.deepEqual(r.missing, [`${SRC}\u0000S-gone`]);
+  // Both regions drawn: a gone Studio key is missing
+  const both = [{ title: 'S1', type: SRC }, { title: 'Other', type: 'Note' }];
+  const r2 = NLME.planResume(keys, both, by);
+  assert.deepEqual(r2.missing.sort(), ['Note\u0000Studio1', `${SRC}\u0000S-gone`].sort());
+  assert.deepEqual(r2.unknown, []);
+});
+
+test('groupErrorsForPanel lists panel-only resume errors in full', () => {
+  const errs = Array.from({ length: 25 }, (_, i) => ({ type: 'not_found', title: 'Notes', message: `n${i} is no longer in the notebook` }));
+  const g = NLME.groupErrorsForPanel(errs);
+  assert.equal(g[0].entries.length, 25);
+  assert.equal(g[0].more, 0);
+  const real = NLME.groupErrorsForPanel(Array.from({ length: 25 }, (_, i) => `[x${i}] boom`));
+  assert.equal(real[0].more, 5);
+});
+
+test('resumeBannerText says export unless the label is a takeout', () => {
+  assert.equal(NLME.resumeBannerLabel({ kind: 'notes', label: 'Notes' }), 'Notes export');
+  assert.equal(NLME.resumeBannerLabel({ kind: 'takeout', label: 'Full Takeout' }), 'Full Takeout');
+  assert.equal(NLME.resumeBannerLabel({}), 'export');
+});

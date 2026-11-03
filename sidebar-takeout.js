@@ -744,7 +744,9 @@ function takeoutRetry(failed, tabId, restore) {
 // Resume's fresh scan per job-record category (full lists, like the tab lists).
 const RESUME_CATEGORIES = [
   { category: 'sources', name: 'Sources', scan: async tabId => (await scanSourcesData(tabId)).sources },
-  { category: 'notes', name: 'Notes', scan: tabId => scanNotesData(tabId) },
+  // Studio notes and the Sources panel's notes are drawn separately: a key is gone
+  // only if the scan shows its own region (see NLME.planResume)
+  { category: 'notes', name: 'Notes', scan: tabId => scanNotesData(tabId), regionOfType: type => (type === 'Note (Sources panel)' ? 'sources-panel' : 'studio') },
   { category: 'artifacts', name: 'Artifacts', scan: tabId => scanArtifactsData(tabId) }
 ];
 
@@ -806,38 +808,54 @@ function resumeJob(record) {
     }
 
     // Find the items again, category by category
-    showToast('Checking what is left…', 'info');
+    showToast('Checking what is left\u2026', 'info');
+    // The tab must still show the record's notebook right before each scan and
+    // again after it (in-app navigation changes the URL before the page is drawn)
+    const onNotebook = async () => {
+      try {
+        const now = await chrome.tabs.get(tabId);
+        return isNotebookUrl(now.url) && NLME.notebookIdFromUrl(now.url) === record.notebookId;
+      } catch (_) { return false; }
+    };
     const itemsByName = {};
     const missingByCategory = {};
     const extraErrors = [];
-    for (const { category, name, scan } of RESUME_CATEGORIES) {
+    for (const { category, name, scan, regionOfType } of RESUME_CATEGORIES) {
       const keys = NLME.jobResumeKeys(live, category);
       if (keys.length === 0) continue;
       if (chainCancelRequested) { showToast('Resume cancelled', 'info'); return; }
+      if (!(await onNotebook())) {
+        showToast('The tab left that notebook; resume stopped', 'warning');
+        return;
+      }
       let items;
       try {
         items = await scan(tabId);
-        stampJobKeys(category, items); // over the full scan, before any subset is cut
       } catch (error) {
         console.error(`[NotebookLM Takeout] Resume: ${name} scan failed:`, error);
-        extraErrors.push({ type: 'error', title: name, message: `Could not scan ${name.toLowerCase()} (${(error && error.message) || error}); its items stay in the list to resume` });
+        extraErrors.push({ type: 'scan_failed', title: name, message: `Could not scan ${name.toLowerCase()} (${(error && error.message) || error}); its items stay in the list to resume` });
         continue;
       }
-      // An empty scan (the page still drawing, a failed read) cannot tell us that
-      // every item is gone: clearing them all would lose the record
-      if (items.length === 0) {
-        extraErrors.push({ type: 'error', title: name, message: `Found no ${name.toLowerCase()} in the notebook (the page may still be loading); its items stay in the list to resume` });
-        continue;
+      if (!(await onNotebook())) {
+        showToast('The tab left that notebook; resume stopped', 'warning');
+        return;
       }
-      const { matched, missing } = NLME.matchResumeItems(keys, items, JOB_KEY_ACCESSORS[category]);
+      stampJobKeys(category, items); // over the full scan, before any subset is cut
+      // NLME.planResume: a scan that matches nothing (empty, still drawing, the wrong
+      // page) or lacks a whole region (Studio notes not drawn) cannot say a key is
+      // gone; those keys are `unknown`, reported and kept in the record
+      const { matched, missing, unknown } = NLME.planResume(keys, items, { ...JOB_KEY_ACCESSORS[category], regionOfType });
       let runnable = matched;
       if (category === 'artifacts') {
         runnable = matched.filter(item => !item.disabled);
         for (const item of matched.filter(item => item.disabled)) {
-          extraErrors.push({ type: 'error', title: name, message: `${item.label} is not ready to download; it stays in the list to resume` });
+          extraErrors.push({ type: 'not_ready', title: name, message: `${item.label} is not ready to download; it stays in the list to resume` });
         }
       }
       if (runnable.length) itemsByName[name] = runnable;
+      if (unknown.length) {
+        for (const key of unknown) extraErrors.push({ type: 'scan_failed', title: name, message: `${NLME.jobKeyTitle(key)} could not be checked (the ${name.toLowerCase()} list looks incomplete; the page may still be loading); it stays in the list to resume` });
+      }
       if (missing.length) {
         missingByCategory[category] = missing;
         for (const key of missing) extraErrors.push({ type: 'not_found', title: name, message: `${NLME.jobKeyTitle(key)} is no longer in the notebook` });
@@ -856,6 +874,7 @@ function resumeJob(record) {
       return;
     }
     const combined = NLME.combineRetryOutcomes({ steps, notRun, verb: 'Resume', extraErrors });
+    if (steps.length === 0 && notRun.length === 0) combined.message = 'Nothing was resumed'; // only notes about items
     showTakeoutResults({
       message: combined.message,
       level: combined.level,

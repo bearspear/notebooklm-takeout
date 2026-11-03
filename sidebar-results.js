@@ -103,7 +103,7 @@ function showResumeBanner(record, { onResume, onDiscard, running = false } = {})
   if (!banner) return;
   const esc = NLME.escapeHtml;
   const { done, total, left } = NLME.jobResumeProgress(record);
-  const label = String(record.label || 'export');
+  const label = NLME.resumeBannerLabel(record);
 
   banner.innerHTML = `
     <p class="resume-text">An earlier ${esc(label)} stopped at ${esc(String(done))} of ${esc(String(total))}.</p>

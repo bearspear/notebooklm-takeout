@@ -385,6 +385,10 @@
     };
   }
 
+  // Error types a Resume adds to its panel and that no errors.md holds: key gone
+  // from the notebook, artifact not ready, scan failed / incomplete.
+  const PANEL_ONLY_ERROR_TYPES = ['not_found', 'not_ready', 'scan_failed'];
+
   // The results panel's error list: groups by error type in first-seen
   // order, at most perGroup entries each; `more` entries are in errors.md.
   function groupErrorsForPanel(errors = [], { perGroup = 20 } = {}) {
@@ -396,11 +400,13 @@
     }
     return [...groups].map(([type, list]) => {
       const words = type.replace(/_/g, ' ');
+      // Resume's own notes exist only in the panel (not in any errors.md): list all
+      const cap = PANEL_ONLY_ERROR_TYPES.includes(type) ? Infinity : perGroup;
       return {
         heading: words.charAt(0).toUpperCase() + words.slice(1),
         count: list.length,
-        entries: list.slice(0, perGroup),
-        more: Math.max(0, list.length - perGroup)
+        entries: list.slice(0, cap),
+        more: Math.max(0, list.length - cap)
       };
     });
   }
@@ -971,6 +977,36 @@
     return !!record && typeof record === 'object' && !!notebookId && record.notebookId === notebookId
       && typeof record.id === 'string' && arrays(record.remaining) && arrays(record.failed)
       && jobRemainingCount(record) > 0;
+  }
+
+  // matchResumeItems that will not call a key gone on thin evidence. A partial
+  // scan (a list not drawn yet, the previous notebook's page) must not clear
+  // items that still exist, so:
+  // - a scan that matches nothing proves nothing: every key is `unknown`;
+  // - with regionOfType(type) -> region (Notes: Studio notes vs the Sources
+  //   panel's notes), a key is `missing` only if the scan has at least one item
+  //   in the key's region, else `unknown`.
+  // matched / missing as in matchResumeItems; unknown keys stay in the record.
+  function planResume(keys, items, { titleOf, typeOf, regionOfType } = {}) {
+    const m = matchResumeItems(keys, items, { titleOf, typeOf });
+    if (m.matched.length === 0) return { matched: [], missing: [], unknown: m.missing };
+    if (typeof regionOfType !== 'function') return { matched: m.matched, missing: m.missing, unknown: [] };
+    const present = new Set((items || []).map(item => regionOfType(typeOf(item))));
+    const missing = [];
+    const unknown = [];
+    for (const key of m.missing) {
+      const at = key.indexOf('\u0000');
+      (present.has(regionOfType(at >= 0 ? key.slice(0, at) : '')) ? missing : unknown).push(key);
+    }
+    return { matched: m.matched, missing, unknown };
+  }
+
+  // The banner's "An earlier <this> stopped at": a takeout's label already
+  // names it; the others are an export.
+  function resumeBannerLabel(record) {
+    const label = String((record && record.label) || '');
+    if (!label) return 'export';
+    return record.kind === 'takeout' ? label : `${label} export`;
   }
 
   // The keys a resume re-runs for one category: remaining, then failed, no repeats.
@@ -1651,6 +1687,8 @@ footer { margin-top: 3rem; }
     jobRemainingCount,
     jobRecordFinished,
     jobRecordUsable,
+    planResume,
+    resumeBannerLabel,
     jobResumeKeys,
     jobResumeProgress,
     jobKeyTitle,
