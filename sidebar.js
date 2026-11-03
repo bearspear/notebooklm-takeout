@@ -2952,18 +2952,18 @@ async function extractNoteItem(shell, note, ctx, state) {
   } catch (error) {
     console.error(`Failed to process note: ${note.title}`, error);
     showToast(`Error processing: ${note.title}`, 'error');
-    throw await noteFailed(shell, state, `Exception during extraction: ${error.message || error.toString()}`);
+    throw await itemFailed(shell, state, `Exception during extraction: ${error.message || error.toString()}`);
   }
 
   console.error(`Failed to extract note: ${note.title}`, noteData?.error);
   showToast(`Skipped: ${note.title} (${noteData?.error || 'unknown error'})`, 'warning');
-  throw await noteFailed(shell, state, `Failed to extract: ${noteData?.error || 'unknown error'}`);
+  throw await itemFailed(shell, state, `Failed to extract: ${noteData?.error || 'unknown error'}`);
 }
 
-// A note failed: every third failure, ask the page whether its DOM errors
+// A note or source failed: every third failure, ask the page whether its DOM errors
 // are worth a warning (once per export). Declining stops the job like a
 // Cancel. Returns the Error for the runner to record.
-async function noteFailed(shell, state, message) {
+async function itemFailed(shell, state, message) {
   state.failures++;
   if (state.failures % 3 === 0 && !state.domWarningShown) {
     try {
@@ -2989,7 +2989,7 @@ async function noteFailed(shell, state, message) {
 function getEnabledNoteVersions({ hasQuotes = false, hasImages = false } = {}) {
   return NLME.noteVariants(settings, { hasQuotes, hasImages }).map(v => ({
     fileSuffix: v.suffix,
-    variant: noteVariantName(v.suffix),
+    variant: variantName(v.suffix),
     citationsCodeBlock: v.codeBlocks,
     stripImages: !v.images
   }));
@@ -3130,8 +3130,9 @@ async function exportSingleNote(note) {
 }
 
 // Variant name for front matter and manifest.json: 'base', 'code-blocks',
-// 'with-images' (from the NLME.noteVariants suffix)
-function noteVariantName(suffix) {
+// 'with-images', 'plus-meta', ... (from an NLME.noteVariants or
+// NLME.sourceVariants suffix)
+function variantName(suffix) {
   return suffix ? suffix.replace(/^-/, '') : 'base';
 }
 
@@ -3183,7 +3184,7 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
   const hasQuotes = notes.some(n => (n.sources || []).some(src => src.quote && src.quote.trim()));
   const hasImages = notes.some(n => NLME.noteHasImages(n)); // body or citation quotes
   const versions = NLME.noteVariants(settings, { hasQuotes, hasImages })
-    .map(v => ({ ...NOTE_VERSION_INFO[v.suffix], variant: noteVariantName(v.suffix) }));
+    .map(v => ({ ...NOTE_VERSION_INFO[v.suffix], variant: variantName(v.suffix) }));
 
   // Process regular notes (all versions in single notes/ folder with
   // suffixes); every variant of one note shares one stem, and no stem may
@@ -3580,764 +3581,467 @@ function setupSourcesEventListeners(sources) {
   }
 }
 
-/**
- * Export selected sources as markdown files in a ZIP
- * Reuses the same pattern as notes export
- */
+// Sources export (Milestone 3a): the shared export shell around the shared
+// job runner. Each batch becomes one ZIP from buildSourcesFiles.
 async function exportSources(selectedSources) {
   startExportTiming();
-  const sourcesAudit = newAudit();
   console.log(`[NotebookLM Takeout] Exporting ${selectedSources.length} sources...`);
 
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  await withExportShell({ label: 'sources', healthType: 'sources', overlayMessage: 'Preparing to export sources...' }, async shell => {
+    const perZip = settings.sourcesPerZip;
+    // Shared by every extractSourceItem call: audit counters and the
+    // DOM-warning decision
+    const state = {
+      audit: newAudit(),
+      failures: 0,
+      domWarningShown: false,
+      declined: false // user declined the DOM warning: stops like a Cancel
+    };
+    let packaged = 0; // sources written to ZIPs so far
 
-  // Get project name and timestamp at the start (same for all batches)
-  const projectName = await getProjectName(tab.id);
-  const timestamp = NLME.exportTimestamp();
-  console.log('[NotebookLM Takeout] Export timestamp:', timestamp, 'Project:', projectName);
+    // Item counts go in last, once every written source is known
+    const finalAudit = () => {
+      state.audit.expected.items = selectedSources.length;
+      state.audit.written.items = packaged;
+      return state.audit;
+    };
 
-  // Reset DOM tracker and perform pre-export health check
-  await chrome.tabs.sendMessage(tab.id, { type: 'RESET_DOM_TRACKER' });
-  const healthCheck = await chrome.tabs.sendMessage(tab.id, {
-    type: 'CHECK_DOM_HEALTH',
-    data: { type: 'sources' }
-  });
+    console.log(`[NotebookLM Takeout] Will create ${Math.ceil(selectedSources.length / perZip)} ZIP(s) for ${selectedSources.length} sources (${perZip} per ZIP)`);
 
-  if (healthCheck && !healthCheck.healthy) {
-    const proceed = await showDOMWarningDialog(healthCheck.issues);
-    if (!proceed) {
-      showToast('Export cancelled', 'info');
-      return;
-    }
-  }
-
-  // Show overlay on the page
-  await chrome.tabs.sendMessage(tab.id, {
-    type: 'SHOW_EXPORT_OVERLAY',
-    message: 'Preparing to export sources...'
-  });
-
-  // Show progress panel in sidebar
-  const progressPanel = document.getElementById('download-progress');
-  const progressFill = document.getElementById('progress-fill');
-  const progressText = document.getElementById('progress-text');
-
-  progressPanel.style.display = 'block';
-  progressText.textContent = `Exporting sources...`;
-  progressFill.style.width = '0%';
-
-  const allErrors = [];
-  let cancelled = false;
-  let cancelNoted = false;
-  let exportedCount = 0;
-  let attemptedCount = 0;
-  let errorsWritten = false;
-  let userAcknowledgedWarning = false; // Track if user already acknowledged DOM issues
-
-  // Track statistics for error reporting
-  const stats = {
-    totalSources: selectedSources.length,
-    successfulExtractions: 0,
-    failedExtractions: 0,
-    missingSummaries: 0,
-    missingKeyTopics: 0,
-    imagesFound: 0,
-    imagesEmbedded: 0,
-    imagesFailed: 0
-  };
-
-  // Listen for cancellation
-  const cancelListener = (message) => {
-    if (message.type === 'CANCEL_EXPORT') {
-      cancelled = true;
-    }
-  };
-  chrome.runtime.onMessage.addListener(cancelListener);
-
-  try {
-    // Calculate batch configuration
-    const SOURCES_PER_ZIP = settings.sourcesPerZip;
-    const totalZips = Math.ceil(selectedSources.length / SOURCES_PER_ZIP);
-    console.log(`[NotebookLM Takeout] Will create ${totalZips} ZIP(s) for ${selectedSources.length} sources (${SOURCES_PER_ZIP} per ZIP)`);
-
-    // Process in batches: extract batch → create ZIP → download → clear memory → repeat
-    for (let zipIndex = 0; zipIndex < totalZips; zipIndex++) {
-      if (cancelled) {
-        console.log('[NotebookLM Takeout] Export cancelled by user');
-        if (!cancelNoted) {
-          cancelNoted = true;
-          allErrors.push(NLME.cancellationNote({ kind: 'sources', done: attemptedCount, total: selectedSources.length }));
-        }
-        break;
-      }
-
-      const startIdx = zipIndex * SOURCES_PER_ZIP;
-      const endIdx = Math.min(startIdx + SOURCES_PER_ZIP, selectedSources.length);
-      const batchSources = selectedSources.slice(startIdx, endIdx);
-      const exportedSources = []; // Only store current batch in memory
-
-      console.log(`[NotebookLM Takeout] Processing batch ${zipIndex + 1}/${totalZips}: sources ${startIdx + 1}-${endIdx}`);
-
-    // Extract sources for this batch only
-    for (let i = 0; i < batchSources.length; i++) {
-      // Check for cancellation
-      if (cancelled) {
-        console.log('[NotebookLM Takeout] Export cancelled by user');
-        if (!cancelNoted) {
-          cancelNoted = true;
-          allErrors.push(NLME.cancellationNote({ kind: 'sources', done: attemptedCount, total: selectedSources.length }));
-        }
-        break;
-      }
-
-      const source = batchSources[i];
-      attemptedCount++;
-      const overallIndex = startIdx + i;
-      const progress = ((overallIndex + 1) / selectedSources.length) * 100;
-
-      // Update sidebar progress
-      progressFill.style.width = `${progress}%`;
-      progressText.textContent = `Batch ${zipIndex + 1}/${totalZips}: Extracting ${i + 1}/${batchSources.length}: ${source.title}`;
-
-      // Update page overlay
-      chrome.tabs.sendMessage(tab.id, {
-        type: 'UPDATE_EXPORT_OVERLAY',
-        message: `Batch ${zipIndex + 1}/${totalZips}: Extracting ${i + 1}/${batchSources.length}: ${source.title}`,
-        progress: progress
-      }).catch(() => {}); // overlay is cosmetic; never abort the job
-
-      console.log(`[NotebookLM Takeout] Extracting source: "${source.title}"`);
-
-      try {
-        // Extract source content with retry logic for transient failures
-        const sourceData = await retryOperation(
-          async () => {
-            return await chrome.tabs.sendMessage(tab.id, {
-              type: 'EXTRACT_SOURCE',
-              data: {
-                sourceIndex: source.index,
-                title: source.title,
-                // Wait for the AI summary/guide only when a metadata version is exported
-                needsGuide: !!(settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages)
-              }
-            });
-          },
-          2, // maxRetries
-          1500, // baseDelay (1.5s)
-          `Extract source "${source.title}"`
-        );
-        mergeTiming(sourceData);
-
-        if (sourceData.error) {
-          console.error(`[NotebookLM Takeout] Failed to extract "${source.title}":`, sourceData.error);
-          showToast(`Skipped: ${source.title}`, 'warning');
-
-          stats.failedExtractions++;
-          allErrors.push({
-            source: source.title,
-            type: 'extraction_failed',
-            message: sourceData.error
-          });
-
-          // Try to close panel before continuing
-          try {
-            await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_BACK' });
-          } catch (backError) {
-            console.error('[NotebookLM Takeout] Failed to close panel after error:', backError);
-          }
-
-          continue;
-        }
-
-        // Helper function to build markdown with optional metadata
-        const buildMarkdown = (includeMeta) => {
-          let md = `# ${source.title}\n\n`;
-
-          // Add YouTube URL if this is a YouTube source
-          if (sourceData.youtubeUrl) {
-            md += `**YouTube Video:** ${sourceData.youtubeUrl}\n\n`;
-          }
-
-          // Add source metadata (summary and key topics) if requested
-          if (includeMeta) {
-            // Add source guide summary if available
-            if (sourceData.guideMarkdown && sourceData.guideMarkdown.trim().length > 0) {
-              md += `## Summary\n\n${sourceData.guideMarkdown}\n\n`;
-            } else {
-              // Track missing summary (only once)
-              if (!metadataErrorsTracked) {
-                stats.missingSummaries++;
-                allErrors.push({
-                  source: source.title,
-                  type: 'missing_summary',
-                  message: 'Source guide/summary not found or empty'
-                });
-                console.warn(`[NotebookLM Takeout] "${source.title}": Summary/guide is missing`);
-              }
-            }
-
-            // Add key topics if available
-            if (sourceData.keyTopics && sourceData.keyTopics.length > 0) {
-              md += `## Key Topics\n\n`;
-              sourceData.keyTopics.forEach(topic => {
-                md += `- ${topic}\n`;
-              });
-              md += `\n`;
-            } else {
-              // Track missing key topics (only once)
-              if (!metadataErrorsTracked) {
-                stats.missingKeyTopics++;
-                allErrors.push({
-                  source: source.title,
-                  type: 'missing_key_topics',
-                  message: 'Key topics not found or empty'
-                });
-                console.warn(`[NotebookLM Takeout] "${source.title}": Key topics are missing`);
-              }
-            }
-            metadataErrorsTracked = true;
-          }
-
-          // Add the main content
-          md += `## Content\n\n`;
-          // Count formulas once: buildMarkdown runs again for the plus-meta version
-          const convertSource = () => convertToMarkdown(sourceData.html, sourceData.sources || [], '', false, false, null, false);
-          md += includeMeta ? convertSource() : convertCounted(sourcesAudit, sourceData.html, convertSource);
-
-          return md;
-        };
-
-        // Track metadata errors only once per source
-        let metadataErrorsTracked = false;
-
-        // Generate 4 versions of markdown:
-        // 1. Base: no metadata, no images (always created)
-        const baseMarkdown = buildMarkdown(false);
-        const baseMarkdownNoImages = stripImagesFromMarkdown(baseMarkdown);
-
-        // 2. Plus-meta: with metadata, no images (conditional)
-        // Only when a metadata version is exported (avoids false "missing
-        // summary" errors when those versions are off)
-        const needsMeta = settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages;
-        const plusMetaMarkdown = needsMeta ? buildMarkdown(true) : null;
-        const plusMetaMarkdownNoImages = plusMetaMarkdown ? stripImagesFromMarkdown(plusMetaMarkdown) : null;
-
-        // 3. With-images: no metadata, with images (conditional)
-        // 4. Plus-meta-with-images: with metadata, with images (conditional)
-        let baseMarkdownWithImages = null;
-        let plusMetaMarkdownWithImages = null;
-        let sourceHasImages = false;
-
-        // Only download and embed images if user has enabled image versions
-        const needsImageVersions = settings.exportSourceWithImages || settings.exportSourcePlusMetaWithImages;
-
-        if (needsImageVersions) {
-          // Embed images for the image versions
-          try {
-            const {
-              markdown: baseEmbedded,
-              errors: imageErrors,
-              imagesFound,
-              imagesEmbedded
-            } = await embedImagesInMarkdown(baseMarkdown, source.title);
-
-            // Track image statistics (only once)
-            stats.imagesFound += imagesFound;
-            stats.imagesEmbedded += imagesEmbedded;
-            stats.imagesFailed += (imagesFound - imagesEmbedded);
-
-            // Track image download errors
-            if (imageErrors.length > 0) {
-              allErrors.push(...imageErrors);
-            }
-
-            // Only create image versions if this source actually has images
-            if (imagesFound > 0) {
-              sourceHasImages = true;
-              baseMarkdownWithImages = baseEmbedded;
-
-              // Also embed images in the plus-meta version
-              if (plusMetaMarkdown) {
-                const { markdown: plusMetaEmbedded } = await embedImagesInMarkdown(plusMetaMarkdown, source.title);
-                plusMetaMarkdownWithImages = plusMetaEmbedded;
-              }
-
-              console.log(`[NotebookLM Takeout] "${source.title}": ${imagesFound} images found, creating image versions`);
-            } else {
-              console.log(`[NotebookLM Takeout] "${source.title}": No images found, skipping image versions`);
-            }
-
-          } catch (error) {
-            console.error(`[NotebookLM Takeout] Error embedding images for "${source.title}":`, error);
-            allErrors.push({
-              source: source.title,
-              type: 'image_embedding_error',
-              message: `Failed to embed images: ${error.message}`
-            });
-          }
-        } else {
-          console.log(`[NotebookLM Takeout] Skipping image downloads for "${source.title}" (no image versions enabled)`);
-        }
-
-        exportedSources.push({
-          title: source.title,
-          youtubeUrl: sourceData.youtubeUrl || null,
-          // Store metadata for index
-          summary: sourceData.guideMarkdown || null,
-          keyTopics: sourceData.keyTopics || [],
-          hasImages: sourceHasImages,
-          // Store versions (image versions are null if no images found)
-          versions: {
-            base: baseMarkdownNoImages,                    // [filename].md
-            plusMeta: plusMetaMarkdownNoImages,            // [filename]-plus-meta.md
-            withImages: baseMarkdownWithImages,            // [filename]-with-images.md (null if no images)
-            plusMetaWithImages: plusMetaMarkdownWithImages // [filename]-plus-meta-with-images.md (null if no images)
-          }
-        });
-
-        stats.successfulExtractions++;
-        console.log(`[NotebookLM Takeout] Successfully extracted "${source.title}", now closing panel...`);
-
-        // Navigate back to sources list
-        const backResponse = await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_BACK' });
-        console.log('[NotebookLM Takeout] NAVIGATE_BACK response:', backResponse);
-
-        // NAVIGATE_BACK resolves once the viewer is closed (Milestone 1: no
-        // extra fixed 1.5 s)
-
-      } catch (error) {
-        console.error(`[NotebookLM Takeout] Error extracting source "${source.title}":`, error);
-        showToast(`Error: ${source.title}`, 'error');
-
-        stats.failedExtractions++;
-        allErrors.push({
-          source: source.title,
-          type: 'extraction_error',
-          message: error.message,
-          stack: error.stack
-        });
-
-        // Check for accumulated DOM errors every 3 failures
-        if (stats.failedExtractions % 3 === 0 && !userAcknowledgedWarning) {
-          try {
-            const errorReport = await chrome.tabs.sendMessage(tab.id, { type: 'GET_DOM_ERRORS' });
-            if (errorReport && errorReport.shouldWarn) {
-              const proceed = await showDOMWarningDialog(errorReport.issues, true);
-              if (!proceed) {
-                cancelled = true;
-              }
-              userAcknowledgedWarning = true;
-            }
-          } catch (e) {
-            console.warn('[NotebookLM Takeout] Could not check DOM errors:', e);
-          }
-        }
-
-        // Try to close panel even if extraction failed
+    const result = await NLME.runExportJob({
+      kind: 'sources',
+      items: selectedSources,
+      perZip,
+      extractOne: (source, ctx) => extractSourceItem(shell, source, ctx, state),
+      // Close the source viewer once per source, whether extraction worked or not
+      afterEach: async () => {
         try {
-          console.log('[NotebookLM Takeout] Attempting to close panel after error...');
-          await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_BACK' });
+          const backResponse = await chrome.tabs.sendMessage(shell.tab.id, { type: 'NAVIGATE_BACK' });
+          console.log('[NotebookLM Takeout] NAVIGATE_BACK response:', backResponse);
+          // NAVIGATE_BACK resolves once the viewer is closed (Milestone 1: no
+          // extra fixed 1.5 s)
         } catch (backError) {
-          console.error('[NotebookLM Takeout] Failed to close panel:', backError);
+          console.error('[NotebookLM Takeout] Failed to close source panel:', backError);
         }
-      }
-    }
-
-    // Now create ZIP for this batch and download it immediately
-    if (exportedSources.length > 0) {
-      exportedCount += exportedSources.length;
-      console.log(`[NotebookLM Takeout] Creating ZIP ${zipIndex + 1}/${totalZips} with ${exportedSources.length} sources from this batch`);
-
-      // Update progress
-      progressText.textContent = `Creating ZIP ${zipIndex + 1}/${totalZips}...`;
-      progressFill.style.width = '100%';
-
-      const zip = new JSZip();
-      const sourcesFolder = zip.folder('sources');
-      const usedSourceFilenames = new Set();
-      const indexFiles = []; // Track files in this ZIP
-
-      exportedSources.forEach(source => {
-        let baseFilename = sanitizeFilename(source.title);
-
-        // Helper to generate unique filename
-        const getUniqueFilename = (suffix = '') => {
-          let filename = suffix ? `${baseFilename}${suffix}.md` : `${baseFilename}.md`;
-          let counter = 2;
-          while (usedSourceFilenames.has(filename)) {
-            filename = suffix ? `${baseFilename}${suffix}-${counter}.md` : `${baseFilename}-${counter}.md`;
-            counter++;
-          }
-          usedSourceFilenames.add(filename);
-          return filename;
-        };
-
-        // Which versions to write for this source (NLME.sourceVariants)
-        const sourceVersionSet = new Set(
-          NLME.sourceVariants(settings, { hasImages: !!source.hasImages }).map(v => v.suffix));
-
-        // 1. Base version: [filename].md (no meta, no images) - always written
-        if (sourceVersionSet.has('')) {
-          const baseFilename1 = getUniqueFilename();
-          sourcesFolder.file(baseFilename1, source.versions.base);
-          (source.writtenFiles || (source.writtenFiles = [])).push({ variant: 'base', filename: baseFilename1 });
-          indexFiles.push({
-            path: `sources/${baseFilename1}`,
-            title: source.title,
-            variant: 'base',
-            hasMeta: false,
-            hasImages: false
-          });
-        }
-
-        // 2. Plus metadata version: [filename]-plus-meta.md (with meta, no images)
-        if (sourceVersionSet.has('-plus-meta')) {
-          const plusMetaFilename = getUniqueFilename('-plus-meta');
-          sourcesFolder.file(plusMetaFilename, source.versions.plusMeta);
-          (source.writtenFiles || (source.writtenFiles = [])).push({ variant: 'plusMeta', filename: plusMetaFilename });
-          indexFiles.push({
-            path: `sources/${plusMetaFilename}`,
-            title: source.title,
-            variant: 'plusMeta',
-            hasMeta: true,
-            hasImages: false
-          });
-        }
-
-        // 3. With images version: [filename]-with-images.md (no meta, with images)
-        // Only create if setting enabled AND source actually has images
-        if (sourceVersionSet.has('-with-images') && source.versions.withImages) {
-          const withImagesFilename = getUniqueFilename('-with-images');
-          sourcesFolder.file(withImagesFilename, source.versions.withImages);
-          (source.writtenFiles || (source.writtenFiles = [])).push({ variant: 'withImages', filename: withImagesFilename });
-          indexFiles.push({
-            path: `sources/${withImagesFilename}`,
-            title: source.title,
-            variant: 'withImages',
-            hasMeta: false,
-            hasImages: true
-          });
-        }
-
-        // 4. Plus metadata with images version: [filename]-plus-meta-with-images.md (with meta, with images)
-        // Only create if setting enabled AND source actually has images
-        if (sourceVersionSet.has('-plus-meta-with-images') && source.versions.plusMetaWithImages) {
-          const plusMetaWithImagesFilename = getUniqueFilename('-plus-meta-with-images');
-          sourcesFolder.file(plusMetaWithImagesFilename, source.versions.plusMetaWithImages);
-          (source.writtenFiles || (source.writtenFiles = [])).push({ variant: 'plusMetaWithImages', filename: plusMetaWithImagesFilename });
-          indexFiles.push({
-            path: `sources/${plusMetaWithImagesFilename}`,
-            title: source.title,
-            variant: 'plusMetaWithImages',
-            hasMeta: true,
-            hasImages: true
-          });
-        }
-      });
-
-      // Add README explaining the file naming
-      let readmeContent = '# NotebookLM Sources Export\n\n';
-      readmeContent += `Generated: ${new Date().toLocaleString()}\n\n`;
-      readmeContent += '---\n\n';
-      readmeContent += '## File Naming Convention\n\n';
-
-      // Versions actually written: image versions only exist for sources
-      // with images, so settings alone overcount
-      const enabledVersions = NLME.distinctVariants(indexFiles);
-      const versionCount = enabledVersions.length;
-      readmeContent += `Each source is exported in ${versionCount} version(s):\n\n`;
-
-      let sectionNum = 1;
-
-      // 1. Base version
-      if (enabledVersions.includes('base')) {
-        readmeContent += `### ${sectionNum}. Base files (e.g., \`Document-1.md\`)\n\n`;
-        readmeContent += '- **Minimal version** - no metadata, no images\n';
-        readmeContent += '- Smallest file size, fastest to process\n';
-        readmeContent += '- Perfect for AI processing (Claude, ChatGPT, etc.)\n';
-        readmeContent += '- Best for search indexing and text analysis\n\n';
-        sectionNum++;
-      }
-
-      // 2. Plus-meta version
-      if (enabledVersions.includes('plusMeta')) {
-        readmeContent += `### ${sectionNum}. Plus-meta files (e.g., \`Document-1-plus-meta.md\`)\n\n`;
-        readmeContent += '- **With metadata** - includes AI-generated summary & key topics\n';
-        readmeContent += '- No images (text only)\n';
-        readmeContent += '- Good for understanding source context\n';
-        readmeContent += '- Still optimized for AI processing\n\n';
-        sectionNum++;
-      }
-
-      // 3. With-images version
-      if (enabledVersions.includes('withImages')) {
-        readmeContent += `### ${sectionNum}. With-images files (e.g., \`Document-1-with-images.md\`)\n\n`;
-        readmeContent += '- **With embedded images** - images as base64 data URIs\n';
-        readmeContent += '- No metadata (content only)\n';
-        readmeContent += '- Self-contained, works offline\n';
-        readmeContent += '- Larger file size due to embedded images\n';
-        readmeContent += '- Best for archival and complete backups\n';
-        readmeContent += '- **Note:** Only created for sources that contain images\n\n';
-
-        if (stats.imagesFound > 0) {
-          readmeContent += `**Image Statistics:** ${stats.imagesFound} image(s) found across all sources, `;
-          readmeContent += `${stats.imagesEmbedded} successfully embedded as base64.\n\n`;
-        } else {
-          readmeContent += '**Note:** No images were found in the exported sources.\n\n';
-        }
-        sectionNum++;
-      }
-
-      // 4. Plus-meta-with-images version
-      if (enabledVersions.includes('plusMetaWithImages')) {
-        readmeContent += `### ${sectionNum}. Plus-meta-with-images files (e.g., \`Document-1-plus-meta-with-images.md\`)\n\n`;
-        readmeContent += '- **Complete version** - metadata + images\n';
-        readmeContent += '- Largest file size\n';
-        readmeContent += '- Best for comprehensive archival\n';
-        readmeContent += '- Self-contained with full context\n';
-        readmeContent += '- **Note:** Only created for sources that contain images\n\n';
-        sectionNum++;
-      }
-
-      readmeContent += '---\n\n';
-      readmeContent += '## File Contents\n\n';
-      readmeContent += 'Base and with-images files include:\n';
-      readmeContent += '- **Content** - Full document content with citations\n\n';
-      readmeContent += 'Plus-meta files additionally include:\n';
-      readmeContent += '- **Summary** - AI-generated source guide (if available)\n';
-      readmeContent += '- **Key Topics** - Important themes (if available)\n\n';
-
-      readmeContent += '---\n\n';
-      readmeContent += '## Choosing the Right Version\n\n';
-      readmeContent += '- **For AI/LLM processing**: Use base files (smallest, fastest)\n';
-      readmeContent += '- **For human review with context**: Use plus-meta files\n';
-      readmeContent += '- **For offline viewing with images**: Use with-images files\n';
-      readmeContent += '- **For complete archival**: Use plus-meta-with-images files\n';
-      readmeContent += '\n';
-
-      // Add batch info to README
-      if (totalZips > 1) {
-        readmeContent += `\n---\n\n`;
-        readmeContent += `**Note:** This is part ${zipIndex + 1} of ${totalZips} in a split export.\n`;
-        readmeContent += `Total sources across all ZIPs: ${selectedSources.length}\n`;
-        readmeContent += `Sources in this ZIP: ${exportedSources.length}\n`;
-      }
-
-      zip.file('README.txt', readmeContent);
-
-      // Add detailed error report if there are any issues
-      // Include errors.txt in the LAST ZIP so it contains ALL errors from all batches
-      // errors.txt goes into the last ZIP this run writes: the final batch,
-      // or the batch the user cancelled in
-      if (zipIndex === totalZips - 1 || cancelled) {
-        sourcesAudit.expected.items = selectedSources.length;
-        sourcesAudit.written.items = exportedCount;
-        zip.file('_audit.md', auditMarkdown('Sources Export', sourcesAudit).text);
-      }
-      if ((zipIndex === totalZips - 1 || cancelled) && allErrors.length > 0) {
-        errorsWritten = true;
-        // Shared report (handles string and object errors, e.g. the cancel note)
-        const sourceStats = {
-          'Total Sources Selected': stats.totalSources,
-          'Successfully Extracted': stats.successfulExtractions,
-          'Failed Extractions': stats.failedExtractions
-        };
-        if (settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages) {
-          sourceStats['Missing Summaries'] = stats.missingSummaries;
-          sourceStats['Missing Key Topics'] = stats.missingKeyTopics;
-        }
-        if (stats.imagesFound > 0) {
-          sourceStats['Images Found'] = stats.imagesFound;
-          sourceStats['Images Embedded'] = stats.imagesEmbedded;
-          sourceStats['Images Failed'] = stats.imagesFailed;
-        }
-        const errorsContent = NLME.buildErrorReport({
-          title: 'Source Export',
-          generatedAt: new Date().toLocaleString(),
-          errors: allErrors,
-          stats: sourceStats
+      },
+      packageBatch: async (sources, info) => {
+        packaged += sources.length;
+        shell.progress(`Creating ZIP ${info.batchIndex}/${info.totalBatches}...`, 1);
+        // _audit.md goes into the last ZIP the run writes (an errors-only ZIP
+        // too, so a run where every source failed still explains its toast)
+        const auditText = info.isLast ? auditMarkdown('Sources Export', finalAudit()).text : null;
+        await saveFiles(buildSourcesFiles(sources, {
+          meta: shell.meta,
+          errors: info.errors,
+          auditText,
+          batchIndex: info.batchIndex,
+          totalBatches: info.totalBatches,
+          partial: info.partial
+        }), {
+          zipName: NLME.zipName({
+            notebook: shell.projectName,
+            kind: 'sources',
+            timestamp: shell.timestamp,
+            partial: info.partial,
+            part: info.batchIndex,
+            totalParts: info.totalBatches
+          })
         });
+        console.log(`[NotebookLM Takeout] Downloaded sources ZIP ${info.batchIndex}/${info.totalBatches}`);
 
-        zip.file('errors.txt', errorsContent);
-        indexFiles.push({ path: 'errors.txt', title: 'Export Error Report' });
-      }
-
-      // Add README to index
-      indexFiles.push({ path: 'README.txt', title: 'README - File Naming Convention' });
-
-      // Create youtube-urls.txt if any YouTube sources were found in THIS batch
-      const youtubeUrls = exportedSources
-        .filter(source => source.youtubeUrl)
-        .map(source => ({ title: source.title, url: source.youtubeUrl }));
-
-      if (youtubeUrls.length > 0) {
-        let youtubeContent = '# YouTube Source URLs\n\n';
-        youtubeContent += `Generated: ${new Date().toLocaleString()}\n\n`;
-        youtubeContent += `Total YouTube Sources: ${youtubeUrls.length}\n\n`;
-        youtubeContent += '---\n\n';
-
-        youtubeUrls.forEach((item, idx) => {
-          youtubeContent += `${idx + 1}. ${item.title}\n`;
-          youtubeContent += `   ${item.url}\n\n`;
+        // CRITICAL: free each batch's memory before the next one
+        await new Promise(resolve => setTimeout(resolve, 500));
+        sources.forEach(source => {
+          source.versions = { base: null, plusMeta: null, withImages: null, plusMetaWithImages: null };
+          source.summary = null;
         });
-
-        sourcesFolder.file('youtube-urls.txt', youtubeContent);
-        indexFiles.push({ path: 'sources/youtube-urls.txt', title: 'YouTube Source URLs (formatted)' });
-        console.log(`[NotebookLM Takeout] Created sources/youtube-urls.txt with ${youtubeUrls.length} URL(s)`);
-
-        // Create raw URL list (just URLs, one per line)
-        const rawUrlsContent = youtubeUrls.map(item => item.url).join('\n') + '\n';
-        sourcesFolder.file('youtube-urls.raw.txt', rawUrlsContent);
-        indexFiles.push({ path: 'sources/youtube-urls.raw.txt', title: 'YouTube Source URLs (raw list)' });
-        console.log(`[NotebookLM Takeout] Created sources/youtube-urls.raw.txt with ${youtubeUrls.length} URL(s)`);
+        // Give GC time to work between batches
+        if (!info.isLast) await new Promise(resolve => setTimeout(resolve, 1000));
+      },
+      isCancelled: () => shell.isCancelled() || state.declined,
+      onProgress: ({ done, total, batchIndex, totalBatches, item }) => {
+        const batchStart = (batchIndex - 1) * perZip;
+        const batchSize = Math.min(perZip, total - batchStart);
+        shell.progress(`Batch ${batchIndex}/${totalBatches}: Extracting ${done - batchStart + 1}/${batchSize}: ${item.title}`,
+          (done + 1) / total);
+        console.log(`[NotebookLM Takeout] Extracting source: "${item.title}"`);
       }
+    });
 
-      // Generate _index.md with links to all files (in sources/ folder) for THIS batch
-      let indexContent = '# NotebookLM Sources Export\n\n';
-      indexContent += `Generated: ${new Date().toLocaleString()}\n\n`;
-
-      if (totalZips > 1) {
-        indexContent += `**Part ${zipIndex + 1} of ${totalZips}**\n\n`;
-        indexContent += `Total Sources (all parts): ${selectedSources.length}\n`;
-        indexContent += `Sources in this part: ${exportedSources.length}\n\n`;
-      } else {
-        indexContent += `Total Sources: ${exportedSources.length}\n\n`;
-      }
-
-      // Reuse hasMetadata, hasImages, versionCount from README section above
-      indexContent += `Each source is available in ${versionCount} version(s).\n\n`;
-      indexContent += '---\n\n';
-
-      // Add YouTube URLs section first if files exist
-      if (youtubeUrls.length > 0) {
-        indexContent += '## YouTube Sources\n\n';
-        indexContent += `This export includes ${youtubeUrls.length} YouTube video source(s).\n\n`;
-        indexContent += `- [YouTube URLs (formatted)](youtube-urls.txt) - Numbered list with titles\n`;
-        indexContent += `- [YouTube URLs (raw)](youtube-urls.raw.txt) - Plain URLs only (for scripting)\n\n`;
-        indexContent += '---\n\n';
-      }
-
-      indexContent += '## Sources\n\n';
-
-      // One numbered entry per exported source, linking the files actually
-      // written for it (same-titled sources no longer share links)
-      const VARIANT_LABELS = {
-        base: 'Base version (no metadata, no images)',
-        plusMeta: 'With metadata, no images',
-        withImages: 'No metadata, with images',
-        plusMetaWithImages: 'With metadata and images'
-      };
-      indexContent += NLME.buildSourcesIndex(exportedSources.map(source => {
-        let details = '';
-        if (source.youtubeUrl) details += `**YouTube Video:** ${source.youtubeUrl}\n\n`;
-        if (source.summary && source.summary.trim().length > 0) details += `**Summary:**\n\n${source.summary}\n\n`;
-        if (source.keyTopics && source.keyTopics.length > 0) {
-          details += `**Key Topics:**\n\n${source.keyTopics.map(topic => `- ${topic}`).join('\n')}\n`;
-        }
-        return {
-          title: source.title,
-          details,
-          files: (source.writtenFiles || []).map(f => ({ label: `${f.filename} - ${VARIANT_LABELS[f.variant]}`, path: f.filename }))
-        };
-      }));
-
-      // Move _index.md to sources/ folder
-      sourcesFolder.file('_index.md', indexContent + timingSummary());
-
-      // Generate ZIP
-      console.log(`[NotebookLM Takeout] Generating ZIP ${zipIndex + 1}/${totalZips}...`);
-      const blob = await generateZipTimed(zip);
-      const url = URL.createObjectURL(blob);
-      try {
-        const sanitizedProjectName = sanitizeFilename(projectName);
-        let filename;
-        if (totalZips > 1) {
-          filename = `${sanitizedProjectName}-sources-${timestamp}${cancelled ? '-PARTIAL' : ''}-part${zipIndex + 1}of${totalZips}.zip`;
-        } else {
-          filename = `${sanitizedProjectName}-sources-${timestamp}${cancelled ? '-PARTIAL' : ''}.zip`;
-        }
-
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-
-        console.log(`[NotebookLM Takeout] Downloaded ZIP ${zipIndex + 1}/${totalZips}: ${filename}`);
-
-      } finally {
-        URL.revokeObjectURL(url);
-      }
-
-      // CRITICAL: Clear memory after each ZIP to prevent crashes
-      // Wait a moment for download to initiate, then clear references
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // Clear the batch data to free memory
-      exportedSources.forEach(source => {
-        // Nullify the large version strings
-        source.versions.base = null;
-        source.versions.plusMeta = null;
-        source.versions.withImages = null;
-        source.versions.plusMetaWithImages = null;
-      });
-
-      console.log(`[NotebookLM Takeout] Cleared memory for batch ${zipIndex + 1}/${totalZips}`);
-
-      // Clear the array itself
-      exportedSources.length = 0;
-
-      // Give GC time to work between batches
-      if (zipIndex < totalZips - 1) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-    } // End of "if exportedSources.length > 0"
-    } // End of batch loop
-
-    // Never lose errors: write an errors-only ZIP if no source ZIP carried them
-    if (allErrors.length > 0 && !errorsWritten) {
-      const errZip = new JSZip();
-      errZip.file('errors.txt', NLME.buildErrorReport({
-        title: 'Source Export',
-        generatedAt: new Date().toLocaleString(),
-        errors: allErrors
-      }));
-      downloadBlob(await generateZipTimed(errZip), `${sanitizeFilename(projectName)}-sources-${timestamp}${cancelled ? '-PARTIAL' : ''}-errors.zip`);
-    }
-
-    const outcome = NLME.summarizeExportOutcome({
+    shell.finish({
       kind: 'sources',
       selected: selectedSources.length,
-      exported: exportedCount,
-      failed: Math.max(0, attemptedCount - exportedCount),
-      cancelled
+      result,
+      auditOk: NLME.auditExport(finalAudit()).ok
     });
-    sourcesAudit.expected.items = selectedSources.length;
-    sourcesAudit.written.items = exportedCount;
-    const sourcesAuditResult = NLME.auditExport(sourcesAudit);
-    showToast(sourcesAuditResult.ok ? outcome.message : `${outcome.message} — some content is missing, see _audit.md`,
-      sourcesAuditResult.ok ? outcome.level : (outcome.level === 'error' ? 'error' : 'warning'));
+  });
+}
 
+/**
+ * Extract one source for the job runner: EXTRACT_SOURCE (retried on
+ * transient failures), then every Markdown version the settings ask for.
+ * Missing summary / key topics and image problems go to ctx.warn as
+ * { source, type, message }; a failed source throws (the runner records
+ * "[<title>] <message>"). NAVIGATE_BACK is the job's afterEach.
+ *
+ * @param {object} shell withExportShell's shell (tab)
+ * @param {{index: number, title: string}} source
+ * @param {{warn: Function}} ctx
+ * @param {object} state shared across sources (see exportSources)
+ * @returns {Promise<object>} SourceData: { title, youtubeUrl, summary,
+ *   keyTopics, hasImages, imagesFound, imagesEmbedded,
+ *   versions: { base, plusMeta, withImages, plusMetaWithImages } }
+ *   (plusMeta null when no metadata version is enabled; image versions null
+ *   when the source has no images or none are enabled)
+ */
+async function extractSourceItem(shell, source, ctx, state) {
+  // Wait for and write the AI summary/guide only when a metadata version is
+  // exported (avoids false "missing summary" errors when those are off)
+  const needsMeta = !!(settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages);
+  let sourceData;
+  try {
+    sourceData = await retryOperation(
+      () => chrome.tabs.sendMessage(shell.tab.id, {
+        type: 'EXTRACT_SOURCE',
+        data: { sourceIndex: source.index, title: source.title, needsGuide: needsMeta }
+      }),
+      2, // maxRetries
+      1500, // baseDelay (1.5s)
+      `Extract source "${source.title}"`
+    );
+    mergeTiming(sourceData);
+
+    if (sourceData && !sourceData.error) {
+      const data = await buildSourceData(source, sourceData, ctx, state.audit, needsMeta);
+      console.log(`[NotebookLM Takeout] Successfully extracted "${source.title}"`);
+      return data;
+    }
   } catch (error) {
-    console.error('[NotebookLM Takeout] Export failed:', error);
-    showToast(`Export failed: ${error.message}`, 'error');
-  } finally {
-    // Remove cancellation listener
-    chrome.runtime.onMessage.removeListener(cancelListener);
+    console.error(`[NotebookLM Takeout] Error extracting source "${source.title}":`, error);
+    showToast(`Error: ${source.title}`, 'error');
+    throw await itemFailed(shell, state, `Exception during extraction: ${error.message || error.toString()}`);
+  }
 
-    // Hide page overlay
+  console.error(`[NotebookLM Takeout] Failed to extract "${source.title}":`, sourceData?.error);
+  showToast(`Skipped: ${source.title}`, 'warning');
+  throw await itemFailed(shell, state, `Failed to extract: ${sourceData?.error || 'no response'}`);
+}
+
+// The Markdown versions of one extracted source (see extractSourceItem)
+async function buildSourceData(source, sourceData, ctx, audit, needsMeta) {
+  const hasSummary = !!(sourceData.guideMarkdown && sourceData.guideMarkdown.trim().length > 0);
+  const hasKeyTopics = !!(sourceData.keyTopics && sourceData.keyTopics.length > 0);
+  if (needsMeta && !hasSummary) {
+    ctx.warn({ source: source.title, type: 'missing_summary', message: 'Source guide/summary not found or empty' });
+    console.warn(`[NotebookLM Takeout] "${source.title}": Summary/guide is missing`);
+  }
+  if (needsMeta && !hasKeyTopics) {
+    ctx.warn({ source: source.title, type: 'missing_key_topics', message: 'Key topics not found or empty' });
+    console.warn(`[NotebookLM Takeout] "${source.title}": Key topics are missing`);
+  }
+
+  // Convert (and count formulas) once; every version shares the content
+  const content = convertCounted(audit, sourceData.html,
+    () => convertToMarkdown(sourceData.html, sourceData.sources || [], '', false, false, null, false));
+
+  const buildMarkdown = includeMeta => {
+    let md = `# ${source.title}\n\n`;
+    if (sourceData.youtubeUrl) md += `**YouTube Video:** ${sourceData.youtubeUrl}\n\n`;
+    if (includeMeta) {
+      if (hasSummary) md += `## Summary\n\n${sourceData.guideMarkdown}\n\n`;
+      if (hasKeyTopics) md += `## Key Topics\n\n${sourceData.keyTopics.map(topic => `- ${topic}`).join('\n')}\n\n`;
+    }
+    return md + `## Content\n\n${content}`;
+  };
+
+  const baseMarkdown = buildMarkdown(false);
+  const plusMetaMarkdown = needsMeta ? buildMarkdown(true) : null;
+
+  // Image versions: download and embed images only when one is enabled, and
+  // keep them only when the source actually has images
+  let withImages = null;
+  let plusMetaWithImages = null;
+  let imagesFound = 0;
+  let imagesEmbedded = 0;
+  if (settings.exportSourceWithImages || settings.exportSourcePlusMetaWithImages) {
     try {
-      await chrome.tabs.sendMessage(tab.id, {
-        type: 'HIDE_EXPORT_OVERLAY'
-      });
+      const embedded = await embedImagesInMarkdown(baseMarkdown, source.title);
+      imagesFound = embedded.imagesFound;
+      imagesEmbedded = embedded.imagesEmbedded;
+      embedded.errors.forEach(err => ctx.warn(err));
+
+      if (imagesFound > 0) {
+        withImages = embedded.markdown;
+        if (plusMetaMarkdown) {
+          plusMetaWithImages = (await embedImagesInMarkdown(plusMetaMarkdown, source.title)).markdown;
+        }
+        console.log(`[NotebookLM Takeout] "${source.title}": ${imagesFound} images found, creating image versions`);
+      } else {
+        console.log(`[NotebookLM Takeout] "${source.title}": No images found, skipping image versions`);
+      }
     } catch (error) {
-      console.error('[NotebookLM Takeout] Failed to hide overlay:', error);
+      console.error(`[NotebookLM Takeout] Error embedding images for "${source.title}":`, error);
+      ctx.warn({ source: source.title, type: 'image_embedding_error', message: `Failed to embed images: ${error.message}` });
+    }
+  } else {
+    console.log(`[NotebookLM Takeout] Skipping image downloads for "${source.title}" (no image versions enabled)`);
+  }
+
+  return {
+    title: source.title,
+    youtubeUrl: sourceData.youtubeUrl || null,
+    // Metadata for _index.md
+    summary: sourceData.guideMarkdown || null,
+    keyTopics: sourceData.keyTopics || [],
+    hasImages: withImages !== null,
+    imagesFound,
+    imagesEmbedded,
+    versions: {
+      base: stripImagesFromMarkdown(baseMarkdown),
+      plusMeta: plusMetaMarkdown ? stripImagesFromMarkdown(plusMetaMarkdown) : null,
+      withImages,
+      plusMetaWithImages
+    }
+  };
+}
+
+// Front matter for a source file (field order fixed by the Milestone 3a
+// layout; youtube_url is dropped when null)
+function sourceFrontMatter(meta, { title, variant, youtubeUrl = null }) {
+  return NLME.frontMatter({
+    title,
+    notebook: meta.notebook,
+    notebook_url: meta.notebook_url,
+    notebook_id: meta.notebook_id,
+    exporter: meta.exporter,
+    exported: meta.exported,
+    kind: 'source',
+    variant,
+    youtube_url: youtubeUrl
+  });
+}
+
+// Source versions by NLME.sourceVariants suffix: where SourceData keeps the
+// Markdown, and how _index.md describes the files
+const SOURCE_VERSION_INFO = {
+  '': {
+    key: 'base',
+    label: 'Base version (no metadata, no images)',
+    heading: 'Base files (e.g., `Document-1.md`)',
+    points: [
+      '**Minimal version** - no metadata, no images',
+      'Smallest file size, fastest to process',
+      'Perfect for AI processing (Claude, ChatGPT, etc.)',
+      'Best for search indexing and text analysis'
+    ]
+  },
+  '-plus-meta': {
+    key: 'plusMeta',
+    label: 'With metadata, no images',
+    heading: 'Plus-meta files (e.g., `Document-1-plus-meta.md`)',
+    points: [
+      '**With metadata** - includes AI-generated summary & key topics',
+      'No images (text only)',
+      'Good for understanding source context',
+      'Still optimized for AI processing'
+    ]
+  },
+  '-with-images': {
+    key: 'withImages',
+    label: 'No metadata, with images',
+    heading: 'With-images files (e.g., `Document-1-with-images.md`)',
+    points: [
+      '**With embedded images** - images as base64 data URIs',
+      'No metadata (content only)',
+      'Self-contained, works offline',
+      'Larger file size due to embedded images',
+      'Best for archival and complete backups',
+      '**Note:** Only created for sources that contain images'
+    ]
+  },
+  '-plus-meta-with-images': {
+    key: 'plusMetaWithImages',
+    label: 'With metadata and images',
+    heading: 'Plus-meta-with-images files (e.g., `Document-1-plus-meta-with-images.md`)',
+    points: [
+      '**Complete version** - metadata + images',
+      'Largest file size',
+      'Best for comprehensive archival',
+      'Self-contained with full context',
+      '**Note:** Only created for sources that contain images'
+    ]
+  }
+};
+
+/**
+ * Files for one sources ZIP: sources/ (every enabled version of each
+ * source), sources/youtube-urls.txt and .raw.txt, errors.md, _audit.md,
+ * _index.md (with the file-naming guide) and manifest.json (last).
+ *
+ * @param {object[]} sources SourceData from extractSourceItem (may be empty
+ *   for an errors-only ZIP)
+ * @param {{ meta: object, errors?: Array, auditText?: string|null,
+ *   batchIndex?: number, totalBatches?: number, partial?: boolean }} options
+ *   errors: ALL errors of the run, passed only to the last ZIP it writes
+ * @returns {Array<{path: string, data: string, title?: string, variant?: string, itemKind?: string}>}
+ */
+function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batchIndex = 1, totalBatches = 1, partial = false }) {
+  const files = [];
+  const indexEntries = [];
+
+  // Every variant of one source shares one stem, and no stem may equal
+  // another source's stem+variant name ('Report' vs 'Report plus meta')
+  const zipSuffixes = NLME.sourceVariants(settings, { hasImages: sources.some(s => s.hasImages) })
+    .map(v => v.suffix).filter(Boolean);
+  const stems = NLME.uniqueStems(sources.map(s => s.title), zipSuffixes);
+
+  sources.forEach((source, idx) => {
+    const written = [];
+    // Versions for this source (NLME.sourceVariants); image versions exist
+    // only when the source has images
+    for (const { suffix } of NLME.sourceVariants(settings, { hasImages: !!source.hasImages })) {
+      const info = SOURCE_VERSION_INFO[suffix];
+      const markdown = source.versions[info.key];
+      if (markdown == null) continue;
+      const variant = variantName(suffix);
+      const filename = `${stems[idx]}${suffix}.md`;
+      files.push({
+        path: `sources/${filename}`,
+        data: sourceFrontMatter(meta, { title: source.title, variant, youtubeUrl: source.youtubeUrl }) + markdown,
+        title: source.title,
+        variant,
+        itemKind: 'source'
+      });
+      written.push({ label: `${filename} - ${info.label}`, path: `sources/${filename}` });
     }
 
-    // Hide sidebar progress panel
-    progressPanel.style.display = 'none';
+    let details = '';
+    if (source.youtubeUrl) details += `**YouTube Video:** ${source.youtubeUrl}\n\n`;
+    if (source.summary && source.summary.trim().length > 0) details += `**Summary:**\n\n${source.summary}\n\n`;
+    if (source.keyTopics && source.keyTopics.length > 0) {
+      details += `**Key Topics:**\n\n${source.keyTopics.map(topic => `- ${topic}`).join('\n')}\n`;
+    }
+    indexEntries.push({ title: source.title, details, files: written });
+  });
+
+  // YouTube URLs of the sources in THIS ZIP: numbered with titles, and raw
+  const youtubeUrls = sources
+    .filter(source => source.youtubeUrl)
+    .map(source => ({ title: source.title, url: source.youtubeUrl }));
+  if (youtubeUrls.length > 0) {
+    let youtubeContent = '# YouTube Source URLs\n\n';
+    youtubeContent += `Generated: ${new Date().toLocaleString()}\n\n`;
+    youtubeContent += `Total YouTube Sources: ${youtubeUrls.length}\n\n`;
+    youtubeContent += '---\n\n';
+    youtubeUrls.forEach((item, idx) => {
+      youtubeContent += `${idx + 1}. ${item.title}\n`;
+      youtubeContent += `   ${item.url}\n\n`;
+    });
+    files.push({ path: 'sources/youtube-urls.txt', data: youtubeContent, title: 'YouTube Source URLs (formatted)' });
+    files.push({
+      path: 'sources/youtube-urls.raw.txt',
+      data: youtubeUrls.map(item => item.url).join('\n') + '\n',
+      title: 'YouTube Source URLs (raw list)'
+    });
   }
+
+  // errors.md when the caller passes errors (it passes ALL errors to the
+  // last ZIP the run writes: the final batch, or the one it ended in)
+  if (errors.length > 0) {
+    files.push({
+      path: 'errors.md',
+      data: NLME.buildErrorReport({
+        title: 'Sources Export',
+        generatedAt: new Date().toLocaleString(),
+        errors
+      })
+    });
+  }
+
+  if (auditText) {
+    files.push({ path: '_audit.md', data: auditText });
+  }
+
+  // _index.md: sources with their files, then the file-naming guide
+  // (versions actually written: image versions only exist for sources with
+  // images, so settings alone overcount)
+  const variantsWritten = NLME.distinctVariants(files.filter(f => f.itemKind === 'source'));
+  let indexContent = `# Sources — ${meta.notebook}\n\n`;
+  indexContent += `Generated: ${new Date().toLocaleString()}\n\n`;
+  if (totalBatches > 1) {
+    indexContent += `**Part ${batchIndex} of ${totalBatches}**\n\n`;
+  }
+  indexContent += `Total Sources: ${sources.length}\n\n`;
+  if (sources.length > 0) {
+    indexContent += `Each source is available in ${variantsWritten.length} version(s).\n\n`;
+  }
+  indexContent += '---\n\n';
+
+  if (youtubeUrls.length > 0) {
+    indexContent += '## YouTube Sources\n\n';
+    indexContent += `This export includes ${youtubeUrls.length} YouTube video source(s).\n\n`;
+    indexContent += '- [YouTube URLs (formatted)](sources/youtube-urls.txt) - Numbered list with titles\n';
+    indexContent += '- [YouTube URLs (raw)](sources/youtube-urls.raw.txt) - Plain URLs only (for scripting)\n\n';
+    indexContent += '---\n\n';
+  }
+
+  if (sources.length > 0) {
+    indexContent += '## Sources\n\n';
+    indexContent += NLME.buildSourcesIndex(indexEntries);
+    indexContent += '\n---\n\n';
+
+    indexContent += '## File Naming Convention\n\n';
+    indexContent += `Each source is exported in ${variantsWritten.length} version(s), all in the \`sources/\` folder:\n\n`;
+    let sectionNum = 1;
+    for (const [suffix, info] of Object.entries(SOURCE_VERSION_INFO)) {
+      if (!variantsWritten.includes(variantName(suffix))) continue;
+      indexContent += `### ${sectionNum}. ${info.heading}\n\n`;
+      indexContent += info.points.map(point => `- ${point}`).join('\n') + '\n\n';
+      if (suffix === '-with-images') {
+        const found = sources.reduce((n, s) => n + (s.imagesFound || 0), 0);
+        const embedded = sources.reduce((n, s) => n + (s.imagesEmbedded || 0), 0);
+        indexContent += `**Image Statistics:** ${found} image(s) found in these sources, ${embedded} successfully embedded as base64.\n\n`;
+      }
+      sectionNum++;
+    }
+
+    indexContent += '### File Contents\n\n';
+    indexContent += 'Base and with-images files include:\n';
+    indexContent += '- **Content** - Full document content with citations\n\n';
+    indexContent += 'Plus-meta files additionally include:\n';
+    indexContent += '- **Summary** - AI-generated source guide (if available)\n';
+    indexContent += '- **Key Topics** - Important themes (if available)\n\n';
+
+    indexContent += '### Choosing the Right Version\n\n';
+    indexContent += '- **For AI/LLM processing**: Use base files (smallest, fastest)\n';
+    indexContent += '- **For human review with context**: Use plus-meta files\n';
+    indexContent += '- **For offline viewing with images**: Use with-images files\n';
+    indexContent += '- **For complete archival**: Use plus-meta-with-images files\n\n';
+  }
+
+  if (errors.length > 0) {
+    indexContent += '## Errors\n\n';
+    indexContent += '- [Export Errors](errors.md)\n\n';
+  }
+
+  files.push({ path: '_index.md', data: indexContent + timingSummary() });
+
+  // manifest.json last: it lists every file above (not itself)
+  files.push({
+    path: 'manifest.json',
+    data: JSON.stringify(NLME.buildManifest({
+      meta,
+      kind: 'sources',
+      part: batchIndex,
+      totalParts: totalBatches,
+      partial,
+      files,
+      counts: { sources: sources.length, youtube: youtubeUrls.length },
+      errorCount: errors.length
+    }), null, 2)
+  });
+
+  return files;
 }
 
 // ========== END SOURCES EXPORT FUNCTIONS ==========
