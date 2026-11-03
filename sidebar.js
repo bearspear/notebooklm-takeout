@@ -2549,7 +2549,16 @@ async function runExclusive(name, fn) {
       el.disabled = false;
       el.removeAttribute('data-job-disabled');
     });
+    // Blanket re-enabling above would leave K = 0 buttons enabled
+    refreshListButtons();
   }
+}
+
+// Buttons that follow a list's selection (disabled at K = 0): re-derive them from the
+// controllers, whatever just enabled or disabled them (a job ending, a redraw)
+function refreshListButtons() {
+  updateArtifactsDownloadBtn();
+  updateStudioBulkButtonsState();
 }
 
 // Same path as the page overlay's Cancel button: the content script flags the
