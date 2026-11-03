@@ -9,10 +9,9 @@
   // Google renamed NotebookLM to "Gemini Notebook" and moved it from
   // notebooklm.google.com to notebook.google.com (Jul 2026). The old host 301s to
   // the new one; keep both so users mid-rollout still work.
-  const NOTEBOOK_HOSTS = ['notebook.google.com', 'notebooklm.google.com'];
 
   function isNotebookUrl(url) {
-    return !!url && NOTEBOOK_HOSTS.some(host => url.includes(host));
+    return NLME.isNotebookUrl(url);
   }
 
 
@@ -266,12 +265,8 @@
       // Extract project name from the page
       try {
         // Look for the project title in the header
-        const titleSelectors = [
-          '.title-label-inner', // Primary selector based on user's HTML
-          'editable-project-title .title-label span',
-          '.title-container .title span',
-          '[class*="title-label"]'
-        ];
+        // One chain for file names, chat export and the health check
+        const titleSelectors = NLME.PROJECT_TITLE_SELECTORS;
 
         let projectName = null;
         for (const selector of titleSelectors) {
@@ -999,13 +994,8 @@
    */
   function checkProjectTitleHealth() {
     const checks = [];
-    const selectors = [
-      '.title-label-inner',
-      'editable-project-title .title-label span',
-      '.title-container .title span',
-      '[class*="title-label"]',
-      '.notebook-title' // legacy fallback
-    ];
+    // One chain for file names, chat export and the health check
+    const selectors = NLME.PROJECT_TITLE_SELECTORS;
 
     let matchedSelector = null;
     let resolvedTitle = null;
@@ -3904,13 +3894,8 @@
 
     // Get notebook title — use the same selector list as GET_PROJECT_NAME so
     // chat exports match the filenames used by notes/sources exports.
-    const titleSelectors = [
-      '.title-label-inner',
-      'editable-project-title .title-label span',
-      '.title-container .title span',
-      '[class*="title-label"]',
-      '.notebook-title' // legacy fallback
-    ];
+    // One chain for file names, chat export and the health check
+    const titleSelectors = NLME.PROJECT_TITLE_SELECTORS;
     let notebookTitle = 'NotebookLM';
     for (const selector of titleSelectors) {
       const titleEl = document.querySelector(selector);

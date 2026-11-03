@@ -96,7 +96,7 @@ function showDOMWarningDialog(issues, isMidExport = false) {
             ? 'Multiple errors occurred. NotebookLM may have been updated.'
             : 'Some expected elements were not found. The extension may need an update.'}
         </p>
-        <ul>${issues.map(i => `<li>${i}</li>`).join('')}</ul>
+        <ul>${issues.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>
         <div class="dialog-actions">
           <button class="btn btn-secondary" data-action="cancel">Cancel</button>
           <button class="btn btn-primary" data-action="continue">
@@ -465,10 +465,9 @@ function convertKatexNodeToLatex(node) {
 // Google renamed NotebookLM to "Gemini Notebook" and moved it from
 // notebooklm.google.com to notebook.google.com (Jul 2026). The old host 301s to
 // the new one; keep both so users mid-rollout still work.
-const NOTEBOOK_HOSTS = ['notebook.google.com', 'notebooklm.google.com'];
 
 function isNotebookUrl(url) {
-  return !!url && NOTEBOOK_HOSTS.some(host => url.includes(host));
+  return NLME.isNotebookUrl(url);
 }
 
 let currentTabId = null;
@@ -978,16 +977,7 @@ async function retryDownload(downloadFn, maxRetries = 3, itemName = 'item') {
  * Get artifact type prefix for filenames
  */
 function getArtifactTypePrefix(artifactType) {
-  const typeMap = {
-    'Audio Overview': 'audio-overview',
-    'Data Table': 'data-table',
-    'Report': 'report',
-    'Infographic': 'infographic',
-    'Slides': 'slides',
-    'Video Overview': 'video-overview',
-    'Mind Map': 'mind-map'
-  };
-  return typeMap[artifactType] || artifactType.toLowerCase().replace(/\s+/g, '-');
+  return NLME.artifactTypePrefix(artifactType);
 }
 
 /**
@@ -1429,7 +1419,7 @@ async function scanPage() {
 
   } catch (error) {
     console.error('Scan failed:', error);
-    resultsEl.innerHTML = `<p class="error">Scan failed: ${error.message}</p>`;
+    resultsEl.innerHTML = `<p class="error">Scan failed: ${escapeHtml(error.message)}</p>`;
   }
 }
 
@@ -2537,33 +2527,8 @@ function cleanOCRArtifacts(text) {
 }
 
 function sanitizeFilename(filename) {
-  let clean = filename
-    // Replace OS-restricted characters with underscore
-    .replace(/[<>:"/\\|?*]/g, '_')
-    // Replace quotes and apostrophes (straight and curly) with nothing
-    // U+0027 ' straight apostrophe, U+0060 ` backtick, U+00B4 ´ acute accent
-    // U+2018 ' left single quote, U+2019 ' right single quote (curly apostrophe)
-    // U+201C " left double quote, U+201D " right double quote
-    .replace(/[\u0027\u0060\u00B4\u2018\u2019\u0022\u201C\u201D]/g, '')
-    // Replace other problematic characters
-    .replace(/[#%&{}$!@+]/g, '_')
-    // Replace multiple periods with single period (avoid confusion with extensions)
-    .replace(/\.{2,}/g, '.')
-    // Replace whitespace with hyphens
-    .replace(/\s+/g, '-')
-    // Collapse multiple hyphens/underscores
-    .replace(/[-_]+/g, '-')
-    // Remove leading/trailing hyphens
-    .replace(/^-+|-+$/g, '')
-    // Limit length (leave room for extension)
-    .substring(0, 100);
-
-  // Fallback if sanitization resulted in empty string
-  if (clean.length === 0) {
-    clean = 'untitled';
-  }
-
-  return clean;
+  // Shared, tested implementation (emoji-safe truncation, reserved names)
+  return NLME.sanitizeFilename(filename);
 }
 
 /**
@@ -2719,7 +2684,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
 
   // Get project name and timestamp at the start (same for all batches)
   const projectName = await getProjectName(tab.id);
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+  const timestamp = NLME.exportTimestamp();
   console.log('[NotebookLM Takeout] Export timestamp:', timestamp, 'Project:', projectName);
 
   // Reset DOM tracker and perform pre-export health check
@@ -3144,7 +3109,7 @@ async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches =
 
   // Use provided timestamp or generate new one
   if (!timestamp) {
-    timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    timestamp = NLME.exportTimestamp();
   }
 
   // Add errors.txt when the caller passes errors (it passes ALL errors to the
@@ -3620,7 +3585,7 @@ async function exportSources(selectedSources) {
 
   // Get project name and timestamp at the start (same for all batches)
   const projectName = await getProjectName(tab.id);
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+  const timestamp = NLME.exportTimestamp();
   console.log('[NotebookLM Takeout] Export timestamp:', timestamp, 'Project:', projectName);
 
   // Reset DOM tracker and perform pre-export health check
@@ -4790,7 +4755,7 @@ async function exportChat(chatData, extractFullCitations = false) {
     console.log(`[NotebookLM Takeout] Processing complete: ${processedMessages.length} messages`);
 
     // Generate all permutations based on settings (cumulative approach)
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    const timestamp = NLME.exportTimestamp();
     const baseFilename = `${sanitizeFilename(chatData.notebookTitle)}-chat-${timestamp}`;
 
     const versions = [];
@@ -6170,9 +6135,7 @@ async function copyHealthReport() {
 }
 
 function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+  return NLME.escapeHtml(text);
 }
 
 // Cleanup on unload

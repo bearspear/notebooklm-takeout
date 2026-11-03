@@ -462,3 +462,37 @@ test('buildErrorReport prints summary stats', () => {
   const report = NLME.buildErrorReport({ title: 'Chat Export', errors: [], stats: { 'Total Messages': 17 } });
   assert.match(report, /- Total Messages: 17/);
 });
+
+test('isNotebookUrl matches hosts exactly', () => {
+  assert.equal(NLME.isNotebookUrl('https://notebook.google.com/notebook/x'), true);
+  assert.equal(NLME.isNotebookUrl('https://notebooklm.google.com/'), true);
+  assert.equal(NLME.isNotebookUrl('https://www.google.com/search?q=notebook.google.com'), false);
+  assert.equal(NLME.isNotebookUrl(undefined), false);
+});
+
+test('sanitizeFilename keeps emoji pairs whole at the cut', () => {
+  const out = NLME.sanitizeFilename('a'.repeat(99) + '😀x', 100);
+  assert.ok(out.endsWith('😀'), out.slice(-4));
+  assert.doesNotMatch(out, /[\ud800-\udbff](?![\udc00-\udfff])/);
+});
+
+test('sanitizeFilename avoids reserved and empty names', () => {
+  assert.equal(NLME.sanitizeFilename('CON'), '_CON');
+  assert.equal(NLME.sanitizeFilename('name.'), 'name');
+  assert.equal(NLME.sanitizeFilename('\u0001'), 'untitled');
+});
+
+test('artifactTypePrefix maps known and unknown types', () => {
+  assert.equal(NLME.artifactTypePrefix('Slides'), 'slides');
+  assert.equal(NLME.artifactTypePrefix('Mind Map'), 'mind-map');
+  assert.equal(NLME.artifactTypePrefix('Weird Thing'), 'weird-thing');
+});
+
+test('exportTimestamp formats a fixed date', () => {
+  assert.equal(NLME.exportTimestamp(new Date('2026-11-03T10:20:30.456Z')), '2026-11-03T10-20-30');
+});
+
+test('escapeHtml escapes quotes', () => {
+  assert.equal(NLME.escapeHtml('"a" & <b>'), '&quot;a&quot; &amp; &lt;b&gt;');
+  assert.equal(NLME.escapeHtml("it's"), 'it&#39;s');
+});

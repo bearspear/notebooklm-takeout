@@ -500,7 +500,88 @@
     return lines.join('\n') + '\n';
   }
 
+  // ---- Shared helpers (one copy for content, sidebar, background) ----
+
+  const NOTEBOOK_HOSTS = ['notebook.google.com', 'notebooklm.google.com'];
+
+  // Exact hostname match; substring checks also accepted e.g. a Google search
+  // URL containing "notebook.google.com"
+  function isNotebookUrl(url) {
+    try {
+      return NOTEBOOK_HOSTS.includes(new URL(url).hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+  // File-system-safe name: the historic replacement chain, plus control
+  // characters stripped, code-point truncation (never splits an emoji),
+  // no trailing dots/spaces, and Windows reserved names prefixed.
+  function sanitizeFilename(name, maxLength = 100) {
+    let clean = String(name == null ? '' : name)
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      .replace(/[<>:"/\\|?*]/g, '_')
+      .replace(/[\u0027\u0060\u00B4\u2018\u2019\u0022\u201C\u201D]/g, '')
+      .replace(/[#%&{}$!@+]/g, '_')
+      .replace(/\.{2,}/g, '.')
+      .replace(/\s+/g, '-')
+      .replace(/[-_]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    clean = Array.from(clean).slice(0, maxLength).join('');
+    clean = clean.replace(/[.\s-]+$/g, '');
+    if (!clean) return 'untitled';
+    if (WINDOWS_RESERVED.test(clean)) clean = `_${clean}`;
+    return clean;
+  }
+
+  const ARTIFACT_PREFIXES = {
+    'Audio Overview': 'audio-overview',
+    'Data Table': 'data-table',
+    'Report': 'report',
+    'Infographic': 'infographic',
+    'Slides': 'slides',
+    'Video Overview': 'video-overview',
+    'Mind Map': 'mind-map'
+  };
+
+  function artifactTypePrefix(type) {
+    return ARTIFACT_PREFIXES[type] || String(type || 'artifact').toLowerCase().replace(/\s+/g, '-');
+  }
+
+  // 'YYYY-MM-DDTHH-MM-SS' (UTC) for export file names
+  function exportTimestamp(date = new Date()) {
+    return date.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  }
+
+  function escapeHtml(text) {
+    return String(text == null ? '' : text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  // Notebook title in the page header, most specific first (one chain for
+  // file names, chat export and the health check)
+  const PROJECT_TITLE_SELECTORS = [
+    '.title-label-inner',
+    'editable-project-title .title-label span',
+    '.title-container .title span',
+    '[class*="title-label"]',
+    '.notebook-title'
+  ];
+
   const NLME = {
+    NOTEBOOK_HOSTS,
+    isNotebookUrl,
+    sanitizeFilename,
+    artifactTypePrefix,
+    exportTimestamp,
+    escapeHtml,
+    PROJECT_TITLE_SELECTORS,
     normalizeExportError,
     buildErrorReport,
     cancellationNote,

@@ -3,13 +3,12 @@
 // Google renamed NotebookLM to "Gemini Notebook" and moved it from
 // notebooklm.google.com to notebook.google.com (Jul 2026). The old host 301s to
 // the new one; keep both so users mid-rollout still work.
-const NOTEBOOK_HOSTS = ['notebook.google.com', 'notebooklm.google.com'];
 
 // Shared DOM-free helpers (globalThis.NLME)
 importScripts('takeout-shared.js', 'jszip.min.js');
 
 function isNotebookUrl(url) {
-  return !!url && NOTEBOOK_HOSTS.some(host => url.includes(host));
+  return NLME.isNotebookUrl(url);
 }
 
 // Handle extension icon click - open sidebar
@@ -64,14 +63,7 @@ const directDownloads = new Map(); // downloadId -> {filename, artifactType} for
  * Get artifact type prefix for filenames
  */
 function getArtifactTypePrefix(artifactType) {
-  const typeMap = {
-    'Audio Overview': 'audio-overview',
-    'Data Table': 'data-table',
-    'Report': 'report',
-    'Infographic': 'infographic',
-    'Slides': 'slides'
-  };
-  return typeMap[artifactType] || artifactType.toLowerCase().replace(/\s+/g, '-');
+  return NLME.artifactTypePrefix(artifactType);
 }
 
 // Listen for messages from content script
@@ -483,22 +475,7 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
 });
 
 function sanitizeFilename(filename) {
-  let clean = filename
-    .replace(/[<>:"/\\|?*]/g, '_')
-    .replace(/[\u0027\u0060\u00B4\u2018\u2019\u0022\u201C\u201D]/g, '')
-    .replace(/[#%&{}$!@+]/g, '_')
-    .replace(/\.{2,}/g, '.')
-    .replace(/\s+/g, '-')
-    .replace(/[-_]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .substring(0, 100);
-
-  // Fallback if sanitization resulted in empty string
-  if (clean.length === 0) {
-    clean = 'untitled';
-  }
-
-  return clean;
+  return NLME.sanitizeFilename(filename);
 }
 
 // Fetch file content and return as base64
@@ -706,7 +683,7 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
     fileContents.forEach((f, i) => { f.filename = uniqueNames[i]; });
     try {
       const zipBase64 = await createZipFromFiles(fileContents, errors);
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const timestamp = NLME.exportTimestamp();
 
       // Download the ZIP (awaited: a failure here is a failed batch)
       const zipUrl = `data:application/zip;base64,${zipBase64}`;
@@ -793,7 +770,7 @@ async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
     // Never lose the reasons: an errors-only ZIP
     if (errors.length > 0) {
       try {
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const timestamp = NLME.exportTimestamp();
         const errUrl = `data:application/zip;base64,${await createZipFromFiles([], errors)}`;
         const errName = `notebooklm-export-${timestamp}${batchWasCancelled ? '-PARTIAL' : ''}-errors.zip`;
         nameNextDownload(errUrl, errName);
