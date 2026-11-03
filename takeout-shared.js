@@ -2001,6 +2001,40 @@ footer { margin-top: 3rem; }
     UPDATE_EXPORT_OVERLAY: 'UPDATE_EXPORT_OVERLAY'
   });
 
+  // The ⚙️ settings as shipped. The side panel starts from these and
+  // "Reset to defaults" returns to them. takeoutZip is Full Takeout's own ZIP
+  // tick (on its tab, not in ⚙️): unset until the user ticks it.
+  const DEFAULT_SETTINGS = Object.freeze({
+    autoZip: false,
+    takeoutZip: undefined,
+    showNotifications: true,
+    refreshInterval: 10,
+    exportSourceBase: true,
+    exportSourcePlusMeta: true,
+    exportSourceWithImages: false,
+    exportSourcePlusMetaWithImages: false,
+    exportNoteBase: true,
+    exportNoteCodeBlocks: true,
+    exportNoteWithImages: false,
+    sourcesPerZip: 25,
+    notesPerZip: 25,
+    cleanOCRArtifacts: true,
+    showStudioTab: false,
+    slidesFormat: 'pdf',
+    citationDetail: 'quotes',
+    reuseCitations: true,
+    citationStyle: 'links',
+    obsidianNames: false
+  });
+
+  // A fresh, editable copy of the defaults. Keeps only the Full Takeout ZIP
+  // choice from `current`, since that tick is not one of the ⚙️ options.
+  function resetSettings(current) {
+    const fresh = { ...DEFAULT_SETTINGS };
+    if (current && current.takeoutZip !== undefined) fresh.takeoutZip = current.takeoutZip;
+    return fresh;
+  }
+
   const NLME = {
     MSG,
     studioTargetMatches,
@@ -2139,7 +2173,9 @@ footer { margin-top: 3rem; }
     shouldClearCitationCache,
     citationSourcesComplete,
     CITE_MAX_BYTES_PER_NOTEBOOK,
-    CITE_KEEP_NOTEBOOKS
+    CITE_KEEP_NOTEBOOKS,
+    DEFAULT_SETTINGS,
+    resetSettings
   };
 
   root.NLME = NLME;

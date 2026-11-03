@@ -1934,3 +1934,40 @@ test('footnoteDefinition escapes * in the title and trims continuation indentati
   assert.equal(NLME.footnoteDefinition('1', 'A*B*', 'q'), '[^1]: **A\\*B\\*** — q');
   assert.equal(NLME.footnoteDefinition('1', 'T', 'first\n      deep\n\tTab'), '[^1]: **T** — first\n    deep\n    Tab');
 });
+
+test('DEFAULT_SETTINGS pins the shipped defaults and cannot be changed', () => {
+  const d = NLME.DEFAULT_SETTINGS;
+  assert.ok(Object.isFrozen(d));
+  assert.equal(d.autoZip, false);
+  assert.equal(d.showNotifications, true);
+  assert.equal(d.refreshInterval, 10);
+  assert.equal(d.exportSourceBase, true);
+  assert.equal(d.exportSourcePlusMeta, true);
+  assert.equal(d.exportSourceWithImages, false);
+  assert.equal(d.exportSourcePlusMetaWithImages, false);
+  assert.equal(d.exportNoteBase, true);
+  assert.equal(d.exportNoteCodeBlocks, true);
+  assert.equal(d.exportNoteWithImages, false);
+  assert.equal(d.sourcesPerZip, 25);
+  assert.equal(d.notesPerZip, 25);
+  assert.equal(d.cleanOCRArtifacts, true);
+  assert.equal(d.showStudioTab, false);
+  assert.equal(d.slidesFormat, 'pdf');
+  assert.equal(d.citationDetail, 'quotes');
+  assert.equal(d.reuseCitations, true);
+  assert.equal(d.citationStyle, 'links');
+  assert.equal(d.obsidianNames, false);
+  assert.ok('takeoutZip' in d);
+  assert.equal(d.takeoutZip, undefined);
+});
+
+test('resetSettings returns fresh defaults and keeps only the Full Takeout ZIP choice', () => {
+  const current = { ...NLME.DEFAULT_SETTINGS, autoZip: true, citationStyle: 'footnotes', obsidianNames: true, sourcesPerZip: 7, takeoutZip: true };
+  const reset = NLME.resetSettings(current);
+  assert.deepEqual(reset, { ...NLME.DEFAULT_SETTINGS, takeoutZip: true });
+  assert.ok(!Object.isFrozen(reset));
+  reset.autoZip = true;
+  assert.equal(NLME.DEFAULT_SETTINGS.autoZip, false);
+  assert.deepEqual(NLME.resetSettings({}), { ...NLME.DEFAULT_SETTINGS });
+  assert.deepEqual(NLME.resetSettings(undefined), { ...NLME.DEFAULT_SETTINGS });
+});

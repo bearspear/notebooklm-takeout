@@ -120,3 +120,15 @@ test('takeout-markdown.js exposes the converter API without needing Turndown at 
   }
   assert.equal(api.htmlToMarkdownPlain(null), '');
 });
+
+test('every setting saveSettings writes has a shipped default, and the panel starts from DEFAULT_SETTINGS', () => {
+  const NLME = require('../takeout-shared.js');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'sidebar-core.js'), 'utf8');
+  const start = src.indexOf('async function saveSettings(');
+  assert.ok(start >= 0, 'saveSettings not found');
+  const body = src.slice(start, src.indexOf('\n}\n', start));
+  const keys = [...new Set([...body.matchAll(/settings\.([A-Za-z]+)\s*=(?!=)/g)].map(m => m[1]))];
+  assert.ok(keys.length >= 15, `expected the saved settings, found ${keys.length}`);
+  for (const k of keys) assert.ok(k in NLME.DEFAULT_SETTINGS, `${k} has no default in NLME.DEFAULT_SETTINGS`);
+  assert.match(src, /let settings = NLME\.resetSettings\(\);/);
+});

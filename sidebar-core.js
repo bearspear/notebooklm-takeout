@@ -147,40 +147,9 @@ function isNotebookUrl(url) {
 let currentTabId = null;
 let autoRefreshInterval = null;
 let settingsLoaded = false;
-let settings = {
-  autoZip: false,
-  takeoutZip: undefined, // Full Takeout's own ZIP choice; not set until the user ticks its checkbox
-  showNotifications: true,
-  refreshInterval: 10,
-  // Source export versions (which combinations to create)
-  exportSourceBase: true, // Base version (always enabled, can't be disabled)
-  exportSourcePlusMeta: true, // With metadata (summary & key topics)
-  exportSourceWithImages: false, // With images (no metadata)
-  exportSourcePlusMetaWithImages: false, // With metadata + images
-  // Note export versions (which combinations to create)
-  exportNoteBase: true, // Base version (always enabled, can't be disabled)
-  exportNoteCodeBlocks: true, // Code blocks, no images (was: citationsCodeBlock)
-  exportNoteWithImages: false, // With images, markdown (was: includeCitationImages)
-  // Batch sizes
-  sourcesPerZip: 25, // Number of sources per ZIP file (prevents memory issues)
-  notesPerZip: 25, // Number of notes per ZIP file (prevents memory issues)
-  // Text cleanup
-  cleanOCRArtifacts: true, // Clean OCR garbage (~~~, :~:, etc.) from citation quotes
-  // Interface
-  showStudioTab: false, // Show the Generated tab (internal id and key stay 'studio'; unified per-item list with delete)
-  // Slide deck download format offered by the More menu ('pdf' | 'pptx')
-  slidesFormat: 'pdf',
-  // Note citations: 'quotes' hovers every marker; 'titles' takes source
-  // titles from the markers only (no hovering); 'none' drops markers and Sources
-  citationDetail: 'quotes',
-  // Milestone 3c: reuse citation quotes read by an earlier export (quotes mode, no images)
-  reuseCitations: true,
-  // Milestone 3d (both opt-in): 'links' | 'footnotes' ([^n] markers and
-  // definitions, for Obsidian, Typora, ...; link versions only), and
-  // Obsidian-friendly file names (no [ ] # ^ | etc., "note - Title")
-  citationStyle: 'links',
-  obsidianNames: false
-};
+// Shipped defaults live in NLME.DEFAULT_SETTINGS (takeout-shared.js); stored
+// settings are merged over them in loadSettings.
+let settings = NLME.resetSettings();
 
 document.addEventListener('DOMContentLoaded', () => {
   init();
@@ -296,7 +265,11 @@ async function loadSettings() {
     settings = migrated;
   }
 
-  // Apply settings to UI
+  applySettingsToUi();
+}
+
+// Show `settings` in the ⚙️ panel (on load and after Reset to defaults)
+function applySettingsToUi() {
   document.getElementById('auto-zip-checkbox').checked = settings.autoZip;
   document.getElementById('takeout-zip-checkbox').checked = NLME.takeoutZipChoice(settings);
   document.getElementById('show-notifications-checkbox').checked = settings.showNotifications;
@@ -331,6 +304,22 @@ async function loadSettings() {
   document.getElementById('obsidian-names-checkbox').checked = settings.obsidianNames === true;
   applyStudioTabVisibility();
   updateChatCitationInfo();
+}
+
+// An "images" version is only offered while its parent version is ticked
+// (the same rule the parent checkboxes' change handlers apply)
+function syncVersionChildStates() {
+  [
+    ['export-source-base-checkbox', 'export-source-with-images-checkbox'],
+    ['export-source-plus-meta-checkbox', 'export-source-plus-meta-with-images-checkbox'],
+    ['export-note-base-checkbox', 'export-note-with-images-checkbox']
+  ].forEach(([parentId, childId]) => {
+    const parent = document.getElementById(parentId);
+    const child = document.getElementById(childId);
+    if (!parent || !child) return;
+    child.disabled = !parent.checked;
+    if (!parent.checked) child.checked = false;
+  });
 }
 
 // The Chat tab's one-line reminder of the Citation detail it will export with
@@ -417,6 +406,16 @@ function setupEventListeners() {
 
   document.getElementById('settings-btn').addEventListener('click', () => {
     document.getElementById('settings-panel').style.display = 'block';
+  });
+
+  document.getElementById('reset-settings-btn')?.addEventListener('click', async () => {
+    if (jobLock.current()) { showToast(`${jobLock.current()} is still running`, 'warning'); return; }
+    if (!confirm('Reset all settings to their defaults? The citation cache and saved exports to resume are kept.')) return;
+    settings = NLME.resetSettings(settings);
+    applySettingsToUi();
+    syncVersionChildStates();
+    await chrome.storage.local.set({ settings });
+    showToast('Settings reset to defaults', 'success');
   });
 
   document.getElementById('clear-citation-cache-btn')?.addEventListener('click', async () => {

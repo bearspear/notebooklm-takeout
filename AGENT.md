@@ -138,14 +138,14 @@ sendResponse later).
 ```
 notebooklm-exporter/
 ├── manifest.json           — V3 manifest, permissions, side_panel, content_scripts
-├── takeout-shared.js (2147) — Selectors + DOM-free helpers (NLME global); content script,
+├── takeout-shared.js (2183) — Selectors + DOM-free helpers (NLME global); content script,
 │                             sidebar, service worker (importScripts) and Node tests load it
 ├── takeout-job.js (228)    — NLME.runExportJob: the one DOM-free job runner (sidebar + Node tests)
 ├── takeout-markdown.js (1029) — NLMEMarkdown: the one Markdown converter + KaTeX (sidebar + page)
 ├── tests/                  — node:test unit tests for takeout-shared.js, takeout-job.js, the
 │                             message protocol and the file structure (load order, unique names)
-├── sidebar.html  ( 470)    — Side panel UI: tabs, controls, settings/health panels
-├── sidebar-core.js (1618) — Settings, init, tab and notebook switching, job lock, shared helpers,
+├── sidebar.html  ( 478)    — Side panel UI: tabs, controls, settings/health panels
+├── sidebar-core.js (1617) — Settings, init, tab and notebook switching, job lock, shared helpers,
 │                             notes Markdown (convertToMarkdown), job records (see Milestone 3d contracts)
 ├── sidebar-artifacts.js (1183), sidebar-notes.js (788), sidebar-sources.js (741),
 │   sidebar-chat.js (772), sidebar-generated.js (314), sidebar-health.js (304)
@@ -176,7 +176,7 @@ Line numbers drift with every change, so anchors are names: `grep -n "<name>" <f
 
 | What | Where (grep for) |
 |---|---|
-| Settings defaults | `let settings = {` in sidebar-core.js |
+| Settings defaults | `NLME.DEFAULT_SETTINGS` in takeout-shared.js (sidebar-core.js starts from `NLME.resetSettings()`) |
 | `loadSettings` / `saveSettings` | sidebar-core.js |
 | Tab switching | `setupTabSwitching` (sidebar-core.js) |
 | KaTeX converter (shared) | `convertKatexNodeToLatex`, `katexRenderInline` (takeout-markdown.js, `NLMEMarkdown`) |
@@ -199,7 +199,7 @@ Line numbers drift with every change, so anchors are names: `grep -n "<name>" <f
 
 ## Settings shape and storage
 
-Storage: `chrome.storage.local`, single key `settings`. Defaults in `let settings = {` (sidebar-core.js):
+Storage: `chrome.storage.local`, single key `settings`. Defaults in the frozen `NLME.DEFAULT_SETTINGS` (takeout-shared.js); `let settings = NLME.resetSettings();` in sidebar-core.js starts from a copy, and ⚙️ "Reset to defaults" calls `NLME.resetSettings(settings)` (keeps only `takeoutZip`), then `applySettingsToUi()` and `syncVersionChildStates()`:
 
 ```js
 {
@@ -244,10 +244,10 @@ chat export code reads them. Update both halves if you touch this.
 
 Adding a new boolean setting:
 
-1. Add field to the `let settings = {` defaults object in sidebar-core.js.
+1. Add field to `DEFAULT_SETTINGS` in takeout-shared.js (and to its test). The structure test fails if `saveSettings` writes a key with no default.
 2. Add `<input type="checkbox" id="{name}-checkbox">` inside the appropriate
    `.setting-section` in `sidebar.html`.
-3. Read in `loadSettings`: `document.getElementById('{name}-checkbox').checked = settings.{name};`
+3. Read in `applySettingsToUi` (called by `loadSettings` and the reset): `document.getElementById('{name}-checkbox').checked = settings.{name};`
 4. Write in `saveSettings`: `settings.{name} = document.getElementById('{name}-checkbox').checked;`
 5. Reference where consumed.
 

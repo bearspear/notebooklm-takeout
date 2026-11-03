@@ -297,6 +297,9 @@ are disabled and a second click shows "… is still running".
 
 The chat export uses the note version settings.
 
+**Reset to defaults** (bottom of ⚙️) puts every option above back to the values in this table,
+after a confirm. It keeps the citation cache, Full Takeout's own ZIP tick and saved exports to resume.
+
 ### Footnote citations and Obsidian-friendly names
 
 Both are opt-in; with them off every file is exactly as before.
@@ -495,6 +498,7 @@ contract with Gemini Notebook, past drift and recipes.
   folder-mode manifests record downloaded file sizes; Delete Selected counts only items it can
   delete; a delete no longer clicks a dialog's backdrop on a menu's behalf or closes dialogs it didn't
   open (it closes its own menu and confirm dialog).
+- ⚙️ has a **Reset to defaults** button; the citation cache and exports to resume are kept.
 - Under the hood: `sidebar.js` is split into one file per tab, the page script answers messages
   through a handler table, and one module (`takeout-markdown.js`) holds all Markdown conversion.
   Exports are otherwise byte-identical to 1.6.0.
