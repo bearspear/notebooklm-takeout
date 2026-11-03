@@ -457,6 +457,15 @@
     };
   }
 
+  // A Full Takeout's errors.md holds every category's errors: each keeps its
+  // type and gets its category in front ("Notes: <item>: <message>").
+  function prefixExportErrors(category, errors = []) {
+    return (errors || []).map(raw => {
+      const e = normalizeExportError(raw);
+      return { type: e.type, title: e.item ? `${category}: ${e.item}` : category, message: e.message, stack: e.detail };
+    });
+  }
+
   // One errors.md format for notes, sources, chat and Download All.
   function buildErrorReport({ title = 'Export', generatedAt = '', errors = [], stats = {} } = {}) {
     const lines = [`# ${title} Error Report`, ''];
@@ -881,7 +890,11 @@
     done: 'complete',
     partial: 'partial (cancelled)',
     skipped: 'skipped (cancelled earlier)',
-    empty: 'none in notebook'
+    empty: 'none in notebook',
+    // Full Takeout only: the notes job stopped itself (citations unreadable)
+    // or the category's scan failed
+    stopped: 'partial (stopped, see errors)',
+    failed: 'failed (see errors)'
   };
 
   // _index.md at the root of a Full Takeout: one row per category (Sources,
@@ -952,6 +965,7 @@
     escapeHtml,
     PROJECT_TITLE_SELECTORS,
     normalizeExportError,
+    prefixExportErrors,
     buildErrorReport,
     cancellationNote,
     distinctVariants,

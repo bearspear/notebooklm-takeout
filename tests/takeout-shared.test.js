@@ -722,3 +722,15 @@ test('buildRootIndex lists every category with its status and links errors', () 
   assert.match(md, /\[errors\.md\]\(errors\.md\)/);
   assert.match(md, /Unzip every ZIP into the same folder/);
 });
+
+test('prefixExportErrors puts the category in front of every error and keeps its type', () => {
+  const errors = NLME.prefixExportErrors('Notes', [
+    '[Algebra] Failed to extract: timeout',
+    'Cancelled by user after 4 of 10 notes; the rest were not exported',
+    { source: 'Paper.pdf', type: 'missing_summary', message: 'No summary' }
+  ]);
+  const report = NLME.buildErrorReport({ title: 'Takeout', errors });
+  assert.match(report, /## ERROR \(1\)\n\n- Notes: Algebra: Failed to extract: timeout/);
+  assert.match(report, /## CANCELLED \(1\)\n\n- Notes: Cancelled by user after 4 of 10 notes/);
+  assert.match(report, /## MISSING SUMMARY \(1\)\n\n- Notes: Paper\.pdf: No summary/);
+});
