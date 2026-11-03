@@ -587,6 +587,16 @@ test('auditExport flags missing citations', () => {
   assert.ok(r.lines.some(l => l.includes('280 of 294') && l.startsWith('- ⚠️')));
 });
 
+test('diffAudit returns what one part added to the run-wide audit', () => {
+  const before = { expected: { items: 3, citations: 10, formulas: 1 }, written: { items: 3, citations: 9, formulas: 1 }, cacheHits: 2, cachedItems: 3 };
+  const now = { expected: { items: 5, citations: 14, formulas: 1 }, written: { items: 4, citations: 12, formulas: 1 }, cacheHits: 3, cachedItems: 4 };
+  assert.deepEqual(NLME.diffAudit(now, before), {
+    expected: { items: 2, citations: 4, formulas: 0 }, written: { items: 1, citations: 3, formulas: 0 }, cacheHits: 1, cachedItems: 1
+  });
+  // No earlier snapshot: the whole audit
+  assert.deepEqual(NLME.diffAudit(now, undefined), now);
+});
+
 test('unknownStudioIcons lists only unmapped icons', () => {
   assert.deepEqual(NLME.unknownStudioIcons(['tablet', 'copy', 'new_shape', 'article', 'new_shape', '']), ['new_shape']);
 });

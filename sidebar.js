@@ -2680,10 +2680,19 @@ function convertCounted(audit, html, convert, page = null) {
   return markdown;
 }
 
-function auditMarkdown(title, audit) {
+function auditSection(audit) {
   const result = NLME.auditExport(audit);
   const cacheLine = audit.cacheHits > 0 ? `\nCitations from cache: ${audit.cacheHits} of ${audit.cachedItems} items\n` : '';
-  return { ok: result.ok, text: `# ${title} Audit\n\nWhat the page showed vs what was exported:\n\n${result.lines.join('\n')}\n${cacheLine}` };
+  return { ok: result.ok, body: `What the page showed vs what was exported:\n\n${result.lines.join('\n')}\n${cacheLine}` };
+}
+
+// runTotals: the run-wide audit, appended as a second section (the last part
+// of a split export carries it; every part's own audit comes first)
+function auditMarkdown(title, audit, { runTotals = null } = {}) {
+  const section = auditSection(audit);
+  let text = `# ${title} Audit\n\n${section.body}`;
+  if (runTotals) text += `\n## Whole run\n\n${auditSection(runTotals).body}`;
+  return { ok: section.ok, text };
 }
 
 async function generateZipTimed(zip) {
@@ -3207,6 +3216,10 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
     declined: false // user declined the DOM warning: stops like a Cancel
   };
   let packaged = 0; // notes written to ZIPs so far
+  // Snapshot of the run-wide audit when the previous part was packaged, and
+  // the items attempted by then: a part's audit is the difference
+  let lastPartAudit = newAudit();
+  let lastPartAttempted = 0;
 
   // Item counts go in last, once every written note is known
   const finalAudit = () => {
@@ -3239,9 +3252,20 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
     packageBatch: async (notes, info) => {
       packaged += notes.length;
       shell.progress(`Creating ZIP ${info.batchIndex}/${info.totalBatches}...`, 1);
-      // _audit.md goes into the last ZIP the run writes (an errors-only ZIP
-      // too: the outcome toast may point at it)
-      const auditText = info.isLast ? auditMarkdown('Notes Export', finalAudit()).text : null;
+      // Every part gets an _audit.md for its own items (what was added since
+      // the previous part); the last part (an errors-only ZIP too: the outcome
+      // toast may point at it) adds the run-wide totals as a second section.
+      // An unsplit export keeps the single run-wide audit.
+      const runAudit = finalAudit();
+      const totalNow = info.exported + info.failed;
+      const partAudit = NLME.diffAudit(runAudit, lastPartAudit);
+      partAudit.expected.items = totalNow - lastPartAttempted;
+      partAudit.written.items = notes.length;
+      lastPartAudit = JSON.parse(JSON.stringify(runAudit));
+      lastPartAttempted = totalNow;
+      const auditText = info.multi
+        ? auditMarkdown(`Notes Export (part ${info.batchIndex} of ${info.totalBatches})`, partAudit, { runTotals: info.isLast ? runAudit : null }).text
+        : auditMarkdown('Notes Export', runAudit).text;
       const files = buildNotesFiles(notes, {
         meta: shell.meta,
         errors: info.errors,

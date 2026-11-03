@@ -808,6 +808,22 @@
     return { ok, lines };
   }
 
+  // What one part of a split export added to a run-wide audit: current minus
+  // the snapshot taken when the previous part was packaged. Keeps every numeric
+  // field of the audit shape (expected/written counters, cacheHits, cachedItems).
+  function diffAudit(current, before) {
+    const sub = (a, b) => {
+      const out = {};
+      for (const key of Object.keys(a || {})) {
+        out[key] = (a[key] && typeof a[key] === 'object')
+          ? sub(a[key], (b || {})[key])
+          : (Number(a[key]) || 0) - (Number((b || {})[key]) || 0);
+      }
+      return out;
+    };
+    return sub(current, before);
+  }
+
   // Studio icons the extension cannot classify (new artifact types appear
   // this way first); notes' icons count as known
   function unknownStudioIcons(iconTexts) {
@@ -1755,6 +1771,7 @@ footer { margin-top: 3rem; }
     citationCoverage,
     unknownStudioIcons,
     auditExport,
+    diffAudit,
     buildSourcesIndex,
     citationTitleFromAriaLabel,
     fenceFor,
