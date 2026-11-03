@@ -3031,7 +3031,9 @@ function stampJobKeys(category, items) {
  * @param {'notes'|'sources'|'artifacts'|'takeout'} kind
  * @param {string} label
  * @param {{ [category: string]: object[] }} itemsByCategory the items to export, by category
- * @param {{ update?: boolean }} [options] update: a retry or resume. It never
+ * @param {{ update?: boolean }} [options] update: a retry or resume (also taken
+ *   by a fresh export when the notebook's stored record is another kind's with
+ *   items left, NLME.jobRecordMode). It never
  *   creates or replaces a record: it loads the notebook's existing one (none:
  *   returns null) and marks its items done or failed on it, only for keys the
  *   record holds, and writes nothing until one changes.
@@ -3048,9 +3050,13 @@ async function startJobRecord(shell, kind, label, itemsByCategory, { update = fa
       keysByCategory[category] = keys;
     }
     let record;
-    if (update) {
-      const storageKey = NLME.jobRecordKey(notebookId);
-      const stored = (await chrome.storage.local.get(storageKey))[storageKey];
+    const storageKey = NLME.jobRecordKey(notebookId);
+    const stored = (await chrome.storage.local.get(storageKey))[storageKey];
+    // A fresh export never replaces a pending record of another kind (a
+    // cancelled takeout keeps its Resume offer through a small Sources export):
+    // it runs as an update, marking only the keys that record holds
+    const updating = update || NLME.jobRecordMode(stored, kind) === 'update';
+    if (updating) {
       const arrays = group => !!group && typeof group === 'object' && !Array.isArray(group) && Object.values(group).every(Array.isArray);
       if (!stored || !arrays(stored.remaining) || !arrays(stored.failed)) return null;
       record = stored;
@@ -3060,7 +3066,7 @@ async function startJobRecord(shell, kind, label, itemsByCategory, { update = fa
       if (NLME.jobRecordFinished(record)) return null;
     }
     const recorder = NLME.createJobRecorder({ storage: chrome.storage.local, record });
-    if (!update) await recorder.start();
+    if (!updating) await recorder.start();
     // Never throws: a bad record must not skip NAVIGATE_BACK or fail a package
     const safe = fn => (...args) => {
       try { return fn(...args); } catch (error) { console.warn('[NotebookLM Takeout] Job record update failed:', error); }
