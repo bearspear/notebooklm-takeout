@@ -611,3 +611,23 @@ test('citationCoverage counts distinct markers against sources actually read', (
   assert.deepEqual(NLME.citationCoverage({ markerNumbers: ['1', '2', '3', '3'], sources, needQuotes: true }), { expected: 3, written: 1 });
   assert.deepEqual(NLME.citationCoverage({ markerNumbers: ['1', '2', '3'], sources, needQuotes: false }), { expected: 3, written: 2 });
 });
+
+test('groupCitationEntries puts all numbers of one source on one line, in first-seen order', () => {
+  const groups = NLME.groupCitationEntries([
+    { number: '1', text: 'Invent math' }, { number: '2', text: 'Invent math' },
+    { number: '3', text: 'ZFC angels' }, { number: '4', text: 'Invent math' }
+  ]);
+  assert.deepEqual(groups, [
+    { text: 'Invent math', numbers: ['1', '2', '4'] },
+    { text: 'ZFC angels', numbers: ['3'] }
+  ]);
+});
+
+test('groupCitationEntries keeps unavailable placeholders apart from real sources', () => {
+  const groups = NLME.groupCitationEntries([
+    { number: '1', text: '(citation details unavailable)', missing: true },
+    { number: '2', text: '(citation details unavailable)', missing: true },
+    { number: '3', text: 'A' }
+  ]);
+  assert.deepEqual(groups.map(g => g.numbers), [['1', '2'], ['3']]);
+});

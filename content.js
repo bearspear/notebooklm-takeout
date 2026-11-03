@@ -78,7 +78,7 @@
   let exportOverlay = null;
   let exportCancelled = false;
   let includeCitationImages = false; // Global setting for including images in citations
-  let citationDetailMode = 'quotes';   // 'quotes' (hover each marker) | 'titles' (no hovering)
+  let citationDetailMode = 'quotes';   // 'quotes' (hover each marker) | 'titles' (no hovering; also used for 'none')
 
   function createExportOverlay() {
     if (exportOverlay) return exportOverlay;
@@ -298,7 +298,8 @@
       sendResponse({ success: true });
     } else if (message.type === 'EXTRACT_NOTE') {
       // Extract note content
-      citationDetailMode = message.data.citationDetail === 'titles' ? 'titles' : 'quotes';
+      // 'titles' and 'none' both skip hovering ('none' drops the markers later)
+      citationDetailMode = ['titles', 'none'].includes(message.data.citationDetail) ? 'titles' : 'quotes';
       withRequestTiming(() => (typeof message.data.sourceIndex === 'number'
         ? extractSourcesPanelNote(message.data.sourceIndex, message.data.noteTitle, message.data.includeCitationImages)
         : extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages)))

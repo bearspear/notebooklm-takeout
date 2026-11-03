@@ -148,7 +148,7 @@ are disabled and a second click shows "… is still running".
 | Always use ZIP for batch downloads | off | Default for the Artifacts ZIP toggle |
 | Slide deck format | PDF | PDF or PowerPoint |
 | Source versions | base + metadata | Any mix of: base, with AI summary & topics, each optionally with images |
-| Citation detail | Full quotes | "Source titles only" skips reading each citation's popup: much faster, every [n] still links to its source, but without the quoted passage |
+| Citation detail | Full quotes | "Source titles only" skips reading each citation's popup: much faster, every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. |
 | Note versions | base + code blocks | Base always; code-block quotes and an image version are added only when a note has quotes or images |
 | Sources / notes per ZIP | 25 | Batch size for large exports |
 | Clean OCR artifacts from citations | on | Strips `~~~`, `:~:` and similar noise |
@@ -255,7 +255,7 @@ contract with Gemini Notebook, past drift and recipes.
 **1.3.0 (Nov 2026)**: lean, shared and correct output.
 - Each export writes `_audit.md`, comparing what the page showed with what was exported
   (items, citations, formulas), and warns when something is missing.
-- New "Source titles only" citation mode: no popup reading, so large exports are much faster.
+- New citation modes: "Source titles only" (no popup reading, one Sources line per source) and "No citations" (plain text). Both make large exports much faster.
 - Reports get a Sources section; quotes render as blockquotes; no more identical duplicate
   files; the sources index links same-titled sources correctly.
 - Error reports have one format for every export (a cancelled chat export no longer fails).

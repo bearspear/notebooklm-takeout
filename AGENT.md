@@ -208,7 +208,7 @@ Storage: `chrome.storage.local`, single key `settings`. Defaults in `let setting
 
   // Downloads
   slidesFormat: 'pdf',                       // 'pdf' | 'pptx' — slide deck More-menu item
-  citationDetail: 'quotes',                  // 'quotes' (hover each marker) | 'titles' (aria-labels only)
+  citationDetail: 'quotes',                  // 'quotes' (hover) | 'titles' (aria-labels) | 'none' (no citations)
 }
 ```
 
@@ -905,8 +905,11 @@ Found while checking real exports after #8; the export bugs below predate it.
   code blocks only with quotes; with-images only with images. "Code blocks + images" is gone.
 - **Quotes:** `NLME.toBlockquote` (plain) or `NLME.fenceFor` (code blocks). Don't escape quotes.
 - **Citation detail:** `settings.citationDetail === 'titles'` makes `EXTRACT_NOTE` build
-  Sources from `NLME.citationTitleFromAriaLabel` without hovering. Reports always get a
-  Sources section from marker titles (`citationTitlesFromHtml`).
+  Sources from `NLME.citationTitleFromAriaLabel` without hovering; quote-less Sources render
+  one line per source (`NLME.groupCitationEntries`: `**[1] [4]** Title`). `'none'` also skips
+  hovering and passes `dropCitations` to `convertToMarkdown`: no `[n]` markers, no Sources,
+  no citation audit. Reports always get a Sources section from marker titles
+  (`citationTitlesFromHtml`).
 - **Audit:** notes, sources and chat write `_audit.md` (`NLME.auditExport`): items, citation
   anchors vs numbered markers, formulas converted (`katexConversions`) vs `.katex`. A notes
   export stops when the first three notes with markers return no sources.

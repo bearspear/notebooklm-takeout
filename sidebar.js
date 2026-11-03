@@ -496,7 +496,7 @@ let settings = {
   // Slide deck download format offered by the More menu ('pdf' | 'pptx')
   slidesFormat: 'pdf',
   // Note citations: 'quotes' hovers every marker; 'titles' takes source
-  // titles from the markers only (no hovering)
+  // titles from the markers only (no hovering); 'none' drops markers and Sources
   citationDetail: 'quotes'
 };
 
@@ -688,7 +688,8 @@ async function saveSettings() {
   // Interface
   settings.showStudioTab = document.getElementById('show-studio-tab-checkbox').checked;
   settings.slidesFormat = document.getElementById('slides-format-select').value === 'pptx' ? 'pptx' : 'pdf';
-  settings.citationDetail = document.getElementById('citation-detail-select').value === 'titles' ? 'titles' : 'quotes';
+  settings.citationDetail = ['titles', 'none'].includes(document.getElementById('citation-detail-select').value)
+    ? document.getElementById('citation-detail-select').value : 'quotes';
   applyStudioTabVisibility();
 
   await chrome.storage.local.set({ settings });
@@ -2110,7 +2111,9 @@ ${footnotesHTML}
 
 // citationPlaceholders: false when no citation extraction ran (reports, source
 // content), so unread markers don't produce "(citation details unavailable)".
-function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock = true, skipTitleIfPresent = false, noteId = null, citationPlaceholders = true) {
+// dropCitations: Citation detail 'none' — remove [n] markers and the Sources
+// section, leaving plain text
+function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock = true, skipTitleIfPresent = false, noteId = null, citationPlaceholders = true, dropCitations = false) {
   // Debug: Log what we're converting
   logger.info('Markdown', `Converting note: "${noteTitle}"`);
   logger.info('Markdown', `  - HTML content length: ${htmlContent.length} chars`);
@@ -2315,6 +2318,7 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
       return false;
     },
     replacement: (content, node) => {
+      if (dropCitations) return '';
       // Debug: Log what we're processing
       logger.info('Citation', `Processing citation node: ${node.nodeName}`);
       logger.info('Citation', `  - content: "${content}"`);
@@ -2407,8 +2411,17 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
 
   // Sources section: extracted sources plus a placeholder for any marker
   // whose tooltip could not be read, all under their original numbers
-  const entries = NLME.buildCitationEntries(sources, [...citationOccurrences.keys()], { placeholders: citationPlaceholders });
-  if (entries.length > 0) {
+  const entries = dropCitations ? [] : NLME.buildCitationEntries(sources, [...citationOccurrences.keys()], { placeholders: citationPlaceholders });
+  if (entries.length > 0 && entries.every(entry => !entry.quote)) {
+    // No quotes (titles-only, reports): one line per source with all its
+    // numbers; every number keeps its own anchor so body links still resolve
+    markdown += '\n\n---\n\n## Sources\n\n';
+    for (const group of NLME.groupCitationEntries(entries)) {
+      const anchors = group.numbers.map(n => `<a id="${anchorPrefix}src-${n}"></a>`).join('');
+      const links = group.numbers.map(n => `[[${n}]](#${anchorPrefix}cite-ref-${n}-1)`).join(' ');
+      markdown += `${anchors}\n**${links}** ${group.text}\n\n`;
+    }
+  } else if (entries.length > 0) {
     markdown += '\n\n---\n\n## Sources\n\n';
 
     entries.forEach(entry => {
@@ -2917,10 +2930,13 @@ async function exportNotesAsMarkdown(selectedNotes) {
             // counting citations and formulas for the audit
             const notePage = countPageContent(noteData.html);
             const markdown = convertCounted(notesAudit, noteData.html,
-              () => convertToMarkdown(noteData.html, noteData.sources, note.title, false), notePage);
-            addCitationCoverage(notesAudit, noteData.html, noteData.sources, settings.citationDetail !== 'titles', notePage);
+              () => convertToMarkdown(noteData.html, noteData.sources, note.title, false, false, null, true, settings.citationDetail === 'none'), notePage);
+            // 'none' drops citations on purpose: nothing to audit there
+            if (settings.citationDetail !== 'none') {
+              addCitationCoverage(notesAudit, noteData.html, noteData.sources, settings.citationDetail === 'quotes', notePage);
+            }
             const pageCitations = notePage.citationNumbers.length;
-            if (pageCitations > 0 && settings.citationDetail !== 'titles') {
+            if (pageCitations > 0 && settings.citationDetail === 'quotes') {
               notesWithMarkers++;
               if ((noteData.sources || []).length === 0) unreadNotes++;
             }
@@ -3198,7 +3214,10 @@ async function exportSingleNote(note) {
       noteData.sources,
       note.title,
       version.citationsCodeBlock,
-      true // skipTitleIfPresent
+      true, // skipTitleIfPresent
+      null,
+      true,
+      settings.citationDetail === 'none'
     );
     if (version.stripImages) {
       markdown = stripImagesFromMarkdown(markdown);
@@ -3286,7 +3305,10 @@ async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches =
           note.sources,
           note.title,
           version.citationsCodeBlock,
-          true // skipTitleIfPresent
+          true, // skipTitleIfPresent
+          null,
+          true,
+          settings.citationDetail === 'none'
         );
 
         // Strip images if needed
@@ -3320,7 +3342,9 @@ async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches =
           note.title,
           version.citationsCodeBlock,
           false, // skipTitleIfPresent
-          noteId // unique ID for this note's anchors
+          noteId, // unique ID for this note's anchors
+          true,
+          settings.citationDetail === 'none'
         );
 
         // Strip images if needed

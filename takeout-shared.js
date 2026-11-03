@@ -709,7 +709,21 @@
     return { expected, written: read.size };
   }
 
+  // Titles-only Sources sections: one line per source with all its citation
+  // numbers (instead of 21 lines repeating the same title). Entries are
+  // {number, text}; order follows each source's first citation.
+  function groupCitationEntries(entries) {
+    const groups = new Map();
+    for (const e of entries || []) {
+      const key = (e.missing ? '\u0000missing:' : '') + (e.text || '');
+      if (!groups.has(key)) groups.set(key, { text: e.text || '', numbers: [] });
+      groups.get(key).numbers.push(String(e.number));
+    }
+    return [...groups.values()];
+  }
+
   const NLME = {
+    groupCitationEntries,
     noteHasImages,
     countMarkdownFormulas,
     citationCoverage,
