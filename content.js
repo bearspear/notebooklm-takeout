@@ -2564,6 +2564,16 @@
   }
 
   // Extract mindmap SVG with all nodes expanded
+  // The Studio list is not rendered while a viewer is open, and comes back
+  // ~100 ms after it closes. Close any viewer and wait for a stable list
+  // before resolving an artifact, or the identity check sees an empty list
+  // ("Item changed") — seen in Download All right after a mind map.
+  async function waitForStudioList() {
+    if (findOpenStudioViewer()) await closeStudioViewer(800);
+    await waitForStable(() => getArtifactItemsWithMore().length,
+      { interval: 50, checks: 2, minLength: 1, timeout: 3000 });
+  }
+
   // Studio artifacts that have a More button, in DOM order. Every artifact
   // index (Artifacts tab, Studio moreIndex, batch ZIP) refers to this list.
   function getArtifactItemsWithMore() {
@@ -3003,6 +3013,7 @@
     try {
       let artifactItem = null;
       let artifactTitle = artifactName || '';
+      await waitForStudioList();
 
       // Mind maps have no Download in their More menu (the menu doesn't open):
       // open the map and extract SVG + tree data like the Notes tab does
