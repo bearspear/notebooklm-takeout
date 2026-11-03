@@ -515,3 +515,27 @@ test('isNotebookDownload rejects a Drive download from another tab', () => {
   assert.equal(NLME.isNotebookDownload({ url: 'https://contribution.usercontent.google.com/download?c=x', referrer: '' }), true);
   assert.equal(NLME.isNotebookDownload({ url: 'https://lh3.googleusercontent.com/x', referrer: 'https://mail.google.com/' }), false);
 });
+
+const suffixes = list => list.map(v => v.suffix);
+
+test('noteVariants always includes base', () => {
+  assert.deepEqual(suffixes(NLME.noteVariants({}, { hasQuotes: false, hasImages: false })), ['']);
+});
+
+test('noteVariants skips code blocks without quotes', () => {
+  assert.deepEqual(suffixes(NLME.noteVariants({ exportNoteCodeBlocks: true }, { hasQuotes: false, hasImages: false })), ['']);
+});
+
+test('noteVariants keeps differing variants', () => {
+  const v = NLME.noteVariants({ exportNoteBase: true, exportNoteCodeBlocks: true, exportNoteWithImages: true, exportNoteCodeBlocksWithImages: true },
+    { hasQuotes: true, hasImages: true });
+  assert.deepEqual(suffixes(v), ['', '-code-blocks', '-with-images']);
+  assert.deepEqual(v[1], { suffix: '-code-blocks', codeBlocks: true, images: false });
+  assert.deepEqual(v[2], { suffix: '-with-images', codeBlocks: false, images: true });
+});
+
+test('sourceVariants needs images for image variants', () => {
+  const all = { exportSourceBase: true, exportSourcePlusMeta: true, exportSourceWithImages: true, exportSourcePlusMetaWithImages: true };
+  assert.deepEqual(suffixes(NLME.sourceVariants(all, { hasImages: false })), ['', '-plus-meta']);
+  assert.deepEqual(suffixes(NLME.sourceVariants(all, { hasImages: true })), ['', '-plus-meta', '-with-images', '-plus-meta-with-images']);
+});

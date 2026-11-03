@@ -593,7 +593,30 @@
     return !referrer || isNotebookUrl(referrer);
   }
 
+  // Which Markdown variants to write per note/chat. Base is always written;
+  // a variant that would be byte-identical to base is skipped: code blocks
+  // need quotes, with-images needs images. (Code blocks + images was dropped:
+  // images inside a fence never render.)
+  function noteVariants(settings = {}, { hasQuotes = false, hasImages = false } = {}) {
+    const variants = [{ suffix: '', codeBlocks: false, images: false }];
+    if (settings.exportNoteCodeBlocks && hasQuotes) variants.push({ suffix: '-code-blocks', codeBlocks: true, images: false });
+    if (settings.exportNoteWithImages && hasImages) variants.push({ suffix: '-with-images', codeBlocks: false, images: true });
+    return variants;
+  }
+
+  // Source variants: base always; metadata versions when enabled; image
+  // versions only when the source actually has images.
+  function sourceVariants(settings = {}, { hasImages = false } = {}) {
+    const variants = [{ suffix: '', meta: false, images: false }];
+    if (settings.exportSourcePlusMeta) variants.push({ suffix: '-plus-meta', meta: true, images: false });
+    if (settings.exportSourceWithImages && hasImages) variants.push({ suffix: '-with-images', meta: false, images: true });
+    if (settings.exportSourcePlusMetaWithImages && hasImages) variants.push({ suffix: '-plus-meta-with-images', meta: true, images: true });
+    return variants;
+  }
+
   const NLME = {
+    noteVariants,
+    sourceVariants,
     isAllowedDownloadUrl,
     isNotebookDownload,
     NOTEBOOK_HOSTS,

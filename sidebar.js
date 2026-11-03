@@ -486,7 +486,6 @@ let settings = {
   exportNoteBase: true, // Base version (always enabled, can't be disabled)
   exportNoteCodeBlocks: true, // Code blocks, no images (was: citationsCodeBlock)
   exportNoteWithImages: false, // With images, markdown (was: includeCitationImages)
-  exportNoteCodeBlocksWithImages: false, // Code blocks + images
   // Batch sizes
   sourcesPerZip: 25, // Number of sources per ZIP file (prevents memory issues)
   notesPerZip: 25, // Number of notes per ZIP file (prevents memory issues)
@@ -618,11 +617,8 @@ async function loadSettings() {
   document.getElementById('export-note-base-checkbox').checked = settings.exportNoteBase;
   document.getElementById('export-note-code-blocks-checkbox').checked = settings.exportNoteCodeBlocks;
   document.getElementById('export-note-with-images-checkbox').checked = settings.exportNoteWithImages;
-  document.getElementById('export-note-code-blocks-with-images-checkbox').checked = settings.exportNoteCodeBlocksWithImages;
 
   // Sync legacy settings for chat export compatibility
-  settings.citationsCodeBlock = settings.exportNoteCodeBlocks || settings.exportNoteCodeBlocksWithImages;
-  settings.includeCitationImages = settings.exportNoteWithImages || settings.exportNoteCodeBlocksWithImages;
 
   // Batch sizes
   document.getElementById('sources-per-zip-input').value = settings.sourcesPerZip;
@@ -675,11 +671,8 @@ async function saveSettings() {
   settings.exportNoteBase = document.getElementById('export-note-base-checkbox').checked;
   settings.exportNoteCodeBlocks = document.getElementById('export-note-code-blocks-checkbox').checked;
   settings.exportNoteWithImages = document.getElementById('export-note-with-images-checkbox').checked;
-  settings.exportNoteCodeBlocksWithImages = document.getElementById('export-note-code-blocks-with-images-checkbox').checked;
 
   // Sync legacy settings for chat export compatibility
-  settings.citationsCodeBlock = settings.exportNoteCodeBlocks || settings.exportNoteCodeBlocksWithImages;
-  settings.includeCitationImages = settings.exportNoteWithImages || settings.exportNoteCodeBlocksWithImages;
 
   // Batch sizes
   settings.sourcesPerZip = parseInt(document.getElementById('sources-per-zip-input').value) || 25;
@@ -782,8 +775,7 @@ function setupEventListeners() {
   // Note version checkboxes - parent/child relationships
   // Parent checkboxes control whether child "include images" checkboxes are enabled
   const noteParentChildPairs = [
-    { parent: 'export-note-base-checkbox', child: 'export-note-with-images-checkbox' },
-    { parent: 'export-note-code-blocks-checkbox', child: 'export-note-code-blocks-with-images-checkbox' }
+    { parent: 'export-note-base-checkbox', child: 'export-note-with-images-checkbox' }
   ];
 
   // Function to update child checkbox state based on parent
@@ -1125,7 +1117,7 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
           logger.info('Download', `Converting HTML to markdown for: "${baseFilename}"`);
           // For Reports, skip adding title if it's already in the content (prevents duplicate H1)
           const skipTitle = (artifactType === 'Report');
-          markdownContent = convertToMarkdown(response.data, [], baseFilename, settings.citationsCodeBlock, skipTitle, null, false);
+          markdownContent = convertToMarkdown(response.data, [], baseFilename, false, skipTitle, null, false);
         } else {
           // Already markdown
           markdownContent = response.data;
@@ -2793,7 +2785,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
         console.log('[NotebookLM Takeout] Sending message to extract note content...');
 
         // Only download images if user has enabled an image version
-        const needsImages = settings.exportNoteWithImages || settings.exportNoteCodeBlocksWithImages;
+        const needsImages = !!settings.exportNoteWithImages;
 
         const noteData = await chrome.tabs.sendMessage(tab.id, {
           type: 'EXTRACT_NOTE',
@@ -2827,7 +2819,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
             });
           } else {
             // Convert to markdown (without noteId for individual files)
-            const markdown = convertToMarkdown(noteData.html, noteData.sources, note.title, settings.citationsCodeBlock);
+            const markdown = convertToMarkdown(noteData.html, noteData.sources, note.title, false);
 
             exportedNotes.push({
               title: note.title,
@@ -2958,25 +2950,14 @@ async function exportNotesAsMarkdown(selectedNotes) {
  * Return the list of note export "versions" the user currently has enabled.
  * Matches the variant set built by createNotesZip.
  */
-function getEnabledNoteVersions() {
-  const versions = [];
-  if (settings.exportNoteBase) {
-    versions.push({ fileSuffix: '', citationsCodeBlock: false, stripImages: true });
-  }
-  if (settings.exportNoteCodeBlocks) {
-    versions.push({ fileSuffix: '-code-blocks', citationsCodeBlock: true, stripImages: true });
-  }
-  if (settings.exportNoteWithImages) {
-    versions.push({ fileSuffix: '-with-images', citationsCodeBlock: false, stripImages: false });
-  }
-  if (settings.exportNoteCodeBlocksWithImages) {
-    versions.push({ fileSuffix: '-code-blocks-with-images', citationsCodeBlock: true, stripImages: false });
-  }
-  // Safety net: always produce at least the base version.
-  if (versions.length === 0) {
-    versions.push({ fileSuffix: '', citationsCodeBlock: false, stripImages: true });
-  }
-  return versions;
+// Versions for one note (NLME.noteVariants): base always, the others only
+// when they would differ from base
+function getEnabledNoteVersions({ hasQuotes = false, hasImages = false } = {}) {
+  return NLME.noteVariants(settings, { hasQuotes, hasImages }).map(v => ({
+    fileSuffix: v.suffix,
+    citationsCodeBlock: v.codeBlocks,
+    stripImages: !v.images
+  }));
 }
 
 /**
@@ -3051,7 +3032,7 @@ async function exportSingleNote(note) {
 
   await ensureContentScriptLoaded(tab.id);
 
-  const needsImages = settings.exportNoteWithImages || settings.exportNoteCodeBlocksWithImages;
+  const needsImages = !!settings.exportNoteWithImages;
 
   let noteData;
   try {
@@ -3082,7 +3063,10 @@ async function exportSingleNote(note) {
   }
 
   // Regular note — produce enabled markdown versions, each as its own .md file.
-  const versions = getEnabledNoteVersions();
+  const versions = getEnabledNoteVersions({
+    hasQuotes: (noteData.sources || []).some(src => src.quote && src.quote.trim()),
+    hasImages: /<img\b/i.test(noteData.html || '')
+  });
   for (const version of versions) {
     let markdown = convertToMarkdown(
       noteData.html,
@@ -3127,62 +3111,21 @@ async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches =
   const regularNotes = notes.filter(n => !n.isMindmap);
   const mindmaps = notes.filter(n => n.isMindmap);
 
-  // Determine which versions to create based on settings
-  const versions = [];
+  // Which versions to write (NLME.noteVariants): base always; code blocks
+  // only if some note in this ZIP has quotes; with-images only if some note
+  // has images. Otherwise those files would be identical to base.
+  const NOTE_VERSION_INFO = {
+    '': { folderSuffix: '', fileSuffix: '', combinedSuffix: '', citationsCodeBlock: false, stripImages: true,
+      title: 'Base (markdown, no images)', description: 'Citations rendered as markdown, images stripped' },
+    '-code-blocks': { folderSuffix: '-code-blocks', fileSuffix: '-code-blocks', combinedSuffix: '-code-blocks', citationsCodeBlock: true, stripImages: true,
+      title: 'Code blocks (no images)', description: 'Citation quotes in code blocks, images stripped' },
+    '-with-images': { folderSuffix: '-with-images', fileSuffix: '-with-images', combinedSuffix: '-with-images', citationsCodeBlock: false, stripImages: false,
+      title: 'With images (markdown)', description: 'Citations rendered as markdown, with base64 images' }
+  };
+  const hasQuotes = notes.some(n => (n.sources || []).some(src => src.quote && src.quote.trim()));
+  const hasImages = notes.some(n => /<img\b/i.test(n.html || ''));
+  const versions = NLME.noteVariants(settings, { hasQuotes, hasImages }).map(v => NOTE_VERSION_INFO[v.suffix]);
 
-  // Version 1: Base (markdown rendering, no images) - Always created if enabled
-  if (settings.exportNoteBase) {
-    versions.push({
-      folderSuffix: '',
-      fileSuffix: '',
-      combinedSuffix: '',
-      citationsCodeBlock: false,
-      stripImages: true,
-      title: 'Base (markdown, no images)',
-      description: 'Citations rendered as markdown, images stripped'
-    });
-  }
-
-  // Version 2: Code blocks, no images
-  if (settings.exportNoteCodeBlocks) {
-    versions.push({
-      folderSuffix: '-code-blocks',
-      fileSuffix: '-code-blocks',
-      combinedSuffix: '-code-blocks',
-      citationsCodeBlock: true,
-      stripImages: true,
-      title: 'Code blocks (no images)',
-      description: 'Citations in code blocks, images stripped'
-    });
-  }
-
-  // Version 3: Markdown rendering, with images
-  if (settings.exportNoteWithImages) {
-    versions.push({
-      folderSuffix: '-with-images',
-      fileSuffix: '-with-images',
-      combinedSuffix: '-with-images',
-      citationsCodeBlock: false,
-      stripImages: false,
-      title: 'With images (markdown)',
-      description: 'Citations rendered as markdown, with base64 images'
-    });
-  }
-
-  // Version 4: Code blocks, with images
-  if (settings.exportNoteCodeBlocksWithImages) {
-    versions.push({
-      folderSuffix: '-code-blocks-with-images',
-      fileSuffix: '-code-blocks-with-images',
-      combinedSuffix: '-code-blocks-with-images',
-      citationsCodeBlock: true,
-      stripImages: false,
-      title: 'Code blocks with images',
-      description: 'Citations in code blocks, with base64 images'
-    });
-  }
-
-  console.log(`[NotebookLM Takeout] Creating ${versions.length} version(s) of ${regularNotes.length} notes`);
   versionCount = versions.length;
 
   // Process regular notes (all versions in single notes/ folder with suffixes)
@@ -3792,7 +3735,7 @@ async function exportSources(selectedSources) {
 
           // Add the main content
           md += `## Content\n\n`;
-          md += convertToMarkdown(sourceData.html, sourceData.sources || [], '', settings.citationsCodeBlock, false, null, false);
+          md += convertToMarkdown(sourceData.html, sourceData.sources || [], '', false, false, null, false);
 
           return md;
         };
@@ -3962,8 +3905,12 @@ async function exportSources(selectedSources) {
           return filename;
         };
 
-        // 1. Base version: [filename].md (no meta, no images) - Always created if enabled
-        if (settings.exportSourceBase) {
+        // Which versions to write for this source (NLME.sourceVariants)
+        const sourceVersionSet = new Set(
+          NLME.sourceVariants(settings, { hasImages: !!source.hasImages }).map(v => v.suffix));
+
+        // 1. Base version: [filename].md (no meta, no images) - always written
+        if (sourceVersionSet.has('')) {
           const baseFilename1 = getUniqueFilename();
           sourcesFolder.file(baseFilename1, source.versions.base);
           indexFiles.push({
@@ -3976,7 +3923,7 @@ async function exportSources(selectedSources) {
         }
 
         // 2. Plus metadata version: [filename]-plus-meta.md (with meta, no images)
-        if (settings.exportSourcePlusMeta) {
+        if (sourceVersionSet.has('-plus-meta')) {
           const plusMetaFilename = getUniqueFilename('-plus-meta');
           sourcesFolder.file(plusMetaFilename, source.versions.plusMeta);
           indexFiles.push({
@@ -3990,7 +3937,7 @@ async function exportSources(selectedSources) {
 
         // 3. With images version: [filename]-with-images.md (no meta, with images)
         // Only create if setting enabled AND source actually has images
-        if (settings.exportSourceWithImages && source.hasImages && source.versions.withImages) {
+        if (sourceVersionSet.has('-with-images') && source.versions.withImages) {
           const withImagesFilename = getUniqueFilename('-with-images');
           sourcesFolder.file(withImagesFilename, source.versions.withImages);
           indexFiles.push({
@@ -4004,7 +3951,7 @@ async function exportSources(selectedSources) {
 
         // 4. Plus metadata with images version: [filename]-plus-meta-with-images.md (with meta, with images)
         // Only create if setting enabled AND source actually has images
-        if (settings.exportSourcePlusMetaWithImages && source.hasImages && source.versions.plusMetaWithImages) {
+        if (sourceVersionSet.has('-plus-meta-with-images') && source.versions.plusMetaWithImages) {
           const plusMetaWithImagesFilename = getUniqueFilename('-plus-meta-with-images');
           sourcesFolder.file(plusMetaWithImagesFilename, source.versions.plusMetaWithImages);
           indexFiles.push({
@@ -4658,7 +4605,7 @@ async function exportChat(chatData, extractFullCitations = false) {
                 messageIndex: pair.domIndex ?? i,
                 messageHTML: pair.aiResponseHTML,
                 sourceIndices: sourceIndices,
-                includeCitationImages: settings.includeCitationImages
+                includeCitationImages: !!settings.exportNoteWithImages
               }
             });
 
@@ -4758,71 +4705,31 @@ async function exportChat(chatData, extractFullCitations = false) {
     const timestamp = NLME.exportTimestamp();
     const baseFilename = `${sanitizeFilename(chatData.notebookTitle)}-chat-${timestamp}`;
 
-    const versions = [];
-
-    // Base version (Scenario 1): Always included - markdown rendering, no images
+    // Versions (NLME.noteVariants): base always; code blocks only when some
+    // answer has quotes; with-images only when the Markdown has images
     const baseMarkdown = convertChatToMarkdown(
       chatData.notebookTitle,
       chatData.notebookSummary,
       processedMessages,
-      false // citationsCodeBlock = false
+      false
     );
-    const baseMarkdownNoImages = stripImagesFromMarkdown(baseMarkdown);
-
-    versions.push({
-      filename: `${baseFilename}.md`,
-      content: baseMarkdownNoImages,
-      title: 'Base (markdown, no images)',
-      description: 'Citations rendered as markdown, images stripped'
+    const chatHasQuotes = processedMessages.some(m => (m.sources || []).some(src => src.quote && src.quote.trim()));
+    const chatHasImages = /!\[/.test(baseMarkdown);
+    const CHAT_VERSION_INFO = {
+      '': { title: 'Base (markdown, no images)', description: 'Citations rendered as markdown, images stripped' },
+      '-code-blocks': { title: 'Code blocks (no images)', description: 'Citation quotes in code blocks, images stripped' },
+      '-with-images': { title: 'With images (markdown)', description: 'Citations rendered as markdown, with base64 images' }
+    };
+    const versions = NLME.noteVariants(settings, { hasQuotes: chatHasQuotes, hasImages: chatHasImages }).map(v => {
+      const markdown = v.codeBlocks
+        ? convertChatToMarkdown(chatData.notebookTitle, chatData.notebookSummary, processedMessages, true)
+        : baseMarkdown;
+      return {
+        filename: `${baseFilename}${v.suffix}.md`,
+        content: v.images ? markdown : stripImagesFromMarkdown(markdown),
+        ...CHAT_VERSION_INFO[v.suffix]
+      };
     });
-
-    // Scenario 2 addition: Code blocks, no images (if citationsCodeBlock is ON)
-    if (settings.citationsCodeBlock) {
-      const codeBlocksMarkdown = convertChatToMarkdown(
-        chatData.notebookTitle,
-        chatData.notebookSummary,
-        processedMessages,
-        true // citationsCodeBlock = true
-      );
-      const codeBlocksMarkdownNoImages = stripImagesFromMarkdown(codeBlocksMarkdown);
-
-      versions.push({
-        filename: `${baseFilename}-code-blocks.md`,
-        content: codeBlocksMarkdownNoImages,
-        title: 'Code blocks (no images)',
-        description: 'Citations in code blocks, images stripped'
-      });
-    }
-
-    // Scenario 3 addition: Markdown rendering, with images (if includeCitationImages is ON)
-    if (settings.includeCitationImages) {
-      // This version already has images from the conversion
-      versions.push({
-        filename: `${baseFilename}-with-images.md`,
-        content: baseMarkdown, // Keep images
-        title: 'With images (markdown)',
-        description: 'Citations rendered as markdown, with base64 images'
-      });
-    }
-
-    // Scenario 4 addition: Code blocks, with images (if BOTH settings are ON)
-    if (settings.citationsCodeBlock && settings.includeCitationImages) {
-      const codeBlocksMarkdownWithImages = convertChatToMarkdown(
-        chatData.notebookTitle,
-        chatData.notebookSummary,
-        processedMessages,
-        true // citationsCodeBlock = true
-      );
-
-      versions.push({
-        filename: `${baseFilename}-code-blocks-with-images.md`,
-        content: codeBlocksMarkdownWithImages, // Keep images
-        title: 'Code blocks with images',
-        description: 'Citations in code blocks, with base64 images'
-      });
-    }
-
-    console.log(`[NotebookLM Takeout] Created ${versions.length} chat version(s)`);
 
     // Determine if we need ZIP (for multiple files OR errors)
     const shouldZip = versions.length > 1 || allErrors.length > 0;
@@ -4861,8 +4768,11 @@ async function exportChat(chatData, extractFullCitations = false) {
         stats: chatStats
       });
 
-      zip.file('errors.txt', errorsContent);
-      indexFiles.push({ path: 'errors.txt', title: 'Export Error Report' });
+      // Only when something went wrong (no "Total Errors: 0" files)
+      if (allErrors.length > 0) {
+        zip.file('errors.txt', errorsContent);
+        indexFiles.push({ path: 'errors.txt', title: 'Export Error Report' });
+      }
 
       // Generate _index.md with links to all files
       let indexContent = '# NotebookLM Chat Export - File Index\n\n';
