@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NotebookLM Takeout</title>
   <link rel="stylesheet" href="styles.css">
+  <style>
+    /* Disabled while any job runs (runExclusive) or settings load */
+    #full-takeout-btn:disabled { opacity: 0.5; cursor: default; }
+  </style>
 </head>
 <body class="sidebar-mode">
   <div class="container">
@@ -23,6 +27,7 @@
       </div>
       <h1>NotebookLM Takeout</h1>
       <p class="subtitle">Export audio, slides, notes & sources</p>
+      <button id="full-takeout-btn" class="btn btn-primary btn-small" style="margin-top: 8px;" title="Export all sources, notes, chat and artifacts of this notebook in one run">📦 Full Takeout</button>
     </header>
 
     <div id="status" class="status">
@@ -424,6 +429,8 @@
   <script src="jszip.min.js"></script>
   <script src="turndown.min.js"></script>
   <script src="takeout-shared.js"></script>
+  <script src="takeout-job.js"></script>
   <script src="sidebar.js"></script>
+  <script src="sidebar-takeout.js"></script>
 </body>
 </html>

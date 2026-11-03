@@ -134,17 +134,6 @@ test('buildCitationEntries without placeholders still lists extracted sources', 
   assert.deepEqual(entries.map(e => e.number), ['2']);
 });
 
-test('uniqueFilenames suffixes repeated names before the extension', () => {
-  assert.deepEqual(
-    NLME.uniqueFilenames(['The-Electric-Universe.pdf', 'The-Electric-Universe.pdf', 'The-Electric-Universe.pdf']),
-    ['The-Electric-Universe.pdf', 'The-Electric-Universe (2).pdf', 'The-Electric-Universe (3).pdf']
-  );
-});
-
-test('uniqueFilenames leaves distinct names and extensionless names usable', () => {
-  assert.deepEqual(NLME.uniqueFilenames(['Map.svg', 'Map.json', 'README', 'README']), ['Map.svg', 'Map.json', 'README', 'README (2)']);
-});
-
 test('renumberCitationAnchors numbers occurrences in document order per message and source', () => {
   const md = 'a<a id="msg-0-cite-ref-8-2" href="#msg-0-src-8">[8]</a> b<a id="msg-0-cite-ref-8-5" href="#msg-0-src-8">[8]</a>' +
     ' c<a id="msg-1-cite-ref-8-3" href="#msg-1-src-8">[8]</a> d<a id="msg-0-cite-ref-9-4" href="#msg-0-src-9">[9]</a>';
@@ -303,7 +292,7 @@ test('summarizeExportOutcome reports a full success', () => {
 test('summarizeExportOutcome reports partial failures', () => {
   const r = NLME.summarizeExportOutcome({ kind: 'notes', selected: 10, exported: 7, failed: 3, cancelled: false });
   assert.equal(r.level, 'warning');
-  assert.equal(r.message, 'Exported 7 of 10 notes (3 failed, see errors.txt)');
+  assert.equal(r.message, 'Exported 7 of 10 notes (3 failed, see errors.md)');
   assert.equal(r.partial, false);
 });
 
@@ -317,7 +306,7 @@ test('summarizeExportOutcome reports a cancelled export as partial', () => {
 test('summarizeExportOutcome reports when nothing was exported', () => {
   const r = NLME.summarizeExportOutcome({ kind: 'notes', selected: 10, exported: 0, failed: 10, cancelled: false });
   assert.equal(r.level, 'error');
-  assert.equal(r.message, 'No notes exported (10 failed, see errors.txt)');
+  assert.equal(r.message, 'No notes exported (10 failed, see errors.md)');
 });
 
 const DL = 'https://contribution.usercontent.google.com/download?c=abc&filename=deck.pdf';
@@ -382,15 +371,6 @@ test('pickFreshIntercept ignores URLs from before the click', () => {
   const entries = [{ url: 'old', timestamp: 5 }, { url: 'new', timestamp: 12 }];
   assert.equal(NLME.pickFreshIntercept(entries, 10), 'new');
   assert.equal(NLME.pickFreshIntercept(entries, 20), null);
-});
-
-test('formatErrorsTxt lists every error and the issues link', () => {
-  const txt = NLME.formatErrorsTxt({ title: 'Artifacts', generatedAt: '11/2/2026, 1:00 PM', errors: ['Deck A: Download was not captured', 'Map B: Item changed'] });
-  assert.match(txt, /^# Artifacts Error Report/);
-  assert.match(txt, /- Deck A: Download was not captured/);
-  assert.match(txt, /- Map B: Item changed/);
-  assert.match(txt, /11\/2\/2026, 1:00 PM/);
-  assert.ok(txt.includes(NLME.ISSUES_URL));
 });
 
 test('extensionFromDownloadUrl reads the filename parameter', () => {
@@ -647,4 +627,333 @@ test('groupCitationEntries keeps unavailable placeholders apart from real source
     { number: '3', text: 'A' }
   ]);
   assert.deepEqual(groups.map(g => g.numbers), [['1', '2'], ['3']]);
+});
+
+test('frontMatter quotes strings so any title stays valid YAML', () => {
+  const fm = NLME.frontMatter({ title: 'Gödel: "proof" # 1\n---', count: 3, draft: false, tags: ['a', 'b'], empty: '', none: null });
+  assert.equal(fm, '---\ntitle: "Gödel: \\"proof\\" # 1\\n---"\ncount: 3\ndraft: false\ntags: ["a","b"]\n---\n\n');
+  assert.equal(NLME.frontMatter({ a: '', b: undefined }), '');
+});
+
+test('uniqueStems gives repeats -2, -3 and treats case-only differences as repeats', () => {
+  assert.deepEqual(NLME.uniqueStems(['A', 'a', 'B', 'A', 'x/y']), ['A', 'a-2', 'B', 'A-3', 'x-y']);
+  assert.deepEqual(NLME.uniqueStems(['', '']), ['untitled', 'untitled-2']);
+});
+
+test('uniqueStems treats stem+variant names as taken', () => {
+  assert.deepEqual(NLME.uniqueStems(['Diagram', 'Diagram with images'], ['-with-images']), ['Diagram', 'Diagram-with-images-2']);
+  assert.deepEqual(NLME.uniqueStems(['Diagram with images', 'Diagram'], ['-with-images']), ['Diagram-with-images', 'Diagram-2']);
+  assert.deepEqual(NLME.uniqueStems(['Summary', 'summary CODE blocks'], ['-code-blocks']), ['Summary', 'summary-CODE-blocks-2']);
+});
+
+test('exportMeta and notebookIdFromUrl describe the notebook', () => {
+  const url = 'https://notebook.google.com/notebook/62d6e344-2fa7-42ed-b3ef-236f3007fdc3';
+  assert.equal(NLME.notebookIdFromUrl(url), '62d6e344-2fa7-42ed-b3ef-236f3007fdc3');
+  assert.equal(NLME.notebookIdFromUrl('https://example.com/'), '');
+  assert.deepEqual(NLME.exportMeta({ notebookTitle: 'New Math', tabUrl: url, version: '1.4.0', exportedAt: new Date('2026-11-03T01:02:03Z') }), {
+    notebook: 'New Math', notebook_url: url, notebook_id: '62d6e344-2fa7-42ed-b3ef-236f3007fdc3',
+    exporter: 'NotebookLM Takeout 1.4.0', exported: '2026-11-03T01:02:03.000Z'
+  });
+});
+
+test('buildManifest lists files with byte sizes and the notebook', () => {
+  const meta = { notebook: 'N', notebook_url: 'u', notebook_id: 'i', exporter: 'NotebookLM Takeout 1.4.0', exported: 'T' };
+  const m = NLME.buildManifest({ meta, kind: 'notes', files: [
+    { path: 'notes/A.md', data: 'ü', title: 'A', variant: 'base', itemKind: 'note' },
+    { path: 'audio/X.m4a', url: 'https://x' },
+    { path: 'b.bin', data: new Uint8Array(5) }
+  ], counts: { notes: 1 }, errorCount: 2 });
+  assert.deepEqual(m.notebook, { title: 'N', url: 'u', id: 'i' });
+  assert.equal(m.kind, 'notes'); assert.equal(m.partial, false); assert.equal(m.errorCount, 2);
+  assert.deepEqual(m.files.map(f => f.bytes), [2, null, 5]);
+  assert.equal(m.files[0].variant, 'base');
+});
+
+test('zipName matches the existing pattern, with PARTIAL and parts', () => {
+  assert.equal(NLME.zipName({ notebook: 'New Math', kind: 'notes', timestamp: 'T' }), 'New-Math-notes-T.zip');
+  assert.equal(NLME.zipName({ notebook: 'a/b', kind: 'takeout-notes', timestamp: 'T', partial: true, part: 2, totalParts: 3 }), 'a-b-takeout-notes-T-PARTIAL-part2of3.zip');
+});
+
+test('artifactFolder and extensionFor', () => {
+  assert.equal(NLME.artifactFolder('Audio Overview'), 'audio');
+  assert.equal(NLME.artifactFolder('Mind Map'), 'mind-maps');
+  assert.equal(NLME.artifactFolder('Flashcards'), 'flashcards');
+  assert.equal(NLME.extensionFor({ url: 'https://contribution.usercontent.google.com/d?filename=Deck.pptx', mime: 'application/pdf' }), '.pptx');
+  assert.equal(NLME.extensionFor({ mime: 'audio/mp4' }), '.m4a');
+  assert.equal(NLME.extensionFor({ type: 'Video Overview' }), '.mp4');
+  assert.equal(NLME.extensionFor({}), '');
+});
+
+test('artifactStems makes stems unique per type folder only', () => {
+  const items = [
+    { type: 'Report', label: 'Overview' },
+    { type: 'Slides', label: 'Overview' },
+    { type: 'Report', label: 'overview' },
+    { type: 'Data Table', label: 'Prices' },
+    { type: 'Data Table', label: 'Prices references' }
+  ];
+  assert.deepEqual(NLME.artifactStems(items), ['Overview', 'Overview', 'overview-2', 'Prices', 'Prices-references-2']);
+});
+
+test('withRealExtension swaps a guessed known extension for the real one', () => {
+  assert.equal(NLME.withRealExtension('Folder/Deck.pdf', '.pptx'), 'Folder/Deck.pptx');
+  assert.equal(NLME.withRealExtension('Deck.pdf', '.PDF'), 'Deck.pdf');
+  assert.equal(NLME.withRealExtension('Deck', '.pptx'), 'Deck.pptx');
+  assert.equal(NLME.withRealExtension('Deck', ''), 'Deck');
+  // Unknown extensions never replace a known one, and unknown endings stay
+  assert.equal(NLME.withRealExtension('Deck.pdf', '.goog'), 'Deck.pdf');
+  assert.equal(NLME.withRealExtension('Talk v1.10', '.m4a'), 'Talk v1.10');
+});
+
+test('buildRootIndex lists every category with its status and links errors', () => {
+  const meta = { notebook: 'New Math', notebook_url: '', notebook_id: '', exporter: 'NotebookLM Takeout 1.4.0', exported: 'T' };
+  const md = NLME.buildRootIndex({ meta, errorsFile: 'errors.md', categories: [
+    { name: 'Sources', folder: 'sources', status: 'done', selected: 12, exported: 12, failed: 0, zips: ['a.zip'] },
+    { name: 'Notes', folder: 'notes', status: 'partial', selected: 10, exported: 4, failed: 0, zips: ['b.zip'] },
+    { name: 'Chat', folder: 'chat', status: 'skipped', selected: 17, exported: 0, failed: 0, zips: [] },
+    { name: 'Artifacts', folder: 'artifacts', status: 'empty', selected: 0, exported: 0, failed: 0, zips: [] }
+  ] });
+  assert.match(md, /^---\n/);
+  assert.match(md, /# Takeout — New Math/);
+  assert.match(md, /\| Sources \| 12 of 12 \| 0 \| complete \| sources\/ \|/);
+  assert.match(md, /\| Notes \| 4 of 10 \| 0 \| partial \(cancelled\) \| notes\/ \|/);
+  assert.match(md, /\| Chat \| 0 of 17 \| 0 \| skipped \(cancelled earlier\) \| — \|/);
+  assert.match(md, /\| Artifacts \| 0 of 0 \| 0 \| none in notebook \| — \|/);
+  assert.match(md, /\[errors\.md\]\(errors\.md\)/);
+  assert.match(md, /Unzip every ZIP into the same folder/);
+});
+
+test('buildRootIndex shows a folder only where files were written, part folders included', () => {
+  const meta = { notebook: 'New Math', notebook_url: '', notebook_id: '', exporter: 'E', exported: 'T' };
+  const md = NLME.buildRootIndex({ meta, categories: [
+    { name: 'Sources', folder: 'sources', status: 'failed', selected: 3, exported: 0, failed: 3, zips: [] },
+    { name: 'Notes', folder: 'notes', status: 'done', selected: 60, exported: 60, failed: 0, zips: ['b1.zip', 'b2.zip'], parts: 2 },
+    { name: 'Chat', folder: 'chat', status: 'skipped', selected: 17, exported: 0, failed: 0, zips: [] },
+    { name: 'Artifacts', folder: 'artifacts', status: 'partial', selected: 9, exported: 2, failed: 0, zips: ['c.zip'], parts: 1 }
+  ] });
+  assert.match(md, /\| Sources \| 0 of 3 \| 3 \| failed \(see errors\) \| — \|/);
+  assert.match(md, /\| Notes \| 60 of 60 \| 0 \| complete \| notes\/part-1\/ … notes\/part-2\/ \|/);
+  assert.match(md, /\| Chat \| 0 of 17 \| 0 \| skipped \(cancelled earlier\) \| — \|/);
+  assert.match(md, /\| Artifacts \| 2 of 9 \| 0 \| partial \(cancelled\) \| artifacts\/part-1\/ \|/);
+  assert.doesNotMatch(md, /\| notes\/ \|/);
+});
+
+test('chatScanIsEmpty only when nothing was skipped', () => {
+  assert.equal(NLME.chatScanIsEmpty({ messagePairs: [], stats: {} }), true);
+  assert.equal(NLME.chatScanIsEmpty({ messagePairs: [] }), true);
+  assert.equal(NLME.chatScanIsEmpty({ messagePairs: [], stats: { skipped: ['q1'] } }), false);
+  assert.equal(NLME.chatScanIsEmpty({ messagePairs: [], stats: { skipped: [], collapsedRemaining: 2 } }), false);
+  assert.equal(NLME.chatScanIsEmpty({ messagePairs: [{ userMessage: 'q', aiResponseHTML: 'a' }], stats: {} }), false);
+});
+
+test('takeoutCategoryStatus marks a run with no exports but errors as failed', () => {
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 0, exported: 0, failed: 0, errorCount: 3 }), 'failed');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 4, exported: 0, failed: 0, errorCount: 3 }), 'failed');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 4, exported: 0, failed: 4, errorCount: 4 }), 'failed');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 5, exported: 5, failed: 0, errorCount: 0 }), 'done');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 5, exported: 3, failed: 2, errorCount: 2 }), 'done');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 5, exported: 2, failed: 0, errorCount: 1, cancelled: true }), 'partial');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 5, exported: 0, failed: 0, errorCount: 1, cancelled: true }), 'partial');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 5, exported: 2, failed: 0, errorCount: 1, stopped: true }), 'stopped');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 0, exported: 0, failed: 0, errorCount: 0 }), 'empty');
+});
+
+test('buildIndexHtml groups files by folder and encodes links', () => {
+  const meta = { notebook: 'New Math', notebook_url: '', notebook_id: '', exporter: 'NotebookLM Takeout 1.4.0', exported: 'T' };
+  const html = NLME.buildIndexHtml({ meta, heading: 'Notes — New Math', files: [
+    { path: 'notes/A b.md', title: 'A <script>b', variant: 'base', data: 'hello' },
+    { path: 'notes/A b-code-blocks.md', title: 'A b', variant: 'code-blocks' },
+    { path: 'mind-maps/[MINDMAP]_M#1.svg' },
+    { path: 'slides/D.pdf', url: 'https://x/d.pdf' },
+    { path: 'combined-notes.md', title: 'Combined' },
+    { path: 'manifest.json' },
+    { path: '_index.html' }
+  ] });
+  assert.ok(html.startsWith('<!doctype html>'));
+  assert.match(html, /<meta charset="utf-8">/);
+  assert.match(html, /<title>Notes — New Math<\/title>/);
+  assert.match(html, /href="notes\/A%20b\.md"/);
+  assert.match(html, /href="mind-maps\/%5BMINDMAP%5D_M%231\.svg"/);
+  assert.match(html, /<h2>notes<\/h2>/);
+  assert.match(html, /<h2>mind-maps<\/h2>/);
+  assert.match(html, /<h2>Files<\/h2>/);
+  assert.doesNotMatch(html, /href="_index\.html"/);
+  assert.match(html, /href="manifest\.json"/); // footer link only
+  assert.equal(html.split('href="manifest.json"').length, 2);
+  assert.match(html, /A &lt;script&gt;b/);
+  assert.match(html, /<span class="type">Markdown · 5 B<\/span>/);
+  assert.match(html, /<span class="type">PDF<\/span>/);
+  assert.match(html, /<span class="type">SVG image<\/span>/);
+  assert.doesNotMatch(html, /<script/);
+  assert.doesNotMatch(html, /https?:\/\/[^"' ]*\.(css|js)/);
+});
+
+test('fileTypeLabel names common export types', () => {
+  assert.equal(NLME.fileTypeLabel('a.md'), 'Markdown');
+  assert.equal(NLME.fileTypeLabel('deck.PPTX'), 'PowerPoint');
+  assert.equal(NLME.fileTypeLabel('x.m4a'), 'Audio');
+  assert.equal(NLME.fileTypeLabel('t.csv'), 'CSV');
+  assert.equal(NLME.fileTypeLabel('m.svg'), 'SVG image');
+  assert.equal(NLME.fileTypeLabel('f.xyz'), 'XYZ');
+  assert.equal(NLME.fileTypeLabel('noext'), 'File');
+  assert.equal(NLME.fileTypeLabel('dir.v2/noext'), 'File');
+});
+
+test('buildIndexHtml links the notebook and extra links', () => {
+  const meta = { notebook: 'New Math', notebook_url: 'https://notebook.google.com/notebook/x', notebook_id: 'x', exporter: 'E', exported: 'T' };
+  const html = NLME.buildIndexHtml({ meta, heading: 'Notes — New Math', files: [{ path: 'a.md' }], links: [{ href: 'errors.md', label: 'Errors' }, { href: '_index.md', label: 'Markdown index' }] });
+  assert.match(html, /<a href="https:\/\/notebook\.google\.com\/notebook\/x"/);
+  assert.match(html, /href="errors\.md"[^>]*>Errors</);
+  assert.match(html, /href="_index\.md"/);
+});
+
+test('buildRootIndexHtml links each category\'s index', () => {
+  const meta = { notebook: 'New Math', notebook_url: '', notebook_id: '', exporter: 'E', exported: 'T' };
+  const html = NLME.buildRootIndexHtml({ meta, errorsFile: 'errors.md', categories: [
+    { name: 'Sources', folder: 'sources', status: 'done', selected: 12, exported: 12, failed: 0, zips: ['a.zip'] },
+    { name: 'Notes', folder: 'notes', status: 'partial', selected: 10, exported: 4, failed: 0, zips: ['b.zip'], parts: 2 },
+    { name: 'Chat', folder: 'chat', status: 'skipped', selected: 17, exported: 0, failed: 0, zips: [] },
+    { name: 'Artifacts', folder: 'artifacts', status: 'empty', selected: 0, exported: 0, failed: 0, zips: [] }
+  ] });
+  assert.ok(html.startsWith('<!doctype html>'));
+  assert.match(html, /href="sources\/_index\.html"/);
+  assert.match(html, /href="notes\/part-1\/_index\.html"/);
+  assert.match(html, /href="notes\/part-2\/_index\.html"/);
+  assert.match(html, /partial \(cancelled\)/);
+  assert.match(html, /none in notebook/);
+  assert.doesNotMatch(html, /artifacts\/_index\.html/);
+  assert.doesNotMatch(html, /chat\/_index\.html/); // skipped: nothing written
+  assert.match(html, /<td>—<\/td>/);
+  assert.match(html, /href="errors\.md"/);
+  assert.match(html, /href="manifest\.json"/);
+  assert.match(html, /href="_index\.md"/);
+});
+
+test('buildRootIndexHtml links part-1 when a multi-batch category wrote only its first batch', () => {
+  const meta = { notebook: 'New Math', notebook_url: '', notebook_id: '', exporter: 'E', exported: 'T' };
+  const html = NLME.buildRootIndexHtml({ meta, categories: [
+    { name: 'Notes', folder: 'notes', status: 'partial', selected: 60, exported: 20, failed: 0, zips: ['b.zip'], parts: 1 }
+  ] });
+  assert.match(html, /href="notes\/part-1\/_index\.html"/);
+  assert.doesNotMatch(html, /href="notes\/_index\.html"/);
+});
+
+test('prefixExportErrors puts the category in front of every error and keeps its type', () => {
+  const errors = NLME.prefixExportErrors('Notes', [
+    '[Algebra] Failed to extract: timeout',
+    'Cancelled by user after 4 of 10 notes; the rest were not exported',
+    { source: 'Paper.pdf', type: 'missing_summary', message: 'No summary' }
+  ]);
+  const report = NLME.buildErrorReport({ title: 'Takeout', errors });
+  assert.match(report, /## ERROR \(1\)\n\n- Notes: Algebra: Failed to extract: timeout/);
+  assert.match(report, /## CANCELLED \(1\)\n\n- Notes: Cancelled by user after 4 of 10 notes/);
+  assert.match(report, /## MISSING SUMMARY \(1\)\n\n- Notes: Paper\.pdf: No summary/);
+});
+
+test('summarizeTakeoutOutcome gives one message for every category', () => {
+  const cat = (name, status, selected, exported, extra = {}) =>
+    ({ name, folder: name.toLowerCase(), status, selected, exported, failed: 0, zips: [], errorCount: 0, ...extra });
+  const ok = NLME.summarizeTakeoutOutcome({ categories: [
+    cat('Sources', 'done', 12, 12), cat('Notes', 'done', 10, 10), cat('Chat', 'done', 17, 17), cat('Artifacts', 'done', 5, 5)
+  ] });
+  assert.deepEqual(ok, { level: 'success', message: 'Takeout: sources 12/12, notes 10/10, chat 17/17, artifacts 5/5' });
+
+  const cancelled = NLME.summarizeTakeoutOutcome({ categories: [
+    cat('Sources', 'done', 12, 11, { failed: 1, errorCount: 1 }), cat('Notes', 'partial', 10, 4, { errorCount: 1 }),
+    cat('Chat', 'skipped', 17, 0), cat('Artifacts', 'empty', 0, 0)
+  ] });
+  assert.equal(cancelled.level, 'warning');
+  assert.equal(cancelled.message, 'Takeout: sources 11/12, notes 4/10 partial, chat skipped, artifacts none (see errors.md)');
+
+  const audit = NLME.summarizeTakeoutOutcome({ auditOk: false, categories: [cat('Sources', 'done', 1, 1)] });
+  assert.equal(audit.level, 'warning');
+  assert.match(audit.message, /some content is missing, see _audit\.md/);
+
+  const nothing = NLME.summarizeTakeoutOutcome({ categories: [
+    cat('Sources', 'done', 3, 0, { failed: 3, errorCount: 3 }), cat('Notes', 'failed', 0, 0, { errorCount: 1 }), cat('Chat', 'empty', 0, 0)
+  ] });
+  assert.equal(nothing.level, 'error');
+  assert.equal(nothing.message, 'Takeout: sources 0/3, notes failed, chat none (see errors.md)');
+  assert.match(NLME.summarizeTakeoutOutcome({ categories: [cat('Sources', 'failed', 3, 0, { failed: 3, errorCount: 3 })] }).message,
+    /^Takeout: sources 0\/3 failed \(see errors\.md\)$/);
+
+  // A cancel before anything was written is a warning, not an error
+  assert.equal(NLME.summarizeTakeoutOutcome({ categories: [cat('Sources', 'partial', 3, 0), cat('Notes', 'skipped', 2, 0)] }).level, 'warning');
+  // An empty notebook is no failure
+  assert.equal(NLME.summarizeTakeoutOutcome({ categories: [cat('Sources', 'empty', 0, 0)] }).level, 'info');
+});
+
+test('mimeForPath types files by extension', () => {
+  assert.equal(NLME.mimeForPath('notes/A.md'), 'text/markdown');
+  assert.equal(NLME.mimeForPath('manifest.json'), 'application/json');
+  assert.equal(NLME.mimeForPath('t/X.CSV'), 'text/csv');
+  assert.equal(NLME.mimeForPath('x.html'), 'text/html');
+  assert.equal(NLME.mimeForPath('m.svg'), 'image/svg+xml');
+  assert.equal(NLME.mimeForPath('r.txt'), 'text/plain');
+  assert.equal(NLME.mimeForPath('audio/a.m4a'), 'application/octet-stream');
+  assert.equal(NLME.mimeForPath('noext'), 'application/octet-stream');
+});
+
+test('singleArtifactPackage bundles data tables and mind maps like before', () => {
+  const table = NLME.singleArtifactPackage({
+    type: 'Data Table',
+    title: 'Q3 Sales: Plan',
+    files: [
+      { path: '[data-table]_Q3-Sales-Plan.csv', data: 'a,b' },
+      { path: '[data-table]_Q3-Sales-Plan.json', data: '{}' },
+      { path: '[data-table]_Q3-Sales-Plan.html', data: '<table/>' },
+      { path: '[data-table]_Q3-Sales-Plan-references.txt', data: '[1] x' }
+    ]
+  });
+  assert.equal(table.zipName, '[data-table]_Q3-Sales-Plan.zip');
+  assert.deepEqual(table.entries.map(e => e.path),
+    ['Q3-Sales-Plan.csv', 'Q3-Sales-Plan.json', 'Q3-Sales-Plan.html', 'references.txt']);
+  assert.equal(table.entries[0].data, 'a,b');
+  assert.equal(table.entries[3].data, '[1] x');
+
+  const map = NLME.singleArtifactPackage({
+    type: 'Mind Map',
+    title: 'Big Ideas',
+    files: [
+      { path: '[mind-map]_Big-Ideas.svg', data: '<svg/>' },
+      { path: '[mind-map]_Big-Ideas.json', data: '{}' },
+      { path: '[mind-map]_Big-Ideas.html', data: '<html/>' }
+    ]
+  });
+  assert.equal(map.zipName, '[MINDMAP]_Big-Ideas.zip');
+  assert.deepEqual(map.entries.map(e => e.path),
+    ['[MINDMAP]_Big-Ideas.svg', '[MINDMAP]_Big-Ideas.json', '[MINDMAP]_Big-Ideas.html']);
+  assert.equal(map.entries[1].data, '{}');
+
+  // A lone CSV (no footnotes, no structured data) stays a plain file
+  assert.equal(NLME.singleArtifactPackage({
+    type: 'Data Table', title: 'T', files: [{ path: '[data-table]_T.csv', data: 'a' }]
+  }), null);
+  // Other types are never bundled
+  assert.equal(NLME.singleArtifactPackage({
+    type: 'Report', title: 'R', files: [{ path: 'a.md' }, { path: 'b.md' }]
+  }), null);
+});
+
+test('takeoutChatFullCitations follows the Citation detail setting', () => {
+  assert.equal(NLME.takeoutChatFullCitations({ citationDetail: 'quotes' }), true);
+  assert.equal(NLME.takeoutChatFullCitations({ citationDetail: 'titles' }), false);
+  assert.equal(NLME.takeoutChatFullCitations({ citationDetail: 'none' }), false);
+  assert.equal(NLME.takeoutChatFullCitations({}), true);
+});
+
+test('slideFormatsFor gives both formats only when asked', () => {
+  assert.deepEqual(NLME.slideFormatsFor('Slides', { both: true }), ['pdf', 'pptx']);
+  assert.deepEqual(NLME.slideFormatsFor('Slides', { both: true, preferred: 'pptx' }), ['pdf', 'pptx']);
+  assert.deepEqual(NLME.slideFormatsFor('Slides', { preferred: 'pptx' }), ['pptx']);
+  assert.deepEqual(NLME.slideFormatsFor('Slides'), ['pdf']);
+  assert.deepEqual(NLME.slideFormatsFor('Report', { both: true }), [null]);
+  assert.deepEqual(NLME.slideFormatsFor('Report'), [null]);
+});
+
+test('extensionFor guesses the requested slide format when nothing else says', () => {
+  assert.equal(NLME.extensionFor({ type: 'Slides', format: 'pptx' }), '.pptx');
+  assert.equal(NLME.extensionFor({ type: 'Slides', format: 'pdf' }), '.pdf');
+  assert.equal(NLME.extensionFor({ type: 'Slides' }), '.pdf');
+  assert.equal(NLME.extensionFor({ type: 'Infographic', format: 'pptx' }), '.png');
 });

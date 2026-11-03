@@ -5,7 +5,7 @@
 // the new one; keep both so users mid-rollout still work.
 
 // Shared DOM-free helpers (globalThis.NLME)
-importScripts('takeout-shared.js', 'jszip.min.js');
+importScripts('takeout-shared.js');
 
 function isNotebookUrl(url) {
   return NLME.isNotebookUrl(url);
@@ -36,7 +36,6 @@ chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
 const pendingDownloads = []; // Array of {name, type, timestamp, requestId}
 let nextRequestId = 1;
 
-// Batch download mode - capture URLs instead of downloading
 // Names for downloads the extension starts itself (blob: / data: URLs).
 // Chrome drops the `filename` given to chrome.downloads.download whenever an
 // onDeterminingFilename listener exists and doesn't suggest a name, so the
@@ -46,12 +45,6 @@ function nameNextDownload(url, filename) {
   namedDownloads.set(url, filename);
   setTimeout(() => namedDownloads.delete(url), 60000);
 }
-
-let batchDownloadMode = false;
-let lastBatchResult = null; // final {success, count, errors} of the last batch
-let capturedDownload = null;
-let batchStatus = '';
-let batchCancelRequested = false;
 
 // Track intercepted downloads by ID instead of global state
 const interceptedDownloads = new Map(); // downloadId -> {originalId, newId, filename, url}
@@ -130,55 +123,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true });
       break;
 
-
-    case 'BATCH_DOWNLOAD_ALL':
-      lastBatchResult = null;
-      if (batchDownloadMode) {
-        sendResponse({ started: false, success: false, error: 'A batch download is already running' });
-        break;
-      }
-      // Run batch download entirely in background (popup may close)
-      runBatchDownload(message.tabId, message.items, message.downloadPreference || 'pdf')
-        .catch(error => ({ success: false, count: 0, error: error.message, errors: [error.message] }))
-        .then(result => {
-          lastBatchResult = result;
-          // Notify (if enabled in settings) since the side panel may be closed
-          chrome.storage.local.get('settings').then(({ settings }) => {
-            if (!result.success || (settings && settings.showNotifications === false)) return;
-            chrome.notifications.create({
-              type: 'basic',
-              iconUrl: 'icons/icon48.png',
-              title: 'NotebookLM Export Complete',
-              message: `Downloaded ${result.count} files as ZIP`
-            });
-          }).catch(() => {});
-        });
-      sendResponse({ started: true });
-      break;
-
     case 'EXTRACT_MINDMAP_FRAME':
       extractMindmapFromAppFrame(message.tabId)
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ success: false, error: error.message }));
       return true;
 
-    case 'CANCEL_BATCH_DOWNLOAD':
-      // Checked between items; the item in progress finishes first
-      batchCancelRequested = true;
-      sendResponse({ success: true });
-      break;
-
     case 'NAME_NEXT_DOWNLOAD':
       nameNextDownload(message.url, message.filename);
       sendResponse({ success: true });
-      break;
-
-    case 'GET_BATCH_STATUS':
-      sendResponse({
-        inProgress: batchDownloadMode,
-        status: batchStatus,
-        result: lastBatchResult
-      });
       break;
 
     case 'DIRECT_DOWNLOAD_URL':
@@ -241,7 +194,7 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
 
   // Check if this is a re-download we initiated (skip interception to avoid loops)
   const isOurRedownload = activeRedownloadUrls.has(downloadItem.url);
-  console.log('[Background] Download created:', downloadItem.id, 'URL:', downloadItem.url?.substring(0, 100), 'batchMode:', batchDownloadMode, 'hasInterceptRequest:', hasInterceptRequest, 'isOurRedownload:', isOurRedownload);
+  console.log('[Background] Download created:', downloadItem.id, 'URL:', downloadItem.url?.substring(0, 100), 'hasInterceptRequest:', hasInterceptRequest, 'isOurRedownload:', isOurRedownload);
 
   // INTERCEPT MODE - Capture, cancel, and re-download without opening tab
   // Skip if this is our own re-download to prevent double interception
@@ -381,26 +334,6 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
 
     return;
   }
-
-  // BATCH MODE - Existing batch download logic
-  if (batchDownloadMode && isFromNotebookLM && downloadItem.url) {
-    // Only intercept requests are queued now (SET_PENDING_DOWNLOAD was removed)
-    const pendingInfo = null;
-
-    // Capture the URL and download ID - don't cancel yet, we need to fetch first
-    if (!capturedDownload) {
-      capturedDownload = {
-        url: downloadItem.url,
-        downloadId: downloadItem.id,
-        mime: downloadItem.mime,
-        name: pendingInfo?.name || 'download',
-        type: pendingInfo?.type || 'unknown',
-        requestId: pendingInfo?.requestId
-      };
-      console.log('[Background] Captured download via onCreated:', capturedDownload.url?.substring(0, 100));
-      // Don't cancel here - let the fetch happen first
-    }
-  }
 });
 
 // Intercept downloads from NotebookLM and rename them
@@ -408,7 +341,7 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
   // Gemini Notebook downloads only (allowed host, notebook referrer)
   const isFromNotebookLM = NLME.isNotebookDownload(downloadItem);
 
-  // Extension-started downloads with a registered name (folder mode, batch ZIP)
+  // Extension-started downloads with a registered name (folder mode)
   const namedFile = namedDownloads.get(downloadItem.url) || namedDownloads.get(downloadItem.finalUrl);
   if (namedFile) {
     namedDownloads.delete(downloadItem.url);
@@ -419,7 +352,7 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
 
   // Check if this download has redownload info in the Map
   const redownloadInfo = redownloadRequests.get(downloadItem.id);
-  console.log('[Background] Download intercepted:', downloadItem.id, downloadItem.filename, 'from NotebookLM:', isFromNotebookLM, 'batchMode:', batchDownloadMode, 'hasRedownloadInfo:', !!redownloadInfo);
+  console.log('[Background] Download intercepted:', downloadItem.id, downloadItem.filename, 'from NotebookLM:', isFromNotebookLM, 'hasRedownloadInfo:', !!redownloadInfo);
 
   // Check if this is the ORIGINAL download being cancelled (skip it)
   if (redownloadInfo && downloadItem.id === redownloadInfo.originalId) {
@@ -430,17 +363,13 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
   // Check if this is a direct download (from URL interception - no tab opened)
   const directInfo = directDownloads.get(downloadItem.id);
   if (directInfo) {
-    let filename = directInfo.filename;
+    // The side panel names the file with the extension it expects (URL,
+    // then type); the actual download's own name or MIME type wins when it
+    // is another known type (Slides as .pptx), then a per-type default
+    const realExt = downloadItem.filename?.match(/\.[a-z0-9]{2,5}$/i)?.[0] || NLME.extensionFor({ mime: downloadItem.mime });
+    let filename = NLME.withRealExtension(directInfo.filename, realExt);
+    if (!/\.[a-z0-9]{2,5}$/i.test(filename)) filename += NLME.extensionFor({ type: directInfo.artifactType });
     console.log('[Background] Direct download - using filename:', filename);
-
-    // Take the extension from the actual download: server filename first,
-    // then MIME type, then a per-type default
-    if (!filename.match(/\.[a-z0-9]{2,5}$/i)) {
-      const originalExt = downloadItem.filename?.match(/\.[a-z0-9]{2,5}$/i)?.[0] || '';
-      const extension = originalExt || getExtensionFromMime(downloadItem.mime) || getExtensionFromType(directInfo.artifactType);
-      filename = filename + extension;
-      console.log('[Background] Added extension:', extension);
-    }
 
     suggest({ filename: filename });
     directDownloads.delete(downloadItem.id); // Clean up
@@ -482,373 +411,10 @@ function sanitizeFilename(filename) {
   return NLME.sanitizeFilename(filename);
 }
 
-// Fetch file content and return as base64
-async function fetchFileContent(url) {
-  try {
-    console.log('[Background] Fetching file:', url);
-
-    if (!NLME.isAllowedDownloadUrl(url)) {
-      throw new Error('Not a Gemini Notebook download URL');
-    }
-    // credentials: 'include' sends the user's cookies for this host (the old
-    // manual Cookie header was a forbidden header that Chrome dropped)
-    const response = await fetch(url, { credentials: 'include' });
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    const blob = await response.blob();
-    const arrayBuffer = await blob.arrayBuffer();
-    const uint8Array = new Uint8Array(arrayBuffer);
-
-    // Convert to base64
-    let binary = '';
-    for (let i = 0; i < uint8Array.length; i++) {
-      binary += String.fromCharCode(uint8Array[i]);
-    }
-    const base64 = btoa(binary);
-
-    console.log('[Background] Fetched file, size:', uint8Array.length, 'mime:', blob.type);
-
-    return {
-      success: true,
-      data: base64,
-      mime: blob.type,
-      size: uint8Array.length
-    };
-  } catch (error) {
-    console.error('[Background] Fetch failed:', error);
-    return { success: false, error: error.message };
-  }
-}
-
 // The toolbar badge counted artifacts found by the removed page polling
 // (Nov 2026). Clear what earlier versions stored so no stale count remains.
 chrome.storage.local.remove('capturedArtifacts');
 chrome.action.setBadgeText({ text: '' });
-
-// Run batch download entirely in background
-async function runBatchDownload(tabId, items, downloadPreference = 'pdf') {
-  console.log('[Background] Starting batch download for', items.length, 'items');
-
-  batchDownloadMode = true;
-  batchCancelRequested = false;
-  let batchWasCancelled = false;
-  batchStatus = 'Starting...';
-  const downloadedFiles = [];
-  const itemsDownloaded = new Set(); // item indexes, so a mind map (2 files) counts once
-  const errors = [];
-
-  // We'll collect files as base64 and create zip at the end
-  const fileContents = [];
-
-  try {
-
-  for (let i = 0; i < items.length; i++) {
-    if (batchCancelRequested) {
-      // Keep what was fetched: it becomes a -PARTIAL ZIP below
-      console.log('[Background] Batch download cancelled by user');
-      batchStatus = 'Cancelled';
-      batchWasCancelled = true;
-      errors.push(NLME.cancellationNote({ kind: 'artifacts', done: i, total: items.length }));
-      break;
-    }
-
-    const item = items[i];
-    batchStatus = `Downloading ${i + 1}/${items.length}: ${item.label}`;
-    console.log('[Background]', batchStatus);
-
-    try {
-      // Use the same content-script path as single downloads: it resolves the
-      // item among artifact-library-item rows only, extracts Reports/Data Tables
-      // as HTML, and returns the CDN URL that injected.js intercepts from
-      // window.open (no Chrome download is created for those).
-      const extractable = item.type === 'Report' || item.type === 'Data Table' || item.type === 'Mind Map';
-      capturedDownload = null;
-      const response = await chrome.tabs.sendMessage(tabId, {
-        type: 'DOWNLOAD_ARTIFACT',
-        data: {
-          artifactIndex: item.index,
-          artifactType: item.type,
-          artifactName: item.label,
-          skipMoreButton: extractable,
-          downloadPreference
-        }
-      });
-
-      if (!response || !response.success) {
-        throw new Error(response?.error || 'Download failed');
-      }
-
-      if (response.method === 'mindmap_app_frame') {
-        const frame = await extractMindmapFromAppFrame(tabId);
-        if (!frame.success) throw new Error(frame.error);
-        const base = sanitizeFilename(item.label);
-        for (const [filename, text] of [
-          [`${base}.svg`, frame.svgContent || ''],
-          [`${base}.json`, JSON.stringify(frame.treeData || {}, null, 2)]
-        ]) {
-          const data = utf8ToBase64(text);
-          fileContents.push({ filename, data, size: data.length });
-          downloadedFiles.push(filename);
-          itemsDownloaded.add(i);
-        }
-        console.log('[Background] Added mind map (app frame) to collection:', base);
-        continue;
-      }
-
-      if (response.method === 'mindmap_extraction') {
-        const base = sanitizeFilename(item.label);
-        for (const [filename, text] of [
-          [`${base}.svg`, response.svgContent || ''],
-          [`${base}.json`, JSON.stringify(response.treeData || {}, null, 2)]
-        ]) {
-          const data = utf8ToBase64(text);
-          fileContents.push({ filename, data, size: data.length });
-          downloadedFiles.push(filename);
-          itemsDownloaded.add(i);
-        }
-        console.log('[Background] Added mind map to collection:', base);
-        continue;
-      }
-
-      if (response.method === 'content_extraction') {
-        const data = utf8ToBase64(response.data || '');
-        const filename = sanitizeFilename(item.label) + '.html';
-        fileContents.push({ filename, data, size: data.length });
-        downloadedFiles.push(filename);
-        itemsDownloaded.add(i);
-        console.log('[Background] Added extracted content to collection:', filename);
-        continue;
-      }
-
-      // Intercepted URL, or (fallback) a real Chrome download captured in onCreated
-      const captured = response.url ? { url: response.url } : await waitForCapture(8000);
-
-      if (captured && captured.url) {
-        console.log('[Background] Captured URL:', captured.url.substring(0, 80));
-
-        // Try fetching directly from background first (no CORS restrictions)
-        console.log('[Background] Starting fetch from background...');
-        let fetchResult = await fetchFileContent(captured.url);
-
-        // If background fetch fails, try via content script
-        if (!fetchResult.success) {
-          console.log('[Background] Background fetch failed, trying content script...');
-          fetchResult = await fetchViaContentScript(tabId, captured.url);
-        }
-        console.log('[Background] Fetch result:', fetchResult.success, fetchResult.error || fetchResult.size);
-
-        // Now cancel the download (after fetch attempt)
-        if (captured.downloadId) {
-          chrome.downloads.cancel(captured.downloadId).then(() => {
-            console.log('[Background] Cancelled download:', captured.downloadId);
-            chrome.downloads.erase({ id: captured.downloadId });
-          }).catch(() => {});
-        }
-
-        if (fetchResult.success) {
-          const extension = NLME.extensionFromDownloadUrl(captured.url) || getExtensionFromMime(fetchResult.mime) || getExtensionFromType(item.type);
-          const filename = sanitizeFilename(item.label) + extension;
-
-          fileContents.push({
-            filename,
-            data: fetchResult.data,
-            size: fetchResult.size
-          });
-          downloadedFiles.push(filename);
-          itemsDownloaded.add(i);
-          console.log('[Background] Added to collection:', filename, fetchResult.size, 'bytes');
-        } else {
-          errors.push(`${item.label}: Fetch failed - ${fetchResult.error}`);
-        }
-      } else {
-        errors.push(`${item.label}: Could not capture download URL`);
-      }
-    } catch (error) {
-      console.error('[Background] Error downloading', item.label, error);
-      errors.push(`${item.label}: ${error.message}`);
-    }
-
-    // Delay between downloads
-    if (i < items.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 1500));
-    }
-  }
-
-    batchStatus = 'Creating ZIP...';
-    console.log('[Background] Creating ZIP with', fileContents.length, 'files');
-
-    // Create ZIP and download
-    if (fileContents.length > 0) {
-    // Same-title artifacts (spec R8) would otherwise overwrite each other
-    const uniqueNames = NLME.uniqueFilenames(fileContents.map(f => f.filename));
-    fileContents.forEach((f, i) => { f.filename = uniqueNames[i]; });
-    try {
-      const zipBase64 = await createZipFromFiles(fileContents, errors);
-      const timestamp = NLME.exportTimestamp();
-
-      // Download the ZIP (awaited: a failure here is a failed batch)
-      const zipUrl = `data:application/zip;base64,${zipBase64}`;
-      const zipName = `notebooklm-export-${timestamp}${batchWasCancelled ? '-PARTIAL' : ''}.zip`;
-      nameNextDownload(zipUrl, zipName);
-      await chrome.downloads.download({
-        url: zipUrl,
-        filename: zipName,
-        saveAs: true
-      });
-
-      batchStatus = `Complete: ${downloadedFiles.length} files`;
-      return { success: true, cancelled: batchWasCancelled, count: itemsDownloaded.size, errors };
-    } catch (zipError) {
-      console.error('[Background] ZIP creation failed:', zipError);
-      console.log('[Background] Falling back to individual file downloads...');
-
-      // FALLBACK: Download files individually to prevent data loss
-      batchStatus = 'Downloading files individually...';
-      let successCount = 0;
-      const fallbackErrors = [];
-
-      for (let i = 0; i < fileContents.length; i++) {
-        const file = fileContents[i];
-        try {
-          // Determine MIME type from filename extension
-          const ext = file.filename.split('.').pop().toLowerCase();
-          const mimeTypes = {
-            'pdf': 'application/pdf',
-            'png': 'image/png',
-            'jpg': 'image/jpeg',
-            'jpeg': 'image/jpeg',
-            'wav': 'audio/wav',
-            'mp3': 'audio/mpeg',
-            'm4a': 'audio/mp4',
-            'mp4': 'video/mp4',
-            'csv': 'text/csv',
-            'md': 'text/markdown',
-            'txt': 'text/plain'
-          };
-          const mimeType = mimeTypes[ext] || 'application/octet-stream';
-
-          // Register the name: Chrome drops `filename` while our
-          // onDeterminingFilename listener exists (see NAME_NEXT_DOWNLOAD)
-          const fileUrl = `data:${mimeType};base64,${file.data}`;
-          nameNextDownload(fileUrl, file.filename);
-          await chrome.downloads.download({
-            url: fileUrl,
-            filename: file.filename,
-            saveAs: false
-          });
-          successCount++;
-          console.log(`[Background] Downloaded ${i + 1}/${fileContents.length}: ${file.filename}`);
-
-          // Small delay between downloads to avoid overwhelming the system
-          if (i < fileContents.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 200));
-          }
-        } catch (downloadError) {
-          console.error(`[Background] Failed to download ${file.filename}:`, downloadError);
-          fallbackErrors.push(`${file.filename}: ${downloadError.message}`);
-        }
-      }
-
-      batchStatus = `Complete: ${successCount}/${fileContents.length} files (individual downloads)`;
-
-      if (successCount > 0) {
-        return {
-          success: true,
-          count: itemsDownloaded.size,
-          warning: `ZIP creation failed. Downloaded ${successCount} files individually.`,
-          errors: [...errors, ...fallbackErrors]
-        };
-      } else {
-        return {
-          success: false,
-          error: 'ZIP creation failed and all individual downloads failed',
-          errors: [...errors, ...fallbackErrors]
-        };
-      }
-    }
-  } else {
-    batchStatus = 'No files downloaded';
-    // Never lose the reasons: an errors-only ZIP
-    if (errors.length > 0) {
-      try {
-        const timestamp = NLME.exportTimestamp();
-        const errUrl = `data:application/zip;base64,${await createZipFromFiles([], errors)}`;
-        const errName = `notebooklm-export-${timestamp}${batchWasCancelled ? '-PARTIAL' : ''}-errors.zip`;
-        nameNextDownload(errUrl, errName);
-        await chrome.downloads.download({ url: errUrl, filename: errName, saveAs: false });
-      } catch (e) {
-        console.error('[Background] Could not save errors-only ZIP:', e);
-      }
-    }
-    return { success: false, cancelled: batchWasCancelled, error: 'No files downloaded', count: 0, errors };
-  }
-
-  } finally {
-    // CRITICAL: Always reset batchDownloadMode, even on error
-    batchDownloadMode = false;
-    console.log('[Background] Batch download mode reset');
-  }
-}
-
-// Fetch file via content script (has page cookies)
-async function fetchViaContentScript(tabId, url) {
-  console.log('[Background] Sending FETCH_FILE to content script, tabId:', tabId);
-
-  return new Promise((resolve) => {
-    let resolved = false;
-
-    // Send message to content script
-    chrome.tabs.sendMessage(tabId, {
-      type: 'FETCH_FILE',
-      url: url
-    }, (response) => {
-      if (resolved) return;
-      resolved = true;
-
-      if (chrome.runtime.lastError) {
-        console.error('[Background] Content script message error:', chrome.runtime.lastError.message);
-        resolve({ success: false, error: chrome.runtime.lastError.message });
-      } else if (response) {
-        console.log('[Background] Got response from content script:', response.success, response.size || response.error);
-        resolve(response);
-      } else {
-        console.error('[Background] No response from content script');
-        resolve({ success: false, error: 'No response from content script' });
-      }
-    });
-
-    // Timeout after 30 seconds
-    setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        console.error('[Background] Content script fetch timeout');
-        resolve({ success: false, error: 'Fetch timeout' });
-      }
-    }, 30000);
-  });
-}
-
-// Wait for a download to be captured
-function waitForCapture(timeout) {
-  return new Promise((resolve) => {
-    const startTime = Date.now();
-    const check = () => {
-      if (capturedDownload) {
-        const result = { ...capturedDownload };
-        capturedDownload = null;
-        resolve(result);
-      } else if (Date.now() - startTime < timeout) {
-        setTimeout(check, 100);
-      } else {
-        resolve(null);
-      }
-    };
-    setTimeout(check, 500); // Start after menu has time to open
-  });
-}
 
 // Extract an open mind map from its sandboxed app iframe (*.scf.usercontent.goog)
 // by injecting mindmap-extract.js into the frame and running the same SVG/tree
@@ -882,68 +448,4 @@ async function extractMindmapFromAppFrame(tabId) {
   } finally {
     chrome.tabs.sendMessage(tabId, { type: 'NAVIGATE_BACK' }).catch(() => {});
   }
-}
-
-// Base64-encode a string as UTF-8 (chunked to avoid call-stack limits)
-function utf8ToBase64(text) {
-  const bytes = new TextEncoder().encode(text);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-  }
-  return btoa(binary);
-}
-
-// Helper functions for batch download
-function getExtensionFromMime(mimeType) {
-  const mimeMap = {
-    'image/png': '.png',
-    'image/jpeg': '.jpg',
-    'image/webp': '.webp',
-    'image/svg+xml': '.svg',
-    'application/pdf': '.pdf',
-    'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
-    'application/json': '.json',
-    'text/csv': '.csv',
-    'text/markdown': '.md',
-    'text/plain': '.txt',
-    'audio/wav': '.wav',
-    'audio/mpeg': '.mp3',
-    'audio/mp4': '.m4a',
-    'audio/x-m4a': '.m4a',
-    'video/mp4': '.mp4',
-    'video/webm': '.webm'
-  };
-  const baseType = (mimeType || '').split(';')[0].trim().toLowerCase();
-  return mimeMap[baseType] || '';
-}
-
-function getExtensionFromType(type) {
-  const typeMap = {
-    'Slides': '.pdf',
-    'Infographic': '.png',
-    'Audio Overview': '.m4a',
-    'Video Overview': '.mp4'
-  };
-  return typeMap[type] || '.bin';
-}
-
-// Batch ZIP via the bundled JSZip (Milestone 1): UTF-8 file names, real
-// dates, and errors.txt when any item failed. Replaces the hand-written
-// writer, which garbled non-ASCII names and zeroed all dates.
-async function createZipFromFiles(files, errors = []) {
-  const zip = new JSZip();
-  for (const file of files) {
-    zip.file(file.filename, file.data, { base64: true });
-  }
-  if (errors.length > 0) {
-    zip.file('errors.txt', NLME.formatErrorsTxt({
-      title: 'Download All',
-      generatedAt: new Date().toLocaleString(),
-      errors
-    }));
-  }
-  return zip.generateAsync({ type: 'base64' });
 }

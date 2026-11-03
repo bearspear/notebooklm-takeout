@@ -46,6 +46,13 @@
     return ICON_TO_TYPE[icon] || icon || 'Unknown';
   }
 
+  // Full Takeout chat follows the one Citation detail setting (the one-click export has no
+  // per-tab checkbox); 'quotes' is the default, so a missing value counts as quotes.
+  function takeoutChatFullCitations(settings) {
+    const detail = settings && settings.citationDetail;
+    return detail === undefined || detail === null || detail === 'quotes';
+  }
+
   function isDownloadableType(type) {
     return !NOT_DOWNLOADABLE.includes(type);
   }
@@ -146,24 +153,6 @@
     const wanted = preference === 'pptx' ? ['powerpoint', '.pptx'] : preference === 'pdf' ? ['pdf'] : [];
     const preferred = candidates.find(i => wanted.some(w => lower[i].includes(w)));
     return preferred !== undefined ? preferred : candidates[0];
-  }
-
-  // Make ZIP entry names unique: repeats get " (2)", " (3)"... before the
-  // extension, so artifacts with the same title don't overwrite each other.
-  function uniqueFilenames(names) {
-    const used = new Set();
-    return (names || []).map(name => {
-      let candidate = name;
-      if (used.has(candidate)) {
-        const dot = name.lastIndexOf('.');
-        const stem = dot > 0 ? name.slice(0, dot) : name;
-        const ext = dot > 0 ? name.slice(dot) : '';
-        let n = 2;
-        do { candidate = `${stem} (${n++})${ext}`; } while (used.has(candidate));
-      }
-      used.add(candidate);
-      return candidate;
-    });
   }
 
   // Citation anchors are numbered while Turndown runs, but some rules convert
@@ -322,10 +311,10 @@
       return { level: 'warning', message: `Cancelled: exported ${exported} of ${selected} ${kind}`, partial: true };
     }
     if (exported === 0 && selected > 0) {
-      return { level: 'error', message: `No ${kind} exported (${failed} failed, see errors.txt)`, partial: false };
+      return { level: 'error', message: `No ${kind} exported (${failed} failed, see errors.md)`, partial: false };
     }
     if (failed > 0) {
-      return { level: 'warning', message: `Exported ${exported} of ${selected} ${kind} (${failed} failed, see errors.txt)`, partial: false };
+      return { level: 'warning', message: `Exported ${exported} of ${selected} ${kind} (${failed} failed, see errors.md)`, partial: false };
     }
     return { level: 'success', message: `Exported ${exported} of ${selected} ${kind}`, partial: false };
   }
@@ -402,10 +391,6 @@
     return fresh.reduce((a, b) => (b.timestamp >= a.timestamp ? b : a)).url;
   }
 
-  function formatErrorsTxt({ title = 'Export', generatedAt = '', errors = [] } = {}) {
-    return buildErrorReport({ title, generatedAt, errors });
-  }
-
 
   // Gemini Notebook download URLs name the real file (filename=Deck.pptx);
   // the extension from there beats guessing from MIME type or artifact type.
@@ -430,6 +415,22 @@
     return clean ? `${clean}/${filename}` : filename;
   }
 
+  // MIME type by file extension. Chrome sniffs an untyped blob download as
+  // text/plain and swaps the suggested extension for .txt, so saved blobs
+  // need a real type.
+  function mimeForPath(path) {
+    const m = /\.([^./\\]+)$/.exec(String(path || ''));
+    const types = {
+      md: 'text/markdown',
+      json: 'application/json',
+      csv: 'text/csv',
+      html: 'text/html',
+      svg: 'image/svg+xml',
+      txt: 'text/plain'
+    };
+    return (m && types[m[1].toLowerCase()]) || 'application/octet-stream';
+  }
+
   // Content is "ready" once its size stops changing: the last `checks`
   // samples are equal and at least `minLength`. Replaces fixed sleeps.
   function createStabilityTracker({ checks = 2, minLength = 1 } = {}) {
@@ -443,7 +444,7 @@
     };
   }
 
-  // errors.txt line for a cancelled run; it also forces the ZIP (and so the
+  // errors.md line for a cancelled run; it also forces the ZIP (and so the
   // -PARTIAL name) for exports that otherwise write a single file.
   function cancellationNote({ kind, done = 0, total = 0 } = {}) {
     // Sources have no citation markers; notes and chat messages do
@@ -479,7 +480,16 @@
     };
   }
 
-  // One errors.txt format for notes, sources, chat and Download All.
+  // A Full Takeout's errors.md holds every category's errors: each keeps its
+  // type and gets its category in front ("Notes: <item>: <message>").
+  function prefixExportErrors(category, errors = []) {
+    return (errors || []).map(raw => {
+      const e = normalizeExportError(raw);
+      return { type: e.type, title: e.item ? `${category}: ${e.item}` : category, message: e.message, stack: e.detail };
+    });
+  }
+
+  // One errors.md format for notes, sources, chat and Download All.
   function buildErrorReport({ title = 'Export', generatedAt = '', errors = [], stats = {} } = {}) {
     const lines = [`# ${title} Error Report`, ''];
     if (generatedAt) lines.push(`Generated: ${generatedAt}`, '');
@@ -556,6 +566,23 @@
 
   function artifactTypePrefix(type) {
     return ARTIFACT_PREFIXES[type] || String(type || 'artifact').toLowerCase().replace(/\s+/g, '-');
+  }
+
+  // One ZIP for a single Data Table or mind map download, as before
+  // Milestone 3a: { zipName, entries } with the inner files renamed, or null
+  // when the artifact stays loose (other types, or a lone file).
+  function singleArtifactPackage({ type, title, files }) {
+    if ((type !== 'Data Table' && type !== 'Mind Map') || !files || files.length < 2) return null;
+    const clean = sanitizeFilename(title);
+    const isTable = type === 'Data Table';
+    const base = isTable ? clean : `[MINDMAP]_${clean}`;
+    const entries = files.map(file => {
+      const path = String(file.path || '');
+      if (isTable && /-references\.txt$/i.test(path)) return { ...file, path: 'references.txt' };
+      const ext = (path.match(/\.[^./\\]+$/) || [''])[0];
+      return { ...file, path: `${base}${ext}` };
+    });
+    return { zipName: `${isTable ? `[${artifactTypePrefix(type)}]_${clean}` : base}.zip`, entries };
   }
 
   // 'YYYY-MM-DDTHH-MM-SS' (UTC) for export file names
@@ -730,7 +757,424 @@
     return [...groups.values()];
   }
 
+  // YAML front matter for exported notes and sources. Strings go through
+  // JSON.stringify, which yields a valid double-quoted YAML scalar, so a title
+  // with colons, quotes or newlines cannot break the block. Empty values are
+  // dropped; with nothing left there is no front matter at all.
+  function frontMatter(fields = {}) {
+    const lines = [];
+    for (const [key, value] of Object.entries(fields)) {
+      if (value === null || value === undefined || value === '') continue;
+      lines.push(`${key}: ${typeof value === 'number' || typeof value === 'boolean' ? String(value) : JSON.stringify(value)}`);
+    }
+    return lines.length ? `---\n${lines.join('\n')}\n---\n\n` : '';
+  }
+
+  // The one naming scheme for notes, sources, mind maps and artifacts:
+  // sanitized titles, repeats (case-insensitive, since macOS and Windows
+  // folders are) get -2, -3... `suffixes` are the variant suffixes written
+  // next to each stem ('-code-blocks'): a stem is taken only if none of its
+  // stem+suffix names is already in use, so "Diagram with images" cannot
+  // overwrite the -with-images variant of "Diagram".
+  function uniqueStems(titles, suffixes = []) {
+    const used = new Set();
+    const endings = ['', ...suffixes];
+    const names = candidate => endings.map(s => (candidate + s).toLowerCase());
+    return (titles || []).map(title => {
+      const base = sanitizeFilename(title);
+      let candidate = base;
+      for (let n = 2; names(candidate).some(name => used.has(name)); n++) candidate = `${base}-${n}`;
+      names(candidate).forEach(name => used.add(name));
+      return candidate;
+    });
+  }
+
+  // The notebook's UUID from its URL, for the manifest and front matter.
+  function notebookIdFromUrl(url) {
+    const m = String(url || '').match(/\/notebook\/([^/?#]+)/);
+    return m ? m[1] : '';
+  }
+
+  // Notebook-level metadata shared by every front matter block and the manifest.
+  function exportMeta({ notebookTitle, tabUrl, version, exportedAt } = {}) {
+    return {
+      notebook: notebookTitle,
+      notebook_url: isNotebookUrl(tabUrl) ? tabUrl : '',
+      notebook_id: notebookIdFromUrl(tabUrl),
+      exporter: `NotebookLM Takeout ${version}`,
+      exported: exportedAt.toISOString()
+    };
+  }
+
+  function byteLength(entry) {
+    const data = entry.data;
+    if (typeof data === 'string') return new TextEncoder().encode(data).length;
+    if (typeof Blob !== 'undefined' && data instanceof Blob) return data.size;
+    if (data && typeof data.byteLength === 'number') return data.byteLength;
+    return null;
+  }
+
+  // manifest.json: what is in a ZIP, so a takeout can be audited or resumed
+  // without opening every file. Entries with a url were not fetched (bytes
+  // null). manifest.json does not list itself.
+  function buildManifest({ meta, kind, part = 1, totalParts = 1, partial = false, files = [], counts = {}, errorCount = 0 } = {}) {
+    return {
+      exporter: meta.exporter,
+      exported: meta.exported,
+      notebook: { title: meta.notebook, url: meta.notebook_url, id: meta.notebook_id },
+      kind,
+      part,
+      totalParts,
+      partial,
+      counts,
+      errorCount,
+      files: files.map(f => {
+        const entry = { path: f.path, bytes: byteLength(f) };
+        for (const key of ['title', 'variant', 'itemKind']) {
+          if (f[key] !== undefined) entry[key] = f[key];
+        }
+        return entry;
+      })
+    };
+  }
+
+  // ZIP file name: "<Notebook>-<kind>-<timestamp>[-PARTIAL][-partNofM].zip".
+  function zipName({ notebook, kind, timestamp, partial = false, part = 1, totalParts = 1 } = {}) {
+    return `${sanitizeFilename(notebook)}-${kind}-${timestamp}${partial ? '-PARTIAL' : ''}${totalParts > 1 ? `-part${part}of${totalParts}` : ''}.zip`;
+  }
+
+  const ARTIFACT_FOLDERS = {
+    'Audio Overview': 'audio',
+    'Video Overview': 'video',
+    'Slides': 'slides',
+    'Infographic': 'infographics',
+    'Report': 'reports',
+    'Data Table': 'tables',
+    'Mind Map': 'mind-maps'
+  };
+
+  // Top-level ZIP folder for an artifact type.
+  function artifactFolder(type) {
+    return ARTIFACT_FOLDERS[type] || artifactTypePrefix(type);
+  }
+
+  const MIME_EXTENSIONS = {
+    'application/pdf': '.pdf',
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/webp': '.webp',
+    'image/svg+xml': '.svg',
+    'audio/mp4': '.m4a',
+    'audio/x-m4a': '.m4a',
+    'audio/mpeg': '.mp3',
+    'audio/wav': '.wav',
+    'video/mp4': '.mp4',
+    'video/webm': '.webm',
+    'text/csv': '.csv',
+    'text/markdown': '.md',
+    'text/plain': '.txt',
+    'application/json': '.json',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx'
+  };
+  const TYPE_EXTENSIONS = {
+    'Slides': '.pdf',
+    'Infographic': '.png',
+    'Audio Overview': '.m4a',
+    'Video Overview': '.mp4'
+  };
+
+  // File extension for a downloaded artifact: the real file name in the URL
+  // wins, then the MIME type, then what the artifact type usually is.
+  // `format` ('pdf'|'pptx') is the Slides format that was asked for: the
+  // last-resort guess, so a PDF and a PowerPoint of one deck never share a name.
+  function extensionFor({ url = '', mime = '', type = '', format = null } = {}) {
+    const baseMime = String(mime || '').split(';')[0].trim().toLowerCase();
+    const typeGuess = type === 'Slides' && format === 'pptx' ? '.pptx' : TYPE_EXTENSIONS[type];
+    return extensionFromDownloadUrl(url) || MIME_EXTENSIONS[baseMime] || typeGuess || '';
+  }
+
+  // The Slides download formats to fetch for an artifact type: both for a
+  // Full Takeout, else the one preferred format. [null] = no format choice.
+  function slideFormatsFor(type, { both = false, preferred = 'pdf' } = {}) {
+    if (type !== 'Slides') return [null];
+    return both ? ['pdf', 'pptx'] : [preferred === 'pptx' ? 'pptx' : 'pdf'];
+  }
+
+  // Everything extensionFor can return
+  const KNOWN_EXTENSIONS = new Set([...Object.values(MIME_EXTENSIONS), ...Object.values(TYPE_EXTENSIONS)]);
+
+  // A URL download's name with its real extension. The side panel names it
+  // with the extension it expects (extensionFor: URL, then type); when the
+  // download turns out to be another known type (Slides as .pptx, not .pdf),
+  // the real extension replaces the expected one. A name without an
+  // extension gets the real one; unknown extensions never replace anything.
+  function withRealExtension(filename, realExt) {
+    const real = String(realExt || '').toLowerCase();
+    const current = (filename.match(/\.[a-z0-9]{2,5}$/i) || [''])[0];
+    if (!current) return filename + real;
+    if (!KNOWN_EXTENSIONS.has(real) || !KNOWN_EXTENSIONS.has(current.toLowerCase())) return filename;
+    return filename.slice(0, -current.length) + real;
+  }
+
+  // One stem per Studio artifact (aligned with items), unique within the
+  // artifact's type folder: different types may share a name, since their
+  // folders differ. Data Tables also write <stem>-references.txt.
+  function artifactStems(items) {
+    const stems = new Array(items.length);
+    const byFolder = new Map();
+    items.forEach((item, idx) => {
+      const folder = artifactFolder(item.type);
+      if (!byFolder.has(folder)) byFolder.set(folder, []);
+      byFolder.get(folder).push(idx);
+    });
+    for (const idxs of byFolder.values()) {
+      const suffixes = idxs.some(i => items[i].type === 'Data Table') ? ['-references'] : [];
+      uniqueStems(idxs.map(i => items[i].label), suffixes).forEach((stem, k) => { stems[idxs[k]] = stem; });
+    }
+    return stems;
+  }
+
+  const TAKEOUT_STATUS_WORDS = {
+    done: 'complete',
+    partial: 'partial (cancelled)',
+    skipped: 'skipped (cancelled earlier)',
+    empty: 'none in notebook',
+    // Full Takeout only: the notes job stopped itself (citations unreadable)
+    // or the category's scan failed
+    stopped: 'partial (stopped, see errors)',
+    failed: 'failed (see errors)'
+  };
+
+  // A Full Takeout category's status after its runner: 'partial' (cancelled),
+  // 'stopped' (the job stopped itself), 'failed' (nothing exported but items
+  // failed or errors were recorded, e.g. chat messages that could not be
+  // read), 'empty' (nothing to export, no errors), else 'done'. 'skipped'
+  // and scan failures are decided by runFullTakeout itself.
+  function takeoutCategoryStatus({ selected = 0, exported = 0, failed = 0, errorCount = 0, cancelled = false, stopped = false } = {}) {
+    if (cancelled) return 'partial';
+    if (stopped) return 'stopped';
+    if (exported === 0 && (failed > 0 || errorCount > 0)) return 'failed';
+    if (selected === 0) return 'empty';
+    return 'done';
+  }
+
+  // A chat scan with nothing to export: no message pairs AND no message that
+  // could not be read AND no citation group left collapsed. Otherwise the
+  // chat job still runs, so those problems reach errors.md.
+  function chatScanIsEmpty(chatData) {
+    const stats = (chatData && chatData.stats) || {};
+    return ((chatData && chatData.messagePairs) || []).length === 0 &&
+      !((stats.skipped || []).length) && !(stats.collapsedRemaining > 0);
+  }
+
+  // _index.md at the root of a Full Takeout: one row per category (Sources,
+  // Notes, Chat, Artifacts) with its counts, status and folder, the ZIPs each
+  // category wrote, and a link to the combined errors.md.
+  function buildRootIndex({ meta, categories = [], errorsFile = null } = {}) {
+    let md = frontMatter({
+      title: `Takeout — ${meta.notebook}`,
+      notebook: meta.notebook,
+      notebook_url: meta.notebook_url,
+      notebook_id: meta.notebook_id,
+      exporter: meta.exporter,
+      exported: meta.exported,
+      kind: 'takeout'
+    });
+    md += `# Takeout — ${meta.notebook}\n\n`;
+    md += '| Category | Exported | Failed | Status | Folder |\n';
+    md += '| --- | --- | --- | --- | --- |\n';
+    for (const c of categories) {
+      // Same rule as buildRootIndexHtml: nothing written (empty, skipped,
+      // failed without a package) has no folder; a category written in
+      // several batches lives in part-N/ folders
+      let folder = '—';
+      if (c.exported > 0 || (c.zips || []).length > 0) {
+        if (c.parts > 1) folder = `${c.folder}/part-1/ … ${c.folder}/part-${c.parts}/`;
+        else if (c.parts === 1) folder = `${c.folder}/part-1/`;
+        else folder = `${c.folder}/`;
+      }
+      md += `| ${c.name} | ${c.exported} of ${c.selected} | ${c.failed} | ${TAKEOUT_STATUS_WORDS[c.status] || c.status} | ${folder} |\n`;
+    }
+    md += '\n';
+    if (errorsFile) md += `Errors and notes from every category: [${errorsFile}](${encodePath(errorsFile)})\n\n`;
+    const withZips = categories.filter(c => (c.zips || []).length > 0);
+    if (withZips.length > 0) {
+      md += 'Unzip every ZIP into the same folder to get one tree.\n\n';
+      md += '## ZIPs\n\n';
+      for (const c of withZips) {
+        for (const zip of c.zips) md += `- ${c.name}: ${zip}\n`;
+      }
+      md += '\n';
+    }
+    return md;
+  }
+
+  // _index.html: the browsable twin of _index.md. A self-contained page
+  // (inline CSS, no scripts or external resources, light and dark) with a
+  // relative, encoded link to every file in the package.
+  const INDEX_HTML_CSS = `
+:root { color-scheme: light dark; --bg: #fff; --fg: #1f2328; --muted: #656d76; --link: #0969da; --line: #d0d7de; }
+@media (prefers-color-scheme: dark) { :root { --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --link: #58a6ff; --line: #30363d; } }
+body { font: 16px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); max-width: 56rem; margin: 0 auto; padding: 1rem 1.25rem 3rem; }
+a { color: var(--link); }
+h1 { margin-bottom: .25rem; }
+h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid var(--line); padding-bottom: .25rem; }
+.meta, .variant, footer { color: var(--muted); font-size: .9rem; }
+.top { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; padding: 0; list-style: none; }
+ul.files { padding-left: 1.25rem; }
+.type { font-size: .75rem; color: var(--muted); border: 1px solid var(--line); border-radius: .75rem; padding: 0 .5rem; white-space: nowrap; }
+table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); }
+footer { margin-top: 3rem; }
+`;
+
+  function indexHtmlShell({ meta, heading, body }) {
+    const notebook = meta.notebook_url
+      ? `<a href="${escapeHtml(meta.notebook_url)}">${escapeHtml(meta.notebook)}</a>`
+      : escapeHtml(meta.notebook);
+    const when = [meta.exporter, meta.exported].filter(Boolean).map(escapeHtml).join(' · ');
+    return '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
+      `<title>${escapeHtml(heading)}</title>\n<style>${INDEX_HTML_CSS}</style>\n</head>\n<body>\n` +
+      `<h1>${escapeHtml(heading)}</h1>\n<p class="meta">Notebook: ${notebook}${when ? `<br>${when}` : ''}</p>\n` +
+      body + '</body>\n</html>\n';
+  }
+
+  function indexHtmlLinks(links) {
+    if (!links.length) return '';
+    return '<ul class="top">' +
+      links.map(l => `<li><a href="${encodePath(l.href)}">${escapeHtml(l.label)}</a></li>`).join('') +
+      '</ul>\n';
+  }
+
+  const FILE_TYPE_LABELS = {
+    md: 'Markdown', json: 'JSON', csv: 'CSV', html: 'HTML', svg: 'SVG image',
+    png: 'Image', jpg: 'Image', jpeg: 'Image', webp: 'Image', pdf: 'PDF',
+    pptx: 'PowerPoint', docx: 'Word', xlsx: 'Excel',
+    m4a: 'Audio', mp3: 'Audio', wav: 'Audio', mp4: 'Video', webm: 'Video',
+    txt: 'Text', zip: 'ZIP'
+  };
+
+  // "Markdown", "PDF", ... for a file path, from its extension.
+  function fileTypeLabel(path) {
+    const name = String(path || '').split('/').pop();
+    const dot = name.lastIndexOf('.');
+    if (dot <= 0 || dot === name.length - 1) return 'File';
+    const ext = name.slice(dot + 1).toLowerCase();
+    return FILE_TYPE_LABELS[ext] || ext.toUpperCase();
+  }
+
+  function humanSize(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function buildIndexHtml({ meta, heading, files = [], links = [] } = {}) {
+    const linked = new Set(links.map(l => l.href));
+    const groups = new Map();
+    for (const f of files) {
+      if (!f || f.path === '_index.html' || f.path === 'manifest.json' || linked.has(f.path)) continue;
+      const parts = String(f.path).split('/');
+      const group = parts.length > 1 ? parts[0] : 'Files';
+      if (!groups.has(group)) groups.set(group, []);
+      groups.get(group).push(f);
+    }
+    let body = indexHtmlLinks(links);
+    for (const [group, list] of groups) {
+      body += `<h2>${escapeHtml(group)}</h2>\n<ul class="files">\n`;
+      for (const f of list) {
+        const label = f.title || String(f.path).split('/').pop();
+        const size = byteLength(f);
+        const type = fileTypeLabel(f.path) + (size == null ? '' : ` · ${humanSize(size)}`);
+        body += `<li><a href="${encodePath(f.path)}">${escapeHtml(label)}</a> <span class="type">${escapeHtml(type)}</span>` +
+          (f.variant ? ` <span class="variant">${escapeHtml(f.variant)}</span>` : '') + '</li>\n';
+      }
+      body += '</ul>\n';
+    }
+    body += '<footer><a href="manifest.json">manifest.json</a></footer>\n';
+    return indexHtmlShell({ meta, heading, body });
+  }
+
+  // Root _index.html of a Full Takeout. A category written in several
+  // batches (c.parts >= 1; 0 = no part-N/ folders) links each part-N/ folder.
+  function buildRootIndexHtml({ meta, categories = [], errorsFile = null } = {}) {
+    let body = indexHtmlLinks([
+      { href: '_index.md', label: 'Markdown index' },
+      ...(errorsFile ? [{ href: errorsFile, label: 'Errors' }] : [])
+    ]);
+    body += '<table>\n<thead><tr><th>Category</th><th>Exported</th><th>Failed</th><th>Status</th><th>Folder</th></tr></thead>\n<tbody>\n';
+    for (const c of categories) {
+      let folder = '—';
+      // Nothing written (empty, skipped, scan failed): no folder to link
+      if (c.exported > 0 || (c.zips || []).length > 0) {
+        const dir = encodePath(c.folder);
+        folder = c.parts >= 1
+          ? Array.from({ length: c.parts }, (_, i) => `<a href="${dir}/part-${i + 1}/_index.html">part-${i + 1}</a>`).join(' · ')
+          : `<a href="${dir}/_index.html">${escapeHtml(c.folder)}/</a>`;
+      }
+      body += `<tr><td>${escapeHtml(c.name)}</td><td>${c.exported} of ${c.selected}</td><td>${c.failed}</td>` +
+        `<td>${escapeHtml(TAKEOUT_STATUS_WORDS[c.status] || c.status)}</td><td>${folder}</td></tr>\n`;
+    }
+    body += '</tbody>\n</table>\n<footer><a href="manifest.json">manifest.json</a></footer>\n';
+    return indexHtmlShell({ meta, heading: `Takeout — ${meta.notebook}`, body });
+  }
+
+  // The one toast after a Full Takeout: "Takeout: sources 12/12, notes 4/10
+  // partial, chat skipped, artifacts none". Warning when any category failed
+  // items, has errors, was cut short or skipped, or lost content (audit);
+  // error when items existed but none was exported and nobody cancelled;
+  // info for a notebook with nothing to export.
+  function summarizeTakeoutOutcome({ categories = [], auditOk = true } = {}) {
+    const part = c => {
+      const name = c.name.toLowerCase();
+      const count = `${c.exported}/${c.selected}`;
+      switch (c.status) {
+        case 'partial': return `${name} ${count} partial`;
+        case 'stopped': return `${name} ${count} stopped`;
+        case 'skipped': return `${name} skipped`;
+        case 'empty': return `${name} none`;
+        // Items found but none exported, or (0 items) the scan failed
+        case 'failed': return c.selected ? `${name} ${count} failed` : `${name} failed`;
+        default: return `${name} ${count}`;
+      }
+    };
+    let message = `Takeout: ${categories.map(part).join(', ')}`;
+    const hasErrors = categories.some(c => (c.errorCount || 0) > 0);
+    if (hasErrors) message += ' (see errors.md)';
+    if (!auditOk) message += ' — some content is missing, see _audit.md';
+
+    const exported = categories.reduce((sum, c) => sum + (c.exported || 0), 0);
+    const cancelled = categories.some(c => c.status === 'partial' || c.status === 'skipped');
+    const hadWork = categories.some(c => c.status !== 'empty');
+    let level = 'success';
+    if (!hadWork) level = 'info';
+    else if (exported === 0 && !cancelled) level = 'error';
+    else if (hasErrors || !auditOk || categories.some(c => c.failed > 0 || !['done', 'empty'].includes(c.status))) level = 'warning';
+    return { level, message };
+  }
+
   const NLME = {
+    buildRootIndex,
+    buildIndexHtml,
+    fileTypeLabel,
+    buildRootIndexHtml,
+    summarizeTakeoutOutcome,
+    takeoutCategoryStatus,
+    chatScanIsEmpty,
+    frontMatter,
+    uniqueStems,
+    notebookIdFromUrl,
+    exportMeta,
+    buildManifest,
+    zipName,
+    artifactFolder,
+    extensionFor,
+    slideFormatsFor,
+    withRealExtension,
+    artifactStems,
     groupCitationEntries,
     noteHasImages,
     countMarkdownFormulas,
@@ -749,17 +1193,18 @@
     isNotebookUrl,
     sanitizeFilename,
     artifactTypePrefix,
+    singleArtifactPackage,
     exportTimestamp,
     escapeHtml,
     PROJECT_TITLE_SELECTORS,
     normalizeExportError,
+    prefixExportErrors,
     buildErrorReport,
     cancellationNote,
     distinctVariants,
     createStabilityTracker,
     downloadFolderPath,
     extensionFromDownloadUrl,
-    formatErrorsTxt,
     titlesMatch,
     pickByIndexThenTitleStrict,
     pickFreshIntercept,
@@ -775,7 +1220,6 @@
     classifyKatexScript,
     isCollapsedCitationGroup,
     renumberCitationAnchors,
-    uniqueFilenames,
     pickDownloadMenuIndex,
     countFailedExtractions,
     ISSUES_URL,
@@ -786,9 +1230,11 @@
     NOTE_ICONS,
     resolveArtifactType,
     isDownloadableType,
+    takeoutChatFullCitations,
     CITATION_TOOLTIP_SELECTOR,
     isCitationExpander,
-    parseCitationIndex
+    parseCitationIndex,
+    mimeForPath
   };
 
   root.NLME = NLME;

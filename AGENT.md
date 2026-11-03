@@ -7,8 +7,9 @@ the table of contents to jump.
 - Repo root: `/Users/mbehringer/Downloads/notebooklm-exporter`
 - Remote: `git@github.com-personal:bearspear/notebooklm-takeout.git`
 - Manifest: V3 Chrome extension, no build step
-- Latest meaningful work: Milestone 2 "Lean, shared and correct output" (v1.3.0), branch
-  `plan/milestone-2-lean-correct`; Milestone 1 (v1.2.0) was PR #3
+- Latest meaningful work: Milestone 3a "One-click Takeout" (v1.4.0): Full Takeout, one layout
+  for every ZIP, front matter, ZIPs built in the side panel. Milestone 2 (v1.3.0) was "Lean,
+  shared and correct output"; Milestone 1 (v1.2.0) was PR #3
 - Branch: `main`
 
 ## Table of contents
@@ -42,7 +43,8 @@ A Chrome side-panel extension that scrapes content out of `notebook.google.com` 
 `notebooklm.google.com`, renamed to "Gemini Notebook" in Aug 2026) into local
 files. Five user-facing surfaces: Sources, Notes, Artifacts, Chat, and the optional Studio
 tab. The Studio tab gives a unified flat list with per-item Download / Delete; everything
-else uses tab-specific batch exports producing ZIPs.
+else uses tab-specific batch exports producing ZIPs. A 📦 Full Takeout button in the header
+runs all four categories in one go.
 
 No backend, no build. Unit tests cover the DOM-free helpers in `takeout-shared.js`
 (`node --test tests/`); everything DOM-related is verified by hand. The hard parts are:
@@ -129,16 +131,19 @@ sendResponse later).
 ```
 notebooklm-exporter/
 ├── manifest.json           — V3 manifest, permissions, side_panel, content_scripts
-├── takeout-shared.js (746) — Selectors + DOM-free helpers (NLME global); content script,
+├── takeout-shared.js (1042) — Selectors + DOM-free helpers (NLME global); content script,
 │                             sidebar, service worker (importScripts) and Node tests load it
-├── tests/                  — node:test unit tests for takeout-shared.js
-├── sidebar.html  ( 423)    — Side panel UI: tabs, controls, settings/health panels
-├── sidebar.js    (6164)    — UI logic, export orchestration, KaTeX, mindmap helpers
-├── styles.css    (1635)    — Side panel styles
-├── content.js    (4149)    — DOM scraping + extraction, runs on NotebookLM
+├── takeout-job.js (85)     — NLME.runExportJob: the one DOM-free job runner (sidebar + Node tests)
+├── tests/                  — node:test unit tests for takeout-shared.js, takeout-job.js and
+│                             the message protocol
+├── sidebar.html  ( 436)    — Side panel UI: tabs, controls, settings/health panels
+├── sidebar.js    (5701)    — UI logic, per-category runners, extract/build functions, KaTeX
+├── sidebar-takeout.js (519) — saveFiles, fetchDownload, withExportShell, runFullTakeout
+├── styles.css    (1644)    — Side panel styles
+├── content.js    (4161)    — DOM scraping + extraction, runs on NotebookLM
 ├── mindmap-extract.js (325) — Mind map SVG/tree extraction; content script and injected
 │                             by background into the *.scf.usercontent.goog app frame
-├── background.js (949)    — Service worker, download interception, batch ZIP, frame extraction
+├── background.js (451)    — Service worker: download interception/naming, mind map frame extraction (no ZIP code)
 ├── injected.js   (  68)    — MAIN-world download hook (window.open + link clicks), armed per click
 ├── mindmap-template.html (371) — Standalone interactive mindmap viewer (used as template)
 ├── jszip.min.js  (  12)    — Bundled JSZip
@@ -162,7 +167,9 @@ Line numbers drift with every change, so anchors are names: `grep -n "<name>" <f
 | Tab switching | `setupTabSwitching` (sidebar.js) |
 | KaTeX converter (shared) | `convertKatexNodeToLatex`, `katexRenderInline` (sidebar.js) |
 | Per-item artifact download | `async function downloadArtifact` (sidebar.js) |
-| Sources / Notes / Chat export | `exportSources`, `exportNotesAsMarkdown`, `createNotesZip`, `exportChat`, `convertChatToMarkdown` (sidebar.js) |
+| Sources / Notes / Chat / Artifacts export | per-category runners `runSourcesJob`, `runNotesJob`, `runChatJob`, `runArtifactsJob`; entry points `exportSources`, `exportNotesAsMarkdown`, `exportChat`, `downloadAllArtifacts` (sidebar.js) |
+| Extract / build / scan data | `extractSourceItem` / `buildSourcesFiles`, `extractNoteItem` / `buildNotesFiles`, `extractChatPair` / `buildChatAuditDoc` / `buildChatFiles`, `fetchArtifactFiles`; `scanSourcesData`, `scanNotesData`, `scanChatData`, `scanArtifactsData` (sidebar.js) |
+| File writer, shell, Full Takeout | `saveFiles`, `fetchDownload`, `withExportShell`, `runFullTakeout` (sidebar-takeout.js); `NLME.runExportJob` (takeout-job.js) |
 | Note Markdown (citations, Sources section) | `function convertToMarkdown` (sidebar.js) |
 | Studio tab | `scanStudioPage`, `handleStudioDownloadRow`, `exportSingleNote` (sidebar.js) |
 | Content message dispatcher | `chrome.runtime.onMessage.addListener` near the top of content.js |
@@ -174,7 +181,7 @@ Line numbers drift with every change, so anchors are names: `grep -n "<name>" <f
 | Viewer closing | `closeStudioViewer`, `closeSourceViewer`, `findStudioHeaderCloseButton` (content.js) |
 | Health check | `runComprehensiveHealthCheck`, `checkProjectTitleHealth` (content.js) |
 | Mind maps | `mindmap-extract.js`; `extractMindmapFromAppFrame` (background.js) |
-| Batch ZIP | `runBatchDownload`, `createZipFromFiles` (background.js) |
+| Layout helpers | `NLME.frontMatter`, `uniqueStems`, `exportMeta`, `buildManifest`, `zipName`, `artifactFolder`, `artifactStems`, `buildRootIndex` (takeout-shared.js) |
 
 ## Settings shape and storage
 
@@ -276,7 +283,7 @@ respond synchronously (and `return true` is omitted) or asynchronously (must
 |---|---|---|
 | `PING` | — | `{success: true}` |
 | `GET_PROJECT_NAME` | — | `{projectName}` (used for filenames) |
-| `FETCH_FILE` | `{url}` | `{success, content?}` — fetches with page credentials |
+| `FETCH_FILE` | `{url}` | `{success, data?, mime?}` (`data` is base64) — fetches with page credentials; `fetchDownload`'s fallback when the side panel's own fetch fails |
 | `EXTRACT_NOTE` | `{noteIndex, noteTitle, sourceIndex?, includeCitationImages}` | `{html, sources, errors}` or `{isMindmap, svgContent, treeData}`. With `sourceIndex` the note is opened from the Sources panel "Notes" group |
 | `SCAN_NOTES` | — | `{notes: [{index, title, type, iconType, sourceIndex?}]}` — Sources-panel notes have `index: -1`, `type: 'Note (Sources panel)'` |
 | `SCAN_SOURCES` | — | `{sources, skippedNotes}` — Sources-panel notes are skipped |
@@ -303,11 +310,12 @@ respond synchronously (and `return true` is omitted) or asynchronously (must
 | `START_INTERCEPT_DOWNLOAD` | Enter intercept mode (capture URL, suppress tab) |
 | `GET_INTERCEPTED_DOWNLOAD` | Read the captured intercept result |
 | `CANCEL_INTERCEPT` | Exit intercept mode (extraction succeeded another way) |
-| `BATCH_DOWNLOAD_ALL` | Dispatch a batch ZIP build (`{tabId, items, downloadPreference}`) |
-| `CANCEL_BATCH_DOWNLOAD` | Stop the batch between items |
 | `EXTRACT_MINDMAP_FRAME` | Inject `mindmap-extract.js` into the mind map app iframe, extract, close viewer |
-| `GET_BATCH_STATUS` | Poll batch progress |
-| `DIRECT_DOWNLOAD_URL` | Hand a finalised URL + filename to background to call `chrome.downloads.download` |
+| `NAME_NEXT_DOWNLOAD` | Register the target name of an extension-started blob download (`{url, filename}`) |
+| `DIRECT_DOWNLOAD_URL` | Hand a finalised URL + filename to background to call `chrome.downloads.download`; the real extension of the download replaces a guessed one (`NLME.withRealExtension`) |
+
+There is no batch ZIP in the service worker any more (Milestone 3a): ZIPs are built in the
+side panel.
 
 ### Page-world → content (via `window.postMessage`, in `injected.js`)
 
@@ -324,9 +332,9 @@ respond synchronously (and `return true` is omitted) or asynchronously (must
    waits for `labs-tailwind-doc-viewer`, scrapes content + guide markdown + key topics.
 4. Sidebar produces 1–4 variants per source based on `settings.exportSource*`:
    - base.md, plus-meta.md, with-images.md (only if source has images), plus-meta-with-images.md
-5. ZIPs are batched (`sourcesPerZip`, default 25) with a `_README.md`, `_index.md`, and
-   `errors.txt` if any.
-6. Download via JSZip → `URL.createObjectURL` → `<a download>` click → `URL.revokeObjectURL`.
+5. ZIPs are batched (`sourcesPerZip`, default 25) by `runExportJob`; each ZIP has `_index.md`,
+   `manifest.json`, `_audit.md` and `errors.md` (last ZIP only, when there are errors).
+6. Written by `saveFiles` (JSZip, then `downloadBlob`).
 7. NAVIGATE_BACK between sources to close the viewer.
 
 ### Notes
@@ -351,14 +359,14 @@ respond synchronously (and `return true` is omitted) or asynchronously (must
      - If mindmap-viewer → `extractMindmapSVG`. Else if labs-tailwind → `extractTailwindNoteContent`
        (citation hover loop). Else raw HTML.
    - `NAVIGATE_BACK` after each note; 3s settle between iterations.
-3. Per batch, `createNotesZip` produces 1–4 markdown variants per note (mirroring the
-   source variants), de-duplicating filenames, + mindmap bundles (`mindmaps/` folder) for
-   any legacy in-page mind map notes.
+3. Per batch, `buildNotesFiles` produces 1–4 markdown variants per note (mirroring the
+   source variants), naming files with `NLME.uniqueStems`, + mind map bundles (`mind-maps/`
+   folder) for any legacy in-page mind map notes (`buildNotesFiles`).
 4. `convertToMarkdown` keeps NotebookLM's citation numbers, renumbers anchor occurrences
    in document order (`NLME.renumberCitationAnchors`, because the list rule converts each
    `<li>` twice), and builds the Sources section with `NLME.buildCitationEntries`.
    Reports and source content pass `citationPlaceholders = false`.
-5. ZIP names: `{project-name}-notes-{timestamp}[-partNofM].zip`.
+5. ZIP names: `NLME.zipName` → `{project-name}-notes-{timestamp}[-PARTIAL][-partNofM].zip`.
 
 ### Chat
 
@@ -378,7 +386,9 @@ respond synchronously (and `return true` is omitted) or asynchronously (must
    - `totalCitationsFound` counts numbered markers only (not group buttons).
    - `convertChatToMarkdown` builds the final markdown using Turndown with chat-specific
      rules (`addChatTurndownRules`).
-   - Produces up to 4 variants based on Note settings, plus an `errors.txt` and `_index.md`.
+   - Produces up to 3 variants based on Note settings (`chat.md`, `chat-code-blocks.md`,
+     `chat-with-images.md`), plus `_index.md`, `manifest.json`, `_audit.md` and `errors.md` when
+     there are errors. One clean version downloads as a single `<Notebook>-chat-<ts>.md`.
    - ZIP name: `{project-title-sanitized}-chat-{timestamp}.zip`.
 
 Citation handling in chat uses message-scoped anchors: `msg-{i}-cite-ref-{n}-{k}` →
@@ -422,20 +432,29 @@ in every answer, so sources must never be keyed by number across answers.
      the proper filename. The extension comes from the URL's `filename` parameter
      (`NLME.extensionFromDownloadUrl`; `.pptx` vs `.pdf`). A download that is never captured
      now fails ("Download was not captured") instead of reporting success.
-   - **Download All, ZIP off**: saves every file into `Downloads/<Notebook>/`
-     (`activeDownloadFolder`, `NLME.downloadFolderPath`); no size limit.
-   - **Download All, ZIP on**: background `runBatchDownload` builds the ZIP with JSZip
-     (`importScripts`), with `errors.txt`; `GET_BATCH_STATUS` returns the final `result`.
-     Everything is held in service-worker memory, so a whole notebook with audio/video
-     overviews can exceed it; use folder mode for full exports.
+   - **Download All** (`downloadAllArtifacts` → `runArtifactsJob`, on `runExportJob`) writes
+     `<type folder>/<stem>.<ext>` plus `_index.md`, `manifest.json` and `errors.md`. Type
+     folders: `audio/ video/ slides/ infographics/ reports/ tables/ mind-maps/`
+     (`NLME.artifactFolder`); stems unique per folder (`NLME.artifactStems`; Data Tables
+     reserve `-references`).
+   - **ZIP off**: each item is saved into `Downloads/<Notebook>/<type>/…` as it is fetched
+     (`NLME.downloadFolderPath`), CDN media straight to disk through `DIRECT_DOWNLOAD_URL`
+     (`perZip: 1`; no size limit). The root files are written after the last item.
+   - **ZIP on**: `fetchDownload` pulls every file into memory and one
+     `<Notebook>-artifacts-<ts>.zip` is built in the side panel. A whole notebook with
+     audio/video can exceed memory; use folder mode for full exports.
+   - `fetchArtifactFiles(tabId, item, {stem, mode, meta, folder})` is the single
+     per-method conversion (reports → Markdown with front matter, never raw HTML; tables;
+     mind maps; media). `mode` is `single`, `zip` or `folder`.
    - Extension-started downloads (blob/data URLs) register their name first via
      `NAME_NEXT_DOWNLOAD`: Chrome drops the `filename` option while an
      `onDeterminingFilename` listener exists and does not suggest one.
 
-Filename convention: `[{prefix}]_{sanitized-title}.{ext}` where prefix is one of `audio-overview`,
-`slides`, `infographic`, `report`, `data-table`, `flowchart`. In the batch ZIP
-(`notebooklm-export-{timestamp}.zip`), repeated names get ` (2)`, ` (3)` via
-`NLME.uniqueFilenames`.
+Filename convention for a single artifact download: `[{prefix}]_{sanitized-title}.{ext}`
+(`NLME.artifactTypePrefix`). A single Data Table or mind map is one ZIP instead
+(`NLME.singleArtifactPackage`: `[data-table]_Title.zip` with `Title.csv/.json/.html` and
+`references.txt`; `[MINDMAP]_Title.zip` with `[MINDMAP]_Title.svg/.json/.html`). Inside a ZIP or folder export the name is `<type folder>/<stem>.<ext>`,
+repeats become `-2`, `-3` (`NLME.uniqueStems`).
 
 ### Studio (new)
 
@@ -454,8 +473,8 @@ Filename convention: `[{prefix}]_{sanitized-title}.{ext}` where prefix is one of
    - `kind === 'artifact'` → `downloadArtifact(tabId, moreIndex, type, label)` (same path
      as Artifacts tab).
    - `kind === 'note'` → `exportSingleNote({index: kindIndex, title: label, type})`.
-     - Mindmap path: drops three files via `downloadBlob` blob URLs (`.svg`, `.json`,
-       `.html` from `generateMindmapHTML(svgContent, title)`).
+     - Mindmap path: three loose files (`.svg`, `.json`, `.html` from
+       `generateMindmapHTML(svgContent, title)`) through `saveFiles`.
      - Note path: produces 1+ markdown variants based on Note settings (full citation
        extraction included, identical to Notes tab output).
 4. Row Delete:
@@ -684,7 +703,7 @@ Since Nov 2026 mind maps are Studio artifacts (`flowchart` icon) that open in
 `*.scf.usercontent.goog`. The content script cannot reach into that frame, so:
 
 1. `handleArtifactDownload` opens the item and returns `method: 'mindmap_app_frame'`.
-2. The sidebar (or `runBatchDownload`) sends `EXTRACT_MINDMAP_FRAME` to background.
+2. The sidebar (`fetchArtifactFiles`) sends `EXTRACT_MINDMAP_FRAME` to background.
 3. `extractMindmapFromAppFrame(tabId)` injects `mindmap-extract.js` into all frames
    (`chrome.scripting.executeScript`, `allFrames: true`; needs the
    `*.scf.usercontent.goog` host permission), runs the extractor in the frame that has the
@@ -918,11 +937,147 @@ Found while checking real exports after #8; the export bugs below predate it.
 - **Health check:** Citations probes two real markers (critical); new Artifacts category.
 - **Trust:** downloads are accepted only from `NLME.isAllowedDownloadUrl` hosts; the download
   listeners use `NLME.isNotebookDownload` and ignore `byExtensionId` downloads. Permissions:
-  storage, downloads, scripting, notifications, sidePanel, tabs; hosts: notebook sites,
+  storage, downloads, scripting, sidePanel, tabs (`notifications` was dropped in 1.4.0; nothing
+  used `chrome.notifications`); hosts: notebook sites,
   `contribution.usercontent.google.com`, `*.googleusercontent.com`, `*.scf.usercontent.goog`.
 - **Helpers:** one copy each in `takeout-shared.js` — `isNotebookUrl` (exact host),
   `sanitizeFilename` (code-point safe), `artifactTypePrefix`, `exportTimestamp`, `escapeHtml`,
   `PROJECT_TITLE_SELECTORS`, `buildSourcesIndex`.
+
+## Milestone 3a contracts (v1.4.0)
+
+### Script order and ownership
+
+`sidebar.html` loads, in this order: `jszip.min.js`, `turndown.min.js`, `takeout-shared.js`,
+`takeout-job.js`, `sidebar.js`, `sidebar-takeout.js`. All are classic scripts sharing one
+global scope. `takeout-job.js` extends `NLME` and must come after `takeout-shared.js`.
+`sidebar-takeout.js` comes last and calls `sidebar.js` functions at call time
+(`generateZipTimed`, `getProjectName`, `showToast`, `downloadBlob`, ...), while `sidebar.js`
+calls `saveFiles`. The service worker imports only `takeout-shared.js`; it no longer zips.
+
+### Collector / builder / writer split
+
+- **Collectors** talk to the page: `scan*Data` and `extract*Item` / `extractChatPair`
+  (message to content, one item in, plain data out).
+- **Builders** are pure: `buildNotesFiles`, `buildSourcesFiles`, `buildChatFiles`,
+  `buildChatAuditDoc`, `artifactsRootFiles`, `reportFile`. They return file entries and
+  **never download anything**. Keep it that way: it is what makes a Full Takeout possible
+  (same builders, different destination).
+- **Writer**: `saveFiles(files, { zipName | folder })` is the only code that writes files.
+  Entries are `{ path, data }` (string, Blob or Uint8Array) or `{ path, url }` (a Gemini
+  Notebook download URL). ZIP mode DEFLATEs strings and STOREs binary data and fetches URL
+  entries with `fetchDownload` (the panel's own fetch, then the content script's
+  `FETCH_FILE`). Folder mode saves to `Downloads/<folder>/<path>` (blobs via
+  `NAME_NEXT_DOWNLOAD` + `chrome.downloads`, URLs via `DIRECT_DOWNLOAD_URL`). With neither,
+  each entry is a single download.
+- **Runners** (`runNotesJob`, `runSourcesJob`, `runChatJob`, `runArtifactsJob`) glue them
+  together with `runExportJob`. They take a `CategoryTarget` `{ pathPrefix, zipKind, folder }`:
+  tab exports use the defaults; Full Takeout passes `<root>/<category>/`, `takeout-<category>`
+  and the takeout's folder. Several batches under a prefix go to `part-N/` (`batchPrefix`).
+
+### `NLME.runExportJob` rules
+
+`runExportJob({ kind, items, extractOne, afterEach, packageBatch, isCancelled, onProgress,
+perZip, seedErrors, titleOf })` returns `{ attempted, exported, failed, cancelled, stopped,
+errors }`.
+
+- `extractOne(item, ctx)` returns the item's result or throws; a throw becomes
+  `[Title] message` in the errors. `ctx.warn(error)` records an error on an item that is still
+  exported (strings or `{ source, type, message }` objects stay as they are); `ctx.stop(reason)`
+  ends the job after this item (notes: citations unreadable in the first three notes with them).
+- `afterEach(item)` runs after every item, even a failed one; its errors are swallowed.
+- Cancel (`isCancelled()` true between items) ends the job with a cancellation note in the
+  errors and the last package marked `partial`.
+- `packageBatch(results, { batchIndex, totalBatches, isLast, partial, errors, errorsOnly })`
+  runs once per batch with at least one success. **All** errors go to the last package only
+  (`errors` is empty before that), so they are never lost nor duplicated.
+- If errors exist but the last batch had no success to carry them, an errors-only package
+  (`results: []`, `errorsOnly: true`) is delivered for the batch the job ended in: that batch
+  never delivered, so its `batchIndex` is unused.
+- `seedErrors` lead the error list (chat messages that could not be read before the job).
+- `perZip: 1` makes each item its own batch (artifacts folder mode).
+
+### `withExportShell` owns the page side
+
+Every export runs inside `withExportShell({ label, healthType, overlayMessage }, run)`: the
+active tab, project name and timestamp, `NLME.exportMeta`, the optional DOM health check (and
+its warning dialog), the page overlay, the side-panel progress bar, the cancel listener, and
+cleanup in `finally`. `run(shell)` gets `{ tab, projectName, timestamp, meta, isCancelled,
+progress(text, fraction), finish(...) }`. Runners and builders never touch the overlay, the
+progress panel or the cancel listener. `shell.finish({ kind, selected, result, auditOk,
+stoppedMessage, errorNote })` shows the one outcome toast; `errorNote` raises success to a
+warning (errors on items that were still exported); `stoppedMessage` replaces it when the
+extension stopped the job. One export runs at a time (`runExclusive`).
+
+### Layout of every export
+
+- Root files: `_index.md`, `_index.html` (browsable twin: `NLME.buildIndexHtml`, or
+  `NLME.buildRootIndexHtml` for the Full Takeout root; self-contained, relative encoded links, no
+  scripts; written before the manifest so it is listed; not for the single-file chat download),
+  `manifest.json` (written last, lists every other file with its
+  byte size; `NLME.buildManifest`), `errors.md` (only with errors, `NLME.buildErrorReport`),
+  `_audit.md` (notes, sources, chat). The old plain-text README and error files are retired.
+- Type folders: `sources/`, `notes/`, `mind-maps/`; artifacts `audio/ video/ slides/
+  infographics/ reports/ tables/ mind-maps/` (`NLME.artifactFolder`); chat entries are
+  `chat${suffix}.md`.
+- Every Markdown item file starts with YAML front matter from `NLME.frontMatter`, fields in
+  this order: `title, notebook, notebook_url, notebook_id, exporter, exported, kind, variant`,
+  plus `youtube_url` (YouTube sources) or `messages` (chat). Strings are JSON-quoted; empty
+  values are dropped. `NLME.exportMeta` supplies the notebook fields once per run.
+- A file entry carries `title`, `variant` and `itemKind` when the manifest should list them.
+- **One naming scheme: `NLME.uniqueStems(titles, suffixes)`.** Sanitized titles, repeats get
+  `-2`, `-3`, compared case-insensitively; a stem counts as taken when any stem+suffix name
+  is in use (so `Diagram with images` cannot overwrite `Diagram`'s `-with-images` variant).
+  `NLME.artifactStems` applies it per type folder. Do not add another uniquifier.
+- `NLME.extensionFor({ url, mime, type })` picks an extension (URL, then MIME, then type
+  default); `NLME.withRealExtension(name, realExt)` lets the background swap a guessed
+  extension for the real one once the download's own name is known (`.pptx` vs `.pdf`).
+
+### Full Takeout
+
+`runFullTakeout` (sidebar-takeout.js, 📦 header button, via `runExclusive`) scans sources,
+notes, chat and artifacts up front (`scan*Data`; 0 items is `empty`, a scan error `failed`),
+then runs `runSourcesJob`, `runNotesJob`, `runChatJob` (with `forceZip`) and `runArtifactsJob`
+in that order inside one shell, then writes the root `_index.md`
+(`NLME.buildRootIndex`), `errors.md` (`NLME.prefixExportErrors` labels each error with its
+category) and `manifest.json`. It does not call `shell.finish`: one combined toast comes from
+`NLME.summarizeTakeoutOutcome`.
+
+- **Slides in both formats:** it passes `bothSlideFormats: true` to `runArtifactsJob`, whose `extractOne`
+  loops `NLME.slideFormatsFor(type, …)` and calls `fetchArtifactFiles(…, { slidesFormat })` once per
+  format with the same stem (`extensionFor({ format })` guesses `.pdf`/`.pptx`); one format failing
+  warns, all failing fails the item. Tab downloads keep the single `settings.slidesFormat`.
+- **ZIP on** (`takeoutZipEnabled`: the Artifacts tab's Zip checkbox once rendered, else
+  `settings.autoZip`): one ZIP per category, `<Notebook>-takeout-<category>-<ts>[-PARTIAL]
+  [-partNofM].zip`, plus `<Notebook>-takeout-index-<ts>.zip`. Paths are prefixed
+  `<Notebook>/<category>/`, so unzipping everything into one folder gives one tree.
+- **ZIP off**: `Downloads/<Notebook> takeout <ts>/<root>/…`: the same `<root>/` tree sits
+  inside the timestamped folder, because every path (category files and root files) carries the
+  `<root>/` prefix and `folder` is the Downloads subfolder; artifacts run in folder mode.
+- **Doubled category folder (intended for now):** each category folder is a self-contained
+  export, i.e. the normal builder layout under `<root>/<category>/`: `sources/sources/<stem>.md`,
+  `notes/notes/<stem>.md` (+ `combined-notes*.md`), `chat/chat.md`, `artifacts/<type>/…`, each with
+  its own `_index.md`, `manifest.json` (and `_audit.md` / `errors.md`), so `_index.md` links stay
+  valid. Do not flatten it without reworking those links.
+- **Statuses**: `done` (complete), `partial` (cancelled), `skipped` (cancelled earlier),
+  `empty` (none in notebook), `stopped` (the job stopped itself), `failed` (scan or write
+  error, or nothing exported but items failed or errors recorded). After a runner the status
+  comes from `NLME.takeoutCategoryStatus`. Chat is `empty` only when `NLME.chatScanIsEmpty`
+  (no pairs, nothing skipped, nothing collapsed); unreadable messages still run the chat job
+  and reach errors.md. A failing category does not stop the others. The root `_index.md`
+  folder column shows `—` unless something was written, and `part-1/ … part-N/` for batches.
+- **Cancel** ends the current category as `partial` and marks the rest `skipped`; a cancel
+  between categories adds one takeout-level "Cancelled by user before …" entry. The root
+  files are still written.
+- **Chat citations** follow ⚙️ Citation detail (`NLME.takeoutChatFullCitations(settings)`:
+  Full quotes → `EXTRACT_MESSAGE_CITATIONS` per message; titles/none → titles-only Sources),
+  while the Chat tab's own export keeps its Extract Full Citations checkbox.
+
+### Notifications
+
+The `notifications` permission was removed in 1.4.0: nothing used `chrome.notifications`.
+`settings.showNotifications` stays and only gates the success toast of a single artifact
+download (`triggerItemDownload`); it is not a system notification.
 
 ## Known issues and latent bugs
 
@@ -963,11 +1118,12 @@ reappears.
 Set in `handleStudioBulkDelete`. If you see "target not found in fresh scan" warnings under
 heavy load, bump to 1500ms.
 
-### 6. ZIP export doesn't fan out per-source for mindmaps when exported via Notes tab
+### 6. Mind maps: ZIP folder vs loose files
 
-The Notes tab bundles mindmaps inside the `mindmaps/` folder of the notes ZIP. The Studio
-tab exports each mindmap as 3 loose files (SVG + JSON + HTML). This asymmetry is intentional
-(matches "no ZIP" Studio contract) but worth knowing.
+Legacy in-page mind map notes are bundled in the `mind-maps/` folder of the notes ZIP; Studio
+mind maps are artifacts (`mind-maps/` in a Download All ZIP). A single mind map artifact download is
+one `[MINDMAP]_Title.zip`; inside Download All / Takeout archives and folder exports they stay
+loose files in `mind-maps/`. This asymmetry is intentional but worth knowing.
 
 ### 7. Flashcards and Quiz are not exportable
 
@@ -1063,8 +1219,8 @@ to keep your real notebook untouched while iterating.
 
 ## Testing and verification
 
-Unit tests cover the DOM-free helpers in `takeout-shared.js` (104 tests including
-`tests/message-protocol.test.js`, which fails when a message type is handled but never
+Unit tests cover the DOM-free helpers in `takeout-shared.js` (134 tests including
+`tests/takeout-job.test.js` and `tests/message-protocol.test.js`, which fails when a message type is handled but never
 sent or sent but never handled; `node --test
 tests/`). Everything that touches the page is verified in Chrome. When a fix is DOM-only,
 verify it live: replicate the changed function in the page console (via Claude in Chrome
@@ -1104,7 +1260,7 @@ Export checks that catch real bugs (scripted against the unzipped export):
 ### Syntax and unit tests
 
 ```bash
-for f in sidebar.js content.js background.js injected.js mindmap-extract.js takeout-shared.js; do node --check "$f"; done
+for f in sidebar.js sidebar-takeout.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js; do node --check "$f"; done
 node --test tests/
 ```
 
@@ -1118,9 +1274,9 @@ node --test tests/
   `tests/`; DOM behaviour gets manual smoke checks.
 - **Logger**: `logger.info/warn/error/download` in sidebar.js. Content uses raw `console.log`
   with `[NotebookLM Takeout]` prefix.
-- **Filenames**: `[{PREFIX}]_{sanitized-title}.{ext}` for individual files,
-  `{project-title}-{kind}-{timestamp}.zip` for batched. `sanitizeFilename` lives in
-  sidebar.js.
+- **Filenames**: `[{PREFIX}]_{sanitized-title}.{ext}` for single artifact downloads,
+  `NLME.zipName` (`{project-title}-{kind}-{timestamp}[-PARTIAL][-partNofM].zip`) for ZIPs,
+  `NLME.uniqueStems` for names inside them. `sanitizeFilename` lives in takeout-shared.js.
 - **Module-scoped helpers** (KaTeX, downloadBlob, exportSingleNote) go above `let
   currentTabId = null`. Per-Turndown-rule helpers go inside `createTurndownService` or
   the rule's `replacement`.
@@ -1159,6 +1315,6 @@ node --test tests/
 
 ---
 
-**Last refreshed**: 2026-11-03 (Milestone 2, v1.3.0). After significant drift events or pipeline rewrites, update
+**Last refreshed**: 2026-11-03 (Milestone 3a, v1.4.0). After significant drift events or pipeline rewrites, update
 this file. It is the single document an agent should read before doing anything in this
 repo.
