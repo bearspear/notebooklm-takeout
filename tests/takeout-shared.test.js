@@ -764,6 +764,26 @@ test('buildRootIndex shows a folder only where files were written, part folders 
   assert.doesNotMatch(md, /\| notes\/ \|/);
 });
 
+test('buildRootIndex links the folder of an errors-only package (folder mode: no zips, nothing exported)', () => {
+  const meta = { notebook: 'New Math', notebook_url: '', notebook_id: '', exporter: 'E', exported: 'T' };
+  const categories = [
+    // One batch, every item failed: the errors-only package is a written package
+    { name: 'Sources', folder: 'sources', status: 'failed', selected: 3, exported: 0, failed: 3, zips: [], parts: 0, packages: 1 },
+    // A part that was written before the category failed
+    { name: 'Notes', folder: 'notes', status: 'failed', selected: 60, exported: 0, failed: 0, zips: [], parts: 1, packages: 1 },
+    // Nothing reached the disk
+    { name: 'Chat', folder: 'chat', status: 'failed', selected: 5, exported: 0, failed: 0, zips: [], parts: 0, packages: 0 }
+  ];
+  const md = NLME.buildRootIndex({ meta, categories });
+  assert.match(md, /\| Sources \| 0 of 3 \| 3 \| failed \(see errors\) \| sources\/ \|/);
+  assert.match(md, /\| Notes \| 0 of 60 \| 0 \| failed \(see errors\) \| notes\/part-1\/ \|/);
+  assert.match(md, /\| Chat \| 0 of 5 \| 0 \| failed \(see errors\) \| — \|/);
+  const html = NLME.buildRootIndexHtml({ meta, categories });
+  assert.match(html, /href="sources\/_index\.html"/);
+  assert.match(html, /href="notes\/part-1\/_index\.html"/);
+  assert.doesNotMatch(html, /href="chat\//);
+});
+
 test('chatScanIsEmpty only when nothing was skipped', () => {
   assert.equal(NLME.chatScanIsEmpty({ messagePairs: [], stats: {} }), true);
   assert.equal(NLME.chatScanIsEmpty({ messagePairs: [] }), true);

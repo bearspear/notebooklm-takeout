@@ -1102,6 +1102,13 @@
       !((stats.skipped || []).length) && !(stats.collapsedRemaining > 0);
   }
 
+  // Did a takeout category put anything on disk? Exported items, a ZIP, a part,
+  // or a package (packages: an errors-only package counts, and so does a
+  // folder-mode one, which has no ZIP name to show for it)
+  function categoryWritten(c) {
+    return c.exported > 0 || (c.zips || []).length > 0 || c.parts > 0 || c.packages > 0;
+  }
+
   // _index.md at the root of a Full Takeout: one row per category (Sources,
   // Notes, Chat, Artifacts) with its counts, status and folder, the ZIPs each
   // category wrote, and a link to the combined errors.md.
@@ -1123,7 +1130,7 @@
       // failed without a package) has no folder; a category written in
       // several batches lives in part-N/ folders
       let folder = '—';
-      if (c.exported > 0 || (c.zips || []).length > 0) {
+      if (categoryWritten(c)) {
         if (c.parts > 1) folder = `${c.folder}/part-1/ … ${c.folder}/part-${c.parts}/`;
         else if (c.parts === 1) folder = `${c.folder}/part-1/`;
         else folder = `${c.folder}/`;
@@ -1242,7 +1249,7 @@ footer { margin-top: 3rem; }
     for (const c of categories) {
       let folder = '—';
       // Nothing written (empty, skipped, scan failed): no folder to link
-      if (c.exported > 0 || (c.zips || []).length > 0) {
+      if (categoryWritten(c)) {
         const dir = encodePath(c.folder);
         folder = c.parts >= 1
           ? Array.from({ length: c.parts }, (_, i) => `<a href="${dir}/part-${i + 1}/_index.html">part-${i + 1}</a>`).join(' · ')
