@@ -3245,6 +3245,28 @@
     backdrops.forEach(b => b.click());
   }
 
+  // Dismiss the dialogs a delete opened itself (not in `existing`, the snapshot
+  // taken before the delete click). Used only when that delete timed out, so a
+  // confirm dialog is not left open. Each dialog's own backdrop is clicked; a
+  // dialog without one gets Escape. Dialogs that existed before are never touched.
+  function closeNewDialogs(existing) {
+    const isOld = el => [...existing].some(old => old === el || old.contains(el));
+    const fresh = Array.from(document.querySelectorAll(DIALOG_SELECTOR))
+      .filter(el => !isOld(el) && !el.querySelector('.mat-mdc-menu-panel') && !el.closest('.mat-mdc-menu-panel'));
+    const backdrops = new Set();
+    const noBackdrop = [];
+    for (const dlg of fresh) {
+      const found = overlayBackdropsOf(dlg);
+      if (found.length) found.forEach(b => backdrops.add(b));
+      else noBackdrop.push(dlg);
+    }
+    backdrops.forEach(b => b.click());
+    for (const dlg of noBackdrop) {
+      if (!dlg.isConnected) continue;
+      dlg.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+    }
+  }
+
   // Close every open menu panel; false if one is still open after ~1 s.
   async function closeOpenMenus() {
     const deadline = Date.now() + 1000;
@@ -3379,6 +3401,7 @@
     }
 
     closeMenuBackdrops([panel]);
+    closeNewDialogs(existingDialogs);
     throw new Error(confirmed
       ? 'Item did not disappear after clicking confirm'
       : 'Delete did not take effect (no dialog, no removal)');
@@ -3469,6 +3492,7 @@
     }
 
     closeMenuBackdrops([panel]);
+    closeNewDialogs(existingDialogs);
     return {
       success: false,
       error: confirmed
