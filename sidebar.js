@@ -3186,9 +3186,11 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
     .map(v => ({ ...NOTE_VERSION_INFO[v.suffix], variant: noteVariantName(v.suffix) }));
 
   // Process regular notes (all versions in single notes/ folder with
-  // suffixes); every variant of one note shares one stem
+  // suffixes); every variant of one note shares one stem, and no stem may
+  // equal another note's stem+variant name
   if (regularNotes.length > 0) {
-    const stems = NLME.uniqueStems(regularNotes.map(n => n.title));
+    const stems = NLME.uniqueStems(regularNotes.map(n => n.title),
+      versions.map(v => v.fileSuffix).filter(Boolean));
 
     versions.forEach(version => {
       // Individual note files with version suffix

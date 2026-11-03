@@ -745,14 +745,19 @@
 
   // The one naming scheme for notes, sources, mind maps and artifacts:
   // sanitized titles, repeats (case-insensitive, since macOS and Windows
-  // folders are) get -2, -3...
-  function uniqueStems(titles) {
+  // folders are) get -2, -3... `suffixes` are the variant suffixes written
+  // next to each stem ('-code-blocks'): a stem is taken only if none of its
+  // stem+suffix names is already in use, so "Diagram with images" cannot
+  // overwrite the -with-images variant of "Diagram".
+  function uniqueStems(titles, suffixes = []) {
     const used = new Set();
+    const endings = ['', ...suffixes];
+    const names = candidate => endings.map(s => (candidate + s).toLowerCase());
     return (titles || []).map(title => {
       const base = sanitizeFilename(title);
       let candidate = base;
-      for (let n = 2; used.has(candidate.toLowerCase()); n++) candidate = `${base}-${n}`;
-      used.add(candidate.toLowerCase());
+      for (let n = 2; names(candidate).some(name => used.has(name)); n++) candidate = `${base}-${n}`;
+      names(candidate).forEach(name => used.add(name));
       return candidate;
     });
   }

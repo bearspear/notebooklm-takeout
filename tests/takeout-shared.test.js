@@ -660,6 +660,12 @@ test('uniqueStems gives repeats -2, -3 and treats case-only differences as repea
   assert.deepEqual(NLME.uniqueStems(['', '']), ['untitled', 'untitled-2']);
 });
 
+test('uniqueStems treats stem+variant names as taken', () => {
+  assert.deepEqual(NLME.uniqueStems(['Diagram', 'Diagram with images'], ['-with-images']), ['Diagram', 'Diagram-with-images-2']);
+  assert.deepEqual(NLME.uniqueStems(['Diagram with images', 'Diagram'], ['-with-images']), ['Diagram-with-images', 'Diagram-2']);
+  assert.deepEqual(NLME.uniqueStems(['Summary', 'summary CODE blocks'], ['-code-blocks']), ['Summary', 'summary-CODE-blocks-2']);
+});
+
 test('exportMeta and notebookIdFromUrl describe the notebook', () => {
   const url = 'https://notebook.google.com/notebook/62d6e344-2fa7-42ed-b3ef-236f3007fdc3';
   assert.equal(NLME.notebookIdFromUrl(url), '62d6e344-2fa7-42ed-b3ef-236f3007fdc3');
