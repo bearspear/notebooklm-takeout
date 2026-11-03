@@ -1014,7 +1014,7 @@ its warning dialog), the page overlay, the side-panel progress bar, the cancel l
 cleanup in `finally`. `run(shell)` gets `{ tab, projectName, timestamp, meta, isCancelled,
 progress(text, fraction), finish(...) }`. Runners and builders never touch the overlay, the
 progress panel or the cancel listener. `shell.finish({ kind, selected, result, auditOk,
-stoppedMessage, errorNote })` shows the one outcome toast; `errorNote` raises success to a
+stoppedMessage, errorNote })` shows the one outcome in the results panel; `errorNote` raises success to a
 warning (errors on items that were still exported); `stoppedMessage` replaces it when the
 extension stopped the job. One export runs at a time (`runExclusive`).
 
@@ -1172,10 +1172,16 @@ user clicks Dismiss.
   success raised to warning. `shell.finish` calls it.
 - `NLME.groupErrorsForPanel(errors, { perGroup = 20 })`: groups by `normalizeExportError(e).type`
   (first-seen order); `{ heading, count, entries: [{ item, message }], more }`.
-- `showResults({ message, level, saved = [], errors = [], retry = null })` and `hideResults()`
-  (globals). `retry = { count, run }` renders "Retry N failed"; the button disables itself while
-  `run()` is pending and re-enables if the job was refused (`JOB_BUSY`). A started retry clears
-  the panel itself, because `withExportShell` calls `hideResults()` first.
+- `showResults({ message, lines = [], level, saved = [], errors = [], retry = null, notify = true })`
+  and `hideResults()` (globals). `lines` are extra plain-text lines (escaped) under the message, one
+  per category in a Full Takeout retry's combined panel. After rendering, the panel is scrolled into
+  view (`scrollIntoView({ block: 'nearest', behavior: 'smooth' })`; it can sit below a long list)
+  and a short toast "Export finished — see results below" carries the level (`notify: false`
+  skips it when a panel is put back). `retry = { count, run }` renders "Retry N failed"; the
+  button disables itself while `run()` is pending and re-enables if the job was refused
+  (`JOB_BUSY`). A started retry clears the panel itself, because `withExportShell` calls
+  `hideResults()` once its tab lookup has succeeded (a retry on a closed tab keeps the panel and
+  its Retry, and toasts "The notebook tab for this export is closed. Open it and try again.").
 - `shell.finish({ ..., saved, retry })`: `saved` is the ZIP names (`zips` from the runner) or the
   Downloads folder; `stoppedMessage` still replaces the outcome line (level error) and the errors
   are listed anyway. `retryFor(failedItems, jobName, exportFn)` (sidebar.js) builds `retry` for
@@ -1183,6 +1189,24 @@ user clicks Dismiss.
   (its messages do not fail as a whole; re-export the chat).
 - Toasts remain for short notices (job refused, no tab, cancelled at the health check, unexpected
   failure) and single-item exports. Full Takeout shows its combined outcome in the results panel (`showResults`).
+- Return values: `shell.finish(...)` returns the outcome `{ kind, selected, message, level, result,
+  saved, errors }`; `withExportShell` returns what `run` returns, `{ declined: true }` when the
+  DOM-health dialog was declined, or `{ aborted: true }` when the tab was gone or the export threw.
+  `exportSources`, `exportNotesAsMarkdown` and `downloadAllArtifacts` return it; callers that ignore
+  it are unaffected.
+- Full Takeout's "Retry N failed" (`takeoutRetry`, sidebar-takeout.js) runs the failed Sources, Notes
+  and Artifacts exports in that order under one `runExclusive('Retry failed')`. A step whose
+  `result.cancelled` is true, or that was declined or aborted, ends the chain; later categories do
+  not run. It ends in ONE combined panel from `NLME.combineRetryOutcomes({ steps, notRun })`: a
+  line per retried category (`lines`), the worst level, every ZIP, every error prefixed with its
+  category (`NLME.prefixExportErrors`), and a Retry for all remaining `failedItems` (a category that
+  did not run keeps its items). If no step ran, the previous panel is put back. The per-category
+  panels shown while the chain runs are replaced by the combined one.
+- Side-panel Cancel (`requestCancel`, sidebar.js) sends `REQUEST_EXPORT_CANCEL` to
+  `activeShellTabId` (the running shell's tab, sidebar-takeout.js), else `jobTabId` (the active tab
+  when the job started), else the current tab. Retries and Download Selected run on the tab they
+  were scanned on, which need not be the active one. The content script there broadcasts
+  `CANCEL_EXPORT`, which the shell's own listener receives.
 
 ### Runner options and the export tab (Task 8)
 
@@ -1448,6 +1472,6 @@ node --test tests/
 
 ---
 
-**Last refreshed**: 2026-11-03 (Milestone 3a, v1.4.0). After significant drift events or pipeline rewrites, update
+**Last refreshed**: 2026-11-03 (Milestone 3b, v1.5.0). After significant drift events or pipeline rewrites, update
 this file. It is the single document an agent should read before doing anything in this
 repo.

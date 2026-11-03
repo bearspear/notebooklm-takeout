@@ -73,7 +73,7 @@ permissions or content scripts.
 
 Open a notebook, then use the tabs in the side panel.
 
-The Notes list (and the other lists as they get the same toolbar) has a filter box that matches
+The Notes, Sources, Artifacts and Studio lists each have a toolbar with a filter box that matches
 titles and types, type chips with counts (shown when there is more than one type), a sort menu
 (notebook order, title A-Z, type) and a **Select all visible** checkbox that only touches the rows
 the filter leaves showing. Rows the filter hides are deselected, so an export never includes
@@ -364,6 +364,7 @@ Plain JavaScript Manifest V3 extension: no build step, no npm dependencies.
 ```
 manifest.json         Manifest V3
 sidebar.html/.js      Side panel UI and export orchestration (Markdown, formulas, per-category runners)
+sidebar-list.js       List toolbar: filter, type chips, sort, select all visible, remembered state
 sidebar-results.js    Results panel (outcome, saved files, errors, Retry)
 sidebar-takeout.js    File writer (ZIP/folder/single), export shell and Full Takeout
 takeout-job.js        The one export job runner: batching, cancel, errors (unit tested)
