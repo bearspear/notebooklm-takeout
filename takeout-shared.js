@@ -730,7 +730,145 @@
     return [...groups.values()];
   }
 
+  // YAML front matter for exported notes and sources. Strings go through
+  // JSON.stringify, which yields a valid double-quoted YAML scalar, so a title
+  // with colons, quotes or newlines cannot break the block. Empty values are
+  // dropped; with nothing left there is no front matter at all.
+  function frontMatter(fields = {}) {
+    const lines = [];
+    for (const [key, value] of Object.entries(fields)) {
+      if (value === null || value === undefined || value === '') continue;
+      lines.push(`${key}: ${typeof value === 'number' || typeof value === 'boolean' ? String(value) : JSON.stringify(value)}`);
+    }
+    return lines.length ? `---\n${lines.join('\n')}\n---\n\n` : '';
+  }
+
+  // The one naming scheme for notes, sources, mind maps and artifacts:
+  // sanitized titles, repeats (case-insensitive, since macOS and Windows
+  // folders are) get -2, -3...
+  function uniqueStems(titles) {
+    const used = new Set();
+    return (titles || []).map(title => {
+      const base = sanitizeFilename(title);
+      let candidate = base;
+      for (let n = 2; used.has(candidate.toLowerCase()); n++) candidate = `${base}-${n}`;
+      used.add(candidate.toLowerCase());
+      return candidate;
+    });
+  }
+
+  // The notebook's UUID from its URL, for the manifest and front matter.
+  function notebookIdFromUrl(url) {
+    const m = String(url || '').match(/\/notebook\/([^/?#]+)/);
+    return m ? m[1] : '';
+  }
+
+  // Notebook-level metadata shared by every front matter block and the manifest.
+  function exportMeta({ notebookTitle, tabUrl, version, exportedAt } = {}) {
+    return {
+      notebook: notebookTitle,
+      notebook_url: isNotebookUrl(tabUrl) ? tabUrl : '',
+      notebook_id: notebookIdFromUrl(tabUrl),
+      exporter: `NotebookLM Takeout ${version}`,
+      exported: exportedAt.toISOString()
+    };
+  }
+
+  function byteLength(entry) {
+    const data = entry.data;
+    if (typeof data === 'string') return new TextEncoder().encode(data).length;
+    if (typeof Blob !== 'undefined' && data instanceof Blob) return data.size;
+    if (data && typeof data.byteLength === 'number') return data.byteLength;
+    return null;
+  }
+
+  // manifest.json: what is in a ZIP, so a takeout can be audited or resumed
+  // without opening every file. Entries with a url were not fetched (bytes
+  // null). manifest.json does not list itself.
+  function buildManifest({ meta, kind, part = 1, totalParts = 1, partial = false, files = [], counts = {}, errorCount = 0 } = {}) {
+    return {
+      exporter: meta.exporter,
+      exported: meta.exported,
+      notebook: { title: meta.notebook, url: meta.notebook_url, id: meta.notebook_id },
+      kind,
+      part,
+      totalParts,
+      partial,
+      counts,
+      errorCount,
+      files: files.map(f => {
+        const entry = { path: f.path, bytes: byteLength(f) };
+        for (const key of ['title', 'variant', 'itemKind']) {
+          if (f[key] !== undefined) entry[key] = f[key];
+        }
+        return entry;
+      })
+    };
+  }
+
+  // ZIP file name: "<Notebook>-<kind>-<timestamp>[-PARTIAL][-partNofM].zip".
+  function zipName({ notebook, kind, timestamp, partial = false, part = 1, totalParts = 1 } = {}) {
+    return `${sanitizeFilename(notebook)}-${kind}-${timestamp}${partial ? '-PARTIAL' : ''}${totalParts > 1 ? `-part${part}of${totalParts}` : ''}.zip`;
+  }
+
+  const ARTIFACT_FOLDERS = {
+    'Audio Overview': 'audio',
+    'Video Overview': 'video',
+    'Slides': 'slides',
+    'Infographic': 'infographics',
+    'Report': 'reports',
+    'Data Table': 'tables',
+    'Mind Map': 'mind-maps'
+  };
+
+  // Top-level ZIP folder for an artifact type.
+  function artifactFolder(type) {
+    return ARTIFACT_FOLDERS[type] || artifactTypePrefix(type);
+  }
+
+  const MIME_EXTENSIONS = {
+    'application/pdf': '.pdf',
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/webp': '.webp',
+    'image/svg+xml': '.svg',
+    'audio/mp4': '.m4a',
+    'audio/x-m4a': '.m4a',
+    'audio/mpeg': '.mp3',
+    'audio/wav': '.wav',
+    'video/mp4': '.mp4',
+    'video/webm': '.webm',
+    'text/csv': '.csv',
+    'text/markdown': '.md',
+    'text/plain': '.txt',
+    'application/json': '.json',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation': '.pptx',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx'
+  };
+  const TYPE_EXTENSIONS = {
+    'Slides': '.pdf',
+    'Infographic': '.png',
+    'Audio Overview': '.m4a',
+    'Video Overview': '.mp4'
+  };
+
+  // File extension for a downloaded artifact: the real file name in the URL
+  // wins, then the MIME type, then what the artifact type usually is.
+  function extensionFor({ url = '', mime = '', type = '' } = {}) {
+    const baseMime = String(mime || '').split(';')[0].trim().toLowerCase();
+    return extensionFromDownloadUrl(url) || MIME_EXTENSIONS[baseMime] || TYPE_EXTENSIONS[type] || '';
+  }
+
   const NLME = {
+    frontMatter,
+    uniqueStems,
+    notebookIdFromUrl,
+    exportMeta,
+    buildManifest,
+    zipName,
+    artifactFolder,
+    extensionFor,
     groupCitationEntries,
     noteHasImages,
     countMarkdownFormulas,

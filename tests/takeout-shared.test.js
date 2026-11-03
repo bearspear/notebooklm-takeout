@@ -648,3 +648,52 @@ test('groupCitationEntries keeps unavailable placeholders apart from real source
   ]);
   assert.deepEqual(groups.map(g => g.numbers), [['1', '2'], ['3']]);
 });
+
+test('frontMatter quotes strings so any title stays valid YAML', () => {
+  const fm = NLME.frontMatter({ title: 'Gödel: "proof" # 1\n---', count: 3, draft: false, tags: ['a', 'b'], empty: '', none: null });
+  assert.equal(fm, '---\ntitle: "Gödel: \\"proof\\" # 1\\n---"\ncount: 3\ndraft: false\ntags: ["a","b"]\n---\n\n');
+  assert.equal(NLME.frontMatter({ a: '', b: undefined }), '');
+});
+
+test('uniqueStems gives repeats -2, -3 and treats case-only differences as repeats', () => {
+  assert.deepEqual(NLME.uniqueStems(['A', 'a', 'B', 'A', 'x/y']), ['A', 'a-2', 'B', 'A-3', 'x-y']);
+  assert.deepEqual(NLME.uniqueStems(['', '']), ['untitled', 'untitled-2']);
+});
+
+test('exportMeta and notebookIdFromUrl describe the notebook', () => {
+  const url = 'https://notebook.google.com/notebook/62d6e344-2fa7-42ed-b3ef-236f3007fdc3';
+  assert.equal(NLME.notebookIdFromUrl(url), '62d6e344-2fa7-42ed-b3ef-236f3007fdc3');
+  assert.equal(NLME.notebookIdFromUrl('https://example.com/'), '');
+  assert.deepEqual(NLME.exportMeta({ notebookTitle: 'New Math', tabUrl: url, version: '1.4.0', exportedAt: new Date('2026-11-03T01:02:03Z') }), {
+    notebook: 'New Math', notebook_url: url, notebook_id: '62d6e344-2fa7-42ed-b3ef-236f3007fdc3',
+    exporter: 'NotebookLM Takeout 1.4.0', exported: '2026-11-03T01:02:03.000Z'
+  });
+});
+
+test('buildManifest lists files with byte sizes and the notebook', () => {
+  const meta = { notebook: 'N', notebook_url: 'u', notebook_id: 'i', exporter: 'NotebookLM Takeout 1.4.0', exported: 'T' };
+  const m = NLME.buildManifest({ meta, kind: 'notes', files: [
+    { path: 'notes/A.md', data: 'ü', title: 'A', variant: 'base', itemKind: 'note' },
+    { path: 'audio/X.m4a', url: 'https://x' },
+    { path: 'b.bin', data: new Uint8Array(5) }
+  ], counts: { notes: 1 }, errorCount: 2 });
+  assert.deepEqual(m.notebook, { title: 'N', url: 'u', id: 'i' });
+  assert.equal(m.kind, 'notes'); assert.equal(m.partial, false); assert.equal(m.errorCount, 2);
+  assert.deepEqual(m.files.map(f => f.bytes), [2, null, 5]);
+  assert.equal(m.files[0].variant, 'base');
+});
+
+test('zipName matches the existing pattern, with PARTIAL and parts', () => {
+  assert.equal(NLME.zipName({ notebook: 'New Math', kind: 'notes', timestamp: 'T' }), 'New-Math-notes-T.zip');
+  assert.equal(NLME.zipName({ notebook: 'a/b', kind: 'takeout-notes', timestamp: 'T', partial: true, part: 2, totalParts: 3 }), 'a-b-takeout-notes-T-PARTIAL-part2of3.zip');
+});
+
+test('artifactFolder and extensionFor', () => {
+  assert.equal(NLME.artifactFolder('Audio Overview'), 'audio');
+  assert.equal(NLME.artifactFolder('Mind Map'), 'mind-maps');
+  assert.equal(NLME.artifactFolder('Flashcards'), 'flashcards');
+  assert.equal(NLME.extensionFor({ url: 'https://contribution.usercontent.google.com/d?filename=Deck.pptx', mime: 'application/pdf' }), '.pptx');
+  assert.equal(NLME.extensionFor({ mime: 'audio/mp4' }), '.m4a');
+  assert.equal(NLME.extensionFor({ type: 'Video Overview' }), '.mp4');
+  assert.equal(NLME.extensionFor({}), '');
+});
