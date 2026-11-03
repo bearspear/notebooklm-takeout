@@ -263,6 +263,37 @@ test('formatTimingSummary lists phases and total', () => {
   assert.match(md, /Total: 3 m 12 s/);
 });
 
+test('createSettleGate lets only the newest settle finish', () => {
+  const gate = NLME.createSettleGate();
+  const first = gate.begin(false);
+  assert.equal(first.current(), true);
+  const second = gate.begin(false);
+  assert.equal(first.current(), false);
+  assert.equal(second.current(), true);
+});
+
+test('createSettleGate hands a rescan the discarded settle owed to the newer one', () => {
+  const gate = NLME.createSettleGate();
+  const first = gate.begin(true); // switched notebook: owes a rescan
+  assert.equal(first.owesRescan, true);
+  // A second navigation inside the same notebook discards the first settle but inherits the rescan
+  const second = gate.begin(false);
+  assert.equal(first.current(), false);
+  assert.equal(second.owesRescan, true);
+  second.settled();
+  // Once settled, nothing is owed any more
+  assert.equal(gate.begin(false).owesRescan, false);
+});
+
+test('createSettleGate: a stale settle cannot clear the debt', () => {
+  const gate = NLME.createSettleGate();
+  const first = gate.begin(true);
+  const second = gate.begin(false);
+  first.settled(); // stale: no effect
+  assert.equal(gate.begin(false).owesRescan, true);
+  second.settled();
+});
+
 test('createJobLock allows one job at a time', () => {
   const lock = NLME.createJobLock();
   assert.equal(lock.tryAcquire('notes'), true);

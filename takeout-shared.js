@@ -312,6 +312,28 @@
     };
   }
 
+  // In-app navigation settle (side panel): each settle wait takes a token; only
+  // the newest token is current, so an older wait that finishes later can tell
+  // that a newer navigation replaced it and does nothing. A settle for a switched
+  // notebook owes a rescan: if a newer settle discards it, the newer one inherits
+  // that debt (owesRescan) and clears it with settled() once it decides.
+  function createSettleGate() {
+    let generation = 0;
+    let owed = false;
+    return {
+      begin(switched) {
+        const mine = ++generation;
+        owed = owed || !!switched;
+        const owesRescan = owed;
+        return {
+          owesRescan,
+          current: () => mine === generation,
+          settled() { if (mine === generation) owed = false; }
+        };
+      }
+    };
+  }
+
   // One truthful end-of-export message for notes, sources, chat and artifacts.
   function summarizeExportOutcome({ kind, selected = 0, exported = 0, failed = 0, cancelled = false } = {}) {
     if (cancelled) {
@@ -2023,6 +2045,7 @@ footer { margin-top: 3rem; }
     combineRetryOutcomes,
     groupErrorsForPanel,
     createJobLock,
+    createSettleGate,
     createPhaseTimer,
     formatTimingSummary,
     cleanOcrArtifacts,

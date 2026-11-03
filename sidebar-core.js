@@ -676,8 +676,13 @@ function notebookSwitchedTo(tab) {
 // settleMs: in-app (history API) navigation reports the new URL before the page
 // has drawn the new notebook, and the content-script scans read the DOM as it
 // is (no waits), so wait, then rescan only if the tab still shows that notebook.
+const settleGate = NLME.createSettleGate();
 async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}) {
   const switched = notebookSwitchedTo(tab);
+  // A second in-app navigation during the first one's settle wait replaces it
+  // (the older wait returns without a banner or rescan); a rescan the older
+  // one owed passes to this one (settle.owesRescan)
+  const settle = settleMs ? settleGate.begin(switched) : null;
   if (settleMs) {
     // The URL names the new notebook before the page has drawn it: no Resume
     // (it would scan the old notebook's lists) until the settle wait is over
@@ -686,15 +691,20 @@ async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}
   } else {
     refreshResumeBanner(); // follows the active tab's notebook, switched or not
   }
-  if (!switched && settleMs) {
+  const rescan = switched || !!(settle && settle.owesRescan);
+  if (!rescan && settleMs) {
     await new Promise(resolve => setTimeout(resolve, settleMs));
+    if (!settle.current()) return; // a newer navigation owns the banner now
+    settle.settled();
     refreshResumeBanner();
   }
-  if (switched) {
-    resetChatPanel();
+  if (rescan) {
+    if (switched) resetChatPanel();
     const recordedId = lastPanelNotebookId;
     if (settleMs) {
       await new Promise(resolve => setTimeout(resolve, settleMs));
+      if (!settle.current()) return; // a newer navigation owns the banner and the rescan now
+      settle.settled();
       const [now] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!now || now.id !== tab.id || NLME.notebookIdFromUrl(now.url) !== recordedId) {
         // Nothing was rescanned: forget the id (unless a newer event replaced it) so the next event does
