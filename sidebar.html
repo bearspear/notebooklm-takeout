@@ -330,6 +330,23 @@
         </div>
 
         <div class="setting-group">
+          <label for="citation-style-select">Citation style</label>
+          <select id="citation-style-select" class="number-input">
+            <option value="links">Links (default)</option>
+            <option value="footnotes">Footnotes (Obsidian, Typora, …)</option>
+          </select>
+          <p class="setting-help">Links writes each [n] as a link to its source, with the quote in the Sources section (works in any viewer). Footnotes writes [^n] markers with a footnote definition per source, which Obsidian, Typora and other Markdown apps show as real footnotes. Applies to notes and chat with "Full quotes" or "Source titles only"; the "code blocks" version keeps links. In combined files the footnotes are numbered per note (1-1, 2-1, …). Opt-in: please check how your Markdown app shows them.</p>
+        </div>
+
+        <div class="setting-group">
+          <label class="toggle-setting">
+            <input type="checkbox" id="obsidian-names-checkbox">
+            <span>Obsidian-friendly file names</span>
+          </label>
+          <p class="setting-help">Removes characters that break Obsidian links ([ ] # ^ | \ : * ? " &lt; &gt;) from note, source and artifact file names, and names single downloads "note - Title" and "mind-map - Title" instead of "[NOTE]_Title". Off by default; the usual file names are unchanged.</p>
+        </div>
+
+        <div class="setting-group">
           <label class="toggle-setting">
             <input type="checkbox" id="reuse-citations-checkbox" checked>
             <span>Reuse citation quotes from earlier exports (faster re-exports)</span>

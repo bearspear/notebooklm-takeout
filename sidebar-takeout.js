@@ -404,7 +404,7 @@ async function runFullTakeout() {
 
   await withExportShell({ label: 'takeout', healthType: 'notes', overlayMessage: 'Preparing Full Takeout...', tabId: tab.id }, async shell => {
     const tabId = shell.tab.id;
-    const root = sanitizeFilename(shell.projectName);
+    const root = NLME.fileStem(shell.projectName, { obsidian: !!settings.obsidianNames });
     const folder = zipMode ? null : `${shell.projectName} takeout ${shell.timestamp}`;
     console.log(`[NotebookLM Takeout] Full Takeout (${zipMode ? 'ZIP' : `folder "${folder}"`})`);
 

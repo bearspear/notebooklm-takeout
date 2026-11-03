@@ -559,7 +559,7 @@ function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batch
   // Next to the package files (itemDir ''), no source may take the name of
   // errors.md or _audit.md
   const reserved = itemDir ? [] : ['errors', '_index', '_audit'];
-  const stems = NLME.uniqueStems(sources.map(s => s.title), zipSuffixes, reserved);
+  const stems = NLME.uniqueStems(sources.map(s => s.title), zipSuffixes, reserved, { obsidian: !!settings.obsidianNames });
 
   sources.forEach((source, idx) => {
     const written = [];

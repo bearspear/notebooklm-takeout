@@ -223,7 +223,7 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
       });
       if (single) {
         // Today's download name for the single file
-        await saveFiles([{ ...single, path: `${sanitizeFilename(shell.projectName)}-chat-${shell.timestamp}.md` }]);
+        await saveFiles([{ ...single, path: `${NLME.fileStem(shell.projectName, { obsidian: !!settings.obsidianNames })}-chat-${shell.timestamp}.md` }]);
       } else {
         // One package: totalBatches is 1, so no -partNofM
         await saveCategoryBatch(shell, files, info, { prefix: pathPrefix, zipKind, folder, written });
@@ -516,7 +516,7 @@ function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, parti
   // answer has quotes; with-images only when the Markdown has images
   const versionFiles = [];
   if (messages.length > 0) {
-    const toMarkdown = codeBlocks => convertChatToMarkdown(chatData.notebookTitle, chatData.notebookSummary, messages, codeBlocks, citationMode === 'none', citationMode === 'titles');
+    const toMarkdown = codeBlocks => convertChatToMarkdown(chatData.notebookTitle, chatData.notebookSummary, messages, codeBlocks, citationMode === 'none', citationMode === 'titles', settings.citationStyle);
     const baseMarkdown = toMarkdown(false);
     const hasQuotes = messages.some(m => (m.sources || []).some(src => src.quote && src.quote.trim()));
     const hasImages = /!\[/.test(baseMarkdown);
@@ -639,8 +639,13 @@ function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, parti
  * dropCitations: Citation detail 'none' — remove the [n] markers and the
  * Sources section (the same meaning as convertToMarkdown's last parameter).
  * groupTitles: Citation detail 'titles' — one Sources line per source title.
+ * citationStyle: 'footnotes' writes [^label] markers and definitions (not for
+ * the code-blocks version, which keeps links). chat.md is ONE file whose
+ * citation numbers restart in every answer, so the label is '<message>-<n>'
+ * (NLME.footnoteLabel with combined: true); every cited number gets a
+ * definition, a placeholder when its popup could not be read.
  */
-function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citationsCodeBlock = true, dropCitations = false, groupTitles = false) {
+function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citationsCodeBlock = true, dropCitations = false, groupTitles = false, citationStyle = 'links') {
   logger.info('Markdown', `Converting chat to markdown: "${notebookTitle}"`);
   logger.info('Markdown', `  - Message count: ${messages.length}`);
 
@@ -665,10 +670,13 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
   // One shared rule set (takeout-markdown.js, Milestone 3d), with
   // per-message citation anchors
   console.log('[NotebookLM Takeout] Adding turndown rules for per-message citations');
+  const useFootnotes = citationStyle === 'footnotes' && !citationsCodeBlock && !dropCitations;
+  const labelOf = (messageIndex, n) => NLME.footnoteLabel(messageIndex, n, { combined: true });
   const converter = NLMEMarkdown.createConverter({
     variant: 'chat',
-    citations: dropCitations ? 'none' : (citationsCodeBlock ? 'code-blocks' : 'links'),
-    getMessageIndex: () => currentMessageIndex
+    citations: dropCitations ? 'none' : (useFootnotes ? 'footnotes' : (citationsCodeBlock ? 'code-blocks' : 'links')),
+    getMessageIndex: () => currentMessageIndex,
+    footnoteLabel: n => labelOf(currentMessageIndex, n)
   });
 
   let currentDate = null;
@@ -712,8 +720,16 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
     // Use newline after A: to ensure tables/lists at start of response parse correctly
     markdown += `**A:**\n${aiResponseMarkdown}\n\n`;
 
-    // Add sources for this message
-    if (!dropCitations && msg.sources && msg.sources.length > 0) {
+    // Footnotes: one definition per cited number, the read sources plus a
+    // placeholder for any marker whose popup could not be read. (The
+    // renderer gathers definitions at the end of the file, so no
+    // "Sources:" label per answer.)
+    if (useFootnotes) {
+      const entries = NLME.buildCitationEntries(msg.sources || [], converter.citedNumbers(idx));
+      markdown += NLME.footnoteDefinitions(entries, n => labelOf(idx, n), {
+        quoteOf: entry => (entry.missing || !entry.quote ? '' : (settings.cleanOCRArtifacts ? cleanOCRArtifacts(entry.quote) : entry.quote))
+      });
+    } else if (!dropCitations && msg.sources && msg.sources.length > 0) {
       markdown += '**Sources:**\n\n';
       if (groupTitles) {
         // Titles only: one line per source title, as in notes

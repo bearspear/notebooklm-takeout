@@ -1715,3 +1715,99 @@ test('NLME.MSG is frozen and maps each type name to itself', () => {
   assert.equal(NLME.MSG.EXTRACT_NOTE, 'EXTRACT_NOTE');
   for (const [key, value] of Object.entries(NLME.MSG)) assert.equal(value, key);
 });
+
+// ---- Milestone 3d Task 5: footnote citations and Obsidian-friendly names ----
+
+test('footnoteLabel is unique per item in combined output', () => {
+  // Single-item files: the plain citation number
+  assert.equal(NLME.footnoteLabel(0, 3), '3');
+  assert.equal(NLME.footnoteLabel(4, 3, { combined: false }), '3');
+  // Combined files: item number first, so note 1's [1] and note 2's [1] differ
+  assert.equal(NLME.footnoteLabel(0, 1, { combined: true }), '1-1');
+  assert.equal(NLME.footnoteLabel(1, 1, { combined: true }), '2-1');
+  const labels = [];
+  for (let item = 0; item < 4; item++) for (let n = 1; n <= 12; n++) labels.push(NLME.footnoteLabel(item, n, { combined: true }));
+  assert.equal(new Set(labels).size, labels.length);
+  // 1-11 vs 11-1 never collide (the item part always ends at the first dash)
+  assert.notEqual(NLME.footnoteLabel(0, 11, { combined: true }), NLME.footnoteLabel(10, 1, { combined: true }));
+});
+
+test('footnoteLabel keeps a label a footnote can carry', () => {
+  assert.equal(NLME.footnoteLabel(0, 'a b]^'), 'a-b-');
+});
+
+test('footnoteDefinition writes title and quote inline, continuation lines indented by 4 spaces', () => {
+  assert.equal(NLME.footnoteDefinition('2', 'Source A', 'one line'), '[^2]: **Source A** — one line');
+  assert.equal(NLME.footnoteDefinition('2', 'Source A', 'first\nsecond\n\nthird'),
+    '[^2]: **Source A** — first\n    second\n\n    third');
+  assert.equal(NLME.footnoteDefinition('2', 'Source A', ''), '[^2]: **Source A**');
+  assert.equal(NLME.footnoteDefinition('2', '', 'only a quote'), '[^2]: only a quote');
+  assert.equal(NLME.footnoteDefinition('2', 'A\nB', null), '[^2]: **A B**');
+});
+
+test('footnoteDefinitions writes one definition per entry, even for titles-only sources', () => {
+  const entries = [
+    { number: '1', text: 'Same', quote: '' },
+    { number: '2', text: 'Same', quote: '' },
+    { number: '3', text: '(citation details unavailable)', quote: '', missing: true }
+  ];
+  const out = NLME.footnoteDefinitions(entries, n => `x${n}`);
+  assert.equal(out, '[^x1]: **Same**\n\n[^x2]: **Same**\n\n[^x3]: **(citation details unavailable)**\n\n');
+  assert.equal(NLME.footnoteDefinitions([], n => n), '');
+  // A repeated number still gets one definition
+  assert.equal(NLME.footnoteDefinitions([{ number: '1', text: 'A' }, { number: '1', text: 'B' }], n => n), '[^1]: **A**\n\n');
+});
+
+test('obsidianSafeName strips link-breaking characters into single spaces', () => {
+  assert.equal(NLME.obsidianSafeName('[mind-map] Title'), 'mind-map Title');
+  assert.equal(NLME.obsidianSafeName('A#B^C|D\\E:F*G?H"I<J>K'), 'A B C D E F G H I J K');
+  assert.equal(NLME.obsidianSafeName('a ## b'), 'a b');
+  assert.equal(NLME.obsidianSafeName('Plain name'), 'Plain name');
+  assert.equal(NLME.obsidianSafeName(null), '');
+});
+
+test('obsidianSafeName keeps names unique through uniqueStems', () => {
+  const stems = NLME.uniqueStems(['A#B', 'A B', 'A[B]'], [], [], { obsidian: true });
+  assert.equal(new Set(stems.map(s => s.toLowerCase())).size, 3);
+  assert.equal(stems.every(s => !/[\[\]#^|\\:*?"<>]/.test(s)), true);
+  // Brackets survive sanitizeFilename, so the option does change them
+  assert.deepEqual(NLME.uniqueStems(['A[1]']), ['A[1]']);
+  assert.deepEqual(NLME.uniqueStems(['A[1]'], [], [], { obsidian: true }), ['A-1']);
+});
+
+test('uniqueStems without the obsidian option is unchanged', () => {
+  assert.deepEqual(NLME.uniqueStems(['A#B', 'A B']), ['A-B', 'A-B-2']);
+  assert.deepEqual(NLME.uniqueStems(['A#B', 'A B'], [], [], {}), ['A-B', 'A-B-2']);
+});
+
+test('prefixedStem keeps [prefix]_ names, and turns them into "prefix - " for Obsidian', () => {
+  assert.equal(NLME.prefixedStem('NOTE', 'My Note'), '[NOTE]_My-Note');
+  assert.equal(NLME.prefixedStem('mind-map', 'A: B'), '[mind-map]_A-B');
+  assert.equal(NLME.prefixedStem('NOTE', 'My Note', { obsidian: true }), 'note - My-Note');
+  assert.equal(NLME.prefixedStem('mind-map', 'A[1] #b', { obsidian: true }), 'mind-map - A-1-b');
+});
+
+test('singleArtifactPackage renames the same way with the obsidian option', () => {
+  const files = [{ path: 'x.svg' }, { path: 'x.json' }];
+  const off = NLME.singleArtifactPackage({ type: 'Mind Map', title: 'Map', files });
+  assert.equal(off.zipName, '[mind-map]_Map.zip');
+  assert.equal(off.entries[0].path, '[mind-map]_Map.svg');
+  const on = NLME.singleArtifactPackage({ type: 'Mind Map', title: 'Map', files, obsidian: true });
+  assert.equal(on.zipName, 'mind-map - Map.zip');
+  assert.equal(on.entries[1].path, 'mind-map - Map.json');
+  const table = NLME.singleArtifactPackage({ type: 'Data Table', title: 'T[1]', files: [{ path: 'a.csv' }, { path: 'a-references.txt' }], obsidian: true });
+  assert.equal(table.zipName, 'data-table - T-1.zip');
+  assert.equal(table.entries[0].path, 'T-1.csv');
+});
+
+test('artifactStems with the obsidian option strips link-breaking characters', () => {
+  const items = [{ type: 'Report', label: 'R[1]' }, { type: 'Report', label: 'R 1' }];
+  assert.deepEqual(NLME.artifactStems(items), ['R[1]', 'R-1']);
+  assert.deepEqual(NLME.artifactStems(items, { obsidian: true }), ['R-1', 'R-1-2']);
+});
+
+test('groupedSourcesMarkdown is unchanged without footnotes', () => {
+  const entries = [{ number: '1', text: 'A' }, { number: '2', text: 'A' }];
+  assert.equal(NLME.groupedSourcesMarkdown(entries, 'x-'),
+    '<a id="x-src-1"></a><a id="x-src-2"></a>\n**[[1]](#x-cite-ref-1-1) [[2]](#x-cite-ref-2-1)** A\n\n');
+});

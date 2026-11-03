@@ -354,19 +354,28 @@
   //           (msg-I-cite-ref-N-k → msg-I-src-N, I from getMessageIndex());
   //           a table is followed by the "[n] …" reference lines found in
   //           its element-list-renderer
-  //   citations 'links' (default) | 'code-blocks' | 'none'
+  //   citations 'links' (default) | 'code-blocks' | 'footnotes' | 'none'
   //     'none' drops every marker (and chat's table references). Links and
   //     code blocks differ only in the Sources section, which the caller writes.
+  //     'footnotes' writes the marker as [^LABEL] (no <sup>, no anchors); the
+  //     caller writes the matching [^LABEL]: definitions (NLME.footnoteDefinitions)
+  //   footnoteLabel(number) -> LABEL, for 'footnotes' (default: the number).
+  //     The caller owns uniqueness: a combined notes file passes a closure over
+  //     NLME.footnoteLabel(noteIndex, n, { combined: true }); chat does the same
+  //     with the current message index, so every label is unique in chat.md.
   //   anchorPrefix (note), getMessageIndex (chat), log(context, message)
-  // Returns { turndownService, convert(html), citedNumbers() } — citedNumbers:
-  // the distinct marker numbers converted so far (note variant), in order.
+  // Returns { turndownService, convert(html), citedNumbers(messageIndex?) } —
+  // citedNumbers: the distinct marker numbers converted so far (note variant),
+  // in order; for the chat variant, those cited in the given message.
   // Turndown gives later-added rules priority; the order below is the notes
   // order. Only rules with overlapping filters depend on it (reportHeadings vs
   // blockquotes, sourceLink vs citationButtons), and both sets ordered those
   // the same way.
-  function createConverter({ variant = 'note', citations = 'links', anchorPrefix = '', getMessageIndex = () => 0, log = null } = {}) {
+  function createConverter({ variant = 'note', citations = 'links', anchorPrefix = '', getMessageIndex = () => 0, footnoteLabel = null, log = null } = {}) {
     const isChat = variant === 'chat';
     const dropCitations = citations === 'none';
+    const footnotes = citations === 'footnotes';
+    const labelOf = typeof footnoteLabel === 'function' ? footnoteLabel : (n => String(n));
     const info = typeof log === 'function' ? log : () => {};
     const turndownService = createTurndownService();
     // Note: number -> occurrences; chat: "messageIdx:number" -> occurrences
@@ -612,6 +621,8 @@
         const occurrenceCount = citationOccurrences.get(key) + 1;
         citationOccurrences.set(key, occurrenceCount);
 
+        if (footnotes) return `[^${labelOf(sourceIndex)}]`;
+
         // Return citation with message-specific anchor and link to source
         return `<sup><a id="msg-${messageIndex}-cite-ref-${sourceIndex}-${occurrenceCount}" href="#msg-${messageIndex}-src-${sourceIndex}">[${sourceIndex}]</a></sup>`;
       }
@@ -680,6 +691,12 @@
         const occurrenceCount = citationOccurrences.get(displayNumber) + 1;
         citationOccurrences.set(displayNumber, occurrenceCount);
 
+        if (footnotes) {
+          const marker = `[^${labelOf(displayNumber)}]`;
+          info('Citation', `  - generated: ${marker}`);
+          return marker;
+        }
+
         const output = `<sup><a id="${anchorPrefix}cite-ref-${displayNumber}-${occurrenceCount}" href="#${anchorPrefix}src-${displayNumber}">[${displayNumber}]</a></sup>`;
         info('Citation', `  - generated: ${output}`);
 
@@ -687,10 +704,22 @@
       }
     });
 
+    // Footnote markers that follow each other (with the commas the page puts
+    // between them) are joined by one space, as the <sup> markers are
+    const joinFootnotes = footnotes
+      ? (text => text.replace(/(\[\^[^\]\s]+\])\s*,?\s*(?=\[\^)/g, '$1 '))
+      : (text => text);
+
     return {
       turndownService,
-      convert: (html) => turndownService.turndown(html),
-      citedNumbers: () => [...citationOccurrences.keys()]
+      convert: (html) => joinFootnotes(turndownService.turndown(html)),
+      citedNumbers: (messageIndex) => {
+        if (isChat && messageIndex !== undefined) {
+          const prefix = `${messageIndex}:`;
+          return [...citationOccurrences.keys()].filter(key => key.startsWith(prefix)).map(key => key.slice(prefix.length));
+        }
+        return [...citationOccurrences.keys()];
+      }
     };
   }
 

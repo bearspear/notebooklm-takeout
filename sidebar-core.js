@@ -174,7 +174,12 @@ let settings = {
   // titles from the markers only (no hovering); 'none' drops markers and Sources
   citationDetail: 'quotes',
   // Milestone 3c: reuse citation quotes read by an earlier export (quotes mode, no images)
-  reuseCitations: true
+  reuseCitations: true,
+  // Milestone 3d (both opt-in): 'links' | 'footnotes' ([^n] markers and
+  // definitions, for Obsidian, Typora, ...; link versions only), and
+  // Obsidian-friendly file names (no [ ] # ^ | etc., "note - Title")
+  citationStyle: 'links',
+  obsidianNames: false
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -322,6 +327,8 @@ async function loadSettings() {
   document.getElementById('slides-format-select').value = settings.slidesFormat;
   document.getElementById('citation-detail-select').value = settings.citationDetail;
   document.getElementById('reuse-citations-checkbox').checked = settings.reuseCitations !== false;
+  document.getElementById('citation-style-select').value = settings.citationStyle === 'footnotes' ? 'footnotes' : 'links';
+  document.getElementById('obsidian-names-checkbox').checked = settings.obsidianNames === true;
   applyStudioTabVisibility();
   updateChatCitationInfo();
 }
@@ -388,6 +395,8 @@ async function saveSettings() {
   settings.citationDetail = ['titles', 'none'].includes(document.getElementById('citation-detail-select').value)
     ? document.getElementById('citation-detail-select').value : 'quotes';
   settings.reuseCitations = document.getElementById('reuse-citations-checkbox').checked;
+  settings.citationStyle = document.getElementById('citation-style-select').value === 'footnotes' ? 'footnotes' : 'links';
+  settings.obsidianNames = document.getElementById('obsidian-names-checkbox').checked;
   applyStudioTabVisibility();
   updateChatCitationInfo();
 
@@ -903,7 +912,13 @@ async function ensureContentScriptLoaded(tabId) {
 // content), so unread markers don't produce "(citation details unavailable)".
 // dropCitations: Citation detail 'none' — remove [n] markers and the Sources
 // section, leaving plain text
-function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock = true, skipTitleIfPresent = false, noteId = null, citationPlaceholders = true, dropCitations = false) {
+// citationStyle: 'footnotes' writes [^label] markers and [^label]: definitions
+// instead of <sup> links (Milestone 3d, ⚙️ Citation style). Only the link
+// versions use it: a code-blocks version (citationsCodeBlock) keeps its
+// links, since a fenced quote cannot live inside a footnote definition.
+// Labels: the citation number; with noteId (combined notes files) '<noteId>-<n>',
+// so every label is unique in the combined file (NLME.footnoteLabel).
+function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock = true, skipTitleIfPresent = false, noteId = null, citationPlaceholders = true, dropCitations = false, citationStyle = 'links') {
   // Debug: Log what we're converting
   logger.info('Markdown', `Converting note: "${noteTitle}"`);
   logger.info('Markdown', `  - HTML content length: ${htmlContent.length} chars`);
@@ -917,11 +932,15 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
   // Create anchor prefix for combined notes (prevents ID collisions)
   const anchorPrefix = noteId ? `note-${noteId}-` : '';
 
+  const useFootnotes = citationStyle === 'footnotes' && !citationsCodeBlock && !dropCitations;
+  const labelOf = n => NLME.footnoteLabel((noteId || 1) - 1, n, { combined: !!noteId });
+
   // One shared rule set (takeout-markdown.js, Milestone 3d)
   const converter = NLMEMarkdown.createConverter({
     variant: 'note',
-    citations: dropCitations ? 'none' : (citationsCodeBlock ? 'code-blocks' : 'links'),
+    citations: dropCitations ? 'none' : (useFootnotes ? 'footnotes' : (citationsCodeBlock ? 'code-blocks' : 'links')),
     anchorPrefix,
+    footnoteLabel: labelOf,
     log: (context, message) => logger.info(context, message)
   });
 
@@ -975,7 +994,15 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
   // Sources section: extracted sources plus a placeholder for any marker
   // whose tooltip could not be read, all under their original numbers
   const entries = dropCitations ? [] : NLME.buildCitationEntries(sources, converter.citedNumbers(), { placeholders: citationPlaceholders });
-  if (entries.length > 0 && entries.every(entry => !entry.quote)) {
+  if (useFootnotes && entries.length > 0) {
+    // Footnotes: one definition per number (a [^label] marker needs its own
+    // definition, so titles-only sources are not grouped). The quote stays
+    // inline, continuation lines indented by the formatter.
+    markdown += '\n\n---\n\n## Sources\n\n';
+    markdown += NLME.footnoteDefinitions(entries, labelOf, {
+      quoteOf: entry => (entry.missing || !entry.quote ? '' : (settings.cleanOCRArtifacts ? cleanOCRArtifacts(entry.quote) : entry.quote))
+    });
+  } else if (entries.length > 0 && entries.every(entry => !entry.quote)) {
     // No quotes (titles-only, reports): one line per source with all its
     // numbers; every number keeps its own anchor so body links still resolve
     markdown += '\n\n---\n\n## Sources\n\n';

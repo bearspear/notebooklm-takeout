@@ -462,11 +462,11 @@ async function exportSingleNote(note) {
     throw new Error(noteData?.error || 'Failed to extract note');
   }
 
-  const sanitizedTitle = sanitizeFilename(note.title);
+  const obsidian = !!settings.obsidianNames;
   let filesWritten = 0;
 
   if (noteData.isMindmap) {
-    const files = await mindmapFiles(`[mind-map]_${sanitizedTitle}`, noteData.svgContent, noteData.treeData, note.title);
+    const files = await mindmapFiles(NLME.prefixedStem('mind-map', note.title, { obsidian }), noteData.svgContent, noteData.treeData, note.title);
     await saveFiles(files);
     return { success: true, filesWritten: files.length };
   }
@@ -485,13 +485,14 @@ async function exportSingleNote(note) {
       true, // skipTitleIfPresent
       null,
       true,
-      settings.citationDetail === 'none'
+      settings.citationDetail === 'none',
+      settings.citationStyle
     );
     if (version.stripImages) {
       markdown = stripImagesFromMarkdown(markdown);
     }
     markdown = noteFrontMatter(meta, { title: note.title, variant: version.variant }) + markdown;
-    const filename = `[NOTE]_${sanitizedTitle}${version.fileSuffix}.md`;
+    const filename = `${NLME.prefixedStem('NOTE', note.title, { obsidian })}${version.fileSuffix}.md`;
     downloadBlob(new Blob([markdown], { type: 'text/markdown' }), filename);
     filesWritten++;
   }
@@ -546,7 +547,7 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
     // errors.md, _audit.md or a combined-notes file
     const reserved = itemDir ? [] : ['errors', '_index', '_audit', ...versions.map(v => `combined-notes${v.combinedSuffix}`)];
     const stems = NLME.uniqueStems(regularNotes.map(n => n.title),
-      versions.map(v => v.fileSuffix).filter(Boolean), reserved);
+      versions.map(v => v.fileSuffix).filter(Boolean), reserved, { obsidian: !!settings.obsidianNames });
 
     versions.forEach(version => {
       // Individual note files with version suffix
@@ -561,7 +562,8 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
           true, // skipTitleIfPresent
           null,
           true,
-          settings.citationDetail === 'none'
+          settings.citationDetail === 'none',
+          settings.citationStyle
         );
 
         // Strip images if needed
@@ -606,7 +608,8 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
           false, // skipTitleIfPresent
           noteId, // unique ID for this note's anchors
           true,
-          settings.citationDetail === 'none'
+          settings.citationDetail === 'none',
+          settings.citationStyle
         );
 
         // Strip images if needed
@@ -641,7 +644,7 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
 
   // Mind map SVG, JSON and interactive HTML files
   if (mindmaps.length > 0) {
-    const stems = NLME.uniqueStems(mindmaps.map(m => m.title));
+    const stems = NLME.uniqueStems(mindmaps.map(m => m.title), [], [], { obsidian: !!settings.obsidianNames });
 
     mindmaps.forEach((mindmap, idx) => {
       const base = `mind-maps/${stems[idx]}`;

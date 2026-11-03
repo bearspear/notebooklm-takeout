@@ -92,7 +92,7 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
     if (!extractable) {
       // Armed BEFORE the click: a real Chrome download (no intercepted URL)
       // is captured, renamed and kept from opening a tab
-      await chrome.runtime.sendMessage({ type: NLME.MSG.START_INTERCEPT_DOWNLOAD, name: label, artifactType: type, folder });
+      await chrome.runtime.sendMessage({ type: NLME.MSG.START_INTERCEPT_DOWNLOAD, name: label, artifactType: type, folder, obsidian: !!settings.obsidianNames });
     }
 
     const response = await chrome.tabs.sendMessage(tabId, {
@@ -168,12 +168,13 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
  * or mind map is one ZIP ([data-table]_Title.zip, [mind-map]_Title.zip).
  */
 async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName) {
-  const stem = `[${getArtifactTypePrefix(artifactType)}]_${sanitizeFilename(artifactName)}`;
+  const obsidian = !!settings.obsidianNames;
+  const stem = NLME.prefixedStem(getArtifactTypePrefix(artifactType), artifactName, { obsidian });
   const { files } = await fetchArtifactFiles(tabId,
     { index: artifactIndex, type: artifactType, label: artifactName },
     { stem, mode: 'single' });
   // Data Tables and mind maps are several files: one ZIP, as before 3a
-  const pkg = NLME.singleArtifactPackage({ type: artifactType, title: artifactName, files });
+  const pkg = NLME.singleArtifactPackage({ type: artifactType, title: artifactName, files, obsidian });
   if (pkg) await saveFiles(pkg.entries, { zipName: pkg.zipName });
   else await saveFiles(files);
   return { success: true, files: files.length };
@@ -980,7 +981,7 @@ async function downloadAllArtifacts(tabId, items, { updateRecord = false } = {})
 async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artifacts', folder = null, bothSlideFormats = false, written = newWritten(), tracker = null } = {}) {
   const zipMode = !folder;
   const place = files => (pathPrefix ? files.map(f => ({ ...f, path: pathPrefix + f.path })) : files);
-  const stems = NLME.artifactStems(items);
+  const stems = NLME.artifactStems(items, { obsidian: !!settings.obsidianNames });
   const stemOf = new Map(items.map((item, idx) => [item, stems[idx]]));
   // Folder mode: what earlier items saved, for _index.md and manifest.json
   // (Blobs replaced by their size: the manifest needs no more)

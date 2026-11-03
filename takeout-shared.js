@@ -660,21 +660,49 @@
     return ARTIFACT_PREFIXES[type] || String(type || 'artifact').toLowerCase().replace(/\s+/g, '-');
   }
 
+  // "Obsidian-friendly file names" (Milestone 3d, opt-in): characters that
+  // break [[wiki links]] and heading/block references ([ ] # ^ | \\ : * ? " < >)
+  // become a space; runs collapse into one space. sanitizeFilename runs after
+  // it (spaces become dashes), so "A#B" and "A B" still end up as different
+  // stems once uniqueStems numbers the repeat.
+  function obsidianSafeName(name) {
+    return String(name == null ? '' : name)
+      .replace(/[\[\]#^|\\:*?"<>]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  // The one file-name stem: sanitizeFilename, preceded by obsidianSafeName
+  // when `obsidian` is on. Off, it is exactly sanitizeFilename.
+  function fileStem(name, { obsidian = false } = {}) {
+    return sanitizeFilename(obsidian ? obsidianSafeName(name) : name);
+  }
+
+  // "[NOTE]_Title" / "[mind-map]_Title" (the historic names of single
+  // downloads). With `obsidian`: "note - Title" / "mind-map - Title", since
+  // square brackets cannot be part of a link target.
+  function prefixedStem(prefix, title, { obsidian = false } = {}) {
+    return obsidian
+      ? `${String(prefix).toLowerCase()} - ${fileStem(title, { obsidian })}`
+      : `[${prefix}]_${fileStem(title)}`;
+  }
+
   // One ZIP for a single Data Table or mind map download, as before
   // Milestone 3a: { zipName, entries } with the inner files renamed, or null
   // when the artifact stays loose (other types, or a lone file).
-  function singleArtifactPackage({ type, title, files }) {
+  function singleArtifactPackage({ type, title, files, obsidian = false }) {
     if ((type !== 'Data Table' && type !== 'Mind Map') || !files || files.length < 2) return null;
-    const clean = sanitizeFilename(title);
+    const clean = fileStem(title, { obsidian });
     const isTable = type === 'Data Table';
-    const base = isTable ? clean : `[${artifactTypePrefix(type)}]_${clean}`;
+    const prefixed = prefixedStem(artifactTypePrefix(type), title, { obsidian });
+    const base = isTable ? clean : prefixed;
     const entries = files.map(file => {
       const path = String(file.path || '');
       if (isTable && /-references\.txt$/i.test(path)) return { ...file, path: 'references.txt' };
       const ext = (path.match(/\.[^./\\]+$/) || [''])[0];
       return { ...file, path: `${base}${ext}` };
     });
-    return { zipName: `${isTable ? `[${artifactTypePrefix(type)}]_${clean}` : base}.zip`, entries };
+    return { zipName: `${isTable ? prefixed : base}.zip`, entries };
   }
 
   // 'YYYY-MM-DDTHH-MM-SS' (UTC) for export file names
@@ -885,6 +913,51 @@
     return out;
   }
 
+  // ---- Footnote citations (Milestone 3d, ⚙️ Citation style: Footnotes) ----
+  // A marker is [^LABEL] and the Sources section holds one definition per
+  // label. Labels must be unique per FILE: citation numbers restart in every
+  // note and every chat answer, so a combined file prefixes the item number.
+
+  // itemIndex: 0-based note (or chat answer) in the file. combined: the file
+  // holds several items. Single-item files keep the plain number ('3'),
+  // combined ones get '<item>-<n>' ('2-3'). Characters a label cannot carry
+  // (whitespace, [ ] ^) become dashes; digits, the normal case, are untouched.
+  function footnoteLabel(itemIndex, n, { combined = false } = {}) {
+    const num = String(n).replace(/[\s\[\]^]+/g, '-');
+    return combined ? `${(Number(itemIndex) || 0) + 1}-${num}` : num;
+  }
+
+  // '[^LABEL]: **Title** \u2014 quote'. The quote stays inline: its
+  // continuation lines are indented by 4 spaces (blank lines stay empty), as
+  // CommonMark footnotes and Obsidian require. No quote: just the title; no
+  // title: just the quote.
+  function footnoteDefinition(label, title, quote) {
+    const head = String(title == null ? '' : title).replace(/\s+/g, ' ').trim();
+    const body = String(quote == null ? '' : quote).replace(/\r\n?/g, '\n').trim()
+      .split('\n').map((line, i) => (i === 0 || !line.trim() ? line.trimEnd() : `    ${line}`)).join('\n');
+    const lead = `[^${label}]:`;
+    if (head && body) return `${lead} **${head}** \u2014 ${body}`;
+    if (head) return `${lead} **${head}**`;
+    return body ? `${lead} ${body}` : `${lead} **(untitled source)**`;
+  }
+
+  // The definitions for Sources entries ({number, text, quote?}): one per
+  // number, in the entries' order, even when several numbers share a title
+  // (every [^label] reference needs its own definition). labelOf(number)
+  // gives the label; quoteOf(entry) the quote text to use (default: none for
+  // placeholders). Returns '' for no entries.
+  function footnoteDefinitions(entries, labelOf, { quoteOf = e => (e.missing ? '' : e.quote) } = {}) {
+    const seen = new Set();
+    let out = '';
+    for (const entry of entries || []) {
+      const number = String(entry.number);
+      if (seen.has(number)) continue;
+      seen.add(number);
+      out += `${footnoteDefinition(labelOf(number), entry.text, quoteOf(entry))}\n\n`;
+    }
+    return out;
+  }
+
   // The citation popover of a long, unpunctuated source (a YouTube
   // transcript) shows only a window of about 1,000 characters, cut
   // mid-word. Mark such a quote with "\u2026" where it was cut. Short
@@ -925,7 +998,9 @@
   // `reserved` names (package files that share the folder, such as
   // 'errors' or '_index' when the items sit next to them) are never handed out.
   // Names compare after NFC normalization.
-  function uniqueStems(titles, suffixes = [], reserved = []) {
+  // `obsidian` (4th parameter): the "Obsidian-friendly file names" option, see
+  // obsidianSafeName. Off, the stems are exactly as before.
+  function uniqueStems(titles, suffixes = [], reserved = [], { obsidian = false } = {}) {
     // Names compare as NFC, lower-cased: "Café" typed as e + combining accent
     // and as the single é look identical and collide on a macOS disk
     const fold = name => String(name).normalize('NFC').toLowerCase();
@@ -933,7 +1008,7 @@
     const endings = ['', ...suffixes];
     const names = candidate => endings.map(s => fold(candidate + s));
     return (titles || []).map(title => {
-      const base = sanitizeFilename(title);
+      const base = fileStem(title, { obsidian });
       let candidate = base;
       for (let n = 2; names(candidate).some(name => used.has(name)); n++) candidate = `${base}-${n}`;
       names(candidate).forEach(name => used.add(name));
@@ -1378,7 +1453,7 @@
   // One stem per Studio artifact (aligned with items), unique within the
   // artifact's type folder: different types may share a name, since their
   // folders differ. Data Tables also write <stem>-references.txt.
-  function artifactStems(items) {
+  function artifactStems(items, { obsidian = false } = {}) {
     const stems = new Array(items.length);
     const byFolder = new Map();
     items.forEach((item, idx) => {
@@ -1388,7 +1463,7 @@
     });
     for (const idxs of byFolder.values()) {
       const suffixes = idxs.some(i => items[i].type === 'Data Table') ? ['-references'] : [];
-      uniqueStems(idxs.map(i => items[i].label), suffixes).forEach((stem, k) => { stems[idxs[k]] = stem; });
+      uniqueStems(idxs.map(i => items[i].label), suffixes, [], { obsidian }).forEach((stem, k) => { stems[idxs[k]] = stem; });
     }
     return stems;
   }
@@ -1887,6 +1962,12 @@ footer { margin-top: 3rem; }
     artifactStems,
     groupCitationEntries,
     groupedSourcesMarkdown,
+    footnoteLabel,
+    footnoteDefinition,
+    footnoteDefinitions,
+    obsidianSafeName,
+    fileStem,
+    prefixedStem,
     markWindowedQuote,
     noteHasImages,
     countMarkdownFormulas,

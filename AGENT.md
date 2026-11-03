@@ -225,6 +225,8 @@ Storage: `chrome.storage.local`, single key `settings`. Defaults in `let setting
   // Downloads
   slidesFormat: 'pdf',                       // 'pdf' | 'pptx' — slide deck More-menu item
   citationDetail: 'quotes',                  // 'quotes' (hover) | 'titles' (aria-labels) | 'none' (no citations)
+  citationStyle: 'links',                    // 'links' | 'footnotes' (Milestone 3d, see "Footnotes and Obsidian names")
+  obsidianNames: false,                      // Obsidian-friendly file names (Milestone 3d)
 }
 ```
 
@@ -1364,7 +1366,7 @@ same list `ensureContentScriptLoaded` re-injects, checked by `tests/structure.te
 |---|---|
 | `createTurndownService(options)` | the one Turndown configuration (atx headings, `*` bullets, `_` emphasis, fenced code) |
 | `convertKatexNodeToLatex(node)` | KaTeX DOM → `$…$` / `$$…$$` (`data-math` / annotation first, then the layout walker) |
-| `createConverter({ variant, citations, anchorPrefix, getMessageIndex, log })` | `convertToMarkdown` (notes, sources, reports; `variant: 'note'`) and `convertChatToMarkdown` (`variant: 'chat'`). Returns `{ turndownService, convert(html), citedNumbers() }` |
+| `createConverter({ variant, citations, anchorPrefix, getMessageIndex, footnoteLabel, log })` | `convertToMarkdown` (notes, sources, reports; `variant: 'note'`) and `convertChatToMarkdown` (`variant: 'chat'`). Returns `{ turndownService, convert(html), citedNumbers() }` |
 | `htmlToMarkdownPlain(element)` | `content.js`: citation quotes, source guides, the notebook summary |
 
 - **One rule set.** reportHeadings, blockquotes, stripAngularComponents, listsWithWrappers, tables,
@@ -1387,6 +1389,37 @@ same list `ensureContentScriptLoaded` re-injects, checked by `tests/structure.te
 - **Turndown in the page.** Content scripts don't load `turndown.min.js`; nothing in
   `takeout-markdown.js` touches `TurndownService` until `createTurndownService` /
   `createConverter` is called, which only the side panel does (tested).
+
+### Footnotes and Obsidian names (Task 5)
+
+Two opt-in settings, both off by default. With them off every export is byte-identical to before:
+each new branch is gated on `citationStyle === 'footnotes'` (and not the code-blocks version, and
+not Citation detail 'none') or on `obsidianNames`.
+
+- **Footnote format.** `createConverter({ citations: 'footnotes', footnoteLabel })` writes the
+  marker as `[^LABEL]` (no `<sup>`, no anchors; markers that follow each other are joined by one
+  space). The callers write the Sources section with `NLME.footnoteDefinitions(entries, labelOf, { quoteOf })`:
+  one definition per number, `[^LABEL]: **Title** — quote` (`NLME.footnoteDefinition`). Quote
+  continuation lines get 4 spaces, blank lines stay empty. Titles-only sources are NOT grouped (a
+  reference needs its own definition), placeholders for unread markers are definitions too, so every
+  `[^x]` has exactly one `[^x]:`. Only the link versions (base, with-images) use footnotes; the
+  code-blocks version keeps links (fenced quotes cannot live inside a definition reliably).
+- **Label rule (`NLME.footnoteLabel(itemIndex, n, { combined })`).** Unique per FILE: plain `n` in a
+  single-item file, `<itemIndex+1>-<n>` where one file holds several items. `convertToMarkdown`
+  derives it from `noteId` (set only for `combined-notes*.md`, so per-note files get plain labels and
+  the combined file `2-1`, from the same function); `convertChatToMarkdown` always uses
+  `combined: true` with the message index (`chat.md` is one file, numbers restart per answer). Chat
+  gets its placeholders from `converter.citedNumbers(messageIndex)`, and no per-answer
+  "Sources:" label (renderers gather definitions at the end of the file).
+- **`NLME.obsidianSafeName(name)`.** Strips `[ ] # ^ | \ : * ? " < >` (runs become one space).
+  `NLME.fileStem(name, { obsidian })` is `sanitizeFilename` after it; `uniqueStems(titles, suffixes,
+  reserved, { obsidian })` and `artifactStems(items, { obsidian })` use it, so `A#B` / `A B` /
+  `A[B]` stay distinct stems. `NLME.prefixedStem(prefix, title, { obsidian })` is `[prefix]_Title`
+  (default) or `prefix - Title` (prefix lower-cased: `note - `, `mind-map - `); it names single
+  downloads (`exportSingleNote`, `downloadArtifact`, `singleArtifactPackage({ obsidian })`) and the
+  background's captured downloads (`START_INTERCEPT_DOWNLOAD` carries `obsidian`). Index, HTML index
+  and manifest take their paths from the same file entries, so their links follow the new names.
+  ZIP names (`NLME.zipName`) are not changed. Any new name builder must use these helpers.
 
 ## Known issues and latent bugs
 

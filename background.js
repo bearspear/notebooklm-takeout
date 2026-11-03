@@ -73,7 +73,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         timestamp: Date.now(),
         requestId: interceptRequestId,
         intercept: true,  // Flag to intercept and re-download
-        folder: message.folder || ''
+        folder: message.folder || '',
+        obsidian: !!message.obsidian // Obsidian-friendly file names (⚙️)
       };
       pendingDownloads.push(interceptDownload);
       console.log('[Background] Intercept download queued:', interceptDownload.name, 'ID:', interceptRequestId);
@@ -268,7 +269,7 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
     const typePrefix = getArtifactTypePrefix(pendingRequest.type);
     console.log('[Background] Artifact type:', pendingRequest.type, '-> prefix:', typePrefix);
     let newFilename = NLME.downloadFolderPath(pendingRequest.folder,
-      `[${typePrefix}]_${sanitizeFilename(pendingRequest.name || 'download')}${extension}`);
+      `${NLME.prefixedStem(typePrefix, pendingRequest.name || 'download', { obsidian: pendingRequest.obsidian })}${extension}`);
 
     // Safety check: if still no extension, we'll try to get it in onDeterminingFilename
     if (!extension) {
