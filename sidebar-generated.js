@@ -36,7 +36,7 @@ async function scanStudioPage() {
     }
 
     await ensureContentScriptLoaded(tab.id);
-    const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_STUDIO_ITEMS' });
+    const response = await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.SCAN_STUDIO_ITEMS });
     const items = [...(response?.items || [])];
 
     // Notes in the Sources panel's "Notes" group are not in the Studio list. If this
@@ -148,8 +148,8 @@ function isStudioItemDeletable(item) {
 // useIndex false for Studio items: by label only, a stale index could hit another item.
 async function sendStudioDelete(item, { useIndex = true } = {}) {
   const message = item.kind === 'source-note'
-    ? { type: 'DELETE_SOURCE_NOTE', data: { sourceIndex: item.sourceIndex, title: item.label } }
-    : { type: 'DELETE_STUDIO_ITEM', data: useIndex ? { label: item.label, combinedIndex: item.combinedIndex } : { label: item.label } };
+    ? { type: NLME.MSG.DELETE_SOURCE_NOTE, data: { sourceIndex: item.sourceIndex, title: item.label } }
+    : { type: NLME.MSG.DELETE_STUDIO_ITEM, data: useIndex ? { label: item.label, combinedIndex: item.combinedIndex } : { label: item.label } };
   const response = await chrome.tabs.sendMessage(_studioTabId, message);
   if (!response || !response.success) {
     throw new Error(response?.error || 'Delete failed');

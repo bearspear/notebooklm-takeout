@@ -1324,6 +1324,34 @@ Rules:
   (`tests/structure.test.js`). `tests/message-protocol.test.js` scans every `sidebar-*.js` file.
 - **Anchors.** Find code by name (`grep -n "<name>" sidebar-*.js`), not by line number.
 
+### Message protocol and the content.js handler table (Task 3)
+
+`NLME.MSG` (frozen, in `takeout-shared.js`) lists every message type. Always write
+`NLME.MSG.X` instead of a string literal, for senders (`{ type: NLME.MSG.X }`) and for
+comparisons and `case` labels. `NLME` exists in every context that sends or handles
+messages: the side panel scripts, `content.js` and `injected.js` (both content scripts load
+`takeout-shared.js` first; `injected.js` runs in the MAIN world and reads `globalThis.NLME`),
+and `background.js` (`importScripts('takeout-shared.js')`). A typo gives `undefined`, so
+`tests/message-protocol.test.js` fails on any `NLME.MSG.X` that is not a key.
+
+`content.js` answers messages through a table instead of an if/else chain:
+
+```js
+const HANDLERS = {
+  [NLME.MSG.X]: { async: bool, run(message, sender, sendResponse) { ... } }
+};
+```
+
+The `chrome.runtime.onMessage` listener looks the type up (own keys only), calls `run` and
+returns `handler.async`. `async: true` means `sendResponse` is called after `run` returns (or
+the entry keeps the channel open), so the listener returns `true`. An unknown type still
+returns `true` without responding, as the old chain did. To add a message: add the key to
+`NLME.MSG`, add a `HANDLERS` entry, send it with `NLME.MSG.X`. The protocol test checks that
+every entry is sent, every sent type has a handler somewhere, and the `async` flags match the
+list recorded from 1.6.0 (update that fixture when you add an entry). The page-world
+`window.postMessage` `case NLME.MSG.NLME_DOWNLOAD_URL_INTERCEPTED` is a different mechanism
+and stays a switch.
+
 ## Known issues and latent bugs
 
 These are deliberate non-fixes or known limitations. Don't "fix" them without checking the

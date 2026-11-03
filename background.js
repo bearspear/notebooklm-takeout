@@ -64,7 +64,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
 
 
-    case 'START_INTERCEPT_DOWNLOAD':
+    case NLME.MSG.START_INTERCEPT_DOWNLOAD:
       // Add to pending downloads queue with intercept flag
       const interceptRequestId = nextRequestId++;
       const interceptDownload = {
@@ -90,7 +90,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true, requestId: interceptRequestId });
       break;
 
-    case 'GET_INTERCEPTED_DOWNLOAD':
+    case NLME.MSG.GET_INTERCEPTED_DOWNLOAD:
       // Check if any downloads were intercepted (return most recent)
       if (interceptedDownloads.size > 0) {
         // Get the most recent intercepted download
@@ -107,7 +107,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       break;
 
-    case 'CANCEL_INTERCEPT':
+    case NLME.MSG.CANCEL_INTERCEPT:
       // Remove all intercept requests from queue
       const cancelledCount = pendingDownloads.filter(d => d.intercept).length;
       if (cancelledCount > 0) {
@@ -123,18 +123,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true });
       break;
 
-    case 'EXTRACT_MINDMAP_FRAME':
+    case NLME.MSG.EXTRACT_MINDMAP_FRAME:
       extractMindmapFromAppFrame(message.tabId)
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ success: false, error: error.message }));
       return true;
 
-    case 'NAME_NEXT_DOWNLOAD':
+    case NLME.MSG.NAME_NEXT_DOWNLOAD:
       nameNextDownload(message.url, message.filename);
       sendResponse({ success: true });
       break;
 
-    case 'DIRECT_DOWNLOAD_URL':
+    case NLME.MSG.DIRECT_DOWNLOAD_URL:
       // Direct download from intercepted URL (no tab opened)
       // Start download and use onDeterminingFilename to rename
       (async () => {
@@ -446,6 +446,6 @@ async function extractMindmapFromAppFrame(tabId) {
     }
     return { success: false, error: 'Mind map not found in app frame (check *.scf.usercontent.goog permission)' };
   } finally {
-    chrome.tabs.sendMessage(tabId, { type: 'NAVIGATE_BACK' }).catch(() => {});
+    chrome.tabs.sendMessage(tabId, { type: NLME.MSG.NAVIGATE_BACK }).catch(() => {});
   }
 }

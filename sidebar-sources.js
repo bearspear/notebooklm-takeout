@@ -126,7 +126,7 @@ async function scanSourcesPage() {
  */
 async function scanSourcesData(tabId) {
   await ensureContentScriptLoaded(tabId);
-  const response = await chrome.tabs.sendMessage(tabId, { type: 'SCAN_SOURCES' });
+  const response = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.SCAN_SOURCES });
   if (!response) throw new Error('No response from the page');
   if (response.error) throw new ScanError(response.error);
   return { sources: response.sources || [], skippedNotes: response.skippedNotes || 0 };
@@ -282,7 +282,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
     afterEach: async (source, { failed }) => {
       if (tracker) (failed ? tracker.fail : tracker.done)('sources', source);
       try {
-        const backResponse = await chrome.tabs.sendMessage(shell.tab.id, { type: 'NAVIGATE_BACK' });
+        const backResponse = await chrome.tabs.sendMessage(shell.tab.id, { type: NLME.MSG.NAVIGATE_BACK });
         console.log('[NotebookLM Takeout] NAVIGATE_BACK response:', backResponse);
         // NAVIGATE_BACK resolves once the viewer is closed (Milestone 1: no
         // extra fixed 1.5 s)
@@ -360,7 +360,7 @@ async function extractSourceItem(shell, source, ctx, state, variantSettings = se
   try {
     sourceData = await retryOperation(
       () => chrome.tabs.sendMessage(shell.tab.id, {
-        type: 'EXTRACT_SOURCE',
+        type: NLME.MSG.EXTRACT_SOURCE,
         data: { sourceIndex: source.index, title: source.title, needsGuide: needsMeta }
       }),
       2, // maxRetries

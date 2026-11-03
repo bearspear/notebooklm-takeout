@@ -92,11 +92,11 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
     if (!extractable) {
       // Armed BEFORE the click: a real Chrome download (no intercepted URL)
       // is captured, renamed and kept from opening a tab
-      await chrome.runtime.sendMessage({ type: 'START_INTERCEPT_DOWNLOAD', name: label, artifactType: type, folder });
+      await chrome.runtime.sendMessage({ type: NLME.MSG.START_INTERCEPT_DOWNLOAD, name: label, artifactType: type, folder });
     }
 
     const response = await chrome.tabs.sendMessage(tabId, {
-      type: 'DOWNLOAD_ARTIFACT',
+      type: NLME.MSG.DOWNLOAD_ARTIFACT,
       data: extractable
         ? { artifactIndex: index, artifactType: type, artifactName: label, skipMoreButton: true }
         : { artifactIndex: index, artifactType: type, artifactName: label, downloadPreference: format }
@@ -109,7 +109,7 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
 
     switch (response.method) {
       case 'mindmap_app_frame': {
-        const frame = await chrome.runtime.sendMessage({ type: 'EXTRACT_MINDMAP_FRAME', tabId });
+        const frame = await chrome.runtime.sendMessage({ type: NLME.MSG.EXTRACT_MINDMAP_FRAME, tabId });
         if (!frame || !frame.success) throw new Error(frame?.error || 'Failed to extract mind map');
         return { files: await mindmapFiles(stem, frame.svgContent, frame.treeData, title), savedOutside: false };
       }
@@ -141,7 +141,7 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
         // download, and fail loudly if it never does (Milestone 1)
         let result = null;
         for (let waited = 0; waited < 20000; waited += 250) {
-          result = await chrome.runtime.sendMessage({ type: 'GET_INTERCEPTED_DOWNLOAD' });
+          result = await chrome.runtime.sendMessage({ type: NLME.MSG.GET_INTERCEPTED_DOWNLOAD });
           if (result && result.success) break;
           await new Promise(resolve => setTimeout(resolve, 250));
         }
@@ -158,7 +158,7 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
   } finally {
     // A queued intercept request would otherwise rename the next unrelated
     // download (even the user's own) as this item for up to 20 s
-    await chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
+    await chrome.runtime.sendMessage({ type: NLME.MSG.CANCEL_INTERCEPT }).catch(() => {});
   }
 }
 
@@ -184,7 +184,7 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
 // @returns {Promise<Array<{ index, label, type, details, disabled }>>}
 async function scanArtifactsData(tabId) {
   await ensureContentScriptLoaded(tabId);
-  const scan = await chrome.tabs.sendMessage(tabId, { type: 'SCAN_STUDIO_ITEMS' });
+  const scan = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.SCAN_STUDIO_ITEMS });
   return (scan?.items || [])
     .filter(item => item.kind === 'artifact')
     .map(item => ({

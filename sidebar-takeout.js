@@ -57,7 +57,7 @@ async function fetchDownload(url, { tabId } = {}) {
       targetTab = tab?.id;
     }
     if (targetTab == null) throw new Error('no notebook tab');
-    const result = await chrome.tabs.sendMessage(targetTab, { type: 'FETCH_FILE', url });
+    const result = await chrome.tabs.sendMessage(targetTab, { type: NLME.MSG.FETCH_FILE, url });
     if (result && result.success && result.data != null) {
       return base64ToBlob(result.data, result.mime);
     }
@@ -82,7 +82,7 @@ function entryBlob(entry) {
 async function downloadBlobToFolderPath(blob, target) {
   const blobUrl = URL.createObjectURL(blob);
   try {
-    await chrome.runtime.sendMessage({ type: 'NAME_NEXT_DOWNLOAD', url: blobUrl, filename: target });
+    await chrome.runtime.sendMessage({ type: NLME.MSG.NAME_NEXT_DOWNLOAD, url: blobUrl, filename: target });
     await chrome.downloads.download({ url: blobUrl, filename: target, conflictAction: 'uniquify', saveAs: false });
   } finally {
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
@@ -92,7 +92,7 @@ async function downloadBlobToFolderPath(blob, target) {
 // Have the background download a url entry to Downloads/<target>.
 async function downloadUrlTo(entry, target) {
   const response = await chrome.runtime.sendMessage({
-    type: 'DIRECT_DOWNLOAD_URL',
+    type: NLME.MSG.DIRECT_DOWNLOAD_URL,
     url: entry.url,
     filename: target
   });
@@ -253,9 +253,9 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
 
     // Reset DOM tracker and run the pre-export health check
     if (healthType) {
-      await chrome.tabs.sendMessage(tab.id, { type: 'RESET_DOM_TRACKER' });
+      await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.RESET_DOM_TRACKER });
       const healthCheck = await chrome.tabs.sendMessage(tab.id, {
-        type: 'CHECK_DOM_HEALTH',
+        type: NLME.MSG.CHECK_DOM_HEALTH,
         data: { type: healthType }
       });
       if (healthCheck && !healthCheck.healthy) {
@@ -269,7 +269,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
 
     // Overlay on the page
     await chrome.tabs.sendMessage(tab.id, {
-      type: 'SHOW_EXPORT_OVERLAY',
+      type: NLME.MSG.SHOW_EXPORT_OVERLAY,
       message: overlayMessage || 'Preparing to export...'
     });
     overlayShown = true;
@@ -282,7 +282,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
 
     // Listen for cancellation (overlay Cancel or side-panel Cancel)
     cancelListener = (message) => {
-      if (message.type === 'CANCEL_EXPORT') cancelled = true;
+      if (message.type === NLME.MSG.CANCEL_EXPORT) cancelled = true;
     };
     chrome.runtime.onMessage.addListener(cancelListener);
 
@@ -300,7 +300,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
         progressFill.style.width = `${percent}%`;
         progressText.textContent = text;
         chrome.tabs.sendMessage(tabId, {
-          type: 'UPDATE_EXPORT_OVERLAY',
+          type: NLME.MSG.UPDATE_EXPORT_OVERLAY,
           message: text,
           progress: percent
         }).catch(() => {}); // overlay is cosmetic; never abort the job
@@ -329,7 +329,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
     // Hide page overlay
     if (overlayShown) {
       try {
-        await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
+        await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.HIDE_EXPORT_OVERLAY });
       } catch (error) {
         console.error('[NotebookLM Takeout] Failed to hide overlay:', error);
       }

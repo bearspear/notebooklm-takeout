@@ -12,7 +12,7 @@ let lastChatScanTiming = null;
 async function scanChatData(tabId) {
   await ensureContentScriptLoaded(tabId);
   const scanStartedAt = performance.now();
-  const response = await chrome.tabs.sendMessage(tabId, { type: 'SCAN_CHAT' });
+  const response = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.SCAN_CHAT });
   lastChatScanTiming = { 'chat.scan': { count: 1, ms: Math.round(performance.now() - scanStartedAt) } };
   if (!response) throw new Error('No response from the page');
   if (response.error) throw new ScanError(response.error);
@@ -46,7 +46,7 @@ async function scanChatPage() {
   try {
     // Show overlay on page
     await chrome.tabs.sendMessage(tab.id, {
-      type: 'SHOW_EXPORT_OVERLAY',
+      type: NLME.MSG.SHOW_EXPORT_OVERLAY,
       message: 'Scanning chat history...'
     });
 
@@ -56,14 +56,14 @@ async function scanChatPage() {
       chatData = await scanChatData(tab.id);
     } catch (error) {
       if (!(error instanceof ScanError)) throw error;
-      await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
+      await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.HIDE_EXPORT_OVERLAY });
       showToast(`Scan failed: ${error.message}`, 'error');
       chatResults.innerHTML = `<p class="error-message">${escapeHtml(error.message)}</p>`;
       return;
     }
 
     // Hide overlay
-    await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
+    await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.HIDE_EXPORT_OVERLAY });
 
     console.log(`[NotebookLM Takeout] Found ${chatData.messagePairs.length} message pairs`);
 
@@ -79,7 +79,7 @@ async function scanChatPage() {
 
     // Hide overlay on error
     try {
-      await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
+      await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.HIDE_EXPORT_OVERLAY });
     } catch (e) {}
   }
 }
@@ -367,7 +367,7 @@ async function extractChatPair(shell, pair, ctx, { citationMode = 'quotes', tota
           // Call content script to extract citations by temporarily inserting HTML
           exportTimer?.start('chat.citations');
           const fullCitationData = await chrome.tabs.sendMessage(shell.tab.id, {
-            type: 'EXTRACT_MESSAGE_CITATIONS',
+            type: NLME.MSG.EXTRACT_MESSAGE_CITATIONS,
             data: {
               messageIndex: pair.domIndex ?? ctx.index,
               messageHTML: pair.aiResponseHTML,

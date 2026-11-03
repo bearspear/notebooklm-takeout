@@ -32,7 +32,7 @@
 
   function report(url) {
     window.postMessage({
-      type: 'NLME_DOWNLOAD_URL_INTERCEPTED',
+      type: NLME.MSG.NLME_DOWNLOAD_URL_INTERCEPTED,
       payload: { url, timestamp: Date.now() }
     }, '*');
   }

@@ -29,7 +29,7 @@ async function runHealthCheck() {
 
     // Run the health check
     const results = await chrome.tabs.sendMessage(tab.id, {
-      type: 'RUN_COMPREHENSIVE_HEALTH_CHECK',
+      type: NLME.MSG.RUN_COMPREHENSIVE_HEALTH_CHECK,
       options: {}
     });
 

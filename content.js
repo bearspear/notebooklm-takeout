@@ -176,7 +176,7 @@
     };
     cancelButton.onclick = () => {
       exportCancelled = true;
-      chrome.runtime.sendMessage({ type: 'CANCEL_EXPORT' });
+      chrome.runtime.sendMessage({ type: NLME.MSG.CANCEL_EXPORT });
       removeExportOverlay();
     };
 
@@ -256,210 +256,292 @@
     return exportCancelled;
   }
 
+  // One entry per message type this content script answers (Milestone 3d).
+  // `async: true` means sendResponse is called after the listener returns, so
+  // the listener returns true to keep the message channel open.
+  const HANDLERS = {
+    [NLME.MSG.PING]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        // Simple ping to check if content script is loaded
+        sendResponse({ success: true });
+      }
+    },
+    [NLME.MSG.GET_PROJECT_NAME]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        // Extract project name from the page
+        try {
+          // Look for the project title in the header
+          // One chain for file names, chat export and the health check
+          const titleSelectors = NLME.PROJECT_TITLE_SELECTORS;
+
+          let projectName = null;
+          for (const selector of titleSelectors) {
+            const titleElement = document.querySelector(selector);
+            if (titleElement && titleElement.textContent.trim()) {
+              projectName = titleElement.textContent.trim();
+              console.log('[NotebookLM Takeout] Found project name:', projectName);
+              break;
+            }
+          }
+
+          sendResponse({ projectName: projectName || 'NotebookLM' });
+        } catch (error) {
+          console.error('[NotebookLM Takeout] Error extracting project name:', error);
+          sendResponse({ projectName: 'NotebookLM' });
+        }
+      }
+    },
+    [NLME.MSG.FETCH_FILE]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Fetch file with page credentials - used by batch download
+        fetchFileWithCredentials(message.url)
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ success: false, error: error.message }));
+      }
+    },
+    [NLME.MSG.REQUEST_EXPORT_CANCEL]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        // Side panel Cancel button: same effect as the overlay's Cancel
+        exportCancelled = true;
+        chrome.runtime.sendMessage({ type: NLME.MSG.CANCEL_EXPORT }).catch(() => {});
+        removeExportOverlay();
+        sendResponse({ success: true });
+      }
+    },
+    [NLME.MSG.EXTRACT_NOTE]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Extract note content
+        // 'titles' and 'none' both skip hovering ('none' drops the markers later)
+        citationDetailMode = ['titles', 'none'].includes(message.data.citationDetail) ? 'titles' : 'quotes';
+        reuseCitations = message.data.reuseCitations === true;
+        withRequestTiming(() => (typeof message.data.sourceIndex === 'number'
+          ? extractSourcesPanelNote(message.data.sourceIndex, message.data.noteTitle, message.data.includeCitationImages)
+          : extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages)))
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ error: error.message || 'Extraction failed' }));
+      }
+    },
+    [NLME.MSG.SCAN_NOTES]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        // Scan for notes
+        const notes = scanForNotes();
+        sendResponse({ notes });
+      }
+    },
+    [NLME.MSG.SCAN_SOURCES]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Scan for sources
+        scanForSources()
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ error: error.message }));
+      }
+    },
+    [NLME.MSG.EXTRACT_SOURCE]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Extract source content
+        withRequestTiming(() => extractSourceContent(message.data.sourceIndex, message.data.title || '', message.data.needsGuide !== false))
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ error: error.message }));
+      }
+    },
+    [NLME.MSG.NAVIGATE_BACK]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Navigate back to notes list
+        navigateBackToNotesList()
+          .then(() => sendResponse({ success: true }))
+          .catch(error => sendResponse({ success: false, error: error.message }));
+      }
+    },
+    [NLME.MSG.SHOW_EXPORT_OVERLAY]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        showExportOverlay(message.message || 'Preparing export...');
+        sendResponse({ success: true });
+      }
+    },
+    [NLME.MSG.UPDATE_EXPORT_OVERLAY]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        updateExportOverlay(message.message, message.progress || 0);
+        sendResponse({ success: true });
+      }
+    },
+    [NLME.MSG.HIDE_EXPORT_OVERLAY]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        removeExportOverlay();
+        sendResponse({ success: true });
+      }
+    },
+    [NLME.MSG.DOWNLOAD_ARTIFACT]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Download artifact via message passing (new pattern)
+        handleArtifactDownload(
+          message.data.artifactIndex,
+          message.data.artifactType,
+          message.data.skipMoreButton || false,
+          message.data.artifactName || null,
+          message.data.downloadPreference || 'pdf'
+        )
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ success: false, error: error.message || 'Download failed' }));
+      }
+    },
+    [NLME.MSG.SCAN_CHAT]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Scan chat messages
+        scanChat()
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ error: error.message }));
+      }
+    },
+    [NLME.MSG.EXTRACT_MESSAGE_CITATIONS]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Extract citations for a specific message
+        console.log('[NotebookLM Takeout] ====== EXTRACT_MESSAGE_CITATIONS message received ======');
+        console.log('[NotebookLM Takeout] Message index:', message.data.messageIndex);
+        console.log('[NotebookLM Takeout] Source indices:', message.data.sourceIndices);
+        console.log('[NotebookLM Takeout] Message HTML length:', message.data.messageHTML?.length || 0);
+        console.log('[NotebookLM Takeout] Include citation images:', message.data.includeCitationImages);
+
+        try {
+          withRequestTiming(() => extractMessageCitations(
+            message.data.messageIndex,
+            message.data.messageHTML,
+            message.data.sourceIndices,
+            message.data.includeCitationImages || false
+          ))
+            .then(result => {
+              console.log('[NotebookLM Takeout] ====== Message citations extracted ======');
+              console.log('[NotebookLM Takeout] Result:', result);
+              sendResponse(result);
+            })
+            .catch(error => {
+              console.error('[NotebookLM Takeout] ====== Message citations extraction error ======', error);
+              console.error('[NotebookLM Takeout] Error stack:', error.stack);
+              sendResponse({ sourcesByIndex: {}, errors: [error.message] });
+            });
+        } catch (error) {
+          console.error('[NotebookLM Takeout] ====== Message citations extraction SYNC error ======', error);
+          console.error('[NotebookLM Takeout] Error stack:', error.stack);
+          sendResponse({ sourcesByIndex: {}, errors: [error.message] });
+        }
+      }
+    },
+    [NLME.MSG.CHECK_DOM_HEALTH]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        // Pre-export health check (basic version - use RUN_COMPREHENSIVE_HEALTH_CHECK for full check)
+        const type = message.data?.type || 'notes';
+        const checks = {
+          // Only the studio list container is required: a notebook with no
+          // studio notes (or notes shown in the Sources panel) is not drift.
+          notes: ['.artifact-library-container'],
+          sources: ['.single-source-container', '.scroll-area-desktop'],
+          artifacts: ['artifact-library-item'],
+          chat: ['.chat-message-pair', '.from-user-container', '.to-user-container']
+        };
+        const issues = [];
+        for (const selector of (checks[type] || [])) {
+          if (!document.querySelector(selector)) {
+            issues.push(`${selector} not found`);
+          }
+        }
+        sendResponse({
+          healthy: issues.length === 0,
+          issues,
+          trackerIssues: DOMHealthTracker.getIssues()
+        });
+      }
+    },
+    [NLME.MSG.GET_DOM_ERRORS]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        // Get current DOM error state
+        sendResponse({
+          shouldWarn: DOMHealthTracker.shouldWarn(),
+          issues: DOMHealthTracker.getIssues()
+        });
+      }
+    },
+    [NLME.MSG.RESET_DOM_TRACKER]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        // Reset tracker at start of new export
+        DOMHealthTracker.reset();
+        sendResponse({ success: true });
+      }
+    },
+    [NLME.MSG.RUN_COMPREHENSIVE_HEALTH_CHECK]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Comprehensive DOM health check for preflight validation
+        runComprehensiveHealthCheck(message.options || {})
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({
+            overallHealthy: false,
+            error: error.message,
+            categories: {},
+            criticalFailures: [error.message],
+            recommendations: ['Try refreshing the page and running the check again.'],
+            duration: 0
+          }));
+      }
+    },
+    [NLME.MSG.SCAN_STUDIO_ITEMS]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        // Unified Studio scan: artifacts + notes/mindmaps in DOM order.
+        try {
+          sendResponse({ items: scanStudioItems() });
+        } catch (e) {
+          sendResponse({ items: [], error: e.message });
+        }
+      }
+    },
+    [NLME.MSG.DELETE_STUDIO_ITEM]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Resolve by label plus combined index (row delete: the title at that index
+        // must match the label, otherwise the delete is refused) or by label alone
+        // (bulk delete). When a label is given there is no index-only fallback.
+        deleteStudioItem(message.data || {})
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ success: false, error: error.message || 'Delete failed' }));
+      }
+    },
+    [NLME.MSG.DELETE_SOURCE_NOTE]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // A note in the Sources panel's "Notes" group (Milestone 3c)
+        deleteSourceNote(message.data || {})
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ success: false, error: error.message || 'Delete failed' }));
+      }
+    }
+  };
+
   // Listen for messages from popup/background
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[NotebookLM Takeout] Received message:', message.type);
 
-    if (message.type === 'PING') {
-      // Simple ping to check if content script is loaded
-      sendResponse({ success: true });
-    } else if (message.type === 'GET_PROJECT_NAME') {
-      // Extract project name from the page
-      try {
-        // Look for the project title in the header
-        // One chain for file names, chat export and the health check
-        const titleSelectors = NLME.PROJECT_TITLE_SELECTORS;
-
-        let projectName = null;
-        for (const selector of titleSelectors) {
-          const titleElement = document.querySelector(selector);
-          if (titleElement && titleElement.textContent.trim()) {
-            projectName = titleElement.textContent.trim();
-            console.log('[NotebookLM Takeout] Found project name:', projectName);
-            break;
-          }
-        }
-
-        sendResponse({ projectName: projectName || 'NotebookLM' });
-      } catch (error) {
-        console.error('[NotebookLM Takeout] Error extracting project name:', error);
-        sendResponse({ projectName: 'NotebookLM' });
-      }
-    } else if (message.type === 'FETCH_FILE') {
-      // Fetch file with page credentials - used by batch download
-      fetchFileWithCredentials(message.url)
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ success: false, error: error.message }));
-      return true; // Keep channel open for async
-    } else if (message.type === 'REQUEST_EXPORT_CANCEL') {
-      // Side panel Cancel button: same effect as the overlay's Cancel
-      exportCancelled = true;
-      chrome.runtime.sendMessage({ type: 'CANCEL_EXPORT' }).catch(() => {});
-      removeExportOverlay();
-      sendResponse({ success: true });
-    } else if (message.type === 'EXTRACT_NOTE') {
-      // Extract note content
-      // 'titles' and 'none' both skip hovering ('none' drops the markers later)
-      citationDetailMode = ['titles', 'none'].includes(message.data.citationDetail) ? 'titles' : 'quotes';
-      reuseCitations = message.data.reuseCitations === true;
-      withRequestTiming(() => (typeof message.data.sourceIndex === 'number'
-        ? extractSourcesPanelNote(message.data.sourceIndex, message.data.noteTitle, message.data.includeCitationImages)
-        : extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages)))
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ error: error.message || 'Extraction failed' }));
-      return true; // Keep channel open for async
-    } else if (message.type === 'SCAN_NOTES') {
-      // Scan for notes
-      const notes = scanForNotes();
-      sendResponse({ notes });
-    } else if (message.type === 'SCAN_SOURCES') {
-      // Scan for sources
-      scanForSources()
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ error: error.message }));
-      return true;
-    } else if (message.type === 'EXTRACT_SOURCE') {
-      // Extract source content
-      withRequestTiming(() => extractSourceContent(message.data.sourceIndex, message.data.title || '', message.data.needsGuide !== false))
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ error: error.message }));
-      return true;
-    } else if (message.type === 'NAVIGATE_BACK') {
-      // Navigate back to notes list
-      navigateBackToNotesList()
-        .then(() => sendResponse({ success: true }))
-        .catch(error => sendResponse({ success: false, error: error.message }));
-      return true; // Keep channel open for async
-    } else if (message.type === 'SHOW_EXPORT_OVERLAY') {
-      showExportOverlay(message.message || 'Preparing export...');
-      sendResponse({ success: true });
-      return true;
-    } else if (message.type === 'UPDATE_EXPORT_OVERLAY') {
-      updateExportOverlay(message.message, message.progress || 0);
-      sendResponse({ success: true });
-      return true;
-    } else if (message.type === 'HIDE_EXPORT_OVERLAY') {
-      removeExportOverlay();
-      sendResponse({ success: true });
-      return true;
-    } else if (message.type === 'DOWNLOAD_ARTIFACT') {
-      // Download artifact via message passing (new pattern)
-      handleArtifactDownload(
-        message.data.artifactIndex,
-        message.data.artifactType,
-        message.data.skipMoreButton || false,
-        message.data.artifactName || null,
-        message.data.downloadPreference || 'pdf'
-      )
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ success: false, error: error.message || 'Download failed' }));
-      return true; // Keep channel open for async
-    } else if (message.type === 'SCAN_CHAT') {
-      // Scan chat messages
-      scanChat()
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ error: error.message }));
-      return true;
-    } else if (message.type === 'EXTRACT_MESSAGE_CITATIONS') {
-      // Extract citations for a specific message
-      console.log('[NotebookLM Takeout] ====== EXTRACT_MESSAGE_CITATIONS message received ======');
-      console.log('[NotebookLM Takeout] Message index:', message.data.messageIndex);
-      console.log('[NotebookLM Takeout] Source indices:', message.data.sourceIndices);
-      console.log('[NotebookLM Takeout] Message HTML length:', message.data.messageHTML?.length || 0);
-      console.log('[NotebookLM Takeout] Include citation images:', message.data.includeCitationImages);
-
-      try {
-        withRequestTiming(() => extractMessageCitations(
-          message.data.messageIndex,
-          message.data.messageHTML,
-          message.data.sourceIndices,
-          message.data.includeCitationImages || false
-        ))
-          .then(result => {
-            console.log('[NotebookLM Takeout] ====== Message citations extracted ======');
-            console.log('[NotebookLM Takeout] Result:', result);
-            sendResponse(result);
-          })
-          .catch(error => {
-            console.error('[NotebookLM Takeout] ====== Message citations extraction error ======', error);
-            console.error('[NotebookLM Takeout] Error stack:', error.stack);
-            sendResponse({ sourcesByIndex: {}, errors: [error.message] });
-          });
-      } catch (error) {
-        console.error('[NotebookLM Takeout] ====== Message citations extraction SYNC error ======', error);
-        console.error('[NotebookLM Takeout] Error stack:', error.stack);
-        sendResponse({ sourcesByIndex: {}, errors: [error.message] });
-      }
-      return true;
-    } else if (message.type === 'CHECK_DOM_HEALTH') {
-      // Pre-export health check (basic version - use RUN_COMPREHENSIVE_HEALTH_CHECK for full check)
-      const type = message.data?.type || 'notes';
-      const checks = {
-        // Only the studio list container is required: a notebook with no
-        // studio notes (or notes shown in the Sources panel) is not drift.
-        notes: ['.artifact-library-container'],
-        sources: ['.single-source-container', '.scroll-area-desktop'],
-        artifacts: ['artifact-library-item'],
-        chat: ['.chat-message-pair', '.from-user-container', '.to-user-container']
-      };
-      const issues = [];
-      for (const selector of (checks[type] || [])) {
-        if (!document.querySelector(selector)) {
-          issues.push(`${selector} not found`);
-        }
-      }
-      sendResponse({
-        healthy: issues.length === 0,
-        issues,
-        trackerIssues: DOMHealthTracker.getIssues()
-      });
-    } else if (message.type === 'GET_DOM_ERRORS') {
-      // Get current DOM error state
-      sendResponse({
-        shouldWarn: DOMHealthTracker.shouldWarn(),
-        issues: DOMHealthTracker.getIssues()
-      });
-    } else if (message.type === 'RESET_DOM_TRACKER') {
-      // Reset tracker at start of new export
-      DOMHealthTracker.reset();
-      sendResponse({ success: true });
-    } else if (message.type === 'RUN_COMPREHENSIVE_HEALTH_CHECK') {
-      // Comprehensive DOM health check for preflight validation
-      runComprehensiveHealthCheck(message.options || {})
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({
-          overallHealthy: false,
-          error: error.message,
-          categories: {},
-          criticalFailures: [error.message],
-          recommendations: ['Try refreshing the page and running the check again.'],
-          duration: 0
-        }));
-      return true;
-    } else if (message.type === 'SCAN_STUDIO_ITEMS') {
-      // Unified Studio scan: artifacts + notes/mindmaps in DOM order.
-      try {
-        sendResponse({ items: scanStudioItems() });
-      } catch (e) {
-        sendResponse({ items: [], error: e.message });
-      }
-    } else if (message.type === 'DELETE_STUDIO_ITEM') {
-      // Resolve by label plus combined index (row delete: the title at that index
-      // must match the label, otherwise the delete is refused) or by label alone
-      // (bulk delete). When a label is given there is no index-only fallback.
-      deleteStudioItem(message.data || {})
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ success: false, error: error.message || 'Delete failed' }));
-      return true;
-    } else if (message.type === 'DELETE_SOURCE_NOTE') {
-      // A note in the Sources panel's "Notes" group (Milestone 3c)
-      deleteSourceNote(message.data || {})
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ success: false, error: error.message || 'Delete failed' }));
-      return true;
-    }
-
-    return true;
+    const handler = Object.prototype.hasOwnProperty.call(HANDLERS, message.type) ? HANDLERS[message.type] : null;
+    // Unknown type: nothing to run; return true exactly as the old chain's trailing `return true` did
+    if (!handler) return true;
+    handler.run(message, sender, sendResponse);
+    return handler.async;
   });
 
   // Fetch file with page credentials (for batch download)
@@ -512,7 +594,7 @@
 
   function handleInjectedMessage(data) {
     switch (data.type) {
-      case 'NLME_DOWNLOAD_URL_INTERCEPTED': {
+      case NLME.MSG.NLME_DOWNLOAD_URL_INTERCEPTED: {
         const entry = { url: data.payload?.url, timestamp: data.payload?.timestamp || Date.now() };
         // The page can post anything; accept Gemini Notebook download hosts only
         if (!NLME.isAllowedDownloadUrl(entry.url)) {
@@ -2125,7 +2207,7 @@
         console.log(`[NotebookLM Takeout] Requesting sidebar to download image: ${url.substring(0, 80)}...`);
 
         const response = await chrome.runtime.sendMessage({
-          type: 'DOWNLOAD_IMAGE_AS_BASE64',
+          type: NLME.MSG.DOWNLOAD_IMAGE_AS_BASE64,
           url: url
         });
 

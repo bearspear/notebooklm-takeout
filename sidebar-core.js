@@ -509,7 +509,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Listen for messages from content script (e.g., image download requests)
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'DOWNLOAD_IMAGE_AS_BASE64') {
+  if (message.type === NLME.MSG.DOWNLOAD_IMAGE_AS_BASE64) {
     // Handle image download request from content script
     downloadImageAsBase64(message.url)
       .then(dataUri => {
@@ -1203,7 +1203,7 @@ function setButtonLabel(btn, text) {
 async function ensureContentScriptLoaded(tabId) {
   try {
     // Try to ping the content script
-    await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+    await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.PING });
     return true;
   } catch (error) {
     if (error.message.includes('Receiving end does not exist')) {
@@ -1757,7 +1757,7 @@ async function requestCancel() {
     // there broadcasts CANCEL_EXPORT, which the shell's own listener also receives.
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const target = activeShellTabId ?? jobTabId ?? currentTabId ?? tab?.id;
-    await chrome.tabs.sendMessage(target, { type: 'REQUEST_EXPORT_CANCEL' });
+    await chrome.tabs.sendMessage(target, { type: NLME.MSG.REQUEST_EXPORT_CANCEL });
   } catch (error) {
     console.warn('[NotebookLM Takeout] Cancel request failed:', error.message);
   }
@@ -1767,7 +1767,7 @@ async function requestCancel() {
 // block) when the selectors they depend on are missing
 async function preflightWarn(tabId, type) {
   try {
-    const health = await chrome.tabs.sendMessage(tabId, { type: 'CHECK_DOM_HEALTH', data: { type } });
+    const health = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.CHECK_DOM_HEALTH, data: { type } });
     if (health && health.healthy === false) {
       showToast(`Gemini Notebook may have changed (${(health.issues || []).length} ${type} check(s) failed). Exporting anyway; run the health check 🩺 afterwards if results look wrong.`, 'warning');
     }
@@ -1831,7 +1831,7 @@ function stripImagesFromMarkdown(markdown) {
  */
 async function getProjectName(tabId) {
   try {
-    const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_PROJECT_NAME' });
+    const response = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.GET_PROJECT_NAME });
     if (response && response.projectName) {
       console.log('[NotebookLM Takeout] Project name:', response.projectName);
       return response.projectName;
@@ -2038,7 +2038,7 @@ async function itemFailed(shell, state, message) {
   state.failures++;
   if (state.failures % 3 === 0 && !state.domWarningShown) {
     try {
-      const errorReport = await chrome.tabs.sendMessage(shell.tab.id, { type: 'GET_DOM_ERRORS' });
+      const errorReport = await chrome.tabs.sendMessage(shell.tab.id, { type: NLME.MSG.GET_DOM_ERRORS });
       if (errorReport && errorReport.shouldWarn) {
         const proceed = await showDOMWarningDialog(errorReport.issues, true);
         if (!proceed) state.declined = true;

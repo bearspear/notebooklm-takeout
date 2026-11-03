@@ -8,7 +8,7 @@
 // @returns {Promise<Array<{ index, title, ... }>>} as the content script sends them
 async function scanNotesData(tabId) {
   await ensureContentScriptLoaded(tabId);
-  const response = await chrome.tabs.sendMessage(tabId, { type: 'SCAN_NOTES' });
+  const response = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.SCAN_NOTES });
   return response?.notes || [];
 }
 
@@ -227,7 +227,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
     afterEach: async (note, { failed }) => {
       if (tracker) (failed ? tracker.fail : tracker.done)('notes', note);
       try {
-        const backResponse = await chrome.tabs.sendMessage(shell.tab.id, { type: 'NAVIGATE_BACK' });
+        const backResponse = await chrome.tabs.sendMessage(shell.tab.id, { type: NLME.MSG.NAVIGATE_BACK });
         console.log('[NotebookLM Takeout] Navigate back response:', backResponse);
         // NAVIGATE_BACK resolves once the viewer is closed and the list is
         // back; the next EXTRACT_NOTE waits for a stable list itself
@@ -312,7 +312,7 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
   let noteData;
   try {
     noteData = await chrome.tabs.sendMessage(shell.tab.id, {
-      type: 'EXTRACT_NOTE',
+      type: NLME.MSG.EXTRACT_NOTE,
       data: {
         noteIndex: note.index,
         noteTitle: note.title,
@@ -443,7 +443,7 @@ async function exportSingleNote(note) {
   let noteData;
   try {
     noteData = await chrome.tabs.sendMessage(tab.id, {
-      type: 'EXTRACT_NOTE',
+      type: NLME.MSG.EXTRACT_NOTE,
       data: {
         noteIndex: note.index,
         noteTitle: note.title,
@@ -455,7 +455,7 @@ async function exportSingleNote(note) {
     });
   } finally {
     // Always close the note viewer so the next action has a clean page.
-    try { await chrome.tabs.sendMessage(tab.id, { type: 'NAVIGATE_BACK' }); } catch (_) { /* noop */ }
+    try { await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.NAVIGATE_BACK }); } catch (_) { /* noop */ }
   }
 
   if (!noteData || noteData.error) {
