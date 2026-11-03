@@ -628,7 +628,15 @@
     return String(text || '').split('\n').map(line => (line.trim() ? `> ${line}` : '>')).join('\n');
   }
 
+  // Source title from a citation marker's aria-label ("3: Title"); markers
+  // without one become "Source N" (titles-only mode, report Sources)
+  function citationTitleFromAriaLabel(label, number) {
+    const title = String(label || '').replace(/^\s*\d+\s*:\s*/, '').trim();
+    return title || `Source ${number}`;
+  }
+
   const NLME = {
+    citationTitleFromAriaLabel,
     fenceFor,
     toBlockquote,
     noteVariants,

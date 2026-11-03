@@ -550,3 +550,14 @@ test('toBlockquote prefixes every line', () => {
   assert.equal(NLME.toBlockquote('a\n\nb'), '> a\n>\n> b');
   assert.equal(NLME.toBlockquote('- item\n- item 2'), '> - item\n> - item 2');
 });
+
+test('citationTitleFromAriaLabel strips the number prefix', () => {
+  assert.equal(NLME.citationTitleFromAriaLabel('3: Donald E. Scott: Indeed, Our Sun is Electric', 3), 'Donald E. Scott: Indeed, Our Sun is Electric');
+  assert.equal(NLME.citationTitleFromAriaLabel('12: ZFC', '12'), 'ZFC');
+});
+
+test('citationTitleFromAriaLabel falls back to Source N', () => {
+  assert.equal(NLME.citationTitleFromAriaLabel('', 4), 'Source 4');
+  assert.equal(NLME.citationTitleFromAriaLabel(null, 4), 'Source 4');
+  assert.equal(NLME.citationTitleFromAriaLabel('4:', 4), 'Source 4');
+});

@@ -494,7 +494,10 @@ let settings = {
   // Interface
   showStudioTab: false, // Show the Studio tab (unified per-item list with delete)
   // Slide deck download format offered by the More menu ('pdf' | 'pptx')
-  slidesFormat: 'pdf'
+  slidesFormat: 'pdf',
+  // Note citations: 'quotes' hovers every marker; 'titles' takes source
+  // titles from the markers only (no hovering)
+  citationDetail: 'quotes'
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -630,6 +633,7 @@ async function loadSettings() {
   // Interface
   document.getElementById('show-studio-tab-checkbox').checked = settings.showStudioTab;
   document.getElementById('slides-format-select').value = settings.slidesFormat;
+  document.getElementById('citation-detail-select').value = settings.citationDetail;
   applyStudioTabVisibility();
 }
 
@@ -684,6 +688,7 @@ async function saveSettings() {
   // Interface
   settings.showStudioTab = document.getElementById('show-studio-tab-checkbox').checked;
   settings.slidesFormat = document.getElementById('slides-format-select').value === 'pptx' ? 'pptx' : 'pdf';
+  settings.citationDetail = document.getElementById('citation-detail-select').value === 'titles' ? 'titles' : 'quotes';
   applyStudioTabVisibility();
 
   await chrome.storage.local.set({ settings });
@@ -1117,7 +1122,7 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
           logger.info('Download', `Converting HTML to markdown for: "${baseFilename}"`);
           // For Reports, skip adding title if it's already in the content (prevents duplicate H1)
           const skipTitle = (artifactType === 'Report');
-          markdownContent = convertToMarkdown(response.data, [], baseFilename, false, skipTitle, null, false);
+          markdownContent = convertToMarkdown(response.data, citationTitlesFromHtml(response.data), baseFilename, false, skipTitle, null, false);
         } else {
           // Already markdown
           markdownContent = response.data;
@@ -2501,6 +2506,26 @@ async function requestCancel() {
   }
 }
 
+// Sources for an exported report: one entry per citation number, titled
+// from the marker's aria-label ("3: Title"), so every [n] in the report links
+// to a Sources entry (Milestone 2, Output #4)
+function citationTitlesFromHtml(html) {
+  const doc = new DOMParser().parseFromString(html || '', 'text/html');
+  const byNumber = new Map();
+  doc.querySelectorAll('button.citation-marker').forEach(button => {
+    const span = button.querySelector('span');
+    const number = NLME.parseCitationIndex(span?.textContent);
+    if (number && !byNumber.has(number)) {
+      byNumber.set(number, {
+        sourceIndex: number,
+        text: NLME.citationTitleFromAriaLabel(span.getAttribute('aria-label'), number),
+        quote: ''
+      });
+    }
+  });
+  return [...byNumber.values()];
+}
+
 function cleanOCRArtifacts(text) {
   // Shared, unit-tested implementation (keeps paragraphs, tables, fences, ~~strike~~)
   return NLME.cleanOcrArtifacts(text);
@@ -2781,7 +2806,8 @@ async function exportNotesAsMarkdown(selectedNotes) {
             noteIndex: note.index,
             noteTitle: note.title,
             sourceIndex: note.sourceIndex,
-            includeCitationImages: needsImages
+            includeCitationImages: needsImages,
+            citationDetail: settings.citationDetail
           }
         });
 
@@ -3030,7 +3056,8 @@ async function exportSingleNote(note) {
         noteIndex: note.index,
         noteTitle: note.title,
         sourceIndex: note.sourceIndex,
-        includeCitationImages: needsImages
+        includeCitationImages: needsImages,
+        citationDetail: settings.citationDetail
       }
     });
   } finally {

@@ -78,6 +78,7 @@
   let exportOverlay = null;
   let exportCancelled = false;
   let includeCitationImages = false; // Global setting for including images in citations
+  let citationDetailMode = 'quotes';   // 'quotes' (hover each marker) | 'titles' (no hovering)
 
   function createExportOverlay() {
     if (exportOverlay) return exportOverlay;
@@ -297,6 +298,7 @@
       sendResponse({ success: true });
     } else if (message.type === 'EXTRACT_NOTE') {
       // Extract note content
+      citationDetailMode = message.data.citationDetail === 'titles' ? 'titles' : 'quotes';
       withRequestTiming(() => (typeof message.data.sourceIndex === 'number'
         ? extractSourcesPanelNote(message.data.sourceIndex, message.data.noteTitle, message.data.includeCitationImages)
         : extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages)))
@@ -2586,8 +2588,12 @@
       });
     };
 
-    // Step 1: expand collapsed citation groups so every marker is in the DOM
-    const showMoreButtons = Array.from(viewer.querySelectorAll('button.citation-marker')).filter(expanderOf);
+    // Step 1: expand collapsed citation groups so every marker is in the DOM.
+    // Only groups that are still collapsed: clicking an open one closes it.
+    const showMoreButtons = Array.from(viewer.querySelectorAll('button.citation-marker')).filter(btn => {
+      const icon = btn.querySelector('mat-icon, span');
+      return NLME.isCollapsedCitationGroup({ iconText: icon?.textContent, ariaLabel: icon?.getAttribute('aria-label') });
+    });
     for (const button of showMoreButtons) {
       button.scrollIntoView({ behavior: 'instant', block: 'center' });
       await sleep(100);
@@ -2608,6 +2614,19 @@
       if (index && !buttonsByIndex.has(index)) buttonsByIndex.set(index, button);
     }
     console.log('[NotebookLM Takeout] Found', buttonsByIndex.size, 'unique citations to extract');
+
+    // Titles-only mode: source titles from the markers' aria-labels, no
+    // hovering (Milestone 2, Speed #4)
+    if (citationDetailMode === 'titles') {
+      const titleSources = [...buttonsByIndex].map(([index, button]) => ({
+        index,
+        text: NLME.citationTitleFromAriaLabel(button.querySelector('span')?.getAttribute('aria-label'), index),
+        quote: '',
+        href: '',
+        sourceIndex: index
+      }));
+      return { html: viewer.innerHTML, sources: titleSources, errors };
+    }
 
     // Step 3: hover each marker and read its tooltip
     const sources = [];
