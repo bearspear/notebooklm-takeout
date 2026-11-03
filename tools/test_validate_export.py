@@ -170,6 +170,13 @@ class ValidateTests(Base):
         self.assertIn('part-missing', codes(only))
         self.assertIn('part 2 of 2', [f.detail for f in only.findings if f.code == 'part-missing'][0])
 
+    def test_browser_renamed_part_still_groups(self):
+        p1 = make_export(os.path.join(self.tmp, 'D-notes-T-part1of2'), manifest={'part': 1, 'totalParts': 2})
+        p2 = make_export(os.path.join(self.tmp, 'D-notes-T-part2of2 (1)'), manifest={'part': 2, 'totalParts': 2},
+                         files={'notes/B.md': '# B\n', 'combined-notes.md': '# All\n'})
+        reports = self.check(p1, p2)
+        self.assertEqual([f.detail for r in reports for f in r.findings if f.code == 'part-missing'], [])
+
     def test_same_file_in_two_parts_warns(self):
         p1 = make_export(os.path.join(self.tmp, 'D-notes-T-part1of2'), manifest={'part': 1, 'totalParts': 2})
         p2 = make_export(os.path.join(self.tmp, 'D-notes-T-part2of2'), manifest={'part': 2, 'totalParts': 2},

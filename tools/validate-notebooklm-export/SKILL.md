@@ -1,52 +1,60 @@
 ---
 name: validate-notebooklm-export
-description: Use when asked to validate, check or verify NotebookLM Takeout exports (Gemini Notebook notes, sources, chat, artifacts or Full Takeout ZIPs, folders or .md files, often in ~/Downloads), to say whether an export is complete or correct, to explain a PARTIAL export, or to compare a new export with an older one or a baseline (A/B after an extension change).
+description: Use when asked to validate, check or verify NotebookLM (not Claude chat) Takeout exports — Gemini Notebook notes, sources, chat, artifacts or Full Takeout ZIPs, folders or .md files, often in ~/Downloads — to say whether an export is complete or correct, to explain a PARTIAL export, or to compare a new export with an older one or a baseline (A/B after an extension change).
 ---
 
 # Validate NotebookLM Takeout exports
 
 ## Overview
 
-The extension repo ships a checker that knows the export format. Run it first; it replaces ad-hoc unzip/diff/grep scripts and gives the same verdict every time.
+The extension repo ships a checker that knows the export format. Run it first instead of ad-hoc unzip/diff/grep.
+
+**Not for** Claude/claude.ai Takeout exports (use validate-export) or merging part ZIPs (use merge-notebooklm-exports).
 
 ```bash
-V=~/Downloads/notebooklm-exporter/tools/validate_export.py
-python3 -I $V EXPORT [EXPORT ...]          # check; EXPORT = .zip, folder, Full Takeout folder or .md
-python3 -I $V NEW --baseline OLD           # check NEW, then compare it with OLD
-python3 -I $V NEW --baseline OLD --allow 'REGEX'   # accept a known, intended change
+V=~/Downloads/notebooklm-exporter/tools/validate_export.py   # = ../validate_export.py from this skill's folder
+python3 -I $V EXPORT [EXPORT ...]                 # check; EXPORT = .zip, folder, Full Takeout folder or .md
+python3 -I $V EXPORT -v                           # also show info notes (hidden by default)
+python3 -I $V NEW --baseline OLD                  # check NEW, then compare it with OLD
+python3 -I $V NEW --baseline OLD --allow 'REGEX'  # accept a known change (repeatable)
 ```
 
-If `$V` is missing, look for `tools/validate_export.py` in the current repo or ask where the extension lives. Do not rebuild it from scratch.
+If `$V` is missing, the repo is elsewhere or on a branch without `tools/`: find `tools/validate_export.py` or ask. Do not rebuild it.
 
-## Rules that matter
+Exit code: 1 on any FAIL or baseline difference; WARN alone exits 0; 2 means wrong arguments.
 
-- **Give every part of a split export in one run** (`…-part1of2.zip …-part2of2.zip`): part completeness and files repeated across parts are only checked within one run.
-- **Never extract with macOS `unzip`.** It fails on UTF-8 names ("Illegal byte sequence"). The tool extracts with Python `zipfile` into a private temp dir and refuses unsafe names.
-- **Never write into ~/Downloads.** Run from anywhere; the tool reads only.
-- **Comparing:** one candidate per `--baseline`. Pair exports by kind and part (notes part 1 with notes part 1).
+## Common mistakes
 
-## Reading the output
+- **Parts checked one at a time.** Give every part of a split export in one run (`…-part1of2.zip …-part2of2.zip`); part completeness and files repeated across parts are only checked within one run.
+- **Extracting with macOS `unzip`.** It fails on UTF-8 names. The tool extracts with `zipfile` into a private temp dir (deleted on exit) and refuses unsafe names, symlinks and archives over 4 GB.
+- **Writing into ~/Downloads.** The tool writes nothing next to its input; keep it that way.
+- **Comparing split exports.** `--baseline` takes one candidate: compare part 1 with part 1, and so on. First check all NEW parts together without `--baseline`; then ignore the `part-missing` WARN the per-part compare runs print. The baseline itself is not checked.
 
-Each export gets `PASS`, `WARN` or `FAIL`, its kind, the extension version that wrote it, and findings. Exit code 1 means a FAIL or a baseline difference.
+## Finding codes
 
-| Code | Meaning | What to tell the user |
+| Code (level) | Meaning | Tell the user |
 |---|---|---|
-| `missing-file`, `size-mismatch` | manifest and files disagree | export damaged or incomplete: re-export |
+| `missing-file`, `size-mismatch` (FAIL) | manifest and files disagree | damaged or incomplete: re-export |
+| `manifest-invalid`, `manifest-incomplete` (FAIL) | manifest.json unreadable or lacks exporter/kind/files | damaged: re-export |
+| `no-manifest`, `not-found` (FAIL) | not a NotebookLM Takeout export, or wrong path | check the path |
+| `bad-zip`, `unsafe-zip` (FAIL) | unreadable, unsafe or over 4 GB | download again; don't extract by hand |
 | `audit-short` (FAIL) | page showed more than was written | items lost: re-export or Retry |
-| `audit-short` (WARN), `partial` | cancelled export | incomplete by design; quote the `partial` reason |
-| `audit-surplus` (info) | more written than counted | normal from 1.7.0 (formulas in quotes) |
-| `broken-link`, `front-matter-missing` | index problem | report the file and target |
-| `footnote-*`, `sentinel`, `js-leftover` | converter bug | report as an extension bug with the file |
-| `part-missing` | a part was not given or never written | ask for it, or say the export was cancelled |
-| `duplicate-across-parts` | same item file in two parts | merging parts loses one; likely a naming bug |
-| `unlisted-file` | stray file | usually harmless; mention it |
+| `audit-short` (WARN), `partial` (WARN) | cancelled export | incomplete by design; quote the `partial` reason |
+| `export-errors` (WARN) | finished with logged errors | quote the error; those items may be missing |
+| `errors-missing` (FAIL) | errors reported but no errors.md | incomplete: re-export |
+| `broken-link`, `front-matter-missing` (FAIL) | index problem | name the file and target |
+| `footnote-undefined`, `footnote-duplicate`, `sentinel`, `js-leftover` (FAIL) | converter bug | report as an extension bug, with the file |
+| `part-missing` (WARN; info if never written after a cancel) | a part not given | ask for it. If all were given, look for renamed files |
+| `duplicate-across-parts` (WARN) | same item file in two parts | merging parts loses one; likely a naming bug |
+| `unlisted-file` (WARN), `unknown-exporter` (WARN) | stray file; no version in manifest | usually harmless; mention it |
+| `audit-surplus`, `footnote-unused` (info, `-v`) | more written than counted; unused footnote | expected (e.g. formulas in quotes); mention only if asked |
 
-Baseline compare: `identical` and `front matter only` are fine; `allowed` matched `--allow`; `different`, `missing`, `extra` need explaining. Run details (dates, version, statistics, sizes that changed only with the date) are already ignored. A deleted note shows as `missing`; a different ⚙️ setting (footnotes, citation detail) shows as `different`. Check the setting before calling it a regression.
+**Baseline compare:** `identical` and `front matter only` are fine; `allowed` matched `--allow`; `different`, `missing`, `extra` need explaining. Dates, versions and statistics are already ignored. A deleted note shows as `missing`, a renamed one as `missing` plus `extra`; a different ⚙️ setting (footnotes, citation detail) shows as `different`. Rule those out before calling it a regression.
 
 ## Answering the user
 
 1. One verdict per export (table), worst first.
 2. Each WARN/FAIL in plain words with the file name.
-3. What the tool cannot know: whether the counts match the live notebook today, and whether quote text matches the sources.
+3. What the tool cannot know: whether counts match the live notebook today, and whether quote text matches the sources.
 
 Go deeper (hand checks) only for a FAIL you must explain, or when the user asks.

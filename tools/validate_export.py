@@ -290,7 +290,8 @@ def check_part_sets(reports):
     groups = {}
     for r in reports:
         if r.total_parts > 1:
-            stem = re.sub(r'-part\d+of\d+(\.zip)?$', '', r.label.split('/')[0])
+            # "…-part2of2 (1).zip": browsers add " (n)" to repeated downloads
+            stem = re.sub(r'-part\d+of\d+( \(\d+\))?(\.zip)?$', '', r.label.split('/')[0])
             groups.setdefault((stem, r.kind, r.notebook, r.total_parts), []).append(r)
     for (stem, _, _, total), members in groups.items():
         have = {r.part for r in members}
