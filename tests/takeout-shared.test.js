@@ -1175,3 +1175,47 @@ test('filesByteSize sums the data size of each file entry', () => {
     { path: 'g' }
   ]), 5 + 10 + 7 + 3 + 100);
 });
+
+test('fnv1a is stable 8-digit hex', () => {
+  assert.equal(NLME.fnv1a(''), '811c9dc5');
+  assert.equal(NLME.fnv1a('a'), 'e40c292c');
+  assert.match(NLME.fnv1a('Gemini Notebook'), /^[0-9a-f]{8}$/);
+});
+test('citationCacheKey normalises whitespace', () => {
+  const a = NLME.citationCacheKey({ kind: 'note', text: ' A  b\n c ', numbers: [1, 2] });
+  const b = NLME.citationCacheKey({ kind: 'note', text: 'A b c', numbers: [1, 2] });
+  assert.equal(a, b);
+  assert.match(a, /^note:[0-9a-f]{8}:5:1\.2$/);
+});
+test('citationCacheKey changes when the text or the citation numbers change', () => {
+  const base = { kind: 'note', text: 'Same text', numbers: [1, 2] };
+  const k = NLME.citationCacheKey(base);
+  assert.notEqual(k, NLME.citationCacheKey({ ...base, text: 'Same text!' }));
+  assert.notEqual(k, NLME.citationCacheKey({ ...base, numbers: [1, 2, 3] }));
+  assert.notEqual(k, NLME.citationCacheKey({ ...base, kind: 'chat' }));
+});
+test('cacheGet returns a copy or null', () => {
+  const bucket = NLME.cachePut(null, 'k', [{ text: 'T', quote: 'Q' }], { now: 1 });
+  const got = NLME.cacheGet(bucket, 'k');
+  assert.deepEqual(got, [{ text: 'T', quote: 'Q' }]);
+  got[0].quote = 'changed';
+  assert.equal(NLME.cacheGet(bucket, 'k')[0].quote, 'Q');
+  assert.equal(NLME.cacheGet(bucket, 'missing'), null);
+  assert.equal(NLME.cacheGet('garbage', 'k'), null);
+});
+test('cachePut prunes oldest entries to stay under the cap', () => {
+  const s = q => [{ text: 'T', quote: q }];
+  let b = NLME.cachePut(null, 'a', s('x'.repeat(40)), { now: 1, maxBytes: 150 });
+  b = NLME.cachePut(b, 'b', s('y'.repeat(40)), { now: 2, maxBytes: 150 });
+  b = NLME.cachePut(b, 'c', s('z'.repeat(40)), { now: 3, maxBytes: 150 });
+  assert.deepEqual(Object.keys(b.entries).sort(), ['b', 'c']);
+  const big = NLME.cachePut(b, 'huge', s('w'.repeat(500)), { now: 4, maxBytes: 150 });
+  assert.deepEqual(Object.keys(big.entries).sort(), ['b', 'c']);
+});
+test('pruneCitationBuckets keeps the most recent notebooks', () => {
+  const meta = [{ key: 'nlme.cite.a', at: 5 }, { key: 'nlme.cite.b', at: 9 }, { key: 'nlme.cite.c', at: 1 }];
+  assert.deepEqual(NLME.pruneCitationBuckets(meta, { keep: 2 }), ['nlme.cite.c']);
+});
+test('citationCacheBucketKey is per notebook', () => {
+  assert.equal(NLME.citationCacheBucketKey('abc'), 'nlme.cite.abc');
+});

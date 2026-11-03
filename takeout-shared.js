@@ -1390,6 +1390,68 @@ footer { margin-top: 3rem; }
     return { level, message };
   }
 
+  // --- Citation cache (pure) ---------------------------------------------
+  // 32-bit FNV-1a over UTF-16 code units (equals byte FNV-1a for ASCII).
+  function fnv1a(text) {
+    const str = String(text == null ? '' : text);
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h.toString(16).padStart(8, '0');
+  }
+
+  function citationCacheKey({ kind, text, numbers }) {
+    const norm = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+    return `${kind}:${fnv1a(norm)}:${norm.length}:${(numbers || []).join('.')}`;
+  }
+
+  function citationCacheBucketKey(notebookId) {
+    return 'nlme.cite.' + notebookId;
+  }
+
+  function isCacheBucket(bucket) {
+    return !!bucket && typeof bucket === 'object' && !!bucket.entries && typeof bucket.entries === 'object';
+  }
+
+  function cacheGet(bucket, key) {
+    if (!isCacheBucket(bucket)) return null;
+    if (!Object.prototype.hasOwnProperty.call(bucket.entries, key)) return null;
+    const entry = bucket.entries[key];
+    if (!entry || !Array.isArray(entry.sources)) return null;
+    return JSON.parse(JSON.stringify(entry.sources));
+  }
+
+  function cachePut(bucket, key, sources, { now, maxBytes = 2 * 1024 * 1024 } = {}) {
+    const entries = isCacheBucket(bucket) ? { ...bucket.entries } : {};
+    const bytes = JSON.stringify(sources).length;
+    if (bytes > maxBytes) return { entries };
+    delete entries[key];
+    const keep = JSON.parse(JSON.stringify(sources));
+    let total = bytes;
+    for (const k of Object.keys(entries)) total += (entries[k] && entries[k].bytes) || 0;
+    if (total > maxBytes) {
+      const oldestFirst = Object.keys(entries).sort((a, b) => ((entries[a] && entries[a].at) || 0) - ((entries[b] && entries[b].at) || 0));
+      for (const k of oldestFirst) {
+        if (total <= maxBytes) break;
+        total -= (entries[k] && entries[k].bytes) || 0;
+        delete entries[k];
+      }
+    }
+    entries[key] = { sources: keep, at: now, bytes };
+    return { entries };
+  }
+
+  // bucketMeta: [{ key, at }] -> keys to remove (everything beyond the `keep` most recent).
+  function pruneCitationBuckets(bucketMeta, { keep = 20 } = {}) {
+    return (bucketMeta || [])
+      .map((m, i) => ({ m, i }))
+      .sort((a, b) => (b.m.at - a.m.at) || (a.i - b.i))
+      .slice(keep)
+      .map(x => x.m.key);
+  }
+
   const NLME = {
     buildRootIndex,
     buildIndexHtml,
@@ -1482,7 +1544,13 @@ footer { margin-top: 3rem; }
     CITATION_TOOLTIP_SELECTOR,
     isCitationExpander,
     parseCitationIndex,
-    mimeForPath
+    mimeForPath,
+    fnv1a,
+    citationCacheKey,
+    citationCacheBucketKey,
+    cacheGet,
+    cachePut,
+    pruneCitationBuckets
   };
 
   root.NLME = NLME;
