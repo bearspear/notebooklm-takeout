@@ -1094,6 +1094,18 @@ test('restoreListState falls back to the tab default', () => {
   assert.deepEqual([...NLME.restoreListState({ sort: 1 }, { keys: ['a'], defaultSelected: 'none' }).selected], []);
 });
 
+test('restoreListState gives items new since the save the tab default', () => {
+  const saved = { selected: ['a'], known: ['a', 'b'] };
+  assert.deepEqual([...NLME.restoreListState(saved, { keys: ['a', 'b', 'c'], defaultSelected: 'all' }).selected].sort(), ['a', 'c']);
+  assert.deepEqual([...NLME.restoreListState(saved, { keys: ['a', 'b', 'c'], defaultSelected: 'none' }).selected], ['a']);
+});
+test('restoreListState without known keeps the saved selection as an allow-list', () => {
+  const s = NLME.restoreListState({ selected: ['a'] }, { keys: ['a', 'b'], defaultSelected: 'all' });
+  assert.deepEqual([...s.selected], ['a']);
+  const bad = NLME.restoreListState({ selected: ['a'], known: 'nope' }, { keys: ['a', 'b'], defaultSelected: 'all' });
+  assert.deepEqual([...bad.selected], ['a']);
+});
+
 test('groupErrorsForPanel groups by type and caps entries', () => {
   const errs = ['[A] boom', { type: 'message_skipped', message: 'm1' }, '[B] bang', { type: 'message_skipped', message: 'm2' }];
   const g = NLME.groupErrorsForPanel(errs, { perGroup: 1 });

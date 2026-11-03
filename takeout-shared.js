@@ -919,6 +919,7 @@
   }
 
   // Rebuilds a list's toolbar state from storage, tolerating missing or malformed data.
+  // saved: { query, types, sort, selected, known? } (see sidebar-list.js savedShape).
   function restoreListState(saved, { keys = [], types = null, defaultSelected } = {}) {
     const s = saved && typeof saved === 'object' ? saved : {};
     const query = typeof s.query === 'string' ? s.query : '';
@@ -927,8 +928,17 @@
     if (Array.isArray(types)) chips = chips.filter(t => types.includes(t));
     const keySet = new Set(keys);
     let selected;
-    if (Array.isArray(s.selected)) selected = new Set(s.selected.filter(k => keySet.has(k)));
-    else selected = new Set(defaultSelected === 'all' ? keys : []);
+    if (Array.isArray(s.selected)) {
+      selected = new Set(s.selected.filter(k => keySet.has(k)));
+      // `known`: the keys that existed at save time. An item that arrived since
+      // (a new source, a newly generated artifact) gets the tab default, so a
+      // remembered selection does not leave it unticked forever. A state saved
+      // without `known` stays a plain allow-list.
+      if (Array.isArray(s.known) && defaultSelected === 'all') {
+        const known = new Set(s.known);
+        for (const k of keys) if (!known.has(k)) selected.add(k);
+      }
+    } else selected = new Set(defaultSelected === 'all' ? keys : []);
     return { query, types: chips, sort, selected };
   }
 

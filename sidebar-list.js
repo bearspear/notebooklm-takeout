@@ -2,7 +2,7 @@
 // result lists (see AGENT.md "Milestone 3b contracts"). Classic script; the pure
 // logic lives in takeout-shared.js (NLME.listView and friends), this file is DOM only.
 
-// Panel-session memory: stateKey -> saved shape { query, types, sort, selected: [keys] }.
+// Panel-session memory: stateKey -> saved shape { query, types, sort, selected: [keys], known: [keys] }.
 // A redraw within the same panel session never waits on chrome.storage.
 const _listStates = new Map();
 let _lastListNotebookId = '';
@@ -82,7 +82,8 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
   // ---- State ----
 
   function savedShape() {
-    return { query, types: [...activeTypes], sort, selected: [...selected] };
+    // known: every key at save time, so restoreListState can tell a new item from an unticked one
+    return { query, types: [...activeTypes], sort, selected: [...selected], known: [...keys] };
   }
 
   function persist() {

@@ -1138,9 +1138,13 @@ onChange, canSelect }) -> { items, selectedItems(), selectedCount(), destroy() }
   would replace. Look rows up by `data-index`.
 - State: restored through `NLME.restoreListState`; kept in the module-level `_listStates` Map
   (instant redraws) and in `chrome.storage.local["nlme.list.<notebookId>.<tab>"]` as
-  `{ query, types, sort, selected: [keys] }`, saved 300 ms after the last change (and on
+  `{ query, types, sort, selected: [keys], known: [keys] }`, saved 300 ms after the last change (and on
   `destroy()`). `notebookId` comes from the active tab's URL; when empty nothing is stored.
   Stored state is applied after the async read only if the user has not touched the list yet.
+  `known` is every key that existed at save time: on restore, a current key not in `known` (a new
+  source, a newly generated artifact) gets `defaultSelected` ('all' -> ticked, 'none' -> unticked),
+  so a remembered selection does not leave new items unticked forever. State saved without
+  `known` restores as a plain allow-list.
 - The Notes tab (`renderNotesList`) is the reference port: `defaultSelected: 'none'`, a
   `.notes-list` container beside the `.export-controls`, and the row export button calls
   `handleNoteRowExport` -> `exportSingleNote` (loose `.md` files, no ZIP) under `runExclusive`.
