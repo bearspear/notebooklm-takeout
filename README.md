@@ -392,6 +392,22 @@ contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
 
+**1.5.0 (Nov 2026)**: find, retry, finish.
+- Every list (Artifacts, Notes, Sources, Studio) has a filter box, type chips, sorting and
+  "Select all visible", with "N of M shown · K selected". Each notebook remembers its choices.
+- The Artifacts tab downloads the selected items ("Download Selected"); everything is selected
+  by default. The download button on a Notes row exports just that note.
+- Export results stay in a panel (what was saved, errors grouped by type) with
+  "Retry N failed" for notes, sources and artifacts, also after a Full Takeout.
+- Chat follows ⚙️ Citation detail (full quotes, source titles only, or no citations); its own
+  checkbox is gone.
+- Full Takeout always includes `-with-images` versions for items that have images, and puts
+  notes and sources straight into `notes/` and `sources/` (no more `notes/notes/`).
+- Fixes: the takeout index keeps parts written before a failure and links folders that hold only
+  errors; unreadable chats count the messages on the page; downloads keep their real file
+  extension (e.g. `.jpeg`); names that differ only in Unicode form no longer overwrite each other;
+  Download All and Retry use the tab they were started from.
+
 **1.4.0 (Nov 2026)**: one-click Full Takeout and one layout everywhere.
 - New **Full Takeout** (📦): sources, notes, chat and artifacts of a notebook in one run, as one
   ZIP per category plus an index (unzip into one folder), or straight into a Downloads folder.
