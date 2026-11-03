@@ -865,6 +865,40 @@
     return extensionFromDownloadUrl(url) || MIME_EXTENSIONS[baseMime] || TYPE_EXTENSIONS[type] || '';
   }
 
+  // Everything extensionFor can return
+  const KNOWN_EXTENSIONS = new Set([...Object.values(MIME_EXTENSIONS), ...Object.values(TYPE_EXTENSIONS)]);
+
+  // A URL download's name with its real extension. The side panel names it
+  // with the extension it expects (extensionFor: URL, then type); when the
+  // download turns out to be another known type (Slides as .pptx, not .pdf),
+  // the real extension replaces the expected one. A name without an
+  // extension gets the real one; unknown extensions never replace anything.
+  function withRealExtension(filename, realExt) {
+    const real = String(realExt || '').toLowerCase();
+    const current = (filename.match(/\.[a-z0-9]{2,5}$/i) || [''])[0];
+    if (!current) return filename + real;
+    if (!KNOWN_EXTENSIONS.has(real) || !KNOWN_EXTENSIONS.has(current.toLowerCase())) return filename;
+    return filename.slice(0, -current.length) + real;
+  }
+
+  // One stem per Studio artifact (aligned with items), unique within the
+  // artifact's type folder: different types may share a name, since their
+  // folders differ. Data Tables also write <stem>-references.txt.
+  function artifactStems(items) {
+    const stems = new Array(items.length);
+    const byFolder = new Map();
+    items.forEach((item, idx) => {
+      const folder = artifactFolder(item.type);
+      if (!byFolder.has(folder)) byFolder.set(folder, []);
+      byFolder.get(folder).push(idx);
+    });
+    for (const idxs of byFolder.values()) {
+      const suffixes = idxs.some(i => items[i].type === 'Data Table') ? ['-references'] : [];
+      uniqueStems(idxs.map(i => items[i].label), suffixes).forEach((stem, k) => { stems[idxs[k]] = stem; });
+    }
+    return stems;
+  }
+
   const NLME = {
     frontMatter,
     uniqueStems,
@@ -874,6 +908,8 @@
     zipName,
     artifactFolder,
     extensionFor,
+    withRealExtension,
+    artifactStems,
     groupCitationEntries,
     noteHasImages,
     countMarkdownFormulas,

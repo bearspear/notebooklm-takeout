@@ -703,3 +703,24 @@ test('artifactFolder and extensionFor', () => {
   assert.equal(NLME.extensionFor({ type: 'Video Overview' }), '.mp4');
   assert.equal(NLME.extensionFor({}), '');
 });
+
+test('artifactStems makes stems unique per type folder only', () => {
+  const items = [
+    { type: 'Report', label: 'Overview' },
+    { type: 'Slides', label: 'Overview' },
+    { type: 'Report', label: 'overview' },
+    { type: 'Data Table', label: 'Prices' },
+    { type: 'Data Table', label: 'Prices references' }
+  ];
+  assert.deepEqual(NLME.artifactStems(items), ['Overview', 'Overview', 'overview-2', 'Prices', 'Prices-references-2']);
+});
+
+test('withRealExtension swaps a guessed known extension for the real one', () => {
+  assert.equal(NLME.withRealExtension('Folder/Deck.pdf', '.pptx'), 'Folder/Deck.pptx');
+  assert.equal(NLME.withRealExtension('Deck.pdf', '.PDF'), 'Deck.pdf');
+  assert.equal(NLME.withRealExtension('Deck', '.pptx'), 'Deck.pptx');
+  assert.equal(NLME.withRealExtension('Deck', ''), 'Deck');
+  // Unknown extensions never replace a known one, and unknown endings stay
+  assert.equal(NLME.withRealExtension('Deck.pdf', '.goog'), 'Deck.pdf');
+  assert.equal(NLME.withRealExtension('Talk v1.10', '.m4a'), 'Talk v1.10');
+});
