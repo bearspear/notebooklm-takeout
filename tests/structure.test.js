@@ -76,20 +76,35 @@ test('the side panel re-injects the same content scripts as the manifest', () =>
   assert.deepEqual(files, contentScriptBlocks()[0]);
 });
 
-test('content scripts declare each top-level name once', () => {
-  // Content scripts of one block share a global scope, like the sidebar
+test('content scripts never assign the same shared global twice', () => {
+  // Content scripts of one block share a global scope. All of them are IIFEs;
+  // what they share is what they assign onto globalThis (NLME, NLMEMarkdown,
+  // __nlmeMindmap), so two files must never claim the same name
+  const assigned = /(?:\bglobalThis|\broot|\bwindow)\.([A-Za-z_$][\w$]*)\s*=(?!=)/g;
   for (const block of contentScriptBlocks()) {
     const owners = new Map();
     const problems = [];
     for (const file of block.filter(f => !VENDORED.test(f))) {
       const source = fs.readFileSync(path.join(ROOT, file), 'utf8');
-      for (const name of topLevelDeclarations(source)) {
-        if (owners.has(name)) problems.push(`${name} declared in both ${owners.get(name)} and ${file}`);
+      const names = new Set([...source.matchAll(assigned)].map(m => m[1]));
+      for (const name of names) {
+        if (owners.has(name)) problems.push(`${name} assigned in both ${owners.get(name)} and ${file}`);
         else owners.set(name, file);
       }
     }
-    assert.deepEqual(problems, [], `Duplicate top-level declarations:\n  ${problems.join('\n  ')}`);
+    assert.ok(owners.has('NLME'), 'scan found no shared globals (NLME missing)');
+    assert.deepEqual(problems, [], `Shared global collisions:\n  ${problems.join('\n  ')}`);
   }
+});
+
+test('sidebar.html loads takeout-markdown.js after takeout-shared.js and before the sidebar scripts', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8');
+  const order = [...html.matchAll(/<script\s+src="([^"]+)"/g)].map(m => m[1]);
+  const at = name => order.indexOf(name);
+  assert.ok(at('takeout-markdown.js') > at('takeout-shared.js'), 'takeout-markdown.js must follow takeout-shared.js');
+  const firstSidebar = order.findIndex(src => /^sidebar-/.test(src));
+  assert.ok(at('takeout-markdown.js') >= 0 && at('takeout-markdown.js') < firstSidebar,
+    'takeout-markdown.js must load before the sidebar scripts');
 });
 
 test('takeout-markdown.js exposes the converter API without needing Turndown at load', () => {

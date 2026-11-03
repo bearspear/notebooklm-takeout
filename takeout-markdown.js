@@ -54,7 +54,8 @@
   //      named functions (ln/log/sin/cos/...), big operators with limits,
   //      fractions, square roots, and Unicode → LaTeX symbol mapping.
   //
-  // Used by both the notes/sources Turndown service and the chat Turndown service.
+  // Used by the shared Turndown rule set (createConverter: notes, sources,
+  // reports, chat) and by htmlToMarkdownPlain (quotes, guides, summary).
 
 
   // LaTeX command names for plain-text operators KaTeX renders inside `.mop`.
@@ -655,7 +656,7 @@
 
         if (!originalSourceIndex && node.nodeName === 'BUTTON') {
           // The number is the span text; a mat-icon only appears on expanders
-          originalSourceIndex = root.NLME.parseCitationIndex(node.querySelector('span')?.textContent) || '';
+          originalSourceIndex = NLME.parseCitationIndex(node.querySelector('span')?.textContent) || '';
           if (!originalSourceIndex) {
             // Not a numbered citation (e.g. an unrecognised button) — drop it
             return '';

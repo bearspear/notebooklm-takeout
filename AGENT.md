@@ -142,10 +142,10 @@ notebooklm-exporter/
 ├── tests/                  — node:test unit tests for takeout-shared.js, takeout-job.js and
 │                             the message protocol
 ├── sidebar.html  ( 436)    — Side panel UI: tabs, controls, settings/health panels
-├── sidebar-core.js (2132) — Settings, init, tab and notebook switching, job lock, shared helpers,
+├── sidebar-core.js (1579) — Settings, init, tab and notebook switching, job lock, shared helpers,
 │                             notes Markdown (convertToMarkdown), job records (see Milestone 3d contracts)
 ├── sidebar-artifacts.js (1161), sidebar-notes.js (786), sidebar-sources.js (727),
-│   sidebar-chat.js (983), sidebar-generated.js (306), sidebar-health.js (304)
+│   sidebar-chat.js (756), sidebar-generated.js (306), sidebar-health.js (304)
 │                           — one file per tab (scan, list, export job, build files)
 ├── sidebar-takeout.js (519) — saveFiles, fetchDownload, withExportShell, runFullTakeout
 ├── styles.css    (1644)    — Side panel styles
