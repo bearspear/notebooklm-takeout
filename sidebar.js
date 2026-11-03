@@ -122,19 +122,6 @@ function showDOMWarningDialog(issues, isMidExport = false) {
 }
 
 /**
- * Show the warning banner in the sidebar
- * @param {string} message - Warning message to display
- */
-function showWarningBanner(message) {
-  const banner = document.getElementById('dom-warning-banner');
-  const messageEl = document.getElementById('warning-message');
-  if (banner && messageEl) {
-    messageEl.textContent = message;
-    banner.style.display = 'flex';
-  }
-}
-
-/**
  * Hide the warning banner
  */
 function hideWarningBanner() {
@@ -1287,58 +1274,6 @@ async function handleSVGDownload(dataUrl, filename, format, artifactType = 'Info
   }
 }
 
-/**
- * Wait for Chrome download to complete
- * Uses chrome.downloads API to verify download
- */
-async function waitForChromeDownload(expectedFilename, timeout = 10000) {
-  return new Promise((resolve, reject) => {
-    const startTime = Date.now();
-    let downloadId = null;
-
-    const timeoutId = setTimeout(() => {
-      if (listener) {
-        chrome.downloads.onCreated.removeListener(listener);
-      }
-      logger.warn('Download', `Timeout waiting for download: ${expectedFilename}`);
-      resolve(); // Don't reject - download might still succeed
-    }, timeout);
-
-    const listener = (downloadItem) => {
-      // Check if this download matches our expected filename
-      const filename = downloadItem.filename || '';
-      const matches = filename.toLowerCase().includes(expectedFilename.toLowerCase().substring(0, 20));
-
-      if (matches) {
-        downloadId = downloadItem.id;
-        logger.info('Download', `Chrome download started: ${downloadItem.filename}`);
-
-        // Monitor download progress
-        const progressListener = (delta) => {
-          if (delta.id === downloadId && delta.state) {
-            if (delta.state.current === 'complete') {
-              clearTimeout(timeoutId);
-              chrome.downloads.onChanged.removeListener(progressListener);
-              chrome.downloads.onCreated.removeListener(listener);
-              logger.download(expectedFilename, 'success', `Downloaded in ${Date.now() - startTime}ms`);
-              resolve();
-            } else if (delta.state.current === 'interrupted') {
-              clearTimeout(timeoutId);
-              chrome.downloads.onChanged.removeListener(progressListener);
-              chrome.downloads.onCreated.removeListener(listener);
-              reject(new Error('Download interrupted'));
-            }
-          }
-        };
-
-        chrome.downloads.onChanged.addListener(progressListener);
-      }
-    };
-
-    chrome.downloads.onCreated.addListener(listener);
-  });
-}
-
 // ==================== STATUS CHECK ====================
 
 async function checkStatus() {
@@ -1431,11 +1366,6 @@ async function scanPage() {
         </div>
       ` : ''}
     `;
-
-    // Store items for handlers
-    window._scanItems = items;
-    window._enabledItems = enabledItems;
-    window._currentTabId = tab.id;
 
     // Add click handlers for individual download buttons with status feedback
     resultsEl.querySelectorAll('button[data-index]').forEach((btn) => {
@@ -1553,12 +1483,7 @@ async function scanNotesPage() {
     // Send message to content script
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_NOTES' });
     const notes = response?.notes || [];
-    window._currentNotes = notes;
-
-    // Debug: Also get raw note data from page
-    const debugResponse = await chrome.tabs.sendMessage(tab.id, { type: 'DEBUG_NOTES' });
     console.log('[NotebookLM Takeout] Scanned notes:', notes);
-    console.log('[NotebookLM Takeout] Raw notes from page:', debugResponse?.notes);
 
     renderNotesList(notes);
 
@@ -5718,64 +5643,6 @@ async function handleStudioBulkDelete() {
   await scanStudioPage();
 }
 
-// OLD IMPLEMENTATION (ROLLBACK) - Keep for reference but commented out
-/*
-async function triggerItemDownload_OLD(tabId, itemIndex, artifactName, artifactType) {
-  try {
-    // Tell background script what name to use for this download
-    await chrome.runtime.sendMessage({
-      type: 'SET_PENDING_DOWNLOAD',
-      name: artifactName,
-      artifactType: artifactType
-    });
-
-    // Trigger the download by clicking More menu -> Download
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      func: clickDownloadForItem,
-      args: [itemIndex]
-    });
-
-    if (settings.showNotifications) {
-      showToast(`Downloading ${artifactName}...`);
-    }
-  } catch (error) {
-    console.error('Download trigger failed:', error);
-    showToast('Failed to trigger download', 'error');
-  }
-}
-*/
-
-// This runs in the page context to click download for a specific item
-function clickDownloadForItem(itemIndex) {
-  const moreButtons = document.querySelectorAll('button[aria-label="More"]');
-
-  const btn = moreButtons[itemIndex];
-  if (!btn) {
-    console.error('[NotebookLM Takeout] Button not found at index', itemIndex);
-    return;
-  }
-
-  btn.click();
-
-  // Wait for menu to appear, then click Download
-  setTimeout(() => {
-    const menuItems = document.querySelectorAll('.mat-mdc-menu-item');
-
-    for (const item of menuItems) {
-      const textSpan = item.querySelector('.mat-mdc-menu-item-text');
-      const text = (textSpan?.textContent || '').trim().toLowerCase();
-
-      if (text === 'download') {
-        item.click();
-        return;
-      }
-    }
-
-    // No Download found - close menu
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-  }, 400);
-}
 
 // Download All - either ZIP or individual based on checkbox
 async function downloadAllArtifacts(tabId, items) {

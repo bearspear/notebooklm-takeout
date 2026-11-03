@@ -44,9 +44,6 @@
         "mindmap-extract.js",
         "content.js"
       ],
-      "css": [
-        "content-styles.css"
-      ],
       "run_at": "document_idle"
     },
     {

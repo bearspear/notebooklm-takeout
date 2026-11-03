@@ -29,14 +29,6 @@ chrome.tabs.onUpdated.addListener(async (tabId, info, tab) => {
   }
 });
 
-// Store captured artifacts
-const capturedArtifacts = {
-  audio: [],
-  slides: [],
-  infographics: [],
-  notebooks: []
-};
-
 // Store pending download name for renaming
 // ==== DOWNLOAD STATE MANAGEMENT (Prevents race conditions) ====
 // Use Maps to track state per download instead of global variables
@@ -85,48 +77,7 @@ function getArtifactTypePrefix(artifactType) {
 // Listen for messages from content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
-    case 'ARTIFACT_DETECTED':
-      handleArtifactDetected(message.data);
-      sendResponse({ success: true });
-      break;
 
-    case 'GET_ARTIFACTS':
-      sendResponse({ artifacts: capturedArtifacts });
-      break;
-
-    case 'DOWNLOAD_ARTIFACT':
-      downloadArtifact(message.data);
-      sendResponse({ success: true });
-      break;
-
-    case 'CLEAR_ARTIFACTS':
-      clearArtifacts();
-      sendResponse({ success: true });
-      break;
-
-    case 'SET_PENDING_DOWNLOAD':
-      // Add to pending downloads queue instead of global variable
-      const requestId = nextRequestId++;
-      const pendingDownload = {
-        name: message.name,
-        type: message.artifactType,
-        timestamp: Date.now(),
-        requestId: requestId
-      };
-      pendingDownloads.push(pendingDownload);
-      console.log('[Background] Pending download queued:', pendingDownload.name, 'ID:', requestId);
-
-      // Clean up old pending downloads (older than 45 seconds)
-      setTimeout(() => {
-        const index = pendingDownloads.findIndex(d => d.requestId === requestId);
-        if (index !== -1) {
-          console.log('[Background] Cleaning up expired pending download:', pendingDownloads[index].name);
-          pendingDownloads.splice(index, 1);
-        }
-      }, 45000);
-
-      sendResponse({ success: true, requestId });
-      break;
 
     case 'START_INTERCEPT_DOWNLOAD':
       // Add to pending downloads queue with intercept flag
@@ -186,41 +137,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true });
       break;
 
-    case 'START_BATCH_DOWNLOAD':
-      // Only reset if not already in batch mode (prevents double-click issues)
-      if (!batchDownloadMode) {
-        batchDownloadMode = true;
-        capturedDownload = null;
-        console.log('[Background] Batch download mode started');
-      } else {
-        console.log('[Background] Already in batch mode, skipping reset');
-      }
-      sendResponse({ success: true });
-      break;
-
-    case 'END_BATCH_DOWNLOAD':
-      batchDownloadMode = false;
-      capturedDownload = null;
-      console.log('[Background] Batch download mode ended');
-      sendResponse({ success: true });
-      break;
-
-    case 'GET_CAPTURED_DOWNLOAD':
-      if (capturedDownload) {
-        const result = { captured: true, ...capturedDownload };
-        capturedDownload = null; // Clear after retrieval
-        sendResponse(result);
-      } else {
-        sendResponse({ captured: false });
-      }
-      break;
-
-    case 'FETCH_FILE_CONTENT':
-      // Fetch file content from URL (with cookies/auth)
-      fetchFileContent(message.url)
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ error: error.message }));
-      return true; // Keep channel open for async
 
     case 'BATCH_DOWNLOAD_ALL':
       lastBatchResult = null;
@@ -470,14 +386,8 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
 
   // BATCH MODE - Existing batch download logic
   if (batchDownloadMode && isFromNotebookLM && downloadItem.url) {
-    // Find and consume the next pending download from queue (FIFO)
-    const pendingIndex = pendingDownloads.findIndex(d => !d.intercept);
-    let pendingInfo = null;
-    if (pendingIndex !== -1) {
-      pendingInfo = pendingDownloads[pendingIndex];
-      pendingDownloads.splice(pendingIndex, 1); // Remove from queue
-      console.log('[Background] Using pending download from queue:', pendingInfo.name, 'requestId:', pendingInfo.requestId);
-    }
+    // Only intercept requests are queued now (SET_PENDING_DOWNLOAD was removed)
+    const pendingInfo = null;
 
     // Capture the URL and download ID - don't cancel yet, we need to fetch first
     if (!capturedDownload) {
@@ -568,110 +478,9 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
     return true;
   }
 
-  // Check for non-intercepted downloads - look in pending queue
-  const hasPendingDownload = pendingDownloads.length > 0 && pendingDownloads.some(d => !d.intercept);
-  if (!hasPendingDownload) {
-    console.log('[Background] Skipping rename - no pending download in queue');
-    return false;
-  }
-
-  if (isFromNotebookLM && hasPendingDownload) {
-    // Find and consume the next non-intercept pending download (FIFO)
-    const pendingIndex = pendingDownloads.findIndex(d => !d.intercept);
-    if (pendingIndex === -1) {
-      console.log('[Background] No non-intercept pending download found');
-      return false;
-    }
-
-    const pendingRequest = pendingDownloads[pendingIndex];
-    pendingDownloads.splice(pendingIndex, 1); // Remove from queue
-    console.log('[Background] Processing pending download:', pendingRequest.name, 'requestId:', pendingRequest.requestId);
-
-    // Determine file extension
-    let extension = '';
-    const originalFilename = downloadItem.filename || '';
-
-    if (originalFilename.includes('.')) {
-      extension = originalFilename.substring(originalFilename.lastIndexOf('.'));
-    } else if (downloadItem.mime) {
-      // Guess extension from MIME type
-      const mimeExtensions = {
-        'image/png': '.png',
-        'image/jpeg': '.jpg',
-        'image/svg+xml': '.svg',
-        'application/pdf': '.pdf',
-        'audio/wav': '.wav',
-        'audio/mpeg': '.mp3',
-        'audio/mp4': '.m4a',
-        'audio/x-m4a': '.m4a',
-        'video/mp4': '.mp4'
-      };
-      extension = mimeExtensions[downloadItem.mime] || '';
-    }
-
-    // Create new filename
-    const newFilename = sanitizeFilename(pendingRequest.name) + extension;
-    console.log('[Background] Renaming download to:', newFilename);
-
-    // In batch mode, onCreated already handled this - just prevent the download
-    if (batchDownloadMode) {
-      // Update captured download with filename if we have it
-      if (capturedDownload && capturedDownload.downloadId === downloadItem.id) {
-        capturedDownload.filename = newFilename;
-      }
-      console.log('[Background] Batch mode - skipping rename, download will be cancelled');
-
-      // Don't suggest anything - let onCreated handle the cancel
-      return false;
-    }
-
-    suggest({ filename: newFilename });
-    return true; // We handled this
-  }
-
-  // Let the download proceed with original name
+  // No registered rename for this download: Chrome keeps its name
   return false;
 });
-
-function handleArtifactDetected(data) {
-  const { type, artifact } = data;
-
-  if (capturedArtifacts[type]) {
-    // Check for duplicates
-    const exists = capturedArtifacts[type].some(a => a.id === artifact.id);
-    if (!exists) {
-      capturedArtifacts[type].push({
-        ...artifact,
-        capturedAt: Date.now()
-      });
-
-    }
-  }
-}
-
-async function downloadArtifact(data) {
-  const { url, filename, type } = data;
-
-  try {
-    if (type === 'blob' || type === 'dataurl') {
-      // Data URLs can be downloaded directly
-      chrome.downloads.download({
-        url: url,
-        filename: sanitizeFilename(filename),
-        saveAs: true
-      });
-    } else {
-      // Direct URL download
-      chrome.downloads.download({
-        url: url,
-        filename: sanitizeFilename(filename),
-        saveAs: true
-      });
-    }
-  } catch (error) {
-    console.error('Download failed:', error);
-  }
-}
 
 function sanitizeFilename(filename) {
   let clean = filename
@@ -736,13 +545,6 @@ async function fetchFileContent(url) {
     console.error('[Background] Fetch failed:', error);
     return { success: false, error: error.message };
   }
-}
-
-function clearArtifacts() {
-  capturedArtifacts.audio = [];
-  capturedArtifacts.slides = [];
-  capturedArtifacts.infographics = [];
-  capturedArtifacts.notebooks = [];
 }
 
 // The toolbar badge counted artifacts found by the removed page polling
@@ -1109,46 +911,6 @@ function utf8ToBase64(text) {
     binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
   }
   return btoa(binary);
-}
-
-// Function to inject into page to fetch file with credentials
-async function fetchFileInPage(url) {
-  try {
-    console.log('[NotebookLM Takeout] Fetching:', url.substring(0, 80));
-
-    const response = await fetch(url, {
-      credentials: 'include'
-    });
-
-    if (!response.ok) {
-      return { success: false, error: `HTTP ${response.status}` };
-    }
-
-    const blob = await response.blob();
-    const arrayBuffer = await blob.arrayBuffer();
-    const uint8Array = new Uint8Array(arrayBuffer);
-
-    // Convert to base64
-    let binary = '';
-    const chunkSize = 8192;
-    for (let i = 0; i < uint8Array.length; i += chunkSize) {
-      const chunk = uint8Array.subarray(i, Math.min(i + chunkSize, uint8Array.length));
-      binary += String.fromCharCode.apply(null, chunk);
-    }
-    const base64 = btoa(binary);
-
-    console.log('[NotebookLM Takeout] Fetched:', uint8Array.length, 'bytes, mime:', blob.type);
-
-    return {
-      success: true,
-      data: base64,
-      mime: blob.type,
-      size: uint8Array.length
-    };
-  } catch (error) {
-    console.error('[NotebookLM Takeout] Fetch error:', error);
-    return { success: false, error: error.message };
-  }
 }
 
 // Helper functions for batch download
