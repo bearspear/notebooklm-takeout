@@ -706,6 +706,7 @@ async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}
       if (!settle.current()) return; // a newer navigation owns the banner and the rescan now
       settle.settled();
       const [now] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!settle.current()) return; // a navigation arrived during the query: it owns the banner
       if (!now || now.id !== tab.id || NLME.notebookIdFromUrl(now.url) !== recordedId) {
         // Nothing was rescanned: forget the id (unless a newer event replaced it) so the next event does
         if (lastPanelNotebookId === recordedId) lastPanelNotebookId = '';
