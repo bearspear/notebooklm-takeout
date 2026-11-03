@@ -1346,7 +1346,18 @@
     if (typeof data === 'string') return new TextEncoder().encode(data).length;
     if (typeof Blob !== 'undefined' && data instanceof Blob) return data.size;
     if (data && typeof data.byteLength === 'number') return data.byteLength;
+    // A url entry the browser downloaded: the size read from the download
+    if (typeof entry.bytes === 'number') return entry.bytes;
     return null;
+  }
+
+  // Where a chrome.downloads item stands for reading its size: done once it
+  // completed, was interrupted or is gone; bytes only for a completed download
+  // that reports a size (fileSize is -1 when unknown).
+  function downloadSizeStatus(item) {
+    if (!item || item.state === 'interrupted') return { done: true, bytes: null };
+    if (item.state !== 'complete') return { done: false, bytes: null };
+    return { done: true, bytes: typeof item.fileSize === 'number' && item.fileSize >= 0 ? item.fileSize : null };
   }
 
   // manifest.json: what is in a ZIP, so a takeout can be audited or resumed
@@ -1987,6 +1998,7 @@ footer { margin-top: 3rem; }
     restoreListState,
     exportMeta,
     buildManifest,
+    downloadSizeStatus,
     zipName,
     filesByteSize,
     artifactFolder,

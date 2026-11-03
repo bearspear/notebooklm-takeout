@@ -830,6 +830,27 @@ test('buildManifest lists files with byte sizes and the notebook', () => {
   assert.equal(m.files[0].variant, 'base');
 });
 
+test('buildManifest uses the size read after a url entry was downloaded', () => {
+  const meta = { notebook: 'N', notebook_url: 'u', notebook_id: 'i', exporter: 'x', exported: 'T' };
+  const m = NLME.buildManifest({ meta, kind: 'artifacts', files: [
+    { path: 'slides/Deck.pptx', url: 'https://x', bytes: 2048 },
+    { path: 'slides/Other.pdf', url: 'https://y', bytes: null },
+    { path: 'slides/Third.pdf', url: 'https://z' }
+  ] });
+  assert.deepEqual(m.files.map(f => f.bytes), [2048, null, null]);
+});
+
+test('downloadSizeStatus reads fileSize only from a completed download', () => {
+  assert.deepEqual(NLME.downloadSizeStatus({ state: 'complete', fileSize: 1234 }), { done: true, bytes: 1234 });
+  // Chrome reports -1 when it does not know
+  assert.deepEqual(NLME.downloadSizeStatus({ state: 'complete', fileSize: -1 }), { done: true, bytes: null });
+  assert.deepEqual(NLME.downloadSizeStatus({ state: 'complete' }), { done: true, bytes: null });
+  assert.deepEqual(NLME.downloadSizeStatus({ state: 'in_progress', fileSize: 10 }), { done: false, bytes: null });
+  assert.deepEqual(NLME.downloadSizeStatus({ state: 'interrupted', fileSize: 10 }), { done: true, bytes: null });
+  // Not found (erased from history): nothing more to wait for
+  assert.deepEqual(NLME.downloadSizeStatus(undefined), { done: true, bytes: null });
+});
+
 test('zipName matches the existing pattern, with PARTIAL and parts', () => {
   assert.equal(NLME.zipName({ notebook: 'New Math', kind: 'notes', timestamp: 'T' }), 'New-Math-notes-T.zip');
   assert.equal(NLME.zipName({ notebook: 'a/b', kind: 'takeout-notes', timestamp: 'T', partial: true, part: 2, totalParts: 3 }), 'a-b-takeout-notes-T-PARTIAL-part2of3.zip');

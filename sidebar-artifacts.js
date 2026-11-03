@@ -986,6 +986,9 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
   // Folder mode: what earlier items saved, for _index.md and manifest.json
   // (Blobs replaced by their size: the manifest needs no more)
   const saved = [];
+  // Sizes of url entries the browser downloaded, read when each download
+  // finishes; awaited before the manifest is written (never rejects)
+  const pendingSizes = [];
   let savedOutside = 0;
 
   const result = await NLME.runExportJob({
@@ -1034,9 +1037,15 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
       if (!zipMode) {
         // Saved here, not in packageBatch, so a failed save fails this
         // item (errors.md) instead of ending the whole job
-        await saveFiles(place(files), { folder });
+        const { sizes = [] } = await saveFiles(place(files), { folder });
         written.count++;
-        saved.push({ item, files: files.map(f => (f.data instanceof Blob ? { ...f, data: { byteLength: f.data.size } } : f)) });
+        const entries = files.map(f => (f.data instanceof Blob ? { ...f, data: { byteLength: f.data.size } } : { ...f }));
+        // A url entry's size is known once its download completes: fill `bytes`
+        // for the manifest (stays absent, so null, when Chrome does not say)
+        sizes.forEach((pending, i) => {
+          if (pending) pendingSizes.push(pending.then(bytes => { if (bytes != null) entries[i].bytes = bytes; }));
+        });
+        saved.push({ item, files: entries });
       }
       return { item, files };
     },
@@ -1063,6 +1072,10 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
       // last call adds the root files
       if (tracker) tracker.commit();
       if (info.isLast) {
+        if (pendingSizes.length) {
+          shell.progress('Reading file sizes...', 1);
+          await Promise.all(pendingSizes);
+        }
         const all = saved.flatMap(r => r.files);
         await saveFiles(place(artifactsRootFiles(all, saved.map(r => r.item), { meta: shell.meta, info })), { folder });
         // The root files are a package too: an errors-only run (every item

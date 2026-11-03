@@ -89,7 +89,8 @@ async function downloadBlobToFolderPath(blob, target) {
   }
 }
 
-// Have the background download a url entry to Downloads/<target>.
+// Have the background download a url entry to Downloads/<target>. Returns
+// the Chrome download id (null if the background did not report one).
 async function downloadUrlTo(entry, target) {
   const response = await chrome.runtime.sendMessage({
     type: NLME.MSG.DIRECT_DOWNLOAD_URL,
@@ -98,6 +99,28 @@ async function downloadUrlTo(entry, target) {
   });
   if (!response || !response.success) {
     throw new Error(`Download failed for ${entry.path}: ${(response && response.error) || 'no response'}`);
+  }
+  return response.downloadId ?? null;
+}
+
+// The size of a finished download, read from chrome.downloads (fileSize), for
+// the manifest of a folder-mode export. Polls until the download completes,
+// is interrupted or is gone, up to timeoutMs. Never rejects and never blocks
+// a job: null means "not available" (the manifest keeps null, as before).
+async function downloadSizeWhenDone(downloadId, { timeoutMs = 120000, intervalMs = 500 } = {}) {
+  if (downloadId == null) return null;
+  try {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const [item] = await chrome.downloads.search({ id: downloadId });
+      const status = NLME.downloadSizeStatus(item);
+      if (status.done) return status.bytes;
+      if (Date.now() >= deadline) return null;
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Could not read a download size:', error);
+    return null;
   }
 }
 
@@ -117,7 +140,10 @@ async function downloadUrlTo(entry, target) {
  *
  * @param {Array<{path: string, data?: string|Blob|Uint8Array, url?: string}>} files
  * @param {{ zipName?: string, folder?: string }} [options]
- * @returns {Promise<{ saved: number, zipped: boolean }>}
+ * @returns {Promise<{ saved: number, zipped: boolean, sizes?: Array<Promise<number|null>|undefined> }>}
+ *   sizes (folder mode): per entry, in order, a promise of the downloaded file's
+ *   size for url entries (downloadSizeWhenDone; resolves null when unknown),
+ *   undefined for data entries. Not awaited here: downloads finish on their own.
  */
 async function saveFiles(files, { zipName, folder } = {}) {
   if (zipName) {
@@ -138,16 +164,18 @@ async function saveFiles(files, { zipName, folder } = {}) {
 
   if (folder) {
     let saved = 0;
+    const sizes = [];
     for (const entry of files) {
       const target = NLME.downloadFolderPath(folder, entry.path);
       if (entry.data !== undefined) {
         await downloadBlobToFolderPath(entryBlob(entry), target);
+        sizes.push(undefined);
       } else {
-        await downloadUrlTo(entry, target);
+        sizes.push(downloadSizeWhenDone(await downloadUrlTo(entry, target)));
       }
       saved++;
     }
-    return { saved, zipped: false };
+    return { saved, zipped: false, sizes };
   }
 
   let saved = 0;
