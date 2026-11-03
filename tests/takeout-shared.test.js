@@ -935,11 +935,12 @@ test('singleArtifactPackage bundles data tables and mind maps like before', () =
   }), null);
 });
 
-test('takeoutChatFullCitations follows the Citation detail setting', () => {
-  assert.equal(NLME.takeoutChatFullCitations({ citationDetail: 'quotes' }), true);
-  assert.equal(NLME.takeoutChatFullCitations({ citationDetail: 'titles' }), false);
-  assert.equal(NLME.takeoutChatFullCitations({ citationDetail: 'none' }), false);
-  assert.equal(NLME.takeoutChatFullCitations({}), true);
+test('chatCitationMode follows Citation detail with quotes as default', () => {
+  assert.equal(NLME.chatCitationMode({ citationDetail: 'titles' }), 'titles');
+  assert.equal(NLME.chatCitationMode({ citationDetail: 'none' }), 'none');
+  assert.equal(NLME.chatCitationMode({}), 'quotes');
+  assert.equal(NLME.chatCitationMode({ citationDetail: 'bogus' }), 'quotes');
+  assert.equal(NLME.takeoutChatFullCitations, undefined);
 });
 
 test('slideFormatsFor gives both formats only when asked', () => {

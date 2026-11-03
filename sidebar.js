@@ -637,6 +637,15 @@ async function loadSettings() {
   document.getElementById('slides-format-select').value = settings.slidesFormat;
   document.getElementById('citation-detail-select').value = settings.citationDetail;
   applyStudioTabVisibility();
+  updateChatCitationInfo();
+}
+
+// The Chat tab's one-line reminder of the Citation detail it will export with
+function updateChatCitationInfo() {
+  const el = document.getElementById('chat-citation-info');
+  if (!el) return;
+  const label = { quotes: 'Full quotes', titles: 'Source titles only', none: 'No citations' }[NLME.chatCitationMode(settings)];
+  el.textContent = `Citations: ${label} · change in ⚙️ Settings`;
 }
 
 function applyStudioTabVisibility() {
@@ -693,6 +702,7 @@ async function saveSettings() {
   settings.citationDetail = ['titles', 'none'].includes(document.getElementById('citation-detail-select').value)
     ? document.getElementById('citation-detail-select').value : 'quotes';
   applyStudioTabVisibility();
+  updateChatCitationInfo();
 
   await chrome.storage.local.set({ settings });
 }
@@ -4152,6 +4162,7 @@ async function scanChatPage() {
  * Render chat scan results summary
  */
 function renderChatSummary(chatData) {
+  updateChatCitationInfo();
   const chatResults = document.getElementById('chat-scan-results');
   const chatCount = document.getElementById('chat-count');
   const exportBtn = document.getElementById('export-chat-btn');
@@ -4207,24 +4218,20 @@ function renderChatSummary(chatData) {
   exportBtn.parentNode.replaceChild(newExportBtn, exportBtn);
 
   newExportBtn.addEventListener('click', async () => {
-    const extractFullCitations = document.getElementById('extract-full-citations-checkbox')?.checked || false;
-    await runExclusive('Chat export', () => exportChat(chatData, extractFullCitations));
+    await runExclusive('Chat export', () => exportChat(chatData));
   });
 }
 
 // Chat export (Milestone 3a): the shared export shell around runChatJob.
 // One package: a single Markdown file, or a ZIP from buildChatFiles.
-async function exportChat(chatData, extractFullCitations = false) {
+// Citations follow the Citation detail setting (NLME.chatCitationMode).
+async function exportChat(chatData) {
   startExportTiming();
-  {
-    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (activeTab) await preflightWarn(activeTab.id, 'chat');
-  }
   exportTimer.merge(lastChatScanTiming);
   console.log('[NotebookLM Takeout] Starting chat export...');
 
-  await withExportShell({ label: 'chat', overlayMessage: 'Preparing to export chat...' }, async shell => {
-    const { result, zips, auditOk } = await runChatJob(shell, chatData, { extractFullCitations });
+  await withExportShell({ label: 'chat', preflight: 'chat', overlayMessage: 'Preparing to export chat...' }, async shell => {
+    const { result, zips, auditOk } = await runChatJob(shell, chatData, { citationMode: NLME.chatCitationMode(settings) });
 
     shell.finish({
       kind: 'messages',
@@ -4247,11 +4254,14 @@ async function exportChat(chatData, extractFullCitations = false) {
  *
  * @param {object} shell withExportShell's shell
  * @param {object} chatData SCAN_CHAT's chatData (messagePairs, stats, ...)
- * @param {CategoryTarget & { extractFullCitations?: boolean, forceZip?: boolean }} [options]
+ * @param {CategoryTarget & { citationMode?: 'quotes'|'titles'|'none', forceZip?: boolean }} [options]
+ *   citationMode: Citation detail. 'quotes' hovers each citation for its
+ *   quote; 'titles' keeps the [n] markers and source titles without hovering;
+ *   'none' drops the markers and the Sources section (no hovering either).
  *   forceZip: always the full file set (Full Takeout), never one loose .md
  * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean }>}
  */
-async function runChatJob(shell, chatData, { extractFullCitations = false, forceZip = false, pathPrefix = '', zipKind = 'chat', folder = null } = {}) {
+async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip = false, pathPrefix = '', zipKind = 'chat', folder = null } = {}) {
   const messagePairs = chatData.messagePairs;
   // Scan completeness (Milestone 2, Resilience #2): known before the job
   // starts, so they lead errors.md
@@ -4269,18 +4279,19 @@ async function runChatJob(shell, chatData, { extractFullCitations = false, force
     items: messagePairs,
     perZip: Infinity,
     seedErrors,
-    extractOne: (pair, ctx) => extractChatPair(shell, pair, ctx, { extractFullCitations, total: messagePairs.length }),
+    extractOne: (pair, ctx) => extractChatPair(shell, pair, ctx, { citationMode, total: messagePairs.length }),
     packageBatch: async (messages, info) => {
       console.log(`[NotebookLM Takeout] Processing complete: ${messages.length} messages`);
       shell.progress('Creating export...', 1);
-      auditDoc = buildChatAuditDoc(chatData, messages, !!extractFullCitations);
+      auditDoc = buildChatAuditDoc(chatData, messages, citationMode);
       const { files, single } = buildChatFiles(messages, {
         meta: shell.meta,
         chatData,
         errors: info.errors,
         auditDoc,
         partial: info.partial,
-        forceZip
+        forceZip,
+        citationMode
       });
       if (single) {
         // Today's download name for the single file
@@ -4302,21 +4313,21 @@ async function runChatJob(shell, chatData, { extractFullCitations = false, force
 
 /**
  * Extract one message pair for the job runner: the citation markers in the
- * answer, and (full-citation mode) each source's quote via
- * EXTRACT_MESSAGE_CITATIONS. Never throws: citation and processing errors go
+ * answer, and ('quotes' mode) each source's quote via
+ * EXTRACT_MESSAGE_CITATIONS. 'none' mode reads no citations at all. Never throws: citation and processing errors go
  * to ctx.warn as { message, messageIndex, userQuestion, type[, stack] } and
  * the message is kept (without citations when processing failed).
  *
  * @param {object} shell withExportShell's shell (tab, progress)
  * @param {{userMessage: string, aiResponseHTML: string, date?: string, domIndex?: number}} pair
  * @param {{index: number, warn: Function}} ctx
- * @param {{ extractFullCitations?: boolean, total: number }} options
+ * @param {{ citationMode?: 'quotes'|'titles'|'none', total: number }} options
  *   total: message pairs in the job (progress text)
  * @returns {Promise<object>} ProcessedMessage: { date, userMessage,
  *   aiResponseHTML, sources: [{ sourceIndex, text, quote }], fullCitations,
  *   stats: { hasCitations, citationsFound, successfulExtractions, failedExtractions } }
  */
-async function extractChatPair(shell, pair, ctx, { extractFullCitations = false, total }) {
+async function extractChatPair(shell, pair, ctx, { citationMode = 'quotes', total }) {
   const n = ctx.index + 1;
   const stats = { hasCitations: false, citationsFound: 0, successfulExtractions: 0, failedExtractions: 0 };
   const message = sources => ({
@@ -4324,7 +4335,7 @@ async function extractChatPair(shell, pair, ctx, { extractFullCitations = false,
     userMessage: pair.userMessage,
     aiResponseHTML: pair.aiResponseHTML,
     sources,
-    fullCitations: !!extractFullCitations,
+    fullCitations: citationMode === 'quotes',
     stats
   });
   const warn = (type, msg, extra = {}) => ctx.warn({
@@ -4334,6 +4345,10 @@ async function extractChatPair(shell, pair, ctx, { extractFullCitations = false,
     type,
     ...extra
   });
+
+  // 'none': the Markdown drops the markers and has no Sources section, so
+  // there is nothing to read or hover
+  if (citationMode === 'none') return message([]);
 
   try {
     // Extract citation buttons from HTML
@@ -4387,8 +4402,8 @@ async function extractChatPair(shell, pair, ctx, { extractFullCitations = false,
       });
     }
 
-    // Extract full citation details if enabled
-    if (extractFullCitations && messageSources.size > 0) {
+    // Extract full citation details ('quotes' mode)
+    if (citationMode === 'quotes' && messageSources.size > 0) {
       console.log(`[NotebookLM Takeout] Message ${n}: Extracting full citation details for ${messageSources.size} sources...`);
       shell.progress(`Message ${n}/${total}: Extracting ${messageSources.size} quotes (this may take a minute)...`, n / total);
 
@@ -4467,19 +4482,22 @@ async function extractChatPair(shell, pair, ctx, { extractFullCitations = false,
  *
  * @param {object} chatData the scan (messagePairs, stats, notebookTitle, notebookSummary)
  * @param {object[]} messages ProcessedMessage[] from extractChatPair, in pair order
- * @param {boolean} needQuotes full-citation mode: a citation needs its quote
+ * @param {'quotes'|'titles'|'none'} citationMode 'quotes': a citation needs
+ *   its quote; 'none': no citations are exported, so none are expected
  * @returns {{ ok: boolean, text: string }} the _audit.md document
  */
-function buildChatAuditDoc(chatData, messages, needQuotes) {
+function buildChatAuditDoc(chatData, messages, citationMode = 'quotes') {
   const audit = newAudit();
   audit.expected.items = chatData.stats?.pairsInDom ?? chatData.messagePairs.length;
   audit.written.items = messages.length;
-  chatData.messagePairs.forEach((pair, i) => {
-    addCitationCoverage(audit, pair.aiResponseHTML, messages[i] ? messages[i].sources : [], needQuotes);
-  });
+  if (citationMode !== 'none') {
+    chatData.messagePairs.forEach((pair, i) => {
+      addCitationCoverage(audit, pair.aiResponseHTML, messages[i] ? messages[i].sources : [], citationMode === 'quotes');
+    });
+  }
   const chatHtml = chatData.messagePairs.map(p => p.aiResponseHTML || '').join('\n');
   convertCounted(audit, chatHtml, () => convertChatToMarkdown(
-    chatData.notebookTitle, chatData.notebookSummary, messages, false));
+    chatData.notebookTitle, chatData.notebookSummary, messages, false, citationMode === 'none'));
   return auditMarkdown('Chat Export', audit);
 }
 
@@ -4500,12 +4518,15 @@ const CHAT_VERSION_INFO = {
  * @param {object[]} messages ProcessedMessage[] from extractChatPair (may be
  *   empty for an errors-only package: then no chat files)
  * @param {{ meta: object, chatData: object, errors?: Array,
- *   auditDoc: {ok: boolean, text: string}, partial?: boolean, forceZip?: boolean }} options
+ *   auditDoc: {ok: boolean, text: string}, partial?: boolean, forceZip?: boolean,
+ *   citationMode?: 'quotes'|'titles'|'none' }} options
  *   forceZip: always return ZIP files (Full Takeout)
+ *   citationMode: 'none' writes no [n] markers and no Sources section (and,
+ *   with no quotes, no code-blocks version)
  * @returns {{ files: Array<{path: string, data: string, title?: string, variant?: string, itemKind?: string}>,
  *   single: object|null }} single is also files[0] when set
  */
-function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, partial = false, forceZip = false }) {
+function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, partial = false, forceZip = false, citationMode = 'quotes' }) {
   const chatTitle = `Chat — ${meta.notebook}`;
   const frontMatter = variant => NLME.frontMatter({
     title: chatTitle,
@@ -4523,7 +4544,7 @@ function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, parti
   // answer has quotes; with-images only when the Markdown has images
   const versionFiles = [];
   if (messages.length > 0) {
-    const toMarkdown = codeBlocks => convertChatToMarkdown(chatData.notebookTitle, chatData.notebookSummary, messages, codeBlocks);
+    const toMarkdown = codeBlocks => convertChatToMarkdown(chatData.notebookTitle, chatData.notebookSummary, messages, codeBlocks, citationMode === 'none');
     const baseMarkdown = toMarkdown(false);
     const hasQuotes = messages.some(m => (m.sources || []).some(src => src.quote && src.quote.trim()));
     const hasImages = /!\[/.test(baseMarkdown);
@@ -4562,13 +4583,12 @@ function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, parti
 
   // errors.md only when something went wrong (no "Errors: 0" files)
   if (errors.length > 0) {
-    const stats = {
-      'Chat': chatData.notebookTitle,
-      'Total Messages': totalMessages,
-      'Messages with Citations': totals.withCitations,
-      'Total Citations Found': totals.citationsFound,
-      'Unique Citations Extracted': totals.citationsExtracted
-    };
+    const stats = { 'Chat': chatData.notebookTitle, 'Total Messages': totalMessages };
+    if (citationMode !== 'none') {
+      stats['Messages with Citations'] = totals.withCitations;
+      stats['Total Citations Found'] = totals.citationsFound;
+      stats['Unique Citations Extracted'] = totals.citationsExtracted;
+    }
     if (messages.some(m => m.fullCitations)) {
       stats['Successful Extractions'] = totals.successful;
       stats['Failed Extractions'] = totals.failed;
@@ -4590,7 +4610,7 @@ function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, parti
   let indexContent = `# ${chatTitle}\n\n`;
   indexContent += `Generated: ${new Date().toLocaleString()}\n\n`;
   indexContent += `Total Messages: ${totalMessages}\n`;
-  indexContent += `Messages with Citations: ${totals.withCitations}\n`;
+  if (citationMode !== 'none') indexContent += `Messages with Citations: ${totals.withCitations}\n`;
   indexContent += `Total Files: ${versionFiles.length + (errors.length > 0 ? 1 : 0)}\n\n`;
   indexContent += '---\n\n';
 
@@ -4643,8 +4663,10 @@ function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, parti
 
 /**
  * Convert chat data to markdown format
+ * dropCitations: Citation detail 'none' — remove the [n] markers and the
+ * Sources section (the same meaning as convertToMarkdown's last parameter).
  */
-function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citationsCodeBlock = true) {
+function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citationsCodeBlock = true, dropCitations = false) {
   logger.info('Markdown', `Converting chat to markdown: "${notebookTitle}"`);
   logger.info('Markdown', `  - Message count: ${messages.length}`);
 
@@ -4671,7 +4693,7 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
 
   // Add custom rules with message index tracking
   console.log('[NotebookLM Takeout] Adding turndown rules for per-message citations');
-  addChatTurndownRules(turndownService, citationsCodeBlock, () => currentMessageIndex);
+  addChatTurndownRules(turndownService, citationsCodeBlock, () => currentMessageIndex, dropCitations);
 
   let currentDate = null;
 
@@ -4715,7 +4737,7 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
     markdown += `**A:**\n${aiResponseMarkdown}\n\n`;
 
     // Add sources for this message
-    if (msg.sources && msg.sources.length > 0) {
+    if (!dropCitations && msg.sources && msg.sources.length > 0) {
       markdown += '**Sources:**\n\n';
       msg.sources.forEach(source => {
         // Add anchor for source with message-specific ID
@@ -4753,8 +4775,9 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
 
 /**
  * Add TurndownService rules for chat conversion
+ * dropCitations: citation markers (and the footnote list under a table) convert to nothing
  */
-function addChatTurndownRules(turndownService, citationsCodeBlock, getCurrentMessageIndex) {
+function addChatTurndownRules(turndownService, citationsCodeBlock, getCurrentMessageIndex, dropCitations = false) {
   // Track citation occurrences within each message
   const citationOccurrences = new Map(); // "messageIdx:sourceIdx" -> count
 
@@ -4901,7 +4924,7 @@ function addChatTurndownRules(turndownService, citationsCodeBlock, getCurrentMes
         });
 
         // Add footnotes if found
-        if (footnotes.length > 0) {
+        if (footnotes.length > 0 && !dropCitations) {
           markdown += '\n**References:**\n\n';
           footnotes.forEach(footnote => {
             markdown += footnote + '\n\n';
@@ -4945,6 +4968,7 @@ function addChatTurndownRules(turndownService, citationsCodeBlock, getCurrentMes
       return true;
     },
     replacement: (content, node) => {
+      if (dropCitations) return '';
       // Try mat-icon first (new DOM), then span (old DOM)
       const matIcon = node.querySelector('mat-icon');
       const span = node.querySelector('span');

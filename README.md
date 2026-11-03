@@ -119,8 +119,10 @@ The quoted passage from the source…
 
 1. **Chat** tab → **Scan Chat** (scrolls to load the whole history and opens collapsed
    citation groups).
-2. Optional: **Extract Full Citations** adds the quoted passage for every citation. This is
-   slower: it reads each citation's popup.
+2. Chat follows ⚙️ **Citation detail** (the line above Export Chat shows the current level):
+   Full quotes adds the quoted passage for every citation (slower: it reads each citation's
+   popup), Source titles only keeps the [n] links without quotes, No citations removes the
+   [n] markers and the Sources section.
 3. **Export Chat**. A clean single-version chat downloads as one file,
    `{notebook}-chat-{timestamp}.md`. With several versions, errors or a failed audit you get
    `{notebook}-chat-{timestamp}.zip` with `chat.md` (and `chat-code-blocks.md` /
@@ -152,9 +154,8 @@ sources, then notes, then chat, then artifacts. It scans each category first, so
 shows what is coming; a category with nothing in it is reported as "none in notebook". It
 uses your Settings (versions, citation detail, slide format) and the Artifacts tab's **Zip**
 toggle (the saved "Always use ZIP" setting until you open that tab). Chat follows
-⚙️ **Citation detail** too (Full quotes gives quoted chat citations, the other levels give
-titles-only sources); the Chat tab keeps its own **Extract Full Citations** checkbox for its
-own export. Every Slides artifact is saved twice, as `.pdf` and `.pptx`, whatever the slide
+⚙️ **Citation detail** too, the same as the Chat tab (Full quotes, Source titles only or No
+citations). Every Slides artifact is saved twice, as `.pdf` and `.pptx`, whatever the slide
 format setting says (the Artifacts tab still uses that setting).
 
 *With ZIP on* you get one ZIP per category plus an index ZIP:
@@ -244,7 +245,7 @@ are disabled and a second click shows "… is still running".
 | Always use ZIP for batch downloads | off | Default for the Artifacts ZIP toggle, also used by Full Takeout |
 | Slide deck format | PDF | PDF or PowerPoint |
 | Source versions | base + metadata | Any mix of: base, with AI summary & topics, each optionally with images |
-| Citation detail | Full quotes | "Source titles only" skips reading each citation's popup: much faster, every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. |
+| Citation detail (notes and chat) | Full quotes | "Source titles only" skips reading each citation's popup: much faster, every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. |
 | Note versions | base + code blocks | Base always; code-block quotes and an image version are added only when a note has quotes or images |
 | Sources / notes per ZIP | 25 | Batch size for large exports |
 | Clean OCR artifacts from citations | on | Strips `~~~`, `:~:` and similar noise |

@@ -184,16 +184,17 @@ async function saveFiles(files, { zipName, folder } = {}) {
  *                              // raises success to warning (not on cancel)
  *                              // saved: ZIP names or the Downloads folder
  *                              // retry: { count, run } for "Retry N failed"
- *                              // runFullTakeout shows its combined toast
- *                              // itself instead
+ *                              // (runFullTakeout builds its own results panel
+ *                              // and does not call finish)
  * }
  *
- * @param {{ label: string, healthType?: string, overlayMessage?: string }} options
+ * @param {{ label: string, healthType?: string, preflight?: string, overlayMessage?: string }} options
  *   label names the export in logs; healthType ('notes', 'sources', ...) runs
- *   the DOM health check first
+ *   the DOM health check first; preflight ('chat') shows preflightWarn's
+ *   toast after the tab lookup
  * @param {(shell: object) => Promise<void>} run
  */
-async function withExportShell({ label, healthType, overlayMessage }, run) {
+async function withExportShell({ label, healthType, preflight, overlayMessage }, run) {
   let tab = null;
   let overlayShown = false;
   let panelShown = false;
@@ -209,6 +210,10 @@ async function withExportShell({ label, healthType, overlayMessage }, run) {
 
   try {
     [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+    // Pre-flight warning (the DOM-health type, e.g. 'chat'): after the tab lookup, inside
+    // the shell, so its cleanup covers it
+    if (preflight) await preflightWarn(tab.id, preflight);
 
     // Project name and timestamp once (same for every batch)
     const projectName = await getProjectName(tab.id);
@@ -362,7 +367,7 @@ async function runFullTakeout() {
 
   startExportTiming();
   const zipMode = takeoutZipEnabled();
-  const extractFullCitations = NLME.takeoutChatFullCitations(settings);
+  const citationMode = NLME.chatCitationMode(settings);
 
   await withExportShell({ label: 'takeout', healthType: 'notes', overlayMessage: 'Preparing Full Takeout...' }, async shell => {
     const tabId = shell.tab.id;
@@ -392,7 +397,7 @@ async function runFullTakeout() {
         // Messages that could not be read are not "none in notebook": the
         // job still runs and writes them to errors.md
         isEmpty: chatData => NLME.chatScanIsEmpty(chatData),
-        run: (catShell, chatData, target) => runChatJob(catShell, chatData, { ...target, extractFullCitations, forceZip: true })
+        run: (catShell, chatData, target) => runChatJob(catShell, chatData, { ...target, citationMode, forceZip: true })
       },
       {
         name: 'Artifacts', folder: 'artifacts',

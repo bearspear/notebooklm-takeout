@@ -133,15 +133,7 @@
           <p class="info-text">Export your conversation with NotebookLM, including questions, answers, and citations.</p>
         </div>
 
-        <div class="chat-options" style="margin: 12px 0;">
-          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-            <input type="checkbox" id="extract-full-citations-checkbox" style="cursor: pointer;">
-            <span>Extract Full Citations (slower, includes quotes)</span>
-          </label>
-          <p class="info-text" style="margin: 4px 0 0 28px; font-size: 12px; color: #666;">
-            When enabled, extracts full citation details with quotes. This takes longer for chats with many citations.
-          </p>
-        </div>
+        <p id="chat-citation-info" class="info-text chat-citation-info">Citations: Full quotes · change in ⚙️ Settings</p>
 
         <div id="chat-scan-results" class="scan-results">
           <p class="empty-message">Click "Scan Chat" to load your conversation history.</p>
@@ -323,13 +315,13 @@
         <h3 class="setting-section-title">Note Options</h3>
 
         <div class="setting-group">
-          <label for="citation-detail-select">Citation detail</label>
+          <label for="citation-detail-select">Citation detail (notes and chat)</label>
           <select id="citation-detail-select" class="number-input">
             <option value="quotes">Full quotes (slower)</option>
             <option value="titles">Source titles only (fast)</option>
             <option value="none">No citations (plain text, fast)</option>
           </select>
-          <p class="setting-help">"Source titles only" skips reading each citation's popup: every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. Both are much faster for large exports.</p>
+          <p class="setting-help">Applies to notes and to the chat export (the Chat tab and Full Takeout). "Source titles only" skips reading each citation's popup: every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. Both are much faster for large exports.</p>
         </div>
 
         <div class="setting-group">

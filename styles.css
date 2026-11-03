@@ -1714,3 +1714,9 @@ body.job-running #rescan-btn {
   opacity: 0.6;
   cursor: default;
 }
+
+.chat-citation-info {
+  margin: 12px 0;
+  font-size: 12px;
+  color: #666;
+}

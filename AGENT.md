@@ -380,9 +380,16 @@ side panel.
      where `NLME.isCollapsedCitationGroup` is true: an open group's button reads "Hide
      additional citations" (`unfold_less`), and clicking it would close the group again
      (this lost ~250 citations on a second scan before Nov 2026). Up to 3 passes, re-scanned.
-2. `exportChat(chatData, extractFullCitations)`:
-   - Optionally calls `EXTRACT_MESSAGE_CITATIONS` per message to populate quote text: one
+2. `exportChat(chatData)` reads `NLME.chatCitationMode(settings)` (⚙️ Citation detail:
+   `'quotes'` default | `'titles'` | `'none'`) and passes it to
+   `runChatJob(shell, chatData, { citationMode, forceZip, pathPrefix, zipKind, folder })`;
+   the shell runs the chat pre-flight (`withExportShell({ preflight: 'chat' })`):
+   - `'quotes'` calls `EXTRACT_MESSAGE_CITATIONS` per message to populate quote text: one
      hover per distinct citation number per answer (~1,400 for a 219-message chat).
+     `'titles'` keeps the `[n]` markers and source titles with no hovering. `'none'` reads and
+     hovers nothing: `convertChatToMarkdown(..., dropCitations)` writes no markers and no
+     Sources section, `buildChatAuditDoc` expects no citations, and with no quotes there is no
+     code-blocks version.
    - `totalCitationsFound` counts numbered markers only (not group buttons).
    - `convertChatToMarkdown` builds the final markdown using Turndown with chat-specific
      rules (`addChatTurndownRules`).
@@ -1069,9 +1076,10 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined toa
 - **Cancel** ends the current category as `partial` and marks the rest `skipped`; a cancel
   between categories adds one takeout-level "Cancelled by user before …" entry. The root
   files are still written.
-- **Chat citations** follow ⚙️ Citation detail (`NLME.takeoutChatFullCitations(settings)`:
-  Full quotes → `EXTRACT_MESSAGE_CITATIONS` per message; titles/none → titles-only Sources),
-  while the Chat tab's own export keeps its Extract Full Citations checkbox.
+- **Chat citations** follow ⚙️ Citation detail (`NLME.chatCitationMode(settings)`), the same
+  as the Chat tab (which has no checkbox of its own, only an info line): Full quotes →
+  `EXTRACT_MESSAGE_CITATIONS` per message; titles → titles-only Sources; none → no markers,
+  no Sources section, no hovering.
 
 ### Notifications
 
