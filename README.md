@@ -467,7 +467,7 @@ injected.js           Page-world hook that captures download URLs
 mindmap-template.html Interactive mind map viewer template
 turndown.min.js       HTML → Markdown (bundled)
 jszip.min.js          ZIP creation (bundled)
-tests/                node:test unit tests for takeout-shared.js and takeout-job.js
+tests/                node:test unit tests for takeout-shared.js, takeout-job.js, the message protocol and file structure
 ```
 
 Check your changes:
@@ -482,6 +482,21 @@ DOM behaviour is verified in Chrome with the health check and real exports.
 contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
+
+**1.7.0 (Nov 2026)**: one converter, clean structure, footnotes.
+- New ⚙️ options, both off by default: footnote-style citations (`[^1]`, for Obsidian, Typora and
+  other Markdown apps) and Obsidian-friendly file names.
+- Formulas are now written as LaTeX in source guides, the notebook summary and citation quotes
+  (they used to come out as doubled text). The citation cache is cleared once when updating to
+  1.7.0, so quotes are read again with formulas.
+- Numbered lists that start after 1 keep their numbering in quotes, guides and the summary.
+- Every category `_index.md` starts with front matter (`kind: index`), like the items.
+- Split sources exports get an `_audit.md` per part; Resume can be cancelled while it scans;
+  folder-mode manifests record downloaded file sizes; Delete Selected counts only items it can
+  delete; a delete closes only its own menu and dialog.
+- Under the hood: `sidebar.js` is split into one file per tab, the page script answers messages
+  through a handler table, and one module (`takeout-markdown.js`) holds all Markdown conversion.
+  Exports are otherwise byte-identical to 1.6.0.
 
 **1.6.0 (Nov 2026)**: faster re-exports, resume, and a complete Generated tab.
 - Re-exports reuse citation quotes read before (⚙️ "Reuse citation quotes from earlier exports", with a

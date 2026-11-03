@@ -7,7 +7,10 @@ the table of contents to jump.
 - Repo root: `/Users/mbehringer/Downloads/notebooklm-exporter`
 - Remote: `git@github.com-personal:bearspear/notebooklm-takeout.git`
 - Manifest: V3 Chrome extension, no build step
-- Latest meaningful work: Milestone 3c "Faster re-exports, resume" (v1.6.0): a citation quote
+- Latest meaningful work: Milestone 3d "One converter, clean structure, footnotes" (v1.7.0):
+  `sidebar.js` split into one file per tab, a handler table in `content.js`, one Markdown converter
+  (`takeout-markdown.js`), footnote citations, Obsidian-friendly names, and the 3c leftovers. Milestone 3c
+  "Faster re-exports, resume" (v1.6.0) added a citation quote
   cache for re-exports, resuming a cancelled or cut-off export, deleting notes from the
   Generated tab, a complete Generated tab. Milestone 3b (v1.5.0) added list filter, sort and
   retry; Milestone 3a (v1.4.0) was Full Takeout. Milestone 2 (v1.3.0) was "Lean, shared and correct output"; Milestone 1
@@ -135,24 +138,26 @@ sendResponse later).
 ```
 notebooklm-exporter/
 ├── manifest.json           — V3 manifest, permissions, side_panel, content_scripts
-├── takeout-shared.js (1042) — Selectors + DOM-free helpers (NLME global); content script,
+├── takeout-shared.js (2147) — Selectors + DOM-free helpers (NLME global); content script,
 │                             sidebar, service worker (importScripts) and Node tests load it
-├── takeout-job.js (85)     — NLME.runExportJob: the one DOM-free job runner (sidebar + Node tests)
-├── takeout-markdown.js     — NLMEMarkdown: the one Markdown converter + KaTeX (sidebar + page)
-├── tests/                  — node:test unit tests for takeout-shared.js, takeout-job.js and
-│                             the message protocol
-├── sidebar.html  ( 436)    — Side panel UI: tabs, controls, settings/health panels
-├── sidebar-core.js (1579) — Settings, init, tab and notebook switching, job lock, shared helpers,
+├── takeout-job.js (228)    — NLME.runExportJob: the one DOM-free job runner (sidebar + Node tests)
+├── takeout-markdown.js (1029) — NLMEMarkdown: the one Markdown converter + KaTeX (sidebar + page)
+├── tests/                  — node:test unit tests for takeout-shared.js, takeout-job.js, the
+│                             message protocol and the file structure (load order, unique names)
+├── sidebar.html  ( 470)    — Side panel UI: tabs, controls, settings/health panels
+├── sidebar-core.js (1618) — Settings, init, tab and notebook switching, job lock, shared helpers,
 │                             notes Markdown (convertToMarkdown), job records (see Milestone 3d contracts)
-├── sidebar-artifacts.js (1161), sidebar-notes.js (786), sidebar-sources.js (727),
-│   sidebar-chat.js (756), sidebar-generated.js (306), sidebar-health.js (304)
+├── sidebar-artifacts.js (1183), sidebar-notes.js (788), sidebar-sources.js (741),
+│   sidebar-chat.js (772), sidebar-generated.js (314), sidebar-health.js (304)
 │                           — one file per tab (scan, list, export job, build files)
-├── sidebar-takeout.js (519) — saveFiles, fetchDownload, withExportShell, runFullTakeout
-├── styles.css    (1644)    — Side panel styles
-├── content.js    (4161)    — DOM scraping + extraction, runs on NotebookLM
+├── sidebar-list.js (336)   — List toolbar: filter, type chips, sort, select all visible
+├── sidebar-results.js (148) — Results panel and Resume banner
+├── sidebar-takeout.js (934) — saveFiles, fetchDownload, withExportShell, runFullTakeout, resumeJob
+├── styles.css    (1791)    — Side panel styles
+├── content.js    (4229)    — DOM scraping + extraction, runs on NotebookLM (HANDLERS table)
 ├── mindmap-extract.js (325) — Mind map SVG/tree extraction; content script and injected
 │                             by background into the *.scf.usercontent.goog app frame
-├── background.js (451)    — Service worker: download interception/naming, mind map frame extraction (no ZIP code)
+├── background.js (467)    — Service worker: download interception/naming, mind map frame extraction, citation cache clear on update (no ZIP code)
 ├── injected.js   (  68)    — MAIN-world download hook (window.open + link clicks), armed per click
 ├── mindmap-template.html (371) — Standalone interactive mindmap viewer (used as template)
 ├── jszip.min.js  (  12)    — Bundled JSZip
@@ -1427,6 +1432,44 @@ not Citation detail 'none') or on `obsidianNames`.
   and manifest take their paths from the same file entries, so their links follow the new names.
   The Full Takeout root folder (ZIP root and, in folder mode, the `<name> takeout <ts>` folder) goes through it too. ZIP names (`NLME.zipName`) are not changed. Any new name builder must use these helpers.
 
+### 3c leftovers (Task 6) and delete cleanup (Task 7)
+
+- **Sources `_audit.md` per part.** `NLME.partAudit(current, before, { attempted, written })` (`diffAudit`
+  plus the part's own item counts). Split sources exports write `sources/part-N/_audit.md` titled
+  "Sources Export (part N of M)" covering that part only; the last part adds a "Whole run" section.
+  Notes use the same helper. Unsplit exports keep one run-wide audit.
+- **Resume scan is cancellable.** `resumeJob` shows `#download-progress` (Cancel wired to `requestCancel`)
+  while it scans, in `try/finally` so every exit hides it. Cancel is checked before each scan and after the
+  last one, before `clearMissingFromRecord` and `runRetryChain`.
+- **Settle gate.** `NLME.createSettleGate()` hands `refreshForTab` a token per `settleMs` navigation
+  (`current()`, `owesRescan`, `settled()`). After a wait, and after the `chrome.tabs.query` that follows
+  it, a stale token returns without touching the banner or rescanning; a discarded switched-notebook
+  settle passes its owed rescan to the newer one.
+- **Menu and dialog cleanup in deletes (content.js).** `closeMenuBackdrops(panels)` clicks only the
+  backdrops of the given menu panels' own overlays (`overlayBackdropsOf`: the previous sibling of the
+  overlay host, or a backdrop child of the host); if none is found, only `.cdk-overlay-transparent-backdrop`.
+  Without an argument it clicks every backdrop (no caller left). `deleteStudioItem` / `deleteSourceNote`
+  snapshot `existingDialogs` before the delete click; on their timeout paths `closeNewDialogs(existingDialogs)`
+  dismisses only dialogs not in that snapshot (their own backdrop, else Escape), so a confirm dialog the
+  delete opened does not stay open and a dialog that existed before is never touched.
+- **Delete Selected count.** `isStudioItemUntitled` is shared by the button label and the confirm in
+  `handleStudioBulkDelete`; untitled Studio items are not counted (Sources-panel notes are).
+- **Folder-mode sizes.** `downloadUrlTo` returns the download id; `downloadSizeWhenDone(id)` polls
+  `chrome.downloads.search({ id })` (500 ms, 120 s cap, never rejects) through the pure
+  `NLME.downloadSizeStatus`. `saveFiles` folder mode returns `sizes` (promises); `runArtifactsJob` sets
+  `entry.bytes` as they resolve and waits for them just before the root files ("Reading file sizes..."),
+  racing the wait against `shell.isCancelled()` (polled every 500 ms) so a cancel skips it and the sizes
+  stay `null`. `buildManifest` honours `entry.bytes` for url entries. Applies to every
+  `DIRECT_DOWNLOAD_URL` entry (slides, audio, video). No new permission.
+- **Category `_index.md` front matter.** `NLME.categoryIndexFrontMatter(meta, { title, category, part })`
+  (the item fields plus `kind: "index"`, `category`, and `part` for split exports) in the notes, sources,
+  chat and artifacts index builders. The root takeout index already had `kind: takeout`.
+- **Citation cache clear on update.** `NLME.versionLess(a, b)` and
+  `NLME.shouldClearCitationCache(details, currentVersion)`; `background.js` registers
+  `chrome.runtime.onInstalled` at top level and calls `NLME.citationCacheClear(chrome.storage.local)` only
+  when `reason === 'update'`, `previousVersion < 1.7.0` and the running version is >= 1.7.0 (quotes cached
+  before 1.7.0 were read without formulas). Fresh installs and 1.7.x updates do nothing.
+
 ## Known issues and latent bugs
 
 These are deliberate non-fixes or known limitations. Don't "fix" them without checking the
@@ -1669,6 +1712,6 @@ node --test tests/
 
 ---
 
-**Last refreshed**: 2026-11-03 (Milestone 3c, v1.6.0). After significant drift events or pipeline rewrites, update
+**Last refreshed**: 2026-11-03 (Milestone 3d, v1.7.0). After significant drift events or pipeline rewrites, update
 this file. It is the single document an agent should read before doing anything in this
 repo.
