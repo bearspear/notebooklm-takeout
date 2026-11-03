@@ -62,6 +62,7 @@ class Report:
     notebook: str = ''
     root: str = None
     partial: bool = False
+    files: list = field(default_factory=list)
     findings: list = field(default_factory=list)
 
     def add(self, level, code, detail):
@@ -158,6 +159,8 @@ def check_markdown(report, rel, text):
         if s in text:
             report.add('fail', 'sentinel', f'{rel}: internal marker U+{ord(s):04X} left in the output')
             break
+    if '[object ' in text:
+        report.add('fail', 'js-leftover', f'{rel}: contains "[object …]" (a JavaScript value written as text)')
     body = _strip_code(text)
     defs = re.findall(r'^\[\^([^\]\s]+)\]:', body, re.M)
     refs = set(re.findall(r'\[\^([^\]\s]+)\](?!:)', re.sub(r'^\[\^[^\]\s]+\]:', '', body, flags=re.M)))
@@ -229,6 +232,7 @@ def check_export(root, label, nested_roots):
         report.add('warn', 'unknown-exporter', f'exporter is {m.get("exporter")!r}')
 
     files = m.get('files') or []
+    report.files = [f.get('path', '') for f in files]
     listed = set()
     for f in files:
         rel = f.get('path', '')
@@ -290,6 +294,15 @@ def check_part_sets(reports):
             groups.setdefault((stem, r.kind, r.notebook, r.total_parts), []).append(r)
     for (stem, _, _, total), members in groups.items():
         have = {r.part for r in members}
+        first_part = {}
+        for r in sorted(members, key=lambda r: r.part):
+            for path in r.files:
+                if '/' not in path:
+                    continue  # per-part files (_index, _audit, combined-*) repeat by design
+                if path in first_part and first_part[path] != r.part:
+                    r.add('warn', 'duplicate-across-parts',
+                          f'{path} is in part {first_part[path]} and part {r.part} (merging the parts keeps only one)')
+                first_part.setdefault(path, r.part)
         cancelled_at = min((r.part for r in members if r.partial), default=None)
         for p in range(1, total + 1):
             if p in have:

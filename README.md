@@ -498,7 +498,8 @@ python3 -I tools/validate_export.py NEW.zip --baseline OLD.zip --allow '\$[^$\n]
 - **Per export:** every file in `manifest.json` exists and has its listed size; no stray files;
   `_audit.md` counts ("N of M") are complete; `_index.md` / `_index.html` links open; `_index.md`
   has front matter (from 1.7.0); every footnote has exactly one definition; no internal markers
-  are left; PARTIAL and failed exports are explained from `errors.md`; split exports have every part.
+  are left; no `[object …]` text; PARTIAL and failed exports are explained from `errors.md`; split
+  exports have every part and no item file appears in two parts.
 - **Against a baseline:** files are compared after removing run details (dates, times, version,
   export statistics, file sizes that only changed because a date got shorter). Differences only in
   front matter are listed separately; `--allow REGEX` accepts known changes.
