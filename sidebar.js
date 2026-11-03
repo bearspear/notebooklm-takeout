@@ -1216,65 +1216,146 @@ async function scanArtifactsData(tabId) {
     }));
 }
 
+// Set a button's text, keeping its icon: the label is the last text node
+function setButtonLabel(btn, text) {
+  if (!btn) return;
+  const last = btn.lastChild;
+  if (last && last.nodeType === Node.TEXT_NODE) last.textContent = text;
+  else btn.append(text);
+}
+
+// The Artifacts tab's list controller (sidebar-list.js) and what it was built from.
+// startAutoRefresh calls scanPage every few seconds: when the scan finds the same
+// items the list is left alone, so typing in the filter box is never interrupted.
+let _artifactsListController = null;
+let _artifactsSignature = null;
+
+function dropArtifactsList() {
+  if (_artifactsListController) {
+    _artifactsListController.destroy();
+    _artifactsListController = null;
+  }
+  _artifactsSignature = null;
+}
+
+// Everything the rows are drawn from (and the page their buttons talk to); equal
+// signatures need no redraw
+function artifactsSignature(tab, items) {
+  const keys = NLME.listItemKeys(items, { titleOf: i => i.label, typeOf: i => i.type });
+  return JSON.stringify([tab.id, tab.url, items.map((item, i) => [keys[i], item.index, !!item.disabled, item.details || ''])]);
+}
+
+// "Download Selected (K)": disabled at K = 0
+function updateArtifactsDownloadBtn(controller = _artifactsListController) {
+  const btn = document.getElementById('download-all-btn');
+  if (!btn || !controller) return;
+  const n = controller.selectedCount();
+  btn.disabled = n === 0;
+  setButtonLabel(btn, `Download Selected (${n})`);
+}
+
 async function scanPage() {
   const resultsEl = document.getElementById('scan-results');
   const countBadge = document.getElementById('artifact-count');
-  resultsEl.innerHTML = '<p class="scanning">Scanning...</p>';
-  countBadge.textContent = '0';
+  // A live list is not blanked while rescanning: the redraw (if any) happens below
+  const listLive = !!_artifactsListController && !!resultsEl.querySelector('.artifacts-list');
+  if (!listLive) {
+    resultsEl.innerHTML = '<p class="scanning">Scanning...</p>';
+    countBadge.textContent = '0';
+  }
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
     if (!isNotebookUrl(tab?.url)) {
+      dropArtifactsList();
       resultsEl.innerHTML = '<p class="error">Please open NotebookLM first</p>';
+      countBadge.textContent = '0';
       return;
     }
 
     const items = await scanArtifactsData(tab.id);
 
     if (items.length === 0) {
+      dropArtifactsList();
       resultsEl.innerHTML = '<p class="empty-message">No downloadable artifacts found.<br><span class="hint">Make sure you have generated content in Studio.</span></p>';
+      countBadge.textContent = '0';
       return;
+    }
+
+    const signature = artifactsSignature(tab, items);
+    if (listLive && signature === _artifactsSignature && resultsEl.querySelector('.artifacts-list')) {
+      return; // unchanged: keep the list, its focus, caret, scroll and selection
     }
 
     const enabledItems = items.filter(i => !i.disabled);
     countBadge.textContent = enabledItems.length;
 
+    // A redraw must not cost the user their place: keep the Zip choice, the scroll
+    // position and, if they are typing in the filter box, focus and caret
+    const zipChecked = document.getElementById('zip-checkbox')?.checked ?? !!settings.autoZip;
+    const scrollTop = resultsEl.scrollTop;
+    const active = document.activeElement;
+    const searchHadFocus = !!active && active.classList && active.classList.contains('list-search') && resultsEl.contains(active);
+    const caret = searchHadFocus ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null;
+
+    dropArtifactsList();
     resultsEl.innerHTML = `
-      ${items.map((item, idx) => `
-        <div class="scan-item${item.disabled ? ' disabled' : ''}">
-          <div class="scan-item-icon">
-            ${getIconForType(item.type)}
-          </div>
-          <div class="scan-item-info">
-            <strong>${escapeHtml(item.label)}</strong>
-            <small>${escapeHtml(item.type)}${item.details ? ' · ' + escapeHtml(item.details) : ''}</small>
-          </div>
-          <button class="btn-icon download-single-btn" data-index="${item.index}" data-item-idx="${idx}" ${item.disabled ? `disabled title="${escapeHtml(item.type)} export not supported yet"` :`title="Download ${escapeHtml(item.label)}"`}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
-            </svg>
-            <span class="download-status"></span>
-          </button>
-        </div>
-      `).join('')}
-      ${enabledItems.length > 0 ? `
-        <div class="download-all-controls">
-          <button id="download-all-btn" class="btn btn-primary">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
-            </svg>
-            Download All (${enabledItems.length})
-          </button>
-          <label class="zip-checkbox">
-            <input type="checkbox" id="zip-checkbox" ${settings.autoZip ? 'checked' : ''}> Zip
-          </label>
-        </div>
-      ` : ''}
+      <div class="artifacts-list"></div>
+      <div class="download-all-controls">
+        <button id="download-all-btn" class="btn btn-primary" disabled>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+          </svg>
+          Download Selected (0)
+        </button>
+        <label class="zip-checkbox">
+          <input type="checkbox" id="zip-checkbox" ${zipChecked ? 'checked' : ''}> Zip
+        </label>
+      </div>
     `;
+    const listEl = resultsEl.querySelector('.artifacts-list');
+
+    const rowHtml = (item, idx) => `
+        <div class="scan-item-icon">
+          ${getIconForType(item.type)}
+        </div>
+        <div class="scan-item-info">
+          <strong>${escapeHtml(item.label)}</strong>
+          <small>${escapeHtml(item.type)}${item.details ? ' · ' + escapeHtml(item.details) : ''}</small>
+        </div>
+        <button class="btn-icon download-single-btn" data-index="${escapeHtml(String(item.index))}" data-item-idx="${idx}" ${item.disabled ? `disabled title="${escapeHtml(item.type)} export not supported yet"` :`title="Download ${escapeHtml(item.label)}"`}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+          </svg>
+          <span class="download-status"></span>
+        </button>
+      `;
+
+    _artifactsListController = createListController({
+      tab: 'artifacts',
+      container: listEl,
+      items,
+      titleOf: item => item.label,
+      typeOf: item => item.type,
+      defaultSelected: 'all',
+      canSelect: item => !item.disabled,
+      rowHtml,
+      onChange: controller => updateArtifactsDownloadBtn(controller)
+    });
+    _artifactsSignature = signature;
+
+    resultsEl.scrollTop = scrollTop;
+    if (caret) {
+      const search = listEl.querySelector('.list-search');
+      if (search) {
+        search.focus({ preventScroll: true });
+        try { search.setSelectionRange(caret[0], caret[1], caret[2] || 'none'); } catch (_) { /* not a text field */ }
+      }
+    }
 
     // Add click handlers for individual download buttons with status feedback
-    resultsEl.querySelectorAll('button[data-index]').forEach((btn) => {
+    listEl.querySelectorAll('button[data-index]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const idx = parseInt(btn.dataset.index);
         const itemIdx = parseInt(btn.dataset.itemIdx);
@@ -1331,16 +1412,18 @@ async function scanPage() {
       });
     });
 
-    // Add handler for Download All button
+    // Add handler for Download Selected button
     const downloadAllBtn = document.getElementById('download-all-btn');
-    if (downloadAllBtn) {
-      downloadAllBtn.addEventListener('click', async () => {
-        await runExclusive('Download All', () => downloadAllArtifacts(tab.id, enabledItems));
-      });
-    }
+    downloadAllBtn.addEventListener('click', async () => {
+      const selected = _artifactsListController ? _artifactsListController.selectedItems() : [];
+      if (selected.length === 0) return;
+      await runExclusive('Download All', () => downloadAllArtifacts(tab.id, selected));
+    });
+    updateArtifactsDownloadBtn();
 
   } catch (error) {
     console.error('Scan failed:', error);
+    dropArtifactsList();
     resultsEl.innerHTML = `<p class="error">Scan failed: ${escapeHtml(error.message)}</p>`;
   }
 }
@@ -3386,19 +3469,28 @@ async function scanSourcesData(tabId) {
   return { sources: response.sources || [], skippedNotes: response.skippedNotes || 0 };
 }
 
+// The Sources tab's list controller (sidebar-list.js); replaced on every redraw
+let _sourcesListController = null;
+
 /**
- * Render the list of sources with checkboxes and download buttons
+ * Render the list of sources: filter toolbar, checkboxes (all selected at first)
+ * and a download button per row
  */
 function renderSourcesList(sources, skippedNotes = 0) {
   const resultsDiv = document.getElementById('sources-scan-results');
   const countBadge = document.getElementById('sources-count');
   const exportBtn = document.getElementById('export-sources-btn');
 
+  if (_sourcesListController) {
+    _sourcesListController.destroy();
+    _sourcesListController = null;
+  }
+
   countBadge.textContent = sources.length;
 
   // Notes shown in NotebookLM's Sources panel are exported from the Notes tab
   const notesHint = skippedNotes > 0
-    ? `<p class="hint">${skippedNotes} note(s) in the Sources panel were skipped — export them from the Notes tab.</p>`
+    ? `<p class="hint">${escapeHtml(String(skippedNotes))} note(s) in the Sources panel were skipped — export them from the Notes tab.</p>`
     : '';
 
   if (sources.length === 0) {
@@ -3407,102 +3499,52 @@ function renderSourcesList(sources, skippedNotes = 0) {
     return;
   }
 
-  // Store sources for later use
-  window._currentSources = sources;
+  resultsDiv.innerHTML = notesHint + '<div class="sources-list"></div>';
+  const listEl = resultsDiv.querySelector('.sources-list');
 
-  // Create list of sources with checkboxes (similar to notes)
-  let html = notesHint + '<div class="source-scan-list">';
-
-  // Select all checkbox
-  html += `
-    <div class="source-scan-item select-all-item">
-      <input type="checkbox" id="select-all-sources" class="source-select-all" checked>
-      <label for="select-all-sources"><strong>Select all sources</strong></label>
-    </div>
-  `;
-
-  // Individual sources
-  sources.forEach((source, idx) => {
+  const rowHtml = (source, idx) => {
     const icon = source.type === 'markdown' ? '📄' : '📎';
-
-    html += `
-      <div class="source-scan-item" data-index="${idx}">
-        <input type="checkbox" id="source-${idx}" class="source-checkbox" checked>
-        <label for="source-${idx}">
-          <span class="source-icon">${icon}</span>
-          <span class="source-title">${escapeHtml(source.title)}</span>
-        </label>
-        <button class="download-single-btn" data-index="${idx}" title="Download this source">
+    return `
+        <span class="source-icon">${icon}</span>
+        <span class="source-title">${escapeHtml(source.title)}</span>
+        <button class="download-single-btn" data-index="${idx}" title="Download ${escapeHtml(source.title)}">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
             <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
           </svg>
         </button>
-      </div>
-    `;
-  });
-
-  html += '</div>';
-
-  resultsDiv.innerHTML = html;
+      `;
+  };
 
   // Show export button
   exportBtn.style.display = 'block';
 
-  // Add event listeners
-  setupSourcesEventListeners(sources);
-}
-
-/**
- * Setup event listeners for sources list
- */
-function setupSourcesEventListeners(sources) {
-  // Select all checkbox
-  const selectAllCheckbox = document.getElementById('select-all-sources');
-  if (selectAllCheckbox) {
-    selectAllCheckbox.addEventListener('change', (e) => {
-      const checkboxes = document.querySelectorAll('.source-checkbox');
-      checkboxes.forEach(cb => cb.checked = e.target.checked);
-    });
-  }
-
-  // Individual checkboxes - update select-all state
-  const sourceCheckboxes = document.querySelectorAll('.source-checkbox');
-  sourceCheckboxes.forEach(cb => {
-    cb.addEventListener('change', () => {
-      const allChecked = Array.from(sourceCheckboxes).every(c => c.checked);
-      const someChecked = Array.from(sourceCheckboxes).some(c => c.checked);
-      if (selectAllCheckbox) {
-        selectAllCheckbox.checked = allChecked;
-        selectAllCheckbox.indeterminate = someChecked && !allChecked;
-      }
-    });
+  _sourcesListController = createListController({
+    tab: 'sources',
+    container: listEl,
+    items: sources,
+    titleOf: source => source.title,
+    typeOf: source => source.type,
+    defaultSelected: 'all',
+    rowHtml,
+    onChange: controller => {
+      const n = controller.selectedCount();
+      setButtonLabel(exportBtn, n > 0 ? `Export Selected Sources (${n})` : 'Export Selected Sources');
+    }
   });
 
-  // Individual download buttons
-  const downloadButtons = document.querySelectorAll('.download-single-btn');
-  downloadButtons.forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const idx = parseInt(btn.dataset.index);
-      const source = sources[idx];
-      await runExclusive('Sources export', () => exportSources([source]));
-    });
+  // Row download buttons (the list controller ignores clicks on buttons, so they never toggle the row)
+  listEl.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.download-single-btn');
+    if (!btn) return;
+    const source = sources[parseInt(btn.dataset.index, 10)];
+    if (source) await runExclusive('Sources export', () => exportSources([source]));
   });
 
-  // Export selected button
-  const exportBtn = document.getElementById('export-sources-btn');
-  if (exportBtn) {
-    // Remove old listeners
-    const newBtn = exportBtn.cloneNode(true);
-    exportBtn.parentNode.replaceChild(newBtn, exportBtn);
-
-    newBtn.addEventListener('click', async () => {
-      const selectedItems = Array.from(document.querySelectorAll('.source-checkbox:checked'));
-      const selected = selectedItems.map(cb => {
-        const item = cb.closest('.source-scan-item');
-        const idx = parseInt(item.dataset.index);
-        return sources[idx];
-      }).filter(Boolean);
+  // The button is static markup: bind once, read the current controller on click
+  if (!exportBtn.dataset.bound) {
+    exportBtn.dataset.bound = '1';
+    exportBtn.addEventListener('click', async () => {
+      const selected = _sourcesListController ? _sourcesListController.selectedItems() : [];
 
       if (selected.length === 0) {
         showToast('No sources selected', 'warning');
@@ -4967,12 +5009,23 @@ async function triggerItemDownload(tabId, itemIndex, artifactName, artifactType)
 
 let _studioItems = [];
 let _studioTabId = null;
+// The Studio tab's list controller (sidebar-list.js); replaced on every redraw
+let _studioListController = null;
+
+function dropStudioList() {
+  if (_studioListController) {
+    _studioListController.destroy();
+    _studioListController = null;
+  }
+  updateStudioBulkButtonsState();
+}
 
 async function scanStudioPage() {
   const resultsEl = document.getElementById('studio-scan-results');
   const countBadge = document.getElementById('studio-count');
   if (!resultsEl || !countBadge) return;
 
+  dropStudioList();
   resultsEl.innerHTML = '<p class="scanning">Scanning studio items...</p>';
   countBadge.textContent = '0';
 
@@ -5004,6 +5057,7 @@ function renderStudioList(items) {
   const deleteBulkBtn = document.getElementById('studio-delete-selected-btn');
   if (!resultsEl || !countBadge) return;
 
+  dropStudioList();
   countBadge.textContent = items.length;
 
   if (items.length === 0) {
@@ -5015,20 +5069,18 @@ function renderStudioList(items) {
 
   if (downloadBulkBtn) downloadBulkBtn.style.display = '';
   if (deleteBulkBtn) deleteBulkBtn.style.display = '';
-  updateStudioBulkButtonsState();
 
-  const rowsHtml = items.map((item, idx) => {
+  resultsEl.innerHTML = '<div class="studio-list"></div>';
+  const listEl = resultsEl.querySelector('.studio-list');
+
+  const rowHtml = (item, idx) => {
     const iconSvg = getIconForType(item.type);
     const detailsStr = item.details ? ` · ${escapeHtml(item.details)}` : '';
     return `
-      <div class="scan-item studio-scan-item" data-idx="${idx}">
-        <label class="studio-row-check">
-          <input type="checkbox" class="studio-row-checkbox" data-idx="${idx}">
-        </label>
         <div class="scan-item-icon">${iconSvg}</div>
         <div class="scan-item-info">
           <strong>${escapeHtml(item.label)}</strong>
-          <small>${escapeHtml(item.kind === 'note' ? item.type : item.type)}${detailsStr}</small>
+          <small>${escapeHtml(item.type)}${detailsStr}</small>
         </div>
         <button class="btn-icon download-single-btn studio-download-btn" data-idx="${idx}" title="Download ${escapeHtml(item.label)}">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -5041,56 +5093,48 @@ function renderStudioList(items) {
             <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
           </svg>
         </button>
-      </div>
-    `;
-  }).join('');
+      `;
+  };
 
-  resultsEl.innerHTML = `
-    <div class="select-all-container">
-      <label>
-        <input type="checkbox" id="studio-select-all">
-        <span>Select All (${items.length})</span>
-      </label>
-    </div>
-    ${rowsHtml}
-  `;
-
-  const selectAll = document.getElementById('studio-select-all');
-  if (selectAll) {
-    selectAll.addEventListener('change', (e) => {
-      const checked = e.target.checked;
-      resultsEl.querySelectorAll('.studio-row-checkbox').forEach(cb => { cb.checked = checked; });
-      updateStudioBulkButtonsState();
-    });
-  }
-
-  resultsEl.querySelectorAll('.studio-row-checkbox').forEach(cb => {
-    cb.addEventListener('change', () => updateStudioBulkButtonsState());
+  _studioListController = createListController({
+    tab: 'studio',
+    container: listEl,
+    items,
+    titleOf: item => item.label,
+    typeOf: item => item.type,
+    defaultSelected: 'none',
+    rowHtml,
+    onChange: controller => updateStudioBulkButtonsState(controller)
   });
 
-  resultsEl.querySelectorAll('.studio-download-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const idx = parseInt(btn.dataset.idx, 10);
-      runExclusive('Studio download', () => handleStudioDownloadRow(idx, btn));
-    });
-  });
-
-  resultsEl.querySelectorAll('.studio-delete-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const idx = parseInt(btn.dataset.idx, 10);
-      handleStudioDeleteRow(idx, btn);
-    });
+  // Row buttons (the list controller ignores clicks on buttons, so they never toggle the row)
+  listEl.addEventListener('click', (e) => {
+    const downloadBtn = e.target.closest('.studio-download-btn');
+    if (downloadBtn) {
+      const idx = parseInt(downloadBtn.dataset.idx, 10);
+      runExclusive('Studio download', () => handleStudioDownloadRow(idx, downloadBtn));
+      return;
+    }
+    const deleteBtn = e.target.closest('.studio-delete-btn');
+    if (deleteBtn) {
+      handleStudioDeleteRow(parseInt(deleteBtn.dataset.idx, 10), deleteBtn);
+    }
   });
 }
 
-function updateStudioBulkButtonsState() {
-  const selected = document.querySelectorAll('#studio-scan-results .studio-row-checkbox:checked').length;
+// The bulk buttons follow the selection: disabled at 0, otherwise "... Selected (K)"
+function updateStudioBulkButtonsState(controller = _studioListController) {
+  const n = controller ? controller.selectedCount() : 0;
   const downloadBulkBtn = document.getElementById('studio-download-selected-btn');
   const deleteBulkBtn = document.getElementById('studio-delete-selected-btn');
-  if (downloadBulkBtn) downloadBulkBtn.disabled = selected === 0;
-  if (deleteBulkBtn) deleteBulkBtn.disabled = selected === 0;
+  if (downloadBulkBtn) {
+    downloadBulkBtn.disabled = n === 0;
+    setButtonLabel(downloadBulkBtn, n > 0 ? `Download Selected (${n})` : 'Download Selected');
+  }
+  if (deleteBulkBtn) {
+    deleteBulkBtn.disabled = n === 0;
+    setButtonLabel(deleteBulkBtn, n > 0 ? `Delete Selected (${n})` : 'Delete Selected');
+  }
 }
 
 function setStudioRowStatus(btn, state) {
@@ -5160,9 +5204,8 @@ async function handleStudioDeleteRow(idx, btn) {
 }
 
 async function handleStudioBulkDownload() {
-  const selectedIdxs = Array.from(document.querySelectorAll('#studio-scan-results .studio-row-checkbox:checked'))
-    .map(cb => parseInt(cb.dataset.idx, 10))
-    .filter(n => Number.isFinite(n));
+  const selected = _studioListController ? _studioListController.selectedItems() : [];
+  const selectedIdxs = selected.map(item => _studioItems.indexOf(item)).filter(n => n >= 0);
   if (selectedIdxs.length === 0) return;
 
   const bulkBtn = document.getElementById('studio-download-selected-btn');
@@ -5184,13 +5227,10 @@ async function handleStudioBulkDownload() {
 }
 
 async function handleStudioBulkDelete() {
-  const selectedCheckboxes = Array.from(document.querySelectorAll('#studio-scan-results .studio-row-checkbox:checked'));
-  const selectedIdxs = selectedCheckboxes.map(cb => parseInt(cb.dataset.idx, 10)).filter(n => Number.isFinite(n));
-  if (selectedIdxs.length === 0) return;
-
-  const selectedLabels = selectedIdxs
-    .map(idx => _studioItems[idx]?.label)
-    .filter(Boolean);
+  // Only what is selected (and so visible) is deleted; the dialog names that count
+  const selectedLabels = (_studioListController ? _studioListController.selectedItems() : [])
+    .map(item => item.label);
+  if (selectedLabels.length === 0) return;
 
   if (!confirm(`Delete ${selectedLabels.length} item(s)? This cannot be undone.`)) return;
 
@@ -5251,7 +5291,7 @@ async function downloadAllArtifacts(tabId, items) {
       });
     });
   } finally {
-    if (downloadBtn) downloadBtn.disabled = false;
+    updateArtifactsDownloadBtn(); // enabled again only if something is still selected
   }
 }
 

@@ -432,7 +432,7 @@ in every answer, so sources must never be keyed by number across answers.
      the proper filename. The extension comes from the URL's `filename` parameter
      (`NLME.extensionFromDownloadUrl`; `.pptx` vs `.pdf`). A download that is never captured
      now fails ("Download was not captured") instead of reporting success.
-   - **Download All** (`downloadAllArtifacts` → `runArtifactsJob`, on `runExportJob`) writes
+   - **Download Selected** (button `#download-all-btn`, ticked rows only; `downloadAllArtifacts` → `runArtifactsJob`, on `runExportJob`) writes
      `<type folder>/<stem>.<ext>` plus `_index.md`, `manifest.json` and `errors.md`. Type
      folders: `audio/ video/ slides/ infographics/ reports/ tables/ mind-maps/`
      (`NLME.artifactFolder`); stems unique per folder (`NLME.artifactStems`; Data Tables
@@ -780,14 +780,14 @@ something specific.
 Already covered in [Export pipelines](#export-pipelines-deep), but the wiring:
 
 - HTML: tab button + tab-content panel at the end of `sidebar.html`, both `hidden` by default.
-- CSS: `.studio-scan-item`, `.studio-row-check`, `.studio-delete-btn` in `styles.css` near
-  the end.
+- CSS: `.studio-delete-btn` in `styles.css` near the end; rows come from the list controller.
 - Sidebar state: module-level `_studioItems = []` and `_studioTabId = null`. Populated by
   `scanStudioPage`. Indexes referenced by `idx` on row buttons; `idx` is the position in
   `_studioItems`, *not* `combinedIndex`.
 - Buttons: `scan-studio-btn`, `studio-download-selected-btn`, `studio-delete-selected-btn`
   are wired once in `setupEventListeners`. Per-row buttons (`studio-download-btn`,
-  `studio-delete-btn`) are wired inside `renderStudioList` after each scan.
+  `studio-delete-btn`) are wired (delegated on `.studio-list`) inside `renderStudioList` after
+  each scan; the bulk buttons act on `_studioListController.selectedItems()` and show `(K)`.
 
 Per-row Download routes to `handleStudioDownloadRow(idx, btn)` which dispatches by kind.
 Status is shown via the row's `.download-status` span (⏳ → ✓ / ✗).
@@ -1116,6 +1116,15 @@ onChange, canSelect }) -> { items, selectedItems(), selectedCount(), destroy() }
 - The Notes tab (`renderNotesList`) is the reference port: `defaultSelected: 'none'`, a
   `.notes-list` container beside the `.export-controls`, and the row export button calls
   `handleNoteRowExport` -> `exportSingleNote` (loose `.md` files, no ZIP) under `runExclusive`.
+- Sources (`renderSourcesList`, `'all'`), Artifacts (`scanPage`, `'all'`, `canSelect: !disabled`)
+  and Studio (`renderStudioList`, `'none'`) use the same pattern: list container
+  (`.sources-list` / `.artifacts-list` / `.studio-list`) beside the action buttons, row buttons via a
+  delegated click handler, buttons reflect `selectedCount()` in `onChange`
+  (`setButtonLabel` keeps the icon). Artifacts: `startAutoRefresh` re-runs `scanPage` every few
+  seconds, so `scanPage` keeps a signature of the last scan (`artifactsSignature`: tab id + url
+  and each item's key, index, disabled, details) and returns without touching the DOM when it is
+  unchanged; it does not blank the list with "Scanning..." either. A real change redraws and
+  restores the Zip choice, scroll position and, if the filter box had focus, its focus and caret.
 
 ## Known issues and latent bugs
 

@@ -129,14 +129,15 @@ The quoted passage from the source…
 
 ### Artifacts
 
-1. **Artifacts** tab lists everything in the Studio panel.
-2. Click **Download** on a row, or **Download All**.
+1. **Artifacts** tab lists everything in the Studio panel. Every downloadable artifact starts
+   selected; filter, sort or untick rows to choose what you want.
+2. Click **Download** on a row, or **Download Selected (N)** for the ticked rows.
    - **Download** saves one file named `[type]_Title.ext` (for example `[report]_Title.md`,
      `[mind-map]_Title.svg`). A Data Table or mind map saves as one ZIP (`[data-table]_Title.zip`, `[MINDMAP]_Title.zip`).
-   - With **ZIP off** (recommended for whole notebooks), **Download All** saves every file into
+   - With **ZIP off** (recommended for whole notebooks), **Download Selected** saves every ticked file into
      `Downloads/<Notebook name>/<type>/…`, one file at a time, so even large audio and video
      overviews work.
-   - With **ZIP on**, **Download All** writes one `{notebook}-artifacts-{timestamp}.zip` with
+   - With **ZIP on**, **Download Selected** writes one `{notebook}-artifacts-{timestamp}.zip` with
      type folders (`audio/ video/ slides/ infographics/ reports/ tables/ mind-maps/`), an
      `_index.md`, a `manifest.json` and `errors.md` when something failed. The side panel builds
      it in memory, so a full notebook with audio/video can be too large for a ZIP; use folder
