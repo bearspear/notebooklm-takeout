@@ -341,6 +341,40 @@
     return { message, level };
   }
 
+  // Full Takeout's "Retry N failed" runs one export per category (Sources,
+  // Notes, Artifacts) and ends in ONE results panel. steps: each retried
+  // category's outcome { name, message, level, saved, errors, failedItems };
+  // notRun: categories a cancel or a declined dialog kept from running
+  // { name, failedItems } (their items still failed). Returns the panel's
+  // content: one line per category, the worst level, every ZIP, every error
+  // prefixed with its category, and what a further Retry would re-run.
+  function combineRetryOutcomes({ steps = [], notRun = [] } = {}) {
+    const rank = { success: 0, info: 0, warning: 1, error: 2 };
+    let level = 'success';
+    for (const s of steps) if ((rank[s.level] || 0) > rank[level]) level = s.level;
+    if (notRun.length && level === 'success') level = 'warning';
+
+    const remaining = {};
+    for (const s of steps) remaining[s.name] = s.failedItems || [];
+    for (const n of notRun) remaining[n.name] = n.failedItems || [];
+    const remainingCount = Object.values(remaining).reduce((sum, list) => sum + list.length, 0);
+
+    let message = notRun.length
+      ? `Retry stopped before ${notRun.map(n => n.name.toLowerCase()).join(' and ')}`
+      : 'Retry finished';
+    if (remainingCount > 0) message += ` \u2014 ${remainingCount} still failed`;
+
+    return {
+      message,
+      level,
+      lines: steps.map(s => `${s.name}: ${s.message}`),
+      saved: steps.flatMap(s => s.saved || []),
+      errors: steps.flatMap(s => prefixExportErrors(s.name, s.errors)),
+      remaining,
+      remainingCount
+    };
+  }
+
   // The results panel's error list: groups by error type in first-seen
   // order, at most perGroup entries each; `more` entries are in errors.md.
   function groupErrorsForPanel(errors = [], { perGroup = 20 } = {}) {
@@ -1398,6 +1432,7 @@ footer { margin-top: 3rem; }
     createInterceptArm,
     summarizeExportOutcome,
     composeOutcome,
+    combineRetryOutcomes,
     groupErrorsForPanel,
     createJobLock,
     createPhaseTimer,

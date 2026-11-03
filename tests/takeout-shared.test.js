@@ -1106,6 +1106,32 @@ test('restoreListState without known keeps the saved selection as an allow-list'
   assert.deepEqual([...bad.selected], ['a']);
 });
 
+test('combineRetryOutcomes merges the retried categories into one outcome', () => {
+  const c = NLME.combineRetryOutcomes({ steps: [
+    { name: 'Sources', message: 'Exported 2 of 3 sources (1 failed, see errors.md)', level: 'warning', saved: ['s.zip'], errors: ['[A] boom'], failedItems: [{ id: 'a' }] },
+    { name: 'Notes', message: 'Exported 2 of 2 notes', level: 'success', saved: ['n.zip'], errors: [], failedItems: [] }
+  ] });
+  assert.equal(c.level, 'warning'); // the worst of the categories, not the last
+  assert.deepEqual(c.lines, ['Sources: Exported 2 of 3 sources (1 failed, see errors.md)', 'Notes: Exported 2 of 2 notes']);
+  assert.deepEqual(c.saved, ['s.zip', 'n.zip']);
+  assert.deepEqual(c.errors.map(e => [e.type, e.title, e.message]), [['error', 'Sources: A', 'boom']]);
+  assert.deepEqual(c.remaining, { Sources: [{ id: 'a' }], Notes: [] });
+  assert.equal(c.remainingCount, 1);
+  assert.match(c.message, /^Retry finished/);
+  assert.match(c.message, /1 still failed/);
+});
+test('combineRetryOutcomes is a success only when every category is and nothing was skipped', () => {
+  const ok = { name: 'Notes', message: 'Exported 1 of 1 notes', level: 'success', saved: [], errors: [], failedItems: [] };
+  assert.equal(NLME.combineRetryOutcomes({ steps: [ok] }).level, 'success');
+  assert.equal(NLME.combineRetryOutcomes({ steps: [ok, { ...ok, level: 'error' }] }).level, 'error');
+  const stopped = NLME.combineRetryOutcomes({ steps: [ok], notRun: [{ name: 'Artifacts', failedItems: [1, 2] }] });
+  assert.equal(stopped.level, 'warning');
+  assert.match(stopped.message, /^Retry stopped before artifacts/);
+  assert.equal(stopped.remainingCount, 2); // the skipped category's items still failed
+  assert.deepEqual(stopped.remaining.Artifacts, [1, 2]);
+  assert.equal(NLME.combineRetryOutcomes({ steps: [ok, { ...ok, level: 'error' }] }).remainingCount, 0);
+});
+
 test('groupErrorsForPanel groups by type and caps entries', () => {
   const errs = ['[A] boom', { type: 'message_skipped', message: 'm1' }, '[B] bang', { type: 'message_skipped', message: 'm2' }];
   const g = NLME.groupErrorsForPanel(errs, { perGroup: 1 });
