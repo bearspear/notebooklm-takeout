@@ -194,8 +194,7 @@ New-Physics/chat/chat.md                New-Physics/notes/combined-notes.md
 New-Physics/chat/_index.md              New-Physics/artifacts/audio/<stem>.m4a
 ```
 
-(The YouTube URL lists of the sources are the one exception: they stay in a `sources/` folder
-of their own, so they are at `New-Physics/sources/sources/youtube-urls.txt`.)
+(The YouTube URL lists of the sources sit there too: `New-Physics/sources/youtube-urls.txt`.)
 
 A category that needed several ZIPs (batch size under
 Settings) is split into `part-1/`, `part-2/`, … subfolders and the ZIPs are named

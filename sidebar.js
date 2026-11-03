@@ -2819,8 +2819,8 @@ async function exportNotesAsMarkdown(selectedNotes) {
  * @typedef {{ pathPrefix?: string, zipKind?: string, folder?: string|null,
  *   variantSettings?: object, itemDir?: string }} CategoryTarget
  *   itemDir: folder (with trailing '/') of the note or source files inside the
- *   package; default 'notes/' / 'sources/'. mind-maps/, the combined files and
- *   sources/youtube-urls*.txt keep their package-relative paths.
+ *   package; default 'notes/' / 'sources/'. mind-maps/ and the combined files
+ *   keep their package-relative paths; sources' youtube-urls*.txt follow itemDir.
  */
 
 // One batch of a category's files to its ZIP (name pushed to `zips`) or, with
@@ -3926,8 +3926,8 @@ const SOURCE_VERSION_INFO = {
  *   variantSettings?: object, itemDir?: string }} options
  *   errors: ALL errors of the run, passed only to the last ZIP it writes
  *   variantSettings: where sourceVariants reads the export* settings (default `settings`)
- *   itemDir: folder of the source files ('sources/'; '' puts them next to
- *   errors.md and _index.md). youtube-urls*.txt stay in sources/ either way.
+ *   itemDir: folder of the source files and youtube-urls*.txt ('sources/';
+ *   '' puts them next to errors.md and _index.md)
  * @returns {Array<{path: string, data: string, title?: string, variant?: string, itemKind?: string}>}
  */
 function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batchIndex = 1, totalBatches = 1, partial = false, variantSettings = settings, itemDir = 'sources/' }) {
@@ -3985,9 +3985,9 @@ function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batch
       youtubeContent += `${idx + 1}. ${item.title}\n`;
       youtubeContent += `   ${item.url}\n\n`;
     });
-    files.push({ path: 'sources/youtube-urls.txt', data: youtubeContent, title: 'YouTube Source URLs (formatted)' });
+    files.push({ path: `${itemDir}youtube-urls.txt`, data: youtubeContent, title: 'YouTube Source URLs (formatted)' });
     files.push({
-      path: 'sources/youtube-urls.raw.txt',
+      path: `${itemDir}youtube-urls.raw.txt`,
       data: youtubeUrls.map(item => item.url).join('\n') + '\n',
       title: 'YouTube Source URLs (raw list)'
     });
@@ -4028,8 +4028,8 @@ function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batch
   if (youtubeUrls.length > 0) {
     indexContent += '## YouTube Sources\n\n';
     indexContent += `This export includes ${youtubeUrls.length} YouTube video source(s).\n\n`;
-    indexContent += '- [YouTube URLs (formatted)](sources/youtube-urls.txt) - Numbered list with titles\n';
-    indexContent += '- [YouTube URLs (raw)](sources/youtube-urls.raw.txt) - Plain URLs only (for scripting)\n\n';
+    indexContent += `- [YouTube URLs (formatted)](${encodeURI(itemDir)}youtube-urls.txt) - Numbered list with titles\n`;
+    indexContent += `- [YouTube URLs (raw)](${encodeURI(itemDir)}youtube-urls.raw.txt) - Plain URLs only (for scripting)\n\n`;
     indexContent += '---\n\n';
   }
 

@@ -1066,8 +1066,8 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined out
   `errors.md`), so `_index.md` links stay valid. The runners get `itemDir: ''` (see below), so
   note and source files sit directly in it: `sources/<stem>.md`, `notes/<stem>.md` (+
   `combined-notes*.md`, `mind-maps/`), `chat/chat.md`, `artifacts/<type>/…`; with parts,
-  `notes/part-1/<stem>.md`. `sources/youtube-urls*.txt` keep their package-relative path (so
-  `<root>/sources/sources/youtube-urls.txt` in a takeout).
+  `notes/part-1/<stem>.md`. `youtube-urls*.txt` follow `itemDir` too
+  (`<root>/sources/youtube-urls.txt`).
 - **`variantSettings` and `itemDir` (`CategoryTarget`, Milestone 3b Task 7):** `runNotesJob`,
   `runSourcesJob` and `runChatJob` read every `exportNote*` / `exportSource*` setting and every
   `NLME.noteVariants` / `sourceVariants` call from `variantSettings` (default: the global
@@ -1077,8 +1077,8 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined out
   `exportSourceWithImages` on), so a takeout always writes `-with-images` versions for items that
   have images; `exportSourcePlusMetaWithImages` is the user's. `exportSingleNote` is not a job
   and keeps the global `settings`. `itemDir` (default `'notes/'` / `'sources/'`) is the folder of
-  the note and source files inside the package; `''` in a takeout. `mind-maps/`, combined files
-  and `youtube-urls*.txt` ignore it. The notes `_index.md` picks note and combined entries by
+  the note and source files and `youtube-urls*.txt` inside the package; `''` in a takeout.
+  `mind-maps/` and the combined files ignore it. The notes `_index.md` picks note and combined entries by
   `kind`, not by path prefix, and says "in this folder" when `itemDir` is empty. With `itemDir`
   `''` the files share a folder with `errors.md` and `combined-notes*.md`, so
   `NLME.uniqueStems(titles, suffixes, reserved)` gets those names as `reserved`. Tab exports
