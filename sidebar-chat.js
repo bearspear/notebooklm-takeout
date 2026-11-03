@@ -660,7 +660,7 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
   markdown += '---\n\n';
 
   // Initialize TurndownService with standardized configuration
-  const turndownService = createTurndownService();
+  const turndownService = NLMEMarkdown.createTurndownService();
 
   // Use closure to track current message index
   let currentMessageIndex = 0;
@@ -924,7 +924,7 @@ function addChatTurndownRules(turndownService, citationsCodeBlock, getCurrentMes
   // sources, and chat all use the same logic. See convertKatexNodeToLatex().
   turndownService.addRule('katexMath', {
     filter: (node) => node.nodeName === 'SPAN' && node.classList.contains('katex'),
-    replacement: (_content, node) => convertKatexNodeToLatex(node)
+    replacement: (_content, node) => NLMEMarkdown.convertKatexNodeToLatex(node)
   });
 
   // Rule: Citation buttons - with message-specific anchors

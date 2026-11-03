@@ -173,7 +173,7 @@ Line numbers drift with every change, so anchors are names: `grep -n "<name>" <f
 | Settings defaults | `let settings = {` in sidebar-core.js |
 | `loadSettings` / `saveSettings` | sidebar-core.js |
 | Tab switching | `setupTabSwitching` (sidebar-core.js) |
-| KaTeX converter (shared) | `convertKatexNodeToLatex`, `katexRenderInline` (sidebar-core.js) |
+| KaTeX converter (shared) | `convertKatexNodeToLatex`, `katexRenderInline` (takeout-markdown.js, `NLMEMarkdown`) |
 | Per-item artifact download | `async function downloadArtifact` (sidebar-artifacts.js) |
 | Sources / Notes / Chat / Artifacts export | per-category runners `runSourcesJob`, `runNotesJob`, `runChatJob`, `runArtifactsJob`; entry points `exportSources`, `exportNotesAsMarkdown`, `exportChat`, `downloadAllArtifacts` (one per tab file: sidebar-sources.js, sidebar-notes.js, sidebar-chat.js, sidebar-artifacts.js) |
 | Extract / build / scan data | `extractSourceItem` / `buildSourcesFiles`, `extractNoteItem` / `buildNotesFiles`, `extractChatPair` / `buildChatAuditDoc` / `buildChatFiles`, `fetchArtifactFiles`; `scanSourcesData`, `scanNotesData`, `scanChatData`, `scanArtifactsData` (one per tab file) |
@@ -665,7 +665,7 @@ sidebar shows a "DOM may be drifting" warning dialog.
 
 ## KaTeX → LaTeX conversion
 
-Entry point: `convertKatexNodeToLatex(node)` (sidebar-core.js). Called from two
+Entry point: `NLMEMarkdown.convertKatexNodeToLatex(node)` (takeout-markdown.js). Called from two
 Turndown rules (notes/sources rule and chat rule), both filter on
 `SPAN.classList.contains('katex')`.
 
@@ -1302,7 +1302,7 @@ before `sidebar-takeout.js`:
 
 | File | Holds |
 |---|---|
-| `sidebar-core.js` | `logger`, mindmap template and `mindmapFiles`, `showDOMWarningDialog`, `createTurndownService`, the KaTeX to LaTeX section, settings (`settings`, `loadSettings`, `saveSettings`), `init`, tab and notebook switching, auto-refresh, resume banner, `retryDownload`, `checkStatus`, `ScanError`, `ensureContentScriptLoaded`, `convertToMarkdown`, timing and audit helpers, `runExclusive` / job lock, `retryFor`, `refreshListButtons`, cancel, `sanitizeFilename`, image helpers, job records (`startJobRecord`, `withJobRecord`), `saveCategoryBatch`, `batchPrefix`, `newWritten`, `itemFailed`, `variantName`, `noteFrontMatter`, `getIconForType`, `showToast`, `escapeHtml` |
+| `sidebar-core.js` | `logger`, mindmap template and `mindmapFiles`, `showDOMWarningDialog`, settings (`settings`, `loadSettings`, `saveSettings`), `init`, tab and notebook switching, auto-refresh, resume banner, `retryDownload`, `checkStatus`, `ScanError`, `ensureContentScriptLoaded`, `convertToMarkdown`, timing and audit helpers, `runExclusive` / job lock, `retryFor`, `refreshListButtons`, cancel, `sanitizeFilename`, image helpers, job records (`startJobRecord`, `withJobRecord`), `saveCategoryBatch`, `batchPrefix`, `newWritten`, `itemFailed`, `variantName`, `noteFrontMatter`, `getIconForType`, `showToast`, `escapeHtml` |
 | `sidebar-artifacts.js` | artifact files (`fetchArtifactFiles`, `downloadArtifact`), `scanArtifactsData`, `scanPage`, Download Selected, `runArtifactsJob`, `downloadAllArtifacts`, and the table converters (`convertTableToCSV`, `createCleanTableHTML`, ...) that only data-table artifacts use |
 | `sidebar-notes.js` | note scanning and list, `exportNotesAsMarkdown`, `runNotesJob`, `extractNoteItem`, `exportSingleNote`, `buildNotesFiles` |
 | `sidebar-sources.js` | the sources scan, list, `runSourcesJob`, `extractSourceItem`, `buildSourcesFiles` |
