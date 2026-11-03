@@ -5572,7 +5572,7 @@ function renderStudioList(items) {
     const detailsStr = item.details ? ` · ${escapeHtml(item.details)}` : '';
     const deleteBtnAttrs = isStudioItemDeletable(item)
       ? `title="Delete ${escapeHtml(item.label)}"`
-      : 'disabled title="Delete this note in the Sources panel"';
+      : 'disabled title="Cannot delete this item"';
     return `
         <div class="scan-item-icon">${iconSvg}</div>
         <div class="scan-item-info">
@@ -5619,13 +5619,26 @@ function renderStudioList(items) {
   });
 }
 
-// Sources-panel notes can be downloaded but not deleted here yet (Milestone 3c)
+// Every Generated item can be deleted: Studio items by label, Sources-panel
+// notes (kind 'source-note') by sourceIndex + title.
 function isStudioItemDeletable(item) {
-  return item.kind !== 'source-note';
+  return !!item;
+}
+
+// One delete request for a Generated item; throws on failure. Bulk delete passes
+// useIndex false for Studio items: by label only, a stale index could hit another item.
+async function sendStudioDelete(item, { useIndex = true } = {}) {
+  const message = item.kind === 'source-note'
+    ? { type: 'DELETE_SOURCE_NOTE', data: { sourceIndex: item.sourceIndex, title: item.label } }
+    : { type: 'DELETE_STUDIO_ITEM', data: useIndex ? { label: item.label, combinedIndex: item.combinedIndex } : { label: item.label } };
+  const response = await chrome.tabs.sendMessage(_studioTabId, message);
+  if (!response || !response.success) {
+    throw new Error(response?.error || 'Delete failed');
+  }
 }
 
 // The bulk buttons follow the selection: disabled at 0, otherwise "... Selected (K)".
-// Delete counts only the deletable selected items (Sources-panel notes never are).
+// Delete counts the deletable selected items (all of them).
 function updateStudioBulkButtonsState(controller = _studioListController) {
   const n = controller ? controller.selectedCount() : 0;
   const deletableN = controller ? controller.selectedItems().filter(isStudioItemDeletable).length : 0;
@@ -5692,14 +5705,7 @@ async function handleStudioDeleteRow(idx, btn) {
 
   if (btn) btn.disabled = true;
   try {
-    await chrome.tabs.sendMessage(_studioTabId, {
-      type: 'DELETE_STUDIO_ITEM',
-      data: { label: item.label, combinedIndex: item.combinedIndex }
-    }).then(response => {
-      if (!response || !response.success) {
-        throw new Error(response?.error || 'Delete failed');
-      }
-    });
+    await sendStudioDelete(item);
     showToast(`Deleted "${item.label}"`, 'success');
     // Refresh the list so indices are re-aligned with the DOM.
     await scanStudioPage();
@@ -5735,45 +5741,40 @@ async function handleStudioBulkDownload() {
 
 async function handleStudioBulkDelete() {
   // Only what is selected (and so visible) is deleted; the dialog names that count.
-  // Sources-panel notes cannot be deleted here yet: they are skipped, never sent.
   const selectedItems = _studioListController ? _studioListController.selectedItems() : [];
-  const selectedLabels = selectedItems.filter(isStudioItemDeletable).map(item => item.label);
-  const skippedCount = selectedItems.length - selectedLabels.length;
-  if (selectedLabels.length === 0) return;
+  const deletable = selectedItems.filter(isStudioItemDeletable);
+  if (deletable.length === 0) return;
 
-  const skippedNote = skippedCount > 0
-    ? ` ${skippedCount} Sources-panel note${skippedCount === 1 ? '' : 's'} will be skipped.`
-    : '';
-  if (!confirm(`Delete ${selectedLabels.length} item(s)${skippedNote} This cannot be undone.`)) return;
+  if (!confirm(`Delete ${deletable.length} item(s)? This cannot be undone.`)) return;
 
   const bulkBtn = document.getElementById('studio-delete-selected-btn');
   if (bulkBtn) bulkBtn.disabled = true;
 
+  // Studio items first (resolved by label each time, to survive index shifts),
+  // then Sources-panel notes from the highest sourceIndex down so the lower
+  // indexes stay valid while rows disappear.
+  const studioItems = deletable.filter(item => item.kind !== 'source-note');
+  const sourceNotes = deletable.filter(item => item.kind === 'source-note')
+    .sort((a, b) => (b.sourceIndex ?? -1) - (a.sourceIndex ?? -1));
+  const queue = [...studioItems, ...sourceNotes];
+
   let okCount = 0;
-  // Resolve by label each iteration to survive index shifts as rows disappear.
-  for (let i = 0; i < selectedLabels.length; i++) {
-    const label = selectedLabels[i];
+  for (let i = 0; i < queue.length; i++) {
+    const item = queue[i];
     try {
-      const response = await chrome.tabs.sendMessage(_studioTabId, {
-        type: 'DELETE_STUDIO_ITEM',
-        data: { label }
-      });
-      if (response && response.success) {
-        okCount++;
-      } else {
-        console.warn('[NotebookLM Takeout] Bulk delete skipped:', label, response?.error);
-      }
+      await sendStudioDelete(item, { useIndex: false });
+      okCount++;
     } catch (e) {
-      console.warn('[NotebookLM Takeout] Bulk delete error:', label, e);
+      console.warn('[NotebookLM Takeout] Bulk delete skipped:', item.label, e?.message || e);
     }
     // Let NotebookLM's undo toast dismiss and the list re-render before the next
-    // label lookup. Skip the delay on the last iteration.
-    if (i < selectedLabels.length - 1) {
+    // lookup. Skip the delay on the last iteration.
+    if (i < queue.length - 1) {
       await new Promise(r => setTimeout(r, 1000));
     }
   }
 
-  showToast(`Deleted ${okCount}/${selectedLabels.length} generated item(s)`, okCount === selectedLabels.length ? 'success' : 'warning');
+  showToast(`Deleted ${okCount}/${queue.length} generated item(s)`, okCount === queue.length ? 'success' : 'warning');
   await scanStudioPage();
 }
 

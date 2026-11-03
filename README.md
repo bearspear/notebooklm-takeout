@@ -231,9 +231,10 @@ was exported so far is kept) and skips the remaining categories. The root index 
 Enable it under **Settings → Show the Generated tab**. It lists everything Gemini Notebook
 generated as one list: the items in the Studio panel (notes, audio, slides, reports and so on)
 and the notes in the Sources panel's "Notes" group (type "Note (Sources panel)"). Every row has
-**Download**, and there are bulk actions. Studio items also have **Delete**, which asks you first
-and then confirms Gemini Notebook's own dialog. Sources-panel notes can't be deleted there yet;
-**Delete Selected** skips them and says so. Delete such a note in the Sources panel.
+**Download** and **Delete**, and there are bulk actions. Delete asks you first and then confirms
+Gemini Notebook's own dialog if it shows one. This includes the notes in the Sources panel: the
+tab removes them through the panel's "Remove note" menu item. Delete Selected removes the Sources-panel
+notes last, from the bottom of the list up.
 
 ### Cancelling
 
@@ -456,7 +457,7 @@ contract with Gemini Notebook, past drift and recipes.
   extension (e.g. `.jpeg`); names that differ only in Unicode form no longer overwrite each other;
   Download All and Retry use the tab they were started from.
 - The Studio tab is now the Generated tab and also lists the notes in the Sources panel (download
-  only; they can't be deleted there yet). The setting keeps its saved value.
+  only at first; Milestone 3c can delete them too). The setting keeps its saved value.
 
 **1.4.0 (Nov 2026)**: one-click Full Takeout and one layout everywhere.
 - New **Full Takeout** (📦): sources, notes, chat and artifacts of a notebook in one run, as one

@@ -450,6 +450,12 @@
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ success: false, error: error.message || 'Delete failed' }));
       return true;
+    } else if (message.type === 'DELETE_SOURCE_NOTE') {
+      // A note in the Sources panel's "Notes" group (Milestone 3c)
+      deleteSourceNote(message.data || {})
+        .then(result => sendResponse(result))
+        .catch(error => sendResponse({ success: false, error: error.message || 'Delete failed' }));
+      return true;
     }
 
     return true;
@@ -3388,7 +3394,7 @@
     const { label, combinedIndex } = data || {};
     const all = Array.from(document.querySelectorAll('artifact-library-item, artifact-library-note'));
     if (all.length === 0) {
-      throw new Error('No studio items found on the page');
+      throw new Error('No Generated items found on the page');
     }
 
     // Resolve target — prefer label (stable across deletes) but fall back to index.
@@ -3403,7 +3409,7 @@
       target = all[combinedIndex];
     }
     if (!target) {
-      throw new Error(`Studio item not found${label ? ` (label: "${label}")` : ''}`);
+      throw new Error(`Generated item not found${label ? ` (label: "${label}")` : ''}`);
     }
 
     const moreButton = target.querySelector('button[aria-label="More"]');
@@ -3459,6 +3465,91 @@
     throw new Error(confirmed
       ? 'Item did not disappear after clicking confirm'
       : 'Delete did not take effect (no dialog, no removal)');
+  }
+
+  /**
+   * Delete one note from the Sources panel's "Notes" group:
+   *   1. The container at sourceIndex must be a note container whose title is
+   *      `title` (no click otherwise: the list may have changed since the scan).
+   *   2. Open its "More" menu, click "Remove note", click the confirm button if
+   *      a dialog appears.
+   *   3. Wait (5 s) until no more note containers with that title are left than
+   *      before, re-finding them by title each time.
+   * A failure closes the menu (backdrop click; Escape does not close it).
+   *
+   * @param {{sourceIndex?: number, title?: string}} data
+   * @returns {Promise<{success: boolean, error?: string}>}
+   */
+  async function deleteSourceNote(data) {
+    const { sourceIndex, title } = data || {};
+    const STALE = 'Note changed — rescan and try again';
+    if (typeof title !== 'string' || !title || typeof sourceIndex !== 'number') {
+      return { success: false, error: STALE };
+    }
+
+    const listNotes = () => Array.from(document.querySelectorAll('.single-source-container'))
+      .filter(c => isNoteSourceContainer(c) && getSourceContainerTitle(c) === title);
+
+    const container = document.querySelectorAll('.single-source-container')[sourceIndex];
+    if (!container || !isNoteSourceContainer(container) || getSourceContainerTitle(container) !== title) {
+      return { success: false, error: STALE };
+    }
+
+    const closeMenu = () => {
+      document.querySelectorAll('.cdk-overlay-backdrop').forEach(b => b.click());
+    };
+
+    if (findOpenStudioViewer()) await closeStudioViewer(500);
+
+    const moreButton = container.querySelector('button[aria-label="More"]');
+    if (!moreButton) {
+      return { success: false, error: 'More button not found on this note' };
+    }
+
+    const initialCount = listNotes().length;
+    moreButton.click();
+
+    try {
+      await waitForElement('.mat-mdc-menu-panel', 2000);
+    } catch (e) {
+      closeMenu();
+      return { success: false, error: 'More menu did not open' };
+    }
+    await new Promise(r => setTimeout(r, 150));
+
+    const panel = document.querySelector('.mat-mdc-menu-panel');
+    const deleteItem = panel?.querySelector('.more-menu-delete-source-button') ||
+      Array.from(panel?.querySelectorAll('[role="menuitem"]') || [])
+        .find(el => (el.textContent || '').toLowerCase().includes('remove note')) || null;
+    if (!deleteItem) {
+      closeMenu();
+      return { success: false, error: 'Remove note menu item not found' };
+    }
+    deleteItem.click();
+
+    // A confirm dialog may or may not appear: click it if it does, and succeed
+    // as soon as the note is gone either way.
+    let confirmed = false;
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if (listNotes().length < initialCount) return { success: true };
+      if (!confirmed) {
+        const confirmBtn = findConfirmDialogButton();
+        if (confirmBtn) {
+          confirmBtn.click();
+          confirmed = true;
+        }
+      }
+      await new Promise(r => setTimeout(r, 100));
+    }
+
+    closeMenu();
+    return {
+      success: false,
+      error: confirmed
+        ? 'Note did not disappear after clicking confirm'
+        : 'Delete did not take effect (no dialog, no removal)'
+    };
   }
 
   /**
