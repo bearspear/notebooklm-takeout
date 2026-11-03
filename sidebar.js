@@ -2910,6 +2910,81 @@ async function getProjectName(tabId) {
   return 'NotebookLM';
 }
 
+// ---- Job records (Milestone 3c) ----
+// One record per notebook in chrome.storage.local (nlme.job.<notebookId>): the list
+// keys of an export's items still to do or failed, never payloads. Task 4 reads it
+// to offer "Resume". Rules: AGENT.md "Milestone 3c contracts". Recording never
+// affects an export: every storage call is caught inside NLME.createJobRecorder.
+
+// The accessors each tab's createListController uses, so keys match fresh scans
+const JOB_KEY_ACCESSORS = {
+  notes: { titleOf: n => n.title, typeOf: n => n.type },
+  sources: { titleOf: s => s.title, typeOf: s => s.type },
+  artifacts: { titleOf: a => a.label, typeOf: a => a.type }
+};
+
+// Keys of `items` (one category): the keys the tab list stamped on them (keys in
+// the whole list, so a selected subset or a retry still matches a fresh scan),
+// else computed over `items` (Full Takeout: the whole scan).
+function jobItemKeys(category, items) {
+  if (items.length && items.every(item => item && typeof item._listKey === 'string')) return items.map(item => item._listKey);
+  return NLME.listItemKeys(items, JOB_KEY_ACCESSORS[category]);
+}
+
+/**
+ * Start recording an export. Returns null (nothing is recorded) when the tab has
+ * no notebook id or there is nothing to do; else a tracker the runners call:
+ * done(category, item) / fail(category, item) per item, commit() after a package
+ * holding the done items is saved, finish(clean) at the end. None of them throws.
+ *
+ * @param {{ tab: { url: string } }} shell
+ * @param {'notes'|'sources'|'artifacts'|'takeout'} kind
+ * @param {string} label
+ * @param {{ [category: string]: object[] }} itemsByCategory the items to export, by category
+ */
+async function startJobRecord(shell, kind, label, itemsByCategory) {
+  try {
+    const notebookId = NLME.notebookIdFromUrl(shell.tab && shell.tab.url);
+    if (!notebookId) return null;
+    const keyOf = new Map();
+    const keysByCategory = {};
+    for (const [category, items] of Object.entries(itemsByCategory)) {
+      const keys = jobItemKeys(category, items);
+      items.forEach((item, i) => keyOf.set(item, keys[i]));
+      keysByCategory[category] = keys;
+    }
+    const now = Date.now();
+    const record = NLME.newJobRecord({ id: `${kind}-${now}`, kind, label, notebookId, keysByCategory, now });
+    if (NLME.jobRecordFinished(record)) return null;
+    const recorder = NLME.createJobRecorder({ storage: chrome.storage.local, record });
+    await recorder.start();
+    return {
+      done: (category, item) => { if (keyOf.has(item)) recorder.done(category, keyOf.get(item)); },
+      fail: (category, item) => { if (keyOf.has(item)) recorder.fail(category, keyOf.get(item)); },
+      commit: () => recorder.commit(),
+      finish: clean => recorder.finish({ clean })
+    };
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Job record not started:', error);
+    return null;
+  }
+}
+
+// A tab export's record around its runner: `run(tracker)` returns the runner's
+// { result }. Clean = not cancelled or stopped; a throw leaves the record.
+async function withJobRecord(shell, kind, label, category, items, run) {
+  const tracker = await startJobRecord(shell, kind, label, { [category]: items });
+  let out;
+  try {
+    out = await run(tracker);
+  } catch (error) {
+    if (tracker) await tracker.finish(false);
+    throw error;
+  }
+  if (tracker) await tracker.finish(!out.result.cancelled && !out.result.stopped);
+  return out;
+}
+
 // Notes export (Milestone 3a): the shared export shell around runNotesJob.
 // Each batch becomes one <Notebook>-notes-<ts>.zip from buildNotesFiles.
 // options.tabId: the tab the notes were scanned on (a retry); default the active tab.
@@ -2920,7 +2995,8 @@ async function exportNotesAsMarkdown(selectedNotes, { tabId } = {}) {
   console.log('[NotebookLM Takeout] Starting export for notes:', selectedNotes.length);
 
   return withExportShell({ label: 'notes', healthType: 'notes', overlayMessage: 'Preparing to export notes...', tabId }, async shell => {
-    const { result, zips, auditOk } = await runNotesJob(shell, selectedNotes);
+    const { result, zips, auditOk } = await withJobRecord(shell, 'notes', 'Notes', 'notes', selectedNotes,
+      tracker => runNotesJob(shell, selectedNotes, { tracker }));
 
     return shell.finish({
       kind: 'notes',
@@ -3015,7 +3091,7 @@ function batchPrefix(pathPrefix, info) {
  *   zips/parts/packages: what target.written holds (see newWritten)
  *   result: runExportJob's result
  */
-async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'notes', folder = null, variantSettings = settings, itemDir = 'notes/', written = newWritten() } = {}) {
+async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'notes', folder = null, variantSettings = settings, itemDir = 'notes/', written = newWritten(), tracker = null } = {}) {
   const perZip = settings.notesPerZip;
   // Shared by every extractNoteItem call: audit counters, early-stop
   // counters, and the DOM-warning decision
@@ -3044,7 +3120,8 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
     perZip,
     extractOne: (note, ctx) => extractNoteItem(shell, note, ctx, state, variantSettings),
     // Always close the note viewer, even if extraction failed
-    afterEach: async () => {
+    afterEach: async (note, { failed }) => {
+      if (tracker) (failed ? tracker.fail : tracker.done)('notes', note);
       try {
         const backResponse = await chrome.tabs.sendMessage(shell.tab.id, { type: 'NAVIGATE_BACK' });
         console.log('[NotebookLM Takeout] Navigate back response:', backResponse);
@@ -3074,6 +3151,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
       });
       await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, written });
       console.log(`[NotebookLM Takeout] Downloaded notes ZIP ${info.batchIndex}/${info.totalBatches}`);
+      if (tracker) tracker.commit(); // these notes are on disk now
 
       // CRITICAL: free each batch's memory before the next one
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -3770,7 +3848,8 @@ async function exportSources(selectedSources, { tabId } = {}) {
   console.log(`[NotebookLM Takeout] Exporting ${selectedSources.length} sources...`);
 
   return withExportShell({ label: 'sources', healthType: 'sources', overlayMessage: 'Preparing to export sources...', tabId }, async shell => {
-    const { result, zips, auditOk } = await runSourcesJob(shell, selectedSources);
+    const { result, zips, auditOk } = await withJobRecord(shell, 'sources', 'Sources', 'sources', selectedSources,
+      tracker => runSourcesJob(shell, selectedSources, { tracker }));
 
     return shell.finish({
       kind: 'sources',
@@ -3792,7 +3871,7 @@ async function exportSources(selectedSources, { tabId } = {}) {
  * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, parts: number, packages: number }>}
  *   zips/parts/packages: what target.written holds (see newWritten)
  */
-async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind = 'sources', folder = null, variantSettings = settings, itemDir = 'sources/', written = newWritten() } = {}) {
+async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind = 'sources', folder = null, variantSettings = settings, itemDir = 'sources/', written = newWritten(), tracker = null } = {}) {
   const perZip = settings.sourcesPerZip;
   // Shared by every extractSourceItem call: audit counters and the
   // DOM-warning decision
@@ -3819,7 +3898,8 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
     perZip,
     extractOne: (source, ctx) => extractSourceItem(shell, source, ctx, state, variantSettings),
     // Close the source viewer once per source, whether extraction worked or not
-    afterEach: async () => {
+    afterEach: async (source, { failed }) => {
+      if (tracker) (failed ? tracker.fail : tracker.done)('sources', source);
       try {
         const backResponse = await chrome.tabs.sendMessage(shell.tab.id, { type: 'NAVIGATE_BACK' });
         console.log('[NotebookLM Takeout] NAVIGATE_BACK response:', backResponse);
@@ -3849,6 +3929,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
       });
       await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, written });
       console.log(`[NotebookLM Takeout] Downloaded sources ZIP ${info.batchIndex}/${info.totalBatches}`);
+      if (tracker) tracker.commit(); // these sources are on disk now
 
       // CRITICAL: free each batch's memory before the next one
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -5608,7 +5689,8 @@ async function downloadAllArtifacts(tabId, items) {
   try {
     return await withExportShell({ label: 'artifacts', overlayMessage: 'Preparing to download artifacts...', tabId }, async shell => {
       const folder = zipEnabled ? null : (shell.projectName || 'NotebookLM');
-      const { result, zips, savedOutside } = await runArtifactsJob(shell, items, { folder });
+      const { result, zips, savedOutside } = await withJobRecord(shell, 'artifacts', 'Artifacts', 'artifacts', items,
+        tracker => runArtifactsJob(shell, items, { folder, tracker }));
 
       return shell.finish({
         kind: 'artifacts',
@@ -5641,7 +5723,7 @@ async function downloadAllArtifacts(tabId, items) {
  * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, savedOutside: number, parts: number, packages: number }>}
  *   savedOutside: items Chrome saved itself (no capturable URL)
  */
-async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artifacts', folder = null, bothSlideFormats = false, written = newWritten() } = {}) {
+async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artifacts', folder = null, bothSlideFormats = false, written = newWritten(), tracker = null } = {}) {
   const zipMode = !folder;
   const place = files => (pathPrefix ? files.map(f => ({ ...f, path: pathPrefix + f.path })) : files);
   const stems = NLME.artifactStems(items);
@@ -5704,7 +5786,8 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
       return { item, files };
     },
     // Pause between items so Gemini Notebook is not hammered
-    afterEach: async item => {
+    afterEach: async (item, { failed }) => {
+      if (tracker) (failed ? tracker.fail : tracker.done)('artifacts', item);
       if (item !== items[items.length - 1]) await new Promise(resolve => setTimeout(resolve, 800));
     },
     packageBatch: async (results, info) => {
@@ -5718,10 +5801,12 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
         // Memory: the Blobs live only in this call; the runner drops `results`
         // once it returns, and `written` keeps names and counts only
         await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder: null, written });
+        if (tracker) tracker.commit(); // this part's items are on disk now
         return;
       }
       // Folder mode (one item per call): the item is already saved; the
       // last call adds the root files
+      if (tracker) tracker.commit();
       if (info.isLast) {
         const all = saved.flatMap(r => r.files);
         await saveFiles(place(artifactsRootFiles(all, saved.map(r => r.item), { meta: shell.meta, info })), { folder });

@@ -464,6 +464,20 @@ async function runFullTakeout() {
     }
     console.log('[NotebookLM Takeout] Full Takeout scan:', categories.map(c => `${c.name} ${c.selected}`).join(', '));
 
+    // Job record (Milestone 3c): one for the whole takeout, made from the scanned
+    // items. A category that is empty, failed to scan or was never scanned
+    // (cancelled during the scan) has an empty list; chat is never recorded.
+    const recordedItems = name => {
+      const c = categories.find(cat => cat.name === name);
+      return !c.status && c.items ? c.items : [];
+    };
+    const tracker = stopRest ? null : await startJobRecord(shell, 'takeout', 'Full Takeout', {
+      sources: recordedItems('Sources'),
+      notes: recordedItems('Notes'),
+      artifacts: recordedItems('Artifacts')
+    });
+    let uncleanEnd = false; // a runner was cancelled or stopped
+
     // 2. One runner per category, in order; a cancel skips the rest
     for (const c of categories) {
       if (c.status) continue; // empty, or the scan failed
@@ -482,7 +496,7 @@ async function runFullTakeout() {
       // so the index still links the parts already written
       const written = newWritten();
       try {
-        const out = await c.run(catShell, c.items, { pathPrefix: `${root}/${c.folder}/`, zipKind: `takeout-${c.folder}`, folder, written });
+        const out = await c.run(catShell, c.items, { pathPrefix: `${root}/${c.folder}/`, zipKind: `takeout-${c.folder}`, folder, written, tracker });
         c.exported = out.result.exported;
         c.failed = out.result.failed;
         c.errors.push(...out.errors);
@@ -498,6 +512,7 @@ async function runFullTakeout() {
           cancelled: out.result.cancelled,
           stopped: out.result.stopped
         });
+        if (out.result.cancelled || out.result.stopped) uncleanEnd = true;
         if (out.result.cancelled) stopRest = true;
       } catch (error) {
         // A package that could not be written: this category fails, the
@@ -511,6 +526,10 @@ async function runFullTakeout() {
       c.packages = written.count;
       c.items = null; // free the scan data before the next category
     }
+
+    // Clean end: nothing cancelled, stopped or skipped. The record goes only when
+    // every recorded item is done (a failed item or a failed category keeps it)
+    if (tracker) await tracker.finish(!stopRest && !uncleanEnd);
 
     // 3. Root files, also after a cancel
     const summary = categories.map(({ name, folder: catFolder, status, selected, exported, failed, zips, parts, packages }) =>

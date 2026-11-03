@@ -1303,3 +1303,44 @@ test('citation cache limits are 10 MB per notebook and 20 notebooks', () => {
   assert.equal(NLME.CITE_MAX_BYTES_PER_NOTEBOOK, 10 * 1024 * 1024);
   assert.equal(NLME.CITE_KEEP_NOTEBOOKS, 20);
 });
+
+test('jobRecord helpers track remaining and failed keys', () => {
+  let r = NLME.newJobRecord({ id: 'notes-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a', 'b', 'c'] }, now: 1 });
+  assert.equal(NLME.jobRemainingCount(r), 3);
+  r = NLME.markJobItem(r, 'notes', 'a', { now: 2 });
+  r = NLME.markJobItem(r, 'notes', 'b', { failed: true, now: 3 });
+  assert.deepEqual(r.remaining.notes, ['c']);
+  assert.deepEqual(r.failed.notes, ['b']);
+  assert.equal(NLME.jobRemainingCount(r), 2);
+  assert.equal(r.updatedAt, 3);
+  r = NLME.markJobItem(r, 'notes', 'c', { now: 4 });
+  assert.equal(NLME.jobRecordFinished(r), false); // 'b' is still failed
+  r = NLME.markJobItem(r, 'notes', 'b', { now: 5 }); // a later success clears the failure
+  assert.deepEqual(r.failed.notes, []);
+  assert.equal(NLME.jobRecordFinished(r), true);
+});
+
+test('jobRecord helpers replace and clear by id', () => {
+  assert.equal(NLME.jobRecordKey('nb'), 'nlme.job.nb');
+  const r = NLME.newJobRecord({ id: 'takeout-9', kind: 'takeout', label: 'Full Takeout', notebookId: 'nb', keysByCategory: { sources: ['s'], notes: [], artifacts: ['x'] }, now: 9 });
+  assert.deepEqual(Object.keys(r.remaining), ['sources', 'notes', 'artifacts']);
+  assert.deepEqual(r.failed, { sources: [], notes: [], artifacts: [] });
+  assert.equal(r.startedAt, 9);
+  assert.equal(NLME.jobRemainingCount(r), 2);
+});
+
+test('markJobItem does not change the record it is given', () => {
+  const r = NLME.newJobRecord({ id: 'n-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a', 'b'] }, now: 1 });
+  const next = NLME.markJobItem(r, 'notes', 'a', { failed: true, now: 2 });
+  assert.deepEqual(r.remaining.notes, ['a', 'b']);
+  assert.deepEqual(r.failed.notes, []);
+  assert.deepEqual(next.remaining.notes, ['b']);
+  assert.deepEqual(next.failed.notes, ['a']);
+});
+
+test('markJobItem tolerates a category the record does not have', () => {
+  const r = NLME.newJobRecord({ id: 'n-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1 });
+  const next = NLME.markJobItem(r, 'sources', 'z', { failed: true, now: 2 });
+  assert.deepEqual(next.failed.sources, ['z']);
+  assert.deepEqual(next.remaining.notes, ['a']);
+});

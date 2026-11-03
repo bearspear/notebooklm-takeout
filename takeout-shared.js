@@ -910,6 +910,44 @@
     });
   }
 
+  // ---- Job records (Milestone 3c): one per notebook in chrome.storage.local ----
+  // List keys only (listItemKeys), never payloads. See AGENT.md "Milestone 3c contracts".
+
+  function jobRecordKey(notebookId) {
+    return `nlme.job.${notebookId}`;
+  }
+
+  function newJobRecord({ id, kind, label, notebookId, keysByCategory, now }) {
+    const remaining = {};
+    const failed = {};
+    for (const [category, keys] of Object.entries(keysByCategory || {})) {
+      remaining[category] = [...keys];
+      failed[category] = [];
+    }
+    return { id, kind, label, notebookId, startedAt: now, updatedAt: now, remaining, failed };
+  }
+
+  // A new record with `key` done: removed from remaining, and from failed unless
+  // it failed again (a later success clears an earlier failure).
+  function markJobItem(record, category, key, { failed = false, now } = {}) {
+    const without = list => (list || []).filter(k => k !== key);
+    return {
+      ...record,
+      updatedAt: now,
+      remaining: { ...record.remaining, [category]: without(record.remaining && record.remaining[category]) },
+      failed: { ...record.failed, [category]: failed ? [...without(record.failed && record.failed[category]), key] : without(record.failed && record.failed[category]) }
+    };
+  }
+
+  function jobRemainingCount(record) {
+    const count = group => Object.values(group || {}).reduce((sum, keys) => sum + keys.length, 0);
+    return count(record.remaining) + count(record.failed);
+  }
+
+  function jobRecordFinished(record) {
+    return jobRemainingCount(record) === 0;
+  }
+
   // Visible indices (filtered and sorted) plus the type chips of the whole list.
   function listView(items, { query = '', types = [], sort = 'notebook' } = {}, { titleOf, typeOf } = {}) {
     const list = items || [];
@@ -1544,6 +1582,11 @@ footer { margin-top: 3rem; }
     uniqueStems,
     notebookIdFromUrl,
     listItemKeys,
+    jobRecordKey,
+    newJobRecord,
+    markJobItem,
+    jobRemainingCount,
+    jobRecordFinished,
     listView,
     pruneSelection,
     listSummary,

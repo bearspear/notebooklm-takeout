@@ -17,6 +17,12 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
   const list = items || [];
   const keys = NLME.listItemKeys(list, accessors);
   const keyIndex = new Map(keys.map((k, i) => [k, i]));
+  // Each item remembers its key in the whole list (non-enumerable, so copies never
+  // carry it): a job record made from a selection or a retry then uses the same
+  // keys a fresh scan gives, duplicates ("#2") included.
+  list.forEach((item, i) => {
+    try { Object.defineProperty(item, '_listKey', { value: keys[i], configurable: true, writable: true }); } catch (_) { /* frozen or primitive: the record computes its own */ }
+  });
   const selectable = list.map(item => (canSelect ? !!canSelect(item) : true));
   const chipTypes = NLME.listView(list, {}, accessors).types; // the whole list, never filtered
 
