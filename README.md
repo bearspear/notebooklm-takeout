@@ -258,7 +258,9 @@ rest are in `errors.md`). If items failed, **Retry N failed** exports just those
 If an export stops early (you cancel it, the tab closes, the panel closes or a Full Takeout
 runs into failures), the side panel remembers which items were left. When you open that
 notebook again, a banner above the results shows "An earlier Notes export stopped at 12 of
-40" (a Full Takeout reads "An earlier Full Takeout stopped at …") with **Resume (28 left)** and **Discard**. It appears only while the active tab is that
+40" (a Full Takeout reads "An earlier Full Takeout stopped at …") with **Resume (28 left)** and **Discard**.
+When the export ran to the end and only failed items are left, it reads "An earlier Notes export
+finished with 3 failed." with **Retry (3)**, which does the same as Resume for those items. It appears only while the active tab is that
 notebook, no export is running, and something is left; it goes away when you switch to
 another notebook (or a page that is not a notebook), and comes back when you return.
 
@@ -269,7 +271,8 @@ the notebook are listed there as "no longer in the notebook" and dropped from th
 items that fail again stay in it. If the page looks only partly loaded (a list not drawn yet),
 those items are reported as "could not be checked" and stay in the banner instead of being
 dropped. The files come as new ZIPs or folders; a resume never
-adds to the earlier export's files. **Discard** forgets the earlier export. Chat exports are
+adds to the earlier export's files. Resume uses your current ⚙️ settings (citation detail,
+versions, ZIP), not the ones of the stopped export. **Discard** forgets the earlier export. Chat exports are
 never resumed. Cancel stops a resume between its steps, too.
 
 Only one export, scan or download runs at a time. While one runs, the panel's other buttons
@@ -393,7 +396,8 @@ causes no extra requests to Gemini Notebook.
   links for media files.
 
 **Permissions:** `sidePanel`, `tabs`, `scripting` (run inside the notebook tab), `downloads`
-and `storage` (settings). Host access is limited to `notebook.google.com` /
+`storage` (settings, unfinished-export records and list settings) and `unlimitedStorage` (the
+citation cache; no install warning). Host access is limited to `notebook.google.com` /
 `notebooklm.google.com` and the hosts Gemini Notebook serves downloads from
 (`contribution.usercontent.google.com`, `*.googleusercontent.com`, and
 `*.scf.usercontent.goog` for mind maps). Downloads from any other host, or from other tabs,
