@@ -3225,14 +3225,11 @@ async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches =
   // Add errors.txt when the caller passes errors (it passes ALL errors to the
   // last ZIP the run writes: the final batch, or the one it was cancelled in)
   if (errors.length > 0) {
-    let errorsContent = '# NotebookLM Export Errors\n\n';
-    errorsContent += `Total Errors: ${errors.length}\n`;
-    errorsContent += `Generated: ${new Date().toLocaleString()}\n\n`;
-    errorsContent += '---\n\n';
-    errors.forEach((err, idx) => {
-      errorsContent += `${idx + 1}. ${err}\n`;
-    });
-    zip.file('errors.txt', errorsContent);
+    zip.file('errors.txt', NLME.buildErrorReport({
+      title: 'Notes Export',
+      generatedAt: new Date().toLocaleString(),
+      errors
+    }));
     indexFiles.push({ path: 'errors.txt', title: 'Export Errors' });
   }
 
@@ -4230,111 +4227,27 @@ async function exportSources(selectedSources) {
       // or the batch the user cancelled in
       if ((zipIndex === totalZips - 1 || cancelled) && allErrors.length > 0) {
         errorsWritten = true;
-        let errorsContent = '# Source Export Error Report\n\n';
-        errorsContent += `Generated: ${new Date().toLocaleString()}\n\n`;
-        errorsContent += '---\n\n';
-
-        // Summary Statistics
-        errorsContent += '## Summary Statistics\n\n';
-        errorsContent += `- **Total Sources Selected:** ${stats.totalSources}\n`;
-        errorsContent += `- **Successfully Extracted:** ${stats.successfulExtractions}\n`;
-        errorsContent += `- **Failed Extractions:** ${stats.failedExtractions}\n`;
+        // Shared report (handles string and object errors, e.g. the cancel note)
+        const sourceStats = {
+          'Total Sources Selected': stats.totalSources,
+          'Successfully Extracted': stats.successfulExtractions,
+          'Failed Extractions': stats.failedExtractions
+        };
         if (settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages) {
-          errorsContent += `- **Missing Summaries:** ${stats.missingSummaries}\n`;
-          errorsContent += `- **Missing Key Topics:** ${stats.missingKeyTopics}\n`;
+          sourceStats['Missing Summaries'] = stats.missingSummaries;
+          sourceStats['Missing Key Topics'] = stats.missingKeyTopics;
         }
         if (stats.imagesFound > 0) {
-          errorsContent += `- **Images Found:** ${stats.imagesFound}\n`;
-          errorsContent += `- **Images Embedded:** ${stats.imagesEmbedded}\n`;
-          errorsContent += `- **Images Failed:** ${stats.imagesFailed}\n`;
+          sourceStats['Images Found'] = stats.imagesFound;
+          sourceStats['Images Embedded'] = stats.imagesEmbedded;
+          sourceStats['Images Failed'] = stats.imagesFailed;
         }
-        const successRate = stats.totalSources > 0
-          ? ((stats.successfulExtractions / stats.totalSources) * 100).toFixed(1)
-          : '0';
-        errorsContent += `- **Success Rate:** ${successRate}%\n`;
-        errorsContent += `\n---\n\n`;
-
-        // Group errors by type
-        const errorsByType = {};
-        allErrors.forEach(err => {
-          if (!errorsByType[err.type]) {
-            errorsByType[err.type] = [];
-          }
-          errorsByType[err.type].push(err);
+        const errorsContent = NLME.buildErrorReport({
+          title: 'Source Export',
+          generatedAt: new Date().toLocaleString(),
+          errors: allErrors,
+          stats: sourceStats
         });
-
-        // Error Details
-        errorsContent += '## Error Details\n\n';
-
-        if (errorsByType.extraction_failed || errorsByType.extraction_error) {
-          errorsContent += '### EXTRACTION FAILURES\n\n';
-          const failures = [
-            ...(errorsByType.extraction_failed || []),
-            ...(errorsByType.extraction_error || [])
-          ];
-          failures.forEach((err, idx) => {
-            errorsContent += `**${idx + 1}. ${err.source}**\n`;
-            errorsContent += `- Error: ${err.message}\n`;
-            if (err.stack) {
-              errorsContent += `- Stack: ${err.stack}\n`;
-            }
-            errorsContent += `\n`;
-          });
-          errorsContent += `\n`;
-        }
-
-        if ((settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages) && errorsByType.missing_summary) {
-          errorsContent += '### MISSING SUMMARIES\n\n';
-          errorsContent += 'The following sources were exported but their source guide/summary was not found:\n\n';
-          errorsByType.missing_summary.forEach((err, idx) => {
-            errorsContent += `${idx + 1}. ${err.source}\n`;
-          });
-          errorsContent += `\n`;
-        }
-
-        if ((settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages) && errorsByType.missing_key_topics) {
-          errorsContent += '### MISSING KEY TOPICS\n\n';
-          errorsContent += 'The following sources were exported but their key topics were not found:\n\n';
-          errorsByType.missing_key_topics.forEach((err, idx) => {
-            errorsContent += `${idx + 1}. ${err.source}\n`;
-          });
-          errorsContent += `\n`;
-        }
-
-        if (errorsByType.image_download_failed || errorsByType.image_embedding_error) {
-          errorsContent += '### IMAGE DOWNLOAD FAILURES\n\n';
-          errorsContent += 'The following images could not be embedded as base64:\n\n';
-          const imageErrors = [
-            ...(errorsByType.image_download_failed || []),
-            ...(errorsByType.image_embedding_error || [])
-          ];
-          imageErrors.forEach((err, idx) => {
-            errorsContent += `**${idx + 1}. ${err.source}**\n`;
-            errorsContent += `- Error: ${err.message}\n`;
-            if (err.url) {
-              errorsContent += `- URL: ${err.url}\n`;
-            }
-            errorsContent += `\n`;
-          });
-          errorsContent += `Note: Images remain as external links in the markdown.\n\n`;
-        }
-
-        errorsContent += '---\n\n';
-        errorsContent += '## Recommendations\n\n';
-        if (stats.failedExtractions > 0) {
-          errorsContent += '- Some sources failed to extract completely. Try exporting them individually.\n';
-        }
-        if ((settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages) && stats.missingSummaries > 0) {
-          errorsContent += '- Some sources are missing summaries. This may happen if NotebookLM hasn\'t generated the source guide yet.\n';
-        }
-        if ((settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages) && stats.missingKeyTopics > 0) {
-          errorsContent += '- Some sources are missing key topics. This is usually included in the source guide.\n';
-        }
-        if (errorsByType.image_download_failed || errorsByType.image_embedding_error) {
-          errorsContent += '- Some images could not be embedded as base64. They remain as external links but may require authentication to view.\n';
-        }
-        errorsContent += '\n- If issues persist, please report them at:\n';
-        errorsContent += `  ${NLME.ISSUES_URL}\n`;
 
         zip.file('errors.txt', errorsContent);
         indexFiles.push({ path: 'errors.txt', title: 'Export Error Report' });
@@ -4517,8 +4430,11 @@ async function exportSources(selectedSources) {
     // Never lose errors: write an errors-only ZIP if no source ZIP carried them
     if (allErrors.length > 0 && !errorsWritten) {
       const errZip = new JSZip();
-      const lines = allErrors.map((e, idx) => `${idx + 1}. ${typeof e === 'string' ? e : `${e.source || e.title || ''} ${e.type || ''}: ${e.message || e.error || ''}`.trim()}`);
-      errZip.file('errors.txt', `# Source Export Error Report\n\nGenerated: ${new Date().toLocaleString()}\n\n---\n\n${lines.join('\n')}\n`);
+      errZip.file('errors.txt', NLME.buildErrorReport({
+        title: 'Source Export',
+        generatedAt: new Date().toLocaleString(),
+        errors: allErrors
+      }));
       downloadBlob(await generateZipTimed(errZip), `${sanitizeFilename(projectName)}-sources-${timestamp}${cancelled ? '-PARTIAL' : ''}-errors.zip`);
     }
 
@@ -5036,74 +4952,24 @@ async function exportChat(chatData, extractFullCitations = false) {
         });
       });
 
-      // Add detailed errors file
-      let errorsContent = '# Chat Export Error Report\n\n';
-      errorsContent += `Chat: ${chatData.notebookTitle}\n`;
-      errorsContent += `Generated: ${new Date().toLocaleString()}\n\n`;
-      errorsContent += '---\n\n';
-
-      // Summary Statistics
-      errorsContent += '## Summary Statistics\n\n';
-      errorsContent += `- **Total Messages:** ${stats.totalMessages}\n`;
-      errorsContent += `- **Messages with Citations:** ${stats.messagesWithCitations}\n`;
-      errorsContent += `- **Total Citations Found:** ${stats.totalCitationsFound}\n`;
-      errorsContent += `- **Unique Citations Extracted:** ${stats.totalCitationsExtracted}\n`;
+      // Shared report (handles string and object errors, e.g. the cancel note)
+      const chatStats = {
+        'Chat': chatData.notebookTitle,
+        'Total Messages': stats.totalMessages,
+        'Messages with Citations': stats.messagesWithCitations,
+        'Total Citations Found': stats.totalCitationsFound,
+        'Unique Citations Extracted': stats.totalCitationsExtracted
+      };
       if (stats.extractFullCitations) {
-        errorsContent += `- **Successful Extractions:** ${stats.successfulExtractions}\n`;
-        errorsContent += `- **Failed Extractions:** ${stats.failedExtractions}\n`;
-        const successRate = stats.totalCitationsExtracted > 0
-          ? ((stats.successfulExtractions / stats.totalCitationsExtracted) * 100).toFixed(1)
-          : '0';
-        errorsContent += `- **Success Rate:** ${successRate}%\n`;
+        chatStats['Successful Extractions'] = stats.successfulExtractions;
+        chatStats['Failed Extractions'] = stats.failedExtractions;
       }
-      errorsContent += `- **Total Errors:** ${allErrors.length}\n\n`;
-
-      errorsContent += '---\n\n';
-
-      // Error Details
-      errorsContent += '## Error Details\n\n';
-
-      // Group errors by type
-      const errorsByType = {};
-      allErrors.forEach(err => {
-        const type = err.type || 'unknown';
-        if (!errorsByType[type]) {
-          errorsByType[type] = [];
-        }
-        errorsByType[type].push(err);
+      const errorsContent = NLME.buildErrorReport({
+        title: 'Chat Export',
+        generatedAt: new Date().toLocaleString(),
+        errors: allErrors,
+        stats: chatStats
       });
-
-      Object.keys(errorsByType).forEach(type => {
-        const errors = errorsByType[type];
-        errorsContent += `### ${type.replace(/_/g, ' ').toUpperCase()} (${errors.length})\n\n`;
-
-        errors.forEach((err, idx) => {
-          errorsContent += `**${idx + 1}. Message ${err.messageIndex}**\n`;
-          errorsContent += `- Question: "${err.userQuestion}${err.userQuestion.length >= 100 ? '...' : ''}"\n`;
-          errorsContent += `- Error: ${err.message}\n`;
-          if (err.stack) {
-            errorsContent += `- Stack: ${err.stack.split('\n')[0]}\n`;
-          }
-          errorsContent += `\n`;
-        });
-
-        errorsContent += '\n';
-      });
-
-      // Recommendations
-      errorsContent += '---\n\n';
-      errorsContent += '## Recommendations\n\n';
-      if (stats.failedExtractions > 0) {
-        errorsContent += '- Some citations failed to extract. This is often due to:\n';
-        errorsContent += '  - Tooltips not appearing (try exporting again)\n';
-        errorsContent += '  - Citations being too close together (timing issue)\n';
-        errorsContent += '  - Network connectivity issues\n\n';
-      }
-      if (allErrors.some(e => e.type === 'message_processing_error')) {
-        errorsContent += '- Message processing errors occurred. Check the browser console for details.\n\n';
-      }
-      errorsContent += '- If you continue to experience issues, please report them at:\n';
-      errorsContent += `  ${NLME.ISSUES_URL}\n\n`;
 
       zip.file('errors.txt', errorsContent);
       indexFiles.push({ path: 'errors.txt', title: 'Export Error Report' });

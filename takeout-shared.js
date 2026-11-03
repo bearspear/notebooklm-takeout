@@ -403,13 +403,9 @@
   }
 
   function formatErrorsTxt({ title = 'Export', generatedAt = '', errors = [] } = {}) {
-    const lines = [`# ${title} Error Report`, ''];
-    if (generatedAt) lines.push(`Generated: ${generatedAt}`, '');
-    lines.push(`Errors: ${errors.length}`, '');
-    for (const e of errors) lines.push(`- ${e}`);
-    lines.push('', `Report issues: ${ISSUES_URL}`);
-    return lines.join('\n') + '\n';
+    return buildErrorReport({ title, generatedAt, errors });
   }
+
 
   // Gemini Notebook download URLs name the real file (filename=Deck.pptx);
   // the extension from there beats guessing from MIME type or artifact type.
@@ -453,7 +449,60 @@
     return `Cancelled by user after ${done} of ${total} ${kind}; the last one may have incomplete citations and the rest were not exported`;
   }
 
+  // Exports collect errors as strings ("[Title] message", cancellation
+  // notes) and as objects ({source|userQuestion|title, type, message|error,
+  // stack|url}). Normalise both before building any report.
+  function normalizeExportError(err) {
+    if (typeof err === 'string') {
+      if (err.startsWith('Cancelled by user after')) {
+        return { type: 'cancelled', item: '', message: err, detail: '' };
+      }
+      const m = err.match(/^\[([^\]]*)\]\s*(.*)$/s);
+      return m
+        ? { type: 'error', item: m[1], message: m[2], detail: '' }
+        : { type: 'error', item: '', message: err, detail: '' };
+    }
+    const e = err || {};
+    return {
+      type: e.type || 'error',
+      item: String(e.source || e.userQuestion || e.title || ''),
+      message: String(e.message || e.error || ''),
+      detail: String(e.stack || e.url || '')
+    };
+  }
+
+  // One errors.txt format for notes, sources, chat and Download All.
+  function buildErrorReport({ title = 'Export', generatedAt = '', errors = [], stats = {} } = {}) {
+    const lines = [`# ${title} Error Report`, ''];
+    if (generatedAt) lines.push(`Generated: ${generatedAt}`, '');
+    const statEntries = Object.entries(stats || {});
+    if (statEntries.length > 0) {
+      lines.push('## Summary', '');
+      for (const [key, value] of statEntries) lines.push(`- ${key}: ${value}`);
+      lines.push('');
+    }
+    lines.push(`Errors: ${errors.length}`, '');
+    const groups = new Map();
+    for (const raw of errors) {
+      const e = normalizeExportError(raw);
+      if (!groups.has(e.type)) groups.set(e.type, []);
+      groups.get(e.type).push(e);
+    }
+    for (const [type, list] of groups) {
+      lines.push(`## ${type.replace(/_/g, ' ').toUpperCase()} (${list.length})`, '');
+      for (const e of list) {
+        lines.push(e.item ? `- ${e.item}: ${e.message}` : `- ${e.message}`);
+        if (e.detail) lines.push(`  ${e.detail.split('\n')[0]}`);
+      }
+      lines.push('');
+    }
+    lines.push(`Report issues: ${ISSUES_URL}`);
+    return lines.join('\n') + '\n';
+  }
+
   const NLME = {
+    normalizeExportError,
+    buildErrorReport,
     cancellationNote,
     createStabilityTracker,
     downloadFolderPath,

@@ -434,3 +434,31 @@ test('cancellationNote says how far the export got and what is missing', () => {
   assert.match(note, /Cancelled by user after 4 of 17 messages/);
   assert.match(note, /not exported/);
 });
+
+test('normalizeExportError handles note strings, objects and cancellation notes', () => {
+  assert.deepEqual(NLME.normalizeExportError('[Deck A] Failed to extract: x'),
+    { type: 'error', item: 'Deck A', message: 'Failed to extract: x', detail: '' });
+  assert.deepEqual(NLME.normalizeExportError({ source: 'S', type: 'missing_summary', message: 'm' }),
+    { type: 'missing_summary', item: 'S', message: 'm', detail: '' });
+  assert.deepEqual(NLME.normalizeExportError({ userQuestion: 'Q', type: 'citation_failed', message: 'm', stack: 'st' }),
+    { type: 'citation_failed', item: 'Q', message: 'm', detail: 'st' });
+  assert.equal(NLME.normalizeExportError(NLME.cancellationNote({ kind: 'messages', done: 4, total: 17 })).type, 'cancelled');
+});
+
+test('buildErrorReport groups mixed errors without throwing', () => {
+  const report = NLME.buildErrorReport({
+    title: 'Chat Export',
+    generatedAt: '11/3/2026, 9:00 AM',
+    errors: ['plain text', { userQuestion: 'Why?', type: 'citation_failed', message: 'Popover did not close' },
+      NLME.cancellationNote({ kind: 'messages', done: 4, total: 17 })]
+  });
+  assert.match(report, /^# Chat Export Error Report/);
+  assert.match(report, /## CANCELLED \(1\)/);
+  assert.match(report, /- Why\?: Popover did not close/);
+  assert.match(report, /- plain text/);
+});
+
+test('buildErrorReport prints summary stats', () => {
+  const report = NLME.buildErrorReport({ title: 'Chat Export', errors: [], stats: { 'Total Messages': 17 } });
+  assert.match(report, /- Total Messages: 17/);
+});
