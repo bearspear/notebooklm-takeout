@@ -1173,10 +1173,37 @@ user clicks Dismiss.
 - `shell.finish({ ..., saved, retry })`: `saved` is the ZIP names (`zips` from the runner) or the
   Downloads folder; `stoppedMessage` still replaces the outcome line (level error) and the errors
   are listed anyway. `retryFor(failedItems, jobName, exportFn)` (sidebar.js) builds `retry` for
-  notes, sources and Download All (`downloadAllArtifacts(shell.tab.id, failed)`); chat passes none
+  notes, sources and Download All (`downloadAllArtifacts(shell.tab.id, failed)`, `exportSources(failed, { tabId })`); chat passes none
   (its messages do not fail as a whole; re-export the chat).
 - Toasts remain for short notices (job refused, no tab, cancelled at the health check, unexpected
   failure) and single-item exports. Full Takeout shows its combined outcome in the results panel (`showResults`).
+
+### Runner options and the export tab (Task 8)
+
+- `withExportShell({ ..., tabId })`: when `tabId` is given the shell uses `chrome.tabs.get(tabId)`
+  instead of the active tab, and `shell.meta` (notebook title, URL) comes from that tab. Omitted:
+  the active tab, as before. `downloadAllArtifacts(tabId, items)` and Full Takeout pass it.
+  `exportSources(selected, { tabId })` and `exportNotesAsMarkdown(selected, { tabId })` take it too
+  (default: the active tab). Every retry (`retryFor` closures for notes, sources and Download All, and
+  Full Takeout's Retry) re-runs on the tab the original export used (`shell.tab.id` / the takeout's tab).
+- `target.written` (every category runner, `CategoryTarget`): `{ zips: [], count: 0, multi: false,
+  parts: 0 }` (`newWritten()`), filled by `saveCategoryBatch` as each package is saved (the artifacts
+  runner fills `zips` and `count` itself). `runFullTakeout` passes a fresh one per category and reads
+  it after the runner, also in `catch`, so a category that throws still lists the ZIPs and parts it
+  wrote. Runners return `zips`, `parts` and `packages` (= `written.count`) from the same object.
+  `count` includes an errors-only package.
+- The takeout summary rows (`buildRootIndex`, `buildRootIndexHtml`, manifest `categories`) carry
+  `packages`; a category has a folder in the index when `NLME.categoryWritten` says so: items
+  exported, a ZIP, `parts > 0` or `packages > 0` (folder mode and errors-only categories have no ZIP).
+- `NLME.chatSelectedCount(chatData)`: `max(messagePairs.length, stats.pairsInDom ?? 0)`. Full
+  Takeout's chat "selected", so a chat of only unreadable messages is "0 of N", not "0 of 0".
+- `NLME.runExportJob`'s `packageBatch(results, info)` info has `exported` and `failed` (items so
+  far; final on the last package). The sources `errors.md` summary is `{ Selected, Exported, Failed }`
+  (`buildSourcesFiles(..., { stats })`).
+- Chat `errors.md` / `_index.md` "Total Messages" is the number of messages in that package (a partial
+  run lists the exported ones). `NLME.extensionFor` ends with the URL path's own extension
+  (`/^\.[a-z0-9]{2,5}$/i`, lower-cased) after the filename, MIME and artifact-type guesses.
+  `NLME.uniqueStems` compares names as NFC, lower-cased.
 
 ## Known issues and latent bugs
 

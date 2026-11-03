@@ -1328,6 +1328,7 @@ footer { margin-top: 3rem; }
     takeoutCategoryStatus,
     chatScanIsEmpty,
     chatSelectedCount,
+    categoryWritten,
     frontMatter,
     uniqueStems,
     notebookIdFromUrl,
