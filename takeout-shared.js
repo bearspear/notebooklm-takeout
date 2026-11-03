@@ -894,7 +894,8 @@
     const raw = text == null ? '' : String(text);
     const t = raw.trim();
     if (t.length < min) return raw;
-    const head = /^[\p{Ll}\p{Nd}]/u.test(t) ? '\u2026' : '';
+    // "1. foo" starts a Markdown list: a leading mark would break the marker
+    const head = /^[\p{Ll}\p{Nd}]/u.test(t) && !/^\d+[.)]\s/.test(t) ? '\u2026' : '';
     const tail = /[\p{L}\p{N}]$/u.test(t) ? '\u2026' : '';
     return head || tail ? head + t + tail : raw;
   }

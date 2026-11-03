@@ -444,8 +444,9 @@
         sendResponse({ items: [], error: e.message });
       }
     } else if (message.type === 'DELETE_STUDIO_ITEM') {
-      // Resolve by label (preferred when provided — resilient to index shifts)
-      // or by combined DOM index as a fallback.
+      // Resolve by label plus combined index (row delete: the title at that index
+      // must match the label, otherwise the delete is refused) or by label alone
+      // (bulk delete). There is no index-only fallback.
       deleteStudioItem(message.data || {})
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ success: false, error: error.message || 'Delete failed' }));
@@ -3431,7 +3432,9 @@
 
   /**
    * Delete one studio item:
-   *   1. Resolve target element (by label first, else combined index).
+   *   1. Resolve target element: label plus combined index must match (the title at
+   *      that index must equal the label); a label alone picks the first title match
+   *      (bulk delete). Anything else is refused, never guessed.
    *   2. Open its "More" menu.
    *   3. Click the "Delete" menu item.
    *   4. Wait for the native confirmation dialog and auto-click its confirm button.

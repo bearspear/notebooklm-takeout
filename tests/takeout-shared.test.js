@@ -647,6 +647,17 @@ test('markWindowedQuote marks cut transcript windows only', () => {
   assert.equal(NLME.markWindowedQuote('short quote'), 'short quote');
 });
 
+test('markWindowedQuote keeps an ordered-list marker at the start', () => {
+  const body = 'foo bar baz '.repeat(90);
+  const dot = '1. ' + body + 'end.';
+  assert.equal(NLME.markWindowedQuote(dot), dot);
+  const paren = '12) ' + body + 'end.';
+  assert.equal(NLME.markWindowedQuote(paren), paren);
+  // The tail mark still applies; a plain digit start still gets the head mark
+  assert.equal(NLME.markWindowedQuote('1. ' + body + 'cut'), '1. ' + body + 'cut\u2026');
+  assert.equal(NLME.markWindowedQuote('2024 ' + body + 'end.'), '\u20262024 ' + body + 'end.');
+});
+
 test('markWindowedQuote marks one side at a time and honours min', () => {
   const startsMid = 'and then ' + 'x'.repeat(990) + ' end.';
   assert.equal(NLME.markWindowedQuote(startsMid), '\u2026' + startsMid);
@@ -887,7 +898,7 @@ test('buildIndexHtml groups files by folder and encodes links', () => {
   const html = NLME.buildIndexHtml({ meta, heading: 'Notes — New Math', files: [
     { path: 'notes/A b.md', title: 'A <script>b', variant: 'base', data: 'hello' },
     { path: 'notes/A b-code-blocks.md', title: 'A b', variant: 'code-blocks' },
-    { path: 'mind-maps/[MINDMAP]_M#1.svg' },
+    { path: 'mind-maps/[mind-map]_M#1.svg' },
     { path: 'slides/D.pdf', url: 'https://x/d.pdf' },
     { path: 'combined-notes.md', title: 'Combined' },
     { path: 'manifest.json' },
@@ -897,7 +908,7 @@ test('buildIndexHtml groups files by folder and encodes links', () => {
   assert.match(html, /<meta charset="utf-8">/);
   assert.match(html, /<title>Notes — New Math<\/title>/);
   assert.match(html, /href="notes\/A%20b\.md"/);
-  assert.match(html, /href="mind-maps\/%5BMINDMAP%5D_M%231\.svg"/);
+  assert.match(html, /href="mind-maps\/%5Bmind-map%5D_M%231\.svg"/);
   assert.match(html, /<h2>notes<\/h2>/);
   assert.match(html, /<h2>mind-maps<\/h2>/);
   assert.match(html, /<h2>Files<\/h2>/);
