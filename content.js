@@ -1507,7 +1507,8 @@
         } else {
           quoteMarkdown = await htmlToMarkdownWithImages(textEl, includeImages);
         }
-        quoteMarkdown = quoteMarkdown.trim();
+        // A long unpunctuated source shows only a cut window: mark it with "…"
+        quoteMarkdown = NLME.markWindowedQuote(quoteMarkdown.trim());
 
         leave();
         if (!(await ensureTooltipGone())) {

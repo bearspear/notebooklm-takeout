@@ -629,6 +629,32 @@ test('groupCitationEntries keeps unavailable placeholders apart from real source
   assert.deepEqual(groups.map(g => g.numbers), [['1', '2'], ['3']]);
 });
 
+test('markWindowedQuote marks cut transcript windows only', () => {
+  const mid = 'vanished from physics ' + 'x'.repeat(980) + ' his tra';
+  assert.equal(NLME.markWindowedQuote(mid), '\u2026' + mid + '\u2026');
+  const sentence = 'The ' + 'y'.repeat(990) + ' end.';
+  assert.equal(NLME.markWindowedQuote(sentence), sentence);
+  assert.equal(NLME.markWindowedQuote('short quote'), 'short quote');
+});
+
+test('markWindowedQuote marks one side at a time and honours min', () => {
+  const startsMid = 'and then ' + 'x'.repeat(990) + ' end.';
+  assert.equal(NLME.markWindowedQuote(startsMid), '\u2026' + startsMid);
+  const endsMid = 'Start ' + 'x'.repeat(990) + ' mid';
+  assert.equal(NLME.markWindowedQuote(endsMid), endsMid + '\u2026');
+  assert.equal(NLME.markWindowedQuote('1 digit start and end 2', { min: 5 }), '\u20261 digit start and end 2\u2026');
+  assert.equal(NLME.markWindowedQuote(''), '');
+  assert.equal(NLME.markWindowedQuote(null), '');
+});
+
+test('groupedSourcesMarkdown writes one line per source with every number anchored', () => {
+  const entries = [{ number: '1', text: 'A' }, { number: '2', text: 'B' }, { number: '3', text: 'A' }];
+  assert.equal(NLME.groupedSourcesMarkdown(entries, 'msg-0-'),
+    '<a id="msg-0-src-1"></a><a id="msg-0-src-3"></a>\n**[[1]](#msg-0-cite-ref-1-1) [[3]](#msg-0-cite-ref-3-1)** A\n\n' +
+    '<a id="msg-0-src-2"></a>\n**[[2]](#msg-0-cite-ref-2-1)** B\n\n');
+  assert.equal(NLME.groupedSourcesMarkdown([], ''), '');
+});
+
 test('frontMatter quotes strings so any title stays valid YAML', () => {
   const fm = NLME.frontMatter({ title: 'Gödel: "proof" # 1\n---', count: 3, draft: false, tags: ['a', 'b'], empty: '', none: null });
   assert.equal(fm, '---\ntitle: "Gödel: \\"proof\\" # 1\\n---"\ncount: 3\ndraft: false\ntags: ["a","b"]\n---\n\n');
@@ -1008,9 +1034,9 @@ test('singleArtifactPackage bundles data tables and mind maps like before', () =
       { path: '[mind-map]_Big-Ideas.html', data: '<html/>' }
     ]
   });
-  assert.equal(map.zipName, '[MINDMAP]_Big-Ideas.zip');
+  assert.equal(map.zipName, '[mind-map]_Big-Ideas.zip');
   assert.deepEqual(map.entries.map(e => e.path),
-    ['[MINDMAP]_Big-Ideas.svg', '[MINDMAP]_Big-Ideas.json', '[MINDMAP]_Big-Ideas.html']);
+    ['[mind-map]_Big-Ideas.svg', '[mind-map]_Big-Ideas.json', '[mind-map]_Big-Ideas.html']);
   assert.equal(map.entries[1].data, '{}');
 
   // A lone CSV (no footnotes, no structured data) stays a plain file

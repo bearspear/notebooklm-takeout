@@ -667,7 +667,7 @@
     if ((type !== 'Data Table' && type !== 'Mind Map') || !files || files.length < 2) return null;
     const clean = sanitizeFilename(title);
     const isTable = type === 'Data Table';
-    const base = isTable ? clean : `[MINDMAP]_${clean}`;
+    const base = isTable ? clean : `[${artifactTypePrefix(type)}]_${clean}`;
     const entries = files.map(file => {
       const path = String(file.path || '');
       if (isTable && /-references\.txt$/i.test(path)) return { ...file, path: 'references.txt' };
@@ -854,6 +854,33 @@
       groups.get(key).numbers.push(String(e.number));
     }
     return [...groups.values()];
+  }
+
+  // The Sources section of a titles-only export: one line per source with
+  // all its numbers; every number keeps its own anchor so body links still
+  // resolve. anchorPrefix: '' for notes, 'msg-<n>-' for a chat answer.
+  function groupedSourcesMarkdown(entries, anchorPrefix = '') {
+    let out = '';
+    for (const group of groupCitationEntries(entries)) {
+      const anchors = group.numbers.map(n => `<a id="${anchorPrefix}src-${n}"></a>`).join('');
+      const links = group.numbers.map(n => `[[${n}]](#${anchorPrefix}cite-ref-${n}-1)`).join(' ');
+      out += `${anchors}\n**${links}** ${group.text}\n\n`;
+    }
+    return out;
+  }
+
+  // The citation popover of a long, unpunctuated source (a YouTube
+  // transcript) shows only a window of about 1,000 characters, cut
+  // mid-word. Mark such a quote with "\u2026" where it was cut. Short
+  // quotes, and ones that start with a capital or end with punctuation,
+  // are left alone.
+  function markWindowedQuote(text, { min = 990 } = {}) {
+    const raw = text == null ? '' : String(text);
+    const t = raw.trim();
+    if (t.length < min) return raw;
+    const head = /^[\p{Ll}\p{Nd}]/u.test(t) ? '\u2026' : '';
+    const tail = /[\p{L}\p{N}]$/u.test(t) ? '\u2026' : '';
+    return head || tail ? head + t + tail : raw;
   }
 
   // YAML front matter for exported notes and sources. Strings go through
@@ -1708,6 +1735,8 @@ footer { margin-top: 3rem; }
     withRealExtension,
     artifactStems,
     groupCitationEntries,
+    groupedSourcesMarkdown,
+    markWindowedQuote,
     noteHasImages,
     countMarkdownFormulas,
     citationCoverage,

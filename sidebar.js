@@ -1325,7 +1325,7 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
 /**
  * Download one artifact (row button, Studio list): today's single-file
  * names ([report]_Title.md, [audio-overview]_Title.m4a, ...); a Data Table
- * or mind map is one ZIP ([data-table]_Title.zip, [MINDMAP]_Title.zip).
+ * or mind map is one ZIP ([data-table]_Title.zip, [mind-map]_Title.zip).
  */
 async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName) {
   const stem = `[${getArtifactTypePrefix(artifactType)}]_${sanitizeFilename(artifactName)}`;
@@ -2567,11 +2567,7 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
     // No quotes (titles-only, reports): one line per source with all its
     // numbers; every number keeps its own anchor so body links still resolve
     markdown += '\n\n---\n\n## Sources\n\n';
-    for (const group of NLME.groupCitationEntries(entries)) {
-      const anchors = group.numbers.map(n => `<a id="${anchorPrefix}src-${n}"></a>`).join('');
-      const links = group.numbers.map(n => `[[${n}]](#${anchorPrefix}cite-ref-${n}-1)`).join(' ');
-      markdown += `${anchors}\n**${links}** ${group.text}\n\n`;
-    }
+    markdown += NLME.groupedSourcesMarkdown(entries, anchorPrefix);
   } else if (entries.length > 0) {
     markdown += '\n\n---\n\n## Sources\n\n';
 
@@ -3473,7 +3469,7 @@ async function exportSingleNote(note) {
   let filesWritten = 0;
 
   if (noteData.isMindmap) {
-    const files = await mindmapFiles(`[MINDMAP]_${sanitizedTitle}`, noteData.svgContent, noteData.treeData, note.title);
+    const files = await mindmapFiles(`[mind-map]_${sanitizedTitle}`, noteData.svgContent, noteData.treeData, note.title);
     await saveFiles(files);
     return { success: true, filesWritten: files.length };
   }
@@ -4917,7 +4913,7 @@ function buildChatAuditDoc(chatData, messages, citationMode = 'quotes') {
   }
   const chatHtml = chatData.messagePairs.map(p => p.aiResponseHTML || '').join('\n');
   convertCounted(audit, chatHtml, () => convertChatToMarkdown(
-    chatData.notebookTitle, chatData.notebookSummary, messages, false, citationMode === 'none'));
+    chatData.notebookTitle, chatData.notebookSummary, messages, false, citationMode === 'none', citationMode === 'titles'));
   return auditMarkdown('Chat Export', audit);
 }
 
@@ -4965,7 +4961,7 @@ function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, parti
   // answer has quotes; with-images only when the Markdown has images
   const versionFiles = [];
   if (messages.length > 0) {
-    const toMarkdown = codeBlocks => convertChatToMarkdown(chatData.notebookTitle, chatData.notebookSummary, messages, codeBlocks, citationMode === 'none');
+    const toMarkdown = codeBlocks => convertChatToMarkdown(chatData.notebookTitle, chatData.notebookSummary, messages, codeBlocks, citationMode === 'none', citationMode === 'titles');
     const baseMarkdown = toMarkdown(false);
     const hasQuotes = messages.some(m => (m.sources || []).some(src => src.quote && src.quote.trim()));
     const hasImages = /!\[/.test(baseMarkdown);
@@ -5087,8 +5083,9 @@ function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, parti
  * Convert chat data to markdown format
  * dropCitations: Citation detail 'none' — remove the [n] markers and the
  * Sources section (the same meaning as convertToMarkdown's last parameter).
+ * groupTitles: Citation detail 'titles' — one Sources line per source title.
  */
-function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citationsCodeBlock = true, dropCitations = false) {
+function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citationsCodeBlock = true, dropCitations = false, groupTitles = false) {
   logger.info('Markdown', `Converting chat to markdown: "${notebookTitle}"`);
   logger.info('Markdown', `  - Message count: ${messages.length}`);
 
@@ -5161,7 +5158,11 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
     // Add sources for this message
     if (!dropCitations && msg.sources && msg.sources.length > 0) {
       markdown += '**Sources:**\n\n';
-      msg.sources.forEach(source => {
+      if (groupTitles) {
+        // Titles only: one line per source title, as in notes
+        markdown += NLME.groupedSourcesMarkdown(
+          msg.sources.map(source => ({ number: source.sourceIndex, text: source.text })), `msg-${idx}-`);
+      } else msg.sources.forEach(source => {
         // Add anchor for source with message-specific ID
         markdown += `<a id="msg-${idx}-src-${source.sourceIndex}"></a>\n`;
         markdown += `**[[${source.sourceIndex}]](#msg-${idx}-cite-ref-${source.sourceIndex}-1)** ${source.text}\n`;

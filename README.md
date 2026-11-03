@@ -135,7 +135,7 @@ The quoted passage from the source…
    selected; filter, sort or untick rows to choose what you want.
 2. Click **Download** on a row, or **Download Selected (N)** for the ticked rows.
    - **Download** saves one file named `[type]_Title.ext` (for example `[report]_Title.md`,
-     `[mind-map]_Title.svg`). A Data Table or mind map saves as one ZIP (`[data-table]_Title.zip`, `[MINDMAP]_Title.zip`).
+     `[mind-map]_Title.svg`). A Data Table or mind map saves as one ZIP (`[data-table]_Title.zip`, `[mind-map]_Title.zip`).
    - With **ZIP off** (recommended for whole notebooks), **Download Selected** saves every ticked file into
      `Downloads/<Notebook name>/<type>/…`, one file at a time, so even large audio and video
      overviews work.
