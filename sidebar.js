@@ -1185,6 +1185,27 @@ async function checkStatus() {
   }
 }
 
+// A scan the page answered with an error message (SCAN_SOURCES, SCAN_CHAT);
+// the tab scans show that message as is
+class ScanError extends Error {}
+
+// Studio artifacts from SCAN_STUDIO_ITEMS, no UI (Artifacts tab, Full
+// Takeout). disabled: a type that cannot be exported yet.
+// @returns {Promise<Array<{ index, label, type, details, disabled }>>}
+async function scanArtifactsData(tabId) {
+  await ensureContentScriptLoaded(tabId);
+  const scan = await chrome.tabs.sendMessage(tabId, { type: 'SCAN_STUDIO_ITEMS' });
+  return (scan?.items || [])
+    .filter(item => item.kind === 'artifact')
+    .map(item => ({
+      index: item.moreIndex,
+      label: item.label,
+      type: item.type,
+      details: item.details,
+      disabled: !item.downloadable
+    }));
+}
+
 async function scanPage() {
   const resultsEl = document.getElementById('scan-results');
   const countBadge = document.getElementById('artifact-count');
@@ -1199,17 +1220,7 @@ async function scanPage() {
       return;
     }
 
-    await ensureContentScriptLoaded(tab.id);
-    const scan = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_STUDIO_ITEMS' });
-    const items = (scan?.items || [])
-      .filter(item => item.kind === 'artifact')
-      .map(item => ({
-        index: item.moreIndex,
-        label: item.label,
-        type: item.type,
-        details: item.details,
-        disabled: !item.downloadable
-      }));
+    const items = await scanArtifactsData(tab.id);
 
     if (items.length === 0) {
       resultsEl.innerHTML = '<p class="empty-message">No downloadable artifacts found.<br><span class="hint">Make sure you have generated content in Studio.</span></p>';
@@ -1352,6 +1363,14 @@ async function ensureContentScriptLoaded(tabId) {
   }
 }
 
+// Notes from SCAN_NOTES, no UI (Notes tab, Full Takeout)
+// @returns {Promise<Array<{ index, title, ... }>>} as the content script sends them
+async function scanNotesData(tabId) {
+  await ensureContentScriptLoaded(tabId);
+  const response = await chrome.tabs.sendMessage(tabId, { type: 'SCAN_NOTES' });
+  return response?.notes || [];
+}
+
 // Sidebar function to trigger note scan
 async function scanNotesPage() {
   const notesResults = document.getElementById('notes-results');
@@ -1368,12 +1387,7 @@ async function scanNotesPage() {
       return;
     }
 
-    // Ensure content script is loaded
-    await ensureContentScriptLoaded(tab.id);
-
-    // Send message to content script
-    const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_NOTES' });
-    const notes = response?.notes || [];
+    const notes = await scanNotesData(tab.id);
     console.log('[NotebookLM Takeout] Scanned notes:', notes);
 
     renderNotesList(notes);
@@ -3289,27 +3303,33 @@ async function scanSourcesPage() {
     return;
   }
 
-  // Ensure content script is loaded
-  await ensureContentScriptLoaded(tab.id);
-
   try {
-    // Send message to scan sources
-    const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_SOURCES' });
-
-    if (response.error) {
-      showToast(`Scan failed: ${response.error}`, 'error');
-      return;
-    }
-
-    const sources = response.sources || [];
+    const { sources, skippedNotes } = await scanSourcesData(tab.id);
 
     console.log(`[NotebookLM Takeout] Found ${sources.length} sources`);
 
-    renderSourcesList(sources, response.skippedNotes || 0);
+    renderSourcesList(sources, skippedNotes);
   } catch (error) {
+    if (error instanceof ScanError) {
+      showToast(`Scan failed: ${error.message}`, 'error');
+      return;
+    }
     console.error('[NotebookLM Takeout] Scan error:', error);
     showToast('Failed to scan sources', 'error');
   }
+}
+
+/**
+ * Sources from SCAN_SOURCES, no UI (Sources tab, Full Takeout).
+ * @returns {Promise<{ sources: Array<{ index, title, ... }>, skippedNotes: number }>}
+ * @throws {ScanError} when the page reports a scan error
+ */
+async function scanSourcesData(tabId) {
+  await ensureContentScriptLoaded(tabId);
+  const response = await chrome.tabs.sendMessage(tabId, { type: 'SCAN_SOURCES' });
+  if (!response) throw new Error('No response from the page');
+  if (response.error) throw new ScanError(response.error);
+  return { sources: response.sources || [], skippedNotes: response.skippedNotes || 0 };
 }
 
 /**
@@ -3908,6 +3928,22 @@ function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batch
 // ========== CHAT EXPORT FUNCTIONS ==========
 
 /**
+ * Chat from SCAN_CHAT (the page scrolls the whole history in), no UI (Chat
+ * tab, Full Takeout). Records the scan time for the export's timing summary.
+ * @returns {Promise<{ notebookTitle, notebookSummary, messagePairs: Array, stats?, dateRange? }>}
+ * @throws {ScanError} when the page reports a scan error
+ */
+async function scanChatData(tabId) {
+  await ensureContentScriptLoaded(tabId);
+  const scanStartedAt = performance.now();
+  const response = await chrome.tabs.sendMessage(tabId, { type: 'SCAN_CHAT' });
+  lastChatScanTiming = { 'chat.scan': { count: 1, ms: Math.round(performance.now() - scanStartedAt) } };
+  if (!response) throw new Error('No response from the page');
+  if (response.error) throw new ScanError(response.error);
+  return response.chatData;
+}
+
+/**
  * Scan chat panel and initiate auto-scroll
  */
 async function scanChatPage() {
@@ -3937,20 +3973,20 @@ async function scanChatPage() {
     });
 
     // Trigger auto-scroll and scan
-    const scanStartedAt = performance.now();
-    const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_CHAT' });
-    lastChatScanTiming = { 'chat.scan': { count: 1, ms: Math.round(performance.now() - scanStartedAt) } };
+    let chatData;
+    try {
+      chatData = await scanChatData(tab.id);
+    } catch (error) {
+      if (!(error instanceof ScanError)) throw error;
+      await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
+      showToast(`Scan failed: ${error.message}`, 'error');
+      chatResults.innerHTML = `<p class="error-message">${escapeHtml(error.message)}</p>`;
+      return;
+    }
 
     // Hide overlay
     await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
 
-    if (response.error) {
-      showToast(`Scan failed: ${response.error}`, 'error');
-      chatResults.innerHTML = `<p class="error-message">${escapeHtml(response.error)}</p>`;
-      return;
-    }
-
-    const chatData = response.chatData;
     console.log(`[NotebookLM Takeout] Found ${chatData.messagePairs.length} message pairs`);
 
     // Store chat data globally
