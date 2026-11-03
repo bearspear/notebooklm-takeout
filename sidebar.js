@@ -2584,11 +2584,17 @@ function refreshListButtons() {
 
 // Same path as the page overlay's Cancel button: the content script flags the
 // export as cancelled and broadcasts CANCEL_EXPORT to every running exporter.
+// Target tab: activeShellTabId (sidebar-takeout.js, the running shell's tab),
+// else jobTabId (the active tab when the job started), else the current tab.
 async function requestCancel() {
   if (!jobLock.current()) return;
   try {
+    // The export shell's tab first: retries and Download Selected run on the tab
+    // they were scanned on, which need not be the active one. The content script
+    // there broadcasts CANCEL_EXPORT, which the shell's own listener also receives.
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    await chrome.tabs.sendMessage(jobTabId || currentTabId || tab?.id, { type: 'REQUEST_EXPORT_CANCEL' });
+    const target = activeShellTabId ?? jobTabId ?? currentTabId ?? tab?.id;
+    await chrome.tabs.sendMessage(target, { type: 'REQUEST_EXPORT_CANCEL' });
   } catch (error) {
     console.warn('[NotebookLM Takeout] Cancel request failed:', error.message);
   }
