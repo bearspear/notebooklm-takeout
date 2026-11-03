@@ -546,7 +546,8 @@ function disableExportButtons() {
     'export-sources-btn',
     'export-chat-btn',
     'scan-sources-btn',
-    'scan-chat-btn'
+    'scan-chat-btn',
+    'full-takeout-btn'
   ];
 
   exportButtons.forEach(id => {
@@ -564,7 +565,8 @@ function enableExportButtons() {
     'export-sources-btn',
     'export-chat-btn',
     'scan-sources-btn',
-    'scan-chat-btn'
+    'scan-chat-btn',
+    'full-takeout-btn'
   ];
 
   exportButtons.forEach(id => {
@@ -715,6 +717,9 @@ function setupEventListeners() {
     document.getElementById('settings-panel').style.display = 'none';
     saveSettings();
   });
+
+  // Full Takeout: the whole notebook in one run (sidebar-takeout.js)
+  document.getElementById('full-takeout-btn')?.addEventListener('click', () => runExclusive('Full Takeout', runFullTakeout));
 
   // Health check panel
   // The health check hovers real citations, so it must never run during an
@@ -2455,7 +2460,7 @@ async function runExclusive(name, fn) {
   // blocked too. Mark them: a scan may replace a control with a clone (the
   // chat Export button), and the clone must be re-enabled too, so restore
   // by the mark, not by the original element.
-  Array.from(document.querySelectorAll('.tab-content button, .tab-content input'))
+  Array.from(document.querySelectorAll('.tab-content button, .tab-content input, #full-takeout-btn'))
     .filter(el => !el.disabled && el.id !== 'cancel-download-btn')
     .forEach(el => { el.disabled = true; el.setAttribute('data-job-disabled', ''); });
   try {

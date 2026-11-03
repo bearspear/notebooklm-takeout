@@ -759,6 +759,8 @@ test('summarizeTakeoutOutcome gives one message for every category', () => {
   ] });
   assert.equal(nothing.level, 'error');
   assert.equal(nothing.message, 'Takeout: sources 0/3, notes failed, chat none (see errors.md)');
+  assert.match(NLME.summarizeTakeoutOutcome({ categories: [cat('Sources', 'failed', 3, 0, { failed: 3, errorCount: 3 })] }).message,
+    /^Takeout: sources 0\/3 failed \(see errors\.md\)$/);
 
   // A cancel before anything was written is a warning, not an error
   assert.equal(NLME.summarizeTakeoutOutcome({ categories: [cat('Sources', 'partial', 3, 0), cat('Notes', 'skipped', 2, 0)] }).level, 'warning');

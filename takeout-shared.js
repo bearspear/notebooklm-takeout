@@ -945,7 +945,8 @@
         case 'stopped': return `${name} ${count} stopped`;
         case 'skipped': return `${name} skipped`;
         case 'empty': return `${name} none`;
-        case 'failed': return `${name} failed`;
+        // Items found but none exported, or (0 items) the scan failed
+        case 'failed': return c.selected ? `${name} ${count} failed` : `${name} failed`;
         default: return `${name} ${count}`;
       }
     };
