@@ -435,6 +435,23 @@ test('cancellationNote says how far the export got and what is missing', () => {
   assert.match(note, /not exported/);
 });
 
+test('cancellationNote mentions citations only for exports that have them', () => {
+  assert.match(NLME.cancellationNote({ kind: 'notes', done: 1, total: 3 }), /incomplete citations/);
+  const note = NLME.cancellationNote({ kind: 'sources', done: 2, total: 4 });
+  assert.doesNotMatch(note, /citations/);
+  assert.match(note, /Cancelled by user after 2 of 4 sources/);
+  assert.match(note, /not exported/);
+});
+
+test('distinctVariants lists the versions actually written, in order', () => {
+  const files = [
+    { variant: 'base' }, { variant: 'plusMeta' },
+    { variant: 'base' }, { variant: 'plusMeta' }, { variant: 'withImages' }
+  ];
+  assert.deepEqual(NLME.distinctVariants(files), ['base', 'plusMeta', 'withImages']);
+  assert.deepEqual(NLME.distinctVariants([]), []);
+});
+
 test('normalizeExportError handles note strings, objects and cancellation notes', () => {
   assert.deepEqual(NLME.normalizeExportError('[Deck A] Failed to extract: x'),
     { type: 'error', item: 'Deck A', message: 'Failed to extract: x', detail: '' });

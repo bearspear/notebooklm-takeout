@@ -446,7 +446,15 @@
   // errors.txt line for a cancelled run; it also forces the ZIP (and so the
   // -PARTIAL name) for exports that otherwise write a single file.
   function cancellationNote({ kind, done = 0, total = 0 } = {}) {
-    return `Cancelled by user after ${done} of ${total} ${kind}; the last one may have incomplete citations and the rest were not exported`;
+    // Sources have no citation markers; notes and chat messages do
+    const last = kind === 'sources' ? '' : 'the last one may have incomplete citations and ';
+    return `Cancelled by user after ${done} of ${total} ${kind}; ${last}the rest were not exported`;
+  }
+
+  // Version names actually written (from index entries with a `variant`),
+  // first-seen order, so README and _index count real files, not settings
+  function distinctVariants(files) {
+    return [...new Set((files || []).map(f => f.variant))];
   }
 
   // Exports collect errors as strings ("[Title] message", cancellation
@@ -747,6 +755,7 @@
     normalizeExportError,
     buildErrorReport,
     cancellationNote,
+    distinctVariants,
     createStabilityTracker,
     downloadFolderPath,
     extensionFromDownloadUrl,

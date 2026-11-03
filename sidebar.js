@@ -4130,20 +4130,16 @@ async function exportSources(selectedSources) {
       readmeContent += '---\n\n';
       readmeContent += '## File Naming Convention\n\n';
 
-      // Determine which versions were created based on settings
-      const enabledVersions = [];
-      if (settings.exportSourceBase) enabledVersions.push('base');
-      if (settings.exportSourcePlusMeta) enabledVersions.push('plusMeta');
-      if (settings.exportSourceWithImages) enabledVersions.push('withImages');
-      if (settings.exportSourcePlusMetaWithImages) enabledVersions.push('plusMetaWithImages');
-
+      // Versions actually written: image versions only exist for sources
+      // with images, so settings alone overcount
+      const enabledVersions = NLME.distinctVariants(indexFiles);
       const versionCount = enabledVersions.length;
       readmeContent += `Each source is exported in ${versionCount} version(s):\n\n`;
 
       let sectionNum = 1;
 
       // 1. Base version
-      if (settings.exportSourceBase) {
+      if (enabledVersions.includes('base')) {
         readmeContent += `### ${sectionNum}. Base files (e.g., \`Document-1.md\`)\n\n`;
         readmeContent += '- **Minimal version** - no metadata, no images\n';
         readmeContent += '- Smallest file size, fastest to process\n';
@@ -4153,7 +4149,7 @@ async function exportSources(selectedSources) {
       }
 
       // 2. Plus-meta version
-      if (settings.exportSourcePlusMeta) {
+      if (enabledVersions.includes('plusMeta')) {
         readmeContent += `### ${sectionNum}. Plus-meta files (e.g., \`Document-1-plus-meta.md\`)\n\n`;
         readmeContent += '- **With metadata** - includes AI-generated summary & key topics\n';
         readmeContent += '- No images (text only)\n';
@@ -4163,7 +4159,7 @@ async function exportSources(selectedSources) {
       }
 
       // 3. With-images version
-      if (settings.exportSourceWithImages) {
+      if (enabledVersions.includes('withImages')) {
         readmeContent += `### ${sectionNum}. With-images files (e.g., \`Document-1-with-images.md\`)\n\n`;
         readmeContent += '- **With embedded images** - images as base64 data URIs\n';
         readmeContent += '- No metadata (content only)\n';
@@ -4182,7 +4178,7 @@ async function exportSources(selectedSources) {
       }
 
       // 4. Plus-meta-with-images version
-      if (settings.exportSourcePlusMetaWithImages) {
+      if (enabledVersions.includes('plusMetaWithImages')) {
         readmeContent += `### ${sectionNum}. Plus-meta-with-images files (e.g., \`Document-1-plus-meta-with-images.md\`)\n\n`;
         readmeContent += '- **Complete version** - metadata + images\n';
         readmeContent += '- Largest file size\n';
