@@ -447,12 +447,12 @@ function convertKatexNodeToLatex(node) {
     annotation: node.querySelector('annotation[encoding="application/x-tex"]')?.textContent,
     display: isDisplay
   });
-  if (exact) { katexConversions++; return exact; }
+  if (exact) return exact;
 
   const katexHtml = node.querySelector('.katex-html');
   if (katexHtml) {
     const latex = katexRenderInline(katexHtml).replace(/\u200b/g, '').replace(/\s+/g, ' ').trim();
-    if (latex) { katexConversions++; return `${delim}${latex}${delim}`; }
+    if (latex) return `${delim}${latex}${delim}`;
   }
 
   // Last-resort textual fallback.
@@ -716,8 +716,10 @@ function setupEventListeners() {
   });
 
   // Health check panel
+  // The health check hovers real citations, so it must never run during an
+  // export (its popovers would race the export's own hovers)
   document.getElementById('health-check-btn').addEventListener('click', () => {
-    runHealthCheck();
+    runExclusive('Health check', runHealthCheck);
   });
 
   document.getElementById('close-health-check-btn').addEventListener('click', () => {
@@ -725,7 +727,7 @@ function setupEventListeners() {
   });
 
   document.getElementById('rerun-health-check-btn').addEventListener('click', () => {
-    runHealthCheck();
+    runExclusive('Health check', runHealthCheck);
   });
 
   document.getElementById('copy-health-report-btn').addEventListener('click', () => {
@@ -2467,33 +2469,36 @@ function timingSummary() {
 
 // Export audit (Milestone 2, Resilience #1): what the page showed vs what
 // the export wrote. Expected counts come from the HTML each export reads.
-let katexConversions = 0;
-
 function countPageContent(html) {
   const doc = new DOMParser().parseFromString(html || '', 'text/html');
-  const citations = [...doc.querySelectorAll('button.citation-marker')]
-    .filter(b => NLME.parseCitationIndex(b.querySelector('span')?.textContent)).length;
+  const citationNumbers = [...doc.querySelectorAll('button.citation-marker')]
+    .map(b => NLME.parseCitationIndex(b.querySelector('span')?.textContent))
+    .filter(Boolean);
   const formulas = doc.querySelectorAll('.katex').length;
-  return { citations, formulas };
+  return { citationNumbers, formulas };
 }
 
-function countWrittenCitations(markdown) {
-  return ((markdown || '').match(/<a id="[^"]*cite-ref-/g) || []).length;
+// Citations: distinct markers vs sources actually read (an anchor is written
+// for every marker even when its popup could not be read)
+function addCitationCoverage(audit, html, sources, needQuotes, page = null) {
+  const counts = page || countPageContent(html);
+  const coverage = NLME.citationCoverage({ markerNumbers: counts.citationNumbers, sources, needQuotes });
+  audit.expected.citations += coverage.expected;
+  audit.written.citations += coverage.written;
 }
 
 function newAudit() {
   return { expected: { items: 0, citations: 0, formulas: 0 }, written: { items: 0, citations: 0, formulas: 0 } };
 }
 
-// Converts with the KaTeX counter so the audit knows how many formulas made it
-function convertCounted(audit, html, convert) {
-  const page = countPageContent(html);
-  const before = katexConversions;
+// Converts and counts formulas: .katex on the page vs formulas in the final
+// Markdown (counted in the output, so nested list/table conversions that run
+// the KaTeX converter twice can't inflate it)
+function convertCounted(audit, html, convert, page = null) {
+  const counts = page || countPageContent(html);
   const markdown = convert();
-  audit.expected.citations += page.citations;
-  audit.expected.formulas += page.formulas;
-  audit.written.citations += countWrittenCitations(markdown);
-  audit.written.formulas += katexConversions - before;
+  audit.expected.formulas += counts.formulas;
+  audit.written.formulas += NLME.countMarkdownFormulas(markdown);
   return markdown;
 }
 
@@ -2586,7 +2591,7 @@ async function preflightWarn(tabId, type) {
   try {
     const health = await chrome.tabs.sendMessage(tabId, { type: 'CHECK_DOM_HEALTH', data: { type } });
     if (health && health.healthy === false) {
-      showToast(`Gemini Notebook may have changed (${(health.issues || []).length} ${type} check(s) failed). Exporting anyway; run the health check 🩺 if results look wrong.`, 'warning');
+      showToast(`Gemini Notebook may have changed (${(health.issues || []).length} ${type} check(s) failed). Exporting anyway; run the health check 🩺 afterwards if results look wrong.`, 'warning');
     }
   } catch (e) {
     console.warn('[NotebookLM Takeout] Pre-flight check failed:', e.message);
@@ -2751,6 +2756,7 @@ async function getProjectName(tabId) {
 async function exportNotesAsMarkdown(selectedNotes) {
   startExportTiming();
   const notesAudit = newAudit();
+  let stoppedEarly = false; // citations unreadable: stopped by the extension, not the user
   let notesWithMarkers = 0;
   let unreadNotes = 0;
   console.log('[NotebookLM Takeout] Starting export for notes:', selectedNotes.length);
@@ -2904,9 +2910,11 @@ async function exportNotesAsMarkdown(selectedNotes) {
           } else {
             // Convert to markdown (without noteId for individual files),
             // counting citations and formulas for the audit
+            const notePage = countPageContent(noteData.html);
             const markdown = convertCounted(notesAudit, noteData.html,
-              () => convertToMarkdown(noteData.html, noteData.sources, note.title, false));
-            const pageCitations = countPageContent(noteData.html).citations;
+              () => convertToMarkdown(noteData.html, noteData.sources, note.title, false), notePage);
+            addCitationCoverage(notesAudit, noteData.html, noteData.sources, settings.citationDetail !== 'titles', notePage);
+            const pageCitations = notePage.citationNumbers.length;
             if (pageCitations > 0 && settings.citationDetail !== 'titles') {
               notesWithMarkers++;
               if ((noteData.sources || []).length === 0) unreadNotes++;
@@ -2917,6 +2925,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
               // without sources.
               allErrors.push(`[${note.title}] Citations could not be read in the first 3 notes that have them; export stopped (Gemini Notebook may have changed — run the health check)`);
               cancelNoted = true; // not a user cancel: no "Cancelled by user" note
+              stoppedEarly = true;
               cancelled = true;
             }
 
@@ -3028,8 +3037,12 @@ async function exportNotesAsMarkdown(selectedNotes) {
     notesAudit.expected.items = selectedNotes.length;
     notesAudit.written.items = exportedCount;
     const finalAudit = NLME.auditExport(notesAudit);
-    showToast(finalAudit.ok ? outcome.message : `${outcome.message} — some content is missing, see _audit.md`,
-      finalAudit.ok ? outcome.level : (outcome.level === 'error' ? 'error' : 'warning'));
+    if (stoppedEarly) {
+      showToast(`Stopped after ${exportedCount} of ${selectedNotes.length} notes: citations could not be read (Gemini Notebook may have changed). Run the health check 🩺; details in errors.txt.`, 'error');
+    } else {
+      showToast(finalAudit.ok ? outcome.message : `${outcome.message} — some content is missing, see _audit.md`,
+        finalAudit.ok ? outcome.level : (outcome.level === 'error' ? 'error' : 'warning'));
+    }
 
   } catch (error) {
     console.error('Export failed:', error);
@@ -3172,7 +3185,7 @@ async function exportSingleNote(note) {
   // Regular note — produce enabled markdown versions, each as its own .md file.
   const versions = getEnabledNoteVersions({
     hasQuotes: (noteData.sources || []).some(src => src.quote && src.quote.trim()),
-    hasImages: /<img\b/i.test(noteData.html || '')
+    hasImages: NLME.noteHasImages(noteData) // body or citation quotes
   });
   for (const version of versions) {
     let markdown = convertToMarkdown(
@@ -3234,7 +3247,7 @@ async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches =
       title: 'With images (markdown)', description: 'Citations rendered as markdown, with base64 images' }
   };
   const hasQuotes = notes.some(n => (n.sources || []).some(src => src.quote && src.quote.trim()));
-  const hasImages = notes.some(n => /<img\b/i.test(n.html || ''));
+  const hasImages = notes.some(n => NLME.noteHasImages(n)); // body or citation quotes
   const versions = NLME.noteVariants(settings, { hasQuotes, hasImages }).map(v => NOTE_VERSION_INFO[v.suffix]);
 
   versionCount = versions.length;
@@ -3847,8 +3860,9 @@ async function exportSources(selectedSources) {
 
           // Add the main content
           md += `## Content\n\n`;
-          md += convertCounted(sourcesAudit, sourceData.html,
-            () => convertToMarkdown(sourceData.html, sourceData.sources || [], '', false, false, null, false));
+          // Count formulas once: buildMarkdown runs again for the plus-meta version
+          const convertSource = () => convertToMarkdown(sourceData.html, sourceData.sources || [], '', false, false, null, false);
+          md += includeMeta ? convertSource() : convertCounted(sourcesAudit, sourceData.html, convertSource);
 
           return md;
         };
@@ -4813,6 +4827,11 @@ async function exportChat(chatData, extractFullCitations = false) {
     chatAudit.expected.items = chatData.stats?.pairsInDom ?? chatData.messagePairs.length;
     chatAudit.written.items = processedMessages.length;
     const chatHtml = chatData.messagePairs.map(p => p.aiResponseHTML || '').join('\n');
+    // Citations per answer: numbers restart in every answer
+    chatData.messagePairs.forEach((pair, i) => {
+      const processed = processedMessages[i];
+      addCitationCoverage(chatAudit, pair.aiResponseHTML, processed ? processed.sources : [], !!extractFullCitations);
+    });
     const baseMarkdown = convertCounted(chatAudit, chatHtml, () => convertChatToMarkdown(
       chatData.notebookTitle,
       chatData.notebookSummary,

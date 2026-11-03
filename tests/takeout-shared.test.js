@@ -593,3 +593,21 @@ test('auditExport flags missing citations', () => {
 test('unknownStudioIcons lists only unmapped icons', () => {
   assert.deepEqual(NLME.unknownStudioIcons(['tablet', 'copy', 'new_shape', 'article', 'new_shape', '']), ['new_shape']);
 });
+
+test('noteHasImages finds images in citation quotes, not only the body', () => {
+  assert.equal(NLME.noteHasImages({ html: '<p>text</p>', sources: [{ quote: 'See ![fig](data:image/png;base64,AA)' }] }), true);
+  assert.equal(NLME.noteHasImages({ html: '<p><img src="x"></p>', sources: [] }), true);
+  assert.equal(NLME.noteHasImages({ html: '<p>text</p>', sources: [{ quote: 'plain' }] }), false);
+});
+
+test('countMarkdownFormulas counts each formula once in the final Markdown', () => {
+  assert.equal(NLME.countMarkdownFormulas('a $x^2$ b $$\\frac{1}{2}$$ c $y$'), 3);
+  assert.equal(NLME.countMarkdownFormulas('costs $5 and $10 today'), 0);
+  assert.equal(NLME.countMarkdownFormulas(''), 0);
+});
+
+test('citationCoverage counts distinct markers against sources actually read', () => {
+  const sources = [{ sourceIndex: '1', text: 'A', quote: 'q' }, { sourceIndex: '2', text: 'B', quote: '' }, { sourceIndex: '3', text: '', quote: '' }];
+  assert.deepEqual(NLME.citationCoverage({ markerNumbers: ['1', '2', '3', '3'], sources, needQuotes: true }), { expected: 3, written: 1 });
+  assert.deepEqual(NLME.citationCoverage({ markerNumbers: ['1', '2', '3'], sources, needQuotes: false }), { expected: 3, written: 2 });
+});

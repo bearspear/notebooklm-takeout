@@ -685,7 +685,34 @@
     return [...unknown];
   }
 
+  // A note has images if its body or any citation quote does (citation
+  // images are embedded in the quotes, not the body)
+  function noteHasImages({ html = '', sources = [] } = {}) {
+    if (/<img\b/i.test(html || '')) return true;
+    return (sources || []).some(src => /!\[/.test((src && src.quote) || ''));
+  }
+
+  // Formulas in final Markdown ($$...$$ and $...$), each counted once,
+  // however many times the converter ran on nested lists or tables
+  function countMarkdownFormulas(markdown) {
+    const re = /\$\$[\s\S]+?\$\$|(?<![\\$\w])\$(?!\s)[^$\n]+?(?<!\s)\$(?![\w$])/g;
+    return (String(markdown || '').match(re) || []).length;
+  }
+
+  // Citation audit: distinct marker numbers on the page vs sources actually
+  // read (with a quote when quotes were requested, else at least a title)
+  function citationCoverage({ markerNumbers = [], sources = [], needQuotes = false } = {}) {
+    const expected = new Set((markerNumbers || []).map(String)).size;
+    const read = new Set((sources || [])
+      .filter(src => src && (needQuotes ? (src.quote || '').trim() : ((src.text || '').trim() || (src.quote || '').trim())))
+      .map(src => String(src.sourceIndex)));
+    return { expected, written: read.size };
+  }
+
   const NLME = {
+    noteHasImages,
+    countMarkdownFormulas,
+    citationCoverage,
     unknownStudioIcons,
     auditExport,
     buildSourcesIndex,
