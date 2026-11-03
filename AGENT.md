@@ -138,11 +138,12 @@ notebooklm-exporter/
 ├── takeout-shared.js (1042) — Selectors + DOM-free helpers (NLME global); content script,
 │                             sidebar, service worker (importScripts) and Node tests load it
 ├── takeout-job.js (85)     — NLME.runExportJob: the one DOM-free job runner (sidebar + Node tests)
+├── takeout-markdown.js     — NLMEMarkdown: the one Markdown converter + KaTeX (sidebar + page)
 ├── tests/                  — node:test unit tests for takeout-shared.js, takeout-job.js and
 │                             the message protocol
 ├── sidebar.html  ( 436)    — Side panel UI: tabs, controls, settings/health panels
 ├── sidebar-core.js (2132) — Settings, init, tab and notebook switching, job lock, shared helpers,
-│                             Markdown converter, KaTeX, job records (see Milestone 3d contracts)
+│                             notes Markdown (convertToMarkdown), job records (see Milestone 3d contracts)
 ├── sidebar-artifacts.js (1161), sidebar-notes.js (786), sidebar-sources.js (727),
 │   sidebar-chat.js (983), sidebar-generated.js (306), sidebar-health.js (304)
 │                           — one file per tab (scan, list, export job, build files)
@@ -1351,6 +1352,41 @@ every entry is sent, every sent type has a handler somewhere, and the `async` fl
 list recorded from 1.6.0 (update that fixture when you add an entry). The page-world
 `window.postMessage` `case NLME.MSG.NLME_DOWNLOAD_URL_INTERCEPTED` is a different mechanism
 and stays a switch.
+
+### One Markdown converter: `takeout-markdown.js` (Task 4)
+
+A classic script loaded in the side panel (after `takeout-shared.js`) and as a content script
+(manifest: `takeout-shared.js`, `takeout-markdown.js`, `mindmap-extract.js`, `content.js`; the
+same list `ensureContentScriptLoaded` re-injects, checked by `tests/structure.test.js`). It exposes
+`globalThis.NLMEMarkdown`:
+
+| Export | Used by |
+|---|---|
+| `createTurndownService(options)` | the one Turndown configuration (atx headings, `*` bullets, `_` emphasis, fenced code) |
+| `convertKatexNodeToLatex(node)` | KaTeX DOM → `$…$` / `$$…$$` (`data-math` / annotation first, then the layout walker) |
+| `createConverter({ variant, citations, anchorPrefix, getMessageIndex, log })` | `convertToMarkdown` (notes, sources, reports; `variant: 'note'`) and `convertChatToMarkdown` (`variant: 'chat'`). Returns `{ turndownService, convert(html), citedNumbers() }` |
+| `htmlToMarkdownPlain(element)` | `content.js`: citation quotes, source guides, the notebook summary |
+
+- **One rule set.** reportHeadings, blockquotes, stripAngularComponents, listsWithWrappers, tables,
+  matIcons, katexMath and citationButtons are shared. The variant changes only:
+  - `citationButtons`: note markers accept every marker form and anchor to
+    `anchorPrefix + cite-ref-N-k` / `src-N`; chat markers are `button.citation-marker` only and
+    anchor per message (`msg-I-…`, I from `getMessageIndex()`);
+  - `sourceLink` (`<source-link>` → link) exists for notes only;
+  - `tables`: chat appends the `[n] …` reference lines found in the table's
+    `element-list-renderer`.
+
+  `citations: 'none'` drops every marker (and chat's table references). Links vs code blocks only
+  changes the Sources section, which the callers write. Rules are added in the notes order;
+  Turndown gives later rules priority, which matters only for overlapping filters.
+- **Why two engines.** `htmlToMarkdownPlain` is the page script's hand-written converter, moved
+  here, not replaced by Turndown: Turndown escapes Markdown characters, writes `_emphasis_` and
+  collapses whitespace, so switching would change nearly every citation quote and every cached
+  quote. It gained KaTeX → LaTeX (source guides, the notebook summary and quotes with formulas
+  used to get the formula text twice) and `<ol start>`.
+- **Turndown in the page.** Content scripts don't load `turndown.min.js`; nothing in
+  `takeout-markdown.js` touches `TurndownService` until `createTurndownService` /
+  `createConverter` is called, which only the side panel does (tested).
 
 ## Known issues and latent bugs
 

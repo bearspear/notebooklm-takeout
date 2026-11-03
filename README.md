@@ -424,6 +424,7 @@ takeout-job.js        The one export job runner: batching, cancel, errors (unit 
 styles.css            Side panel styles
 content.js            Runs in the notebook page: scanning, extraction, citation popups
 takeout-shared.js     Selectors and DOM-free helpers shared by all contexts (unit tested)
+takeout-markdown.js   The one Markdown converter and KaTeX → LaTeX (side panel and page)
 mindmap-extract.js    Mind map extraction (page and sandboxed mind map frame)
 background.js         Service worker: download interception and naming, mind map frame extraction
 injected.js           Page-world hook that captures download URLs
@@ -436,7 +437,7 @@ tests/                node:test unit tests for takeout-shared.js and takeout-job
 Check your changes:
 
 ```bash
-for f in sidebar-*.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js; do node --check "$f"; done
+for f in sidebar-*.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js takeout-markdown.js; do node --check "$f"; done
 node --test tests/
 ```
 

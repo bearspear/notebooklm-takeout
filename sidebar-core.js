@@ -884,7 +884,7 @@ async function ensureContentScriptLoaded(tabId) {
       console.log('[NotebookLM Takeout] Content script not loaded, injecting...');
       await chrome.scripting.executeScript({
         target: { tabId: tabId },
-        files: ['takeout-shared.js', 'mindmap-extract.js', 'content.js']
+        files: ['takeout-shared.js', 'takeout-markdown.js', 'mindmap-extract.js', 'content.js']
       });
       // The page-world download hook too (guarded against double install)
       await chrome.scripting.executeScript({

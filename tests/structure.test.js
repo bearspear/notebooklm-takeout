@@ -54,11 +54,54 @@ test('every non-IIFE sidebar script yields top-level names', () => {
   assert.deepEqual(empty, [], `No top-level names found in: ${empty.join(', ')}`);
 });
 
-test('content scripts load takeout-shared before content.js', () => {
+function contentScriptBlocks() {
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
-  const js = manifest.content_scripts.map(block => block.js);
-  assert.deepEqual(js, [
-    ['takeout-shared.js', 'mindmap-extract.js', 'content.js'],
+  return manifest.content_scripts.map(block => block.js);
+}
+
+test('content scripts load takeout-shared and takeout-markdown before content.js', () => {
+  assert.deepEqual(contentScriptBlocks(), [
+    ['takeout-shared.js', 'takeout-markdown.js', 'mindmap-extract.js', 'content.js'],
     ['takeout-shared.js', 'injected.js']
   ]);
+});
+
+test('the side panel re-injects the same content scripts as the manifest', () => {
+  // ensureContentScriptLoaded injects these after a reload; a file missing
+  // there leaves content.js without NLME or NLMEMarkdown
+  const core = fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8');
+  const m = core.match(/files:\s*\[([^\]]*content\.js[^\]]*)\]/);
+  assert.ok(m, 'content script injection list not found in sidebar-core.js');
+  const files = [...m[1].matchAll(/'([^']+)'/g)].map(x => x[1]);
+  assert.deepEqual(files, contentScriptBlocks()[0]);
+});
+
+test('content scripts declare each top-level name once', () => {
+  // Content scripts of one block share a global scope, like the sidebar
+  for (const block of contentScriptBlocks()) {
+    const owners = new Map();
+    const problems = [];
+    for (const file of block.filter(f => !VENDORED.test(f))) {
+      const source = fs.readFileSync(path.join(ROOT, file), 'utf8');
+      for (const name of topLevelDeclarations(source)) {
+        if (owners.has(name)) problems.push(`${name} declared in both ${owners.get(name)} and ${file}`);
+        else owners.set(name, file);
+      }
+    }
+    assert.deepEqual(problems, [], `Duplicate top-level declarations:\n  ${problems.join('\n  ')}`);
+  }
+});
+
+test('takeout-markdown.js exposes the converter API without needing Turndown at load', () => {
+  // Content scripts load it without turndown.min.js: nothing may touch
+  // TurndownService until createTurndownService / createConverter is called
+  const vm = require('node:vm');
+  const sandbox = { globalThis: null, NLME: {} };
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'takeout-markdown.js'), 'utf8'), sandbox);
+  const api = sandbox.NLMEMarkdown;
+  for (const fn of ['createTurndownService', 'convertKatexNodeToLatex', 'createConverter', 'htmlToMarkdownPlain']) {
+    assert.equal(typeof api[fn], 'function', fn);
+  }
+  assert.equal(api.htmlToMarkdownPlain(null), '');
 });

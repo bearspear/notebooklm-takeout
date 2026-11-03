@@ -39,6 +39,7 @@
       ],
       "js": [
         "takeout-shared.js",
+        "takeout-markdown.js",
         "mindmap-extract.js",
         "content.js"
       ],

@@ -693,9 +693,297 @@
     };
   }
 
+  // ==================== PAGE SCRIPT CONVERTER ====================
+  // The page script's converter (moved from content.js, Milestone 3d): citation
+  // quotes, source guides and the notebook summary. It is kept apart from the
+  // Turndown rule set on purpose: Turndown escapes Markdown characters,
+  // writes _emphasis_ and collapses whitespace, so switching would change
+  // nearly every citation quote (and every cached quote). Additions here:
+  // KaTeX → LaTeX (it used to emit the formula's text twice) and <ol start>.
+  function htmlToMarkdownPlain(element) {
+    if (!element) return '';
+
+    let markdown = '';
+
+    // Helper function to process table cells with proper escaping
+    const processTableCell = (cell, context) => {
+      let text = processNode(cell, context).trim();
+
+      // Escape pipe characters (Markdown table delimiter)
+      text = text.replace(/\|/g, '\\|');
+
+      // Replace newlines with spaces (tables must be single-line)
+      text = text.replace(/\n+/g, ' ');
+
+      // Warn about colspan/rowspan if present (cannot be represented in Markdown)
+      const colspan = parseInt(cell.getAttribute('colspan') || '1');
+      const rowspan = parseInt(cell.getAttribute('rowspan') || '1');
+      if (colspan > 1 || rowspan > 1) {
+        console.warn('[NotebookLM Takeout] Table cell spans multiple columns/rows - this cannot be represented in Markdown');
+      }
+
+      return text;
+    };
+
+    // Helper function to process table elements
+    const processTable = (tableNode, context) => {
+      const rows = [];
+      let isFirstRowHeader = false;
+
+      // Find all rows (in thead and tbody, or directly in table)
+      const thead = tableNode.querySelector('thead');
+      const tbody = tableNode.querySelector('tbody');
+
+      if (thead) {
+        const headerRows = thead.querySelectorAll('tr');
+        headerRows.forEach((tr, idx) => {
+          const cells = Array.from(tr.querySelectorAll('th, td'));
+          const cellContents = cells.map(cell => processTableCell(cell, context));
+          rows.push(cellContents);
+          if (idx === 0) isFirstRowHeader = true;
+        });
+      }
+
+      if (tbody) {
+        const bodyRows = tbody.querySelectorAll('tr');
+        bodyRows.forEach(tr => {
+          const cells = Array.from(tr.querySelectorAll('td, th'));
+          const cellContents = cells.map(cell => processTableCell(cell, context));
+          rows.push(cellContents);
+        });
+      }
+
+      // If no thead/tbody, get rows directly from table
+      if (!thead && !tbody) {
+        const allRows = tableNode.querySelectorAll('tr');
+        allRows.forEach((tr, idx) => {
+          const cells = Array.from(tr.querySelectorAll('th, td'));
+          const cellContents = cells.map(cell => processTableCell(cell, context));
+
+          // Check if first row has <th> elements
+          if (idx === 0 && tr.querySelector('th')) {
+            isFirstRowHeader = true;
+          }
+
+          rows.push(cellContents);
+        });
+      }
+
+      if (rows.length === 0) return '';
+
+      // Determine number of columns
+      const numCols = Math.max(...rows.map(row => row.length));
+
+      // Build markdown table
+      let tableMarkdown = '\n';
+
+      rows.forEach((row, rowIdx) => {
+        // Pad row to match column count
+        while (row.length < numCols) {
+          row.push('');
+        }
+
+        // Add row
+        tableMarkdown += '| ' + row.join(' | ') + ' |\n';
+
+        // Add separator after first row if it's a header
+        if (rowIdx === 0 && (isFirstRowHeader || thead)) {
+          tableMarkdown += '| ' + Array(numCols).fill('---').join(' | ') + ' |\n';
+        }
+      });
+
+      tableMarkdown += '\n';
+      return tableMarkdown;
+    };
+
+    // Helper function to process list elements
+    const processList = (listNode, context) => {
+      const isOrdered = listNode.tagName.toLowerCase() === 'ol';
+      // Find all <li> elements, but filter out those that belong to nested lists
+      // (handles Angular wrapper components like <labs-tailwind-structural-element-view-v2>)
+      const allLis = Array.from(listNode.querySelectorAll('li'));
+      const items = allLis.filter(li => {
+        // Check if this <li> has a list ancestor between it and listNode
+        let parent = li.parentElement;
+        while (parent && parent !== listNode) {
+          if (parent.tagName && (parent.tagName.toLowerCase() === 'ul' || parent.tagName.toLowerCase() === 'ol')) {
+            return false; // This <li> belongs to a nested list
+          }
+          parent = parent.parentElement;
+        }
+        return true; // This <li> belongs directly to this list
+      });
+      // <ol start="4"> continues a numbered list (Milestone 3d)
+      const startAttr = isOrdered ? parseInt(listNode.getAttribute('start'), 10) : NaN;
+      const start = Number.isFinite(startAttr) ? startAttr : 1;
+      let listMarkdown = '\n';
+
+      items.forEach((li, idx) => {
+        const indent = '  '.repeat(context.listDepth);
+        const marker = isOrdered ? `${start + idx}.` : '*';
+
+        // Process the list item content
+        const itemContext = { ...context, listDepth: context.listDepth + 1 };
+        const itemContent = Array.from(li.childNodes)
+          .map(child => processNode(child, itemContext))
+          .join('')
+          .trim();
+
+        // Split multi-line content and indent continuation lines
+        const lines = itemContent.split('\n');
+        listMarkdown += `${indent}${marker} ${lines[0]}\n`;
+        for (let i = 1; i < lines.length; i++) {
+          if (lines[i].trim()) {
+            listMarkdown += `${indent}  ${lines[i]}\n`;
+          }
+        }
+      });
+
+      listMarkdown += '\n';
+      return listMarkdown;
+    };
+
+    // Helper function to process blockquote elements
+    const processBlockquote = (blockquoteNode, context) => {
+      const content = Array.from(blockquoteNode.childNodes)
+        .map(child => processNode(child, context))
+        .join('')
+        .trim();
+
+      // For citations, blockquotes are just semantic wrappers - extract content without markdown syntax
+      // (the citation itself is already clearly a quote in the footnote)
+      return '\n' + content + '\n\n';
+    };
+
+    const processNode = (node, context = { listDepth: 0 }) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        return node.textContent;
+      }
+
+      if (node.nodeType !== Node.ELEMENT_NODE) {
+        return '';
+      }
+
+      const tag = node.tagName.toLowerCase();
+
+      // KaTeX math → $…$ / $$…$$ (Milestone 3d)
+      if (node.classList && node.classList.contains('katex')) {
+        return convertKatexNodeToLatex(node);
+      }
+
+      // Special handling for tables
+      if (tag === 'table') {
+        return processTable(node, context);
+      }
+
+      // Special handling for lists
+      if (tag === 'ul' || tag === 'ol') {
+        return processList(node, context);
+      }
+
+      // Special handling for blockquotes
+      if (tag === 'blockquote') {
+        return processBlockquote(node, context);
+      }
+
+      // Special handling for ARIA headings (e.g., <div role="heading" aria-level="4">)
+      if (node.getAttribute('role') === 'heading') {
+        const ariaLevel = parseInt(node.getAttribute('aria-level') || '1', 10);
+        const level = Math.min(Math.max(ariaLevel, 1), 6); // Clamp between 1-6
+        const content = Array.from(node.childNodes).map(child => processNode(child, context)).join('');
+        const hashes = '#'.repeat(level);
+        return `\n${hashes} ${content}\n\n`;
+      }
+
+      // For table sub-elements, process children normally
+      // (they're handled by processTable when it encounters a table)
+      if (['thead', 'tbody', 'tr', 'th', 'td'].includes(tag)) {
+        return Array.from(node.childNodes).map(child => processNode(child, context)).join('');
+      }
+
+      // For list items within the list processor, just process children
+      if (tag === 'li' && context.listDepth > 0) {
+        return Array.from(node.childNodes).map(child => processNode(child, context)).join('');
+      }
+
+      const content = Array.from(node.childNodes).map(child => processNode(child, context)).join('');
+
+      switch (tag) {
+        // Headings
+        case 'h1':
+          return `\n# ${content}\n\n`;
+        case 'h2':
+          return `\n## ${content}\n\n`;
+        case 'h3':
+          return `\n### ${content}\n\n`;
+        case 'h4':
+          return `\n#### ${content}\n\n`;
+        case 'h5':
+          return `\n##### ${content}\n\n`;
+        case 'h6':
+          return `\n###### ${content}\n\n`;
+
+        // Text formatting
+        case 'b':
+        case 'strong':
+          return `**${content}**`;
+        case 'i':
+        case 'em':
+          return `*${content}*`;
+        case 's':
+        case 'del':
+        case 'strike':
+          return `~~${content}~~`;
+
+        // Links and images
+        case 'a':
+          const href = node.getAttribute('href') || '';
+          return href ? `[${content}](${href})` : content;
+        case 'img':
+          const src = node.getAttribute('src') || '';
+          const alt = node.getAttribute('alt') || '';
+          return src ? `![${alt}](${src})` : '';
+
+        // Code
+        case 'code':
+          // Check if this is inside a <pre> tag (already handled as code block)
+          if (node.parentElement && node.parentElement.tagName.toLowerCase() === 'pre') {
+            return content;
+          }
+          return `\`${content}\``;
+        case 'pre':
+          // Code block
+          const codeElement = node.querySelector('code');
+          const codeContent = codeElement ? codeElement.textContent : node.textContent;
+          const language = codeElement ? (codeElement.className.match(/language-(\w+)/) || [])[1] || '' : '';
+          return `\n\`\`\`${language}\n${codeContent}\n\`\`\`\n\n`;
+
+        // Horizontal rule
+        case 'hr':
+          return '\n---\n\n';
+
+        // Line breaks and blocks
+        case 'br':
+          return '\n';
+        case 'p':
+        case 'div':
+          return content + '\n';
+        case 'span':
+          return content;
+
+        default:
+          return content;
+      }
+    };
+
+    markdown = processNode(element);
+    return markdown.trim();
+  }
+
   root.NLMEMarkdown = Object.assign(root.NLMEMarkdown || {}, {
     createTurndownService,
     convertKatexNodeToLatex,
-    createConverter
+    createConverter,
+    htmlToMarkdownPlain
   });
 })(globalThis);
