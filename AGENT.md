@@ -1060,6 +1060,9 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined toa
   error, or every item failed). A failing category does not stop the others.
 - **Cancel** ends the current category as `partial` and marks the rest `skipped`; the root
   files are still written.
+- **Chat citations** follow ⚙️ Citation detail (`NLME.takeoutChatFullCitations(settings)`:
+  Full quotes → `EXTRACT_MESSAGE_CITATIONS` per message; titles/none → titles-only Sources),
+  while the Chat tab's own export keeps its Extract Full Citations checkbox.
 
 ### Notifications
 

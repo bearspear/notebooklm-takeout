@@ -46,6 +46,13 @@
     return ICON_TO_TYPE[icon] || icon || 'Unknown';
   }
 
+  // Full Takeout chat follows the one Citation detail setting (the one-click export has no
+  // per-tab checkbox); 'quotes' is the default, so a missing value counts as quotes.
+  function takeoutChatFullCitations(settings) {
+    const detail = settings && settings.citationDetail;
+    return detail === undefined || detail === null || detail === 'quotes';
+  }
+
   function isDownloadableType(type) {
     return !NOT_DOWNLOADABLE.includes(type);
   }
@@ -1153,6 +1160,7 @@ footer { margin-top: 3rem; }
     NOTE_ICONS,
     resolveArtifactType,
     isDownloadableType,
+    takeoutChatFullCitations,
     CITATION_TOOLTIP_SELECTOR,
     isCitationExpander,
     parseCitationIndex,

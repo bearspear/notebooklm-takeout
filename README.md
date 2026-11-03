@@ -143,8 +143,10 @@ The 📦 **Full Takeout** button in the panel header exports the whole notebook 
 sources, then notes, then chat, then artifacts. It scans each category first, so the progress
 shows what is coming; a category with nothing in it is reported as "none in notebook". It
 uses your Settings (versions, citation detail, slide format) and the Artifacts tab's **Zip**
-toggle (the saved "Always use ZIP" setting until you open that tab). If **Extract Full
-Citations** is ticked on the Chat tab, the takeout reads the chat's full citations too.
+toggle (the saved "Always use ZIP" setting until you open that tab). Chat follows
+⚙️ **Citation detail** too (Full quotes gives quoted chat citations, the other levels give
+titles-only sources); the Chat tab keeps its own **Extract Full Citations** checkbox for its
+own export.
 
 *With ZIP on* you get one ZIP per category plus an index ZIP:
 

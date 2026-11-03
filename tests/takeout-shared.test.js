@@ -884,3 +884,10 @@ test('singleArtifactPackage bundles data tables and mind maps like before', () =
     type: 'Report', title: 'R', files: [{ path: 'a.md' }, { path: 'b.md' }]
   }), null);
 });
+
+test('takeoutChatFullCitations follows the Citation detail setting', () => {
+  assert.equal(NLME.takeoutChatFullCitations({ citationDetail: 'quotes' }), true);
+  assert.equal(NLME.takeoutChatFullCitations({ citationDetail: 'titles' }), false);
+  assert.equal(NLME.takeoutChatFullCitations({ citationDetail: 'none' }), false);
+  assert.equal(NLME.takeoutChatFullCitations({}), true);
+});

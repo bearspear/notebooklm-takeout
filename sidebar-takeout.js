@@ -361,7 +361,7 @@ async function runFullTakeout() {
 
   startExportTiming();
   const zipMode = takeoutZipEnabled();
-  const extractFullCitations = document.getElementById('extract-full-citations-checkbox')?.checked || false;
+  const extractFullCitations = NLME.takeoutChatFullCitations(settings);
 
   await withExportShell({ label: 'takeout', healthType: 'notes', overlayMessage: 'Preparing Full Takeout...' }, async shell => {
     const tabId = shell.tab.id;
