@@ -303,7 +303,7 @@ test('summarizeExportOutcome reports a full success', () => {
 test('summarizeExportOutcome reports partial failures', () => {
   const r = NLME.summarizeExportOutcome({ kind: 'notes', selected: 10, exported: 7, failed: 3, cancelled: false });
   assert.equal(r.level, 'warning');
-  assert.equal(r.message, 'Exported 7 of 10 notes (3 failed, see errors.txt)');
+  assert.equal(r.message, 'Exported 7 of 10 notes (3 failed, see errors.md)');
   assert.equal(r.partial, false);
 });
 
@@ -317,7 +317,7 @@ test('summarizeExportOutcome reports a cancelled export as partial', () => {
 test('summarizeExportOutcome reports when nothing was exported', () => {
   const r = NLME.summarizeExportOutcome({ kind: 'notes', selected: 10, exported: 0, failed: 10, cancelled: false });
   assert.equal(r.level, 'error');
-  assert.equal(r.message, 'No notes exported (10 failed, see errors.txt)');
+  assert.equal(r.message, 'No notes exported (10 failed, see errors.md)');
 });
 
 const DL = 'https://contribution.usercontent.google.com/download?c=abc&filename=deck.pdf';

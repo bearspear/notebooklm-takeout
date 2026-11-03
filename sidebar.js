@@ -2821,9 +2821,9 @@ async function exportNotesAsMarkdown(selectedNotes) {
       packageBatch: async (notes, info) => {
         packaged += notes.length;
         shell.progress(`Creating ZIP ${info.batchIndex}/${info.totalBatches}...`, 1);
-        // _audit.md goes with the errors into the last ZIP; an errors-only
-        // ZIP has no notes to audit
-        const auditText = info.isLast && !info.errorsOnly ? auditMarkdown('Notes Export', finalAudit()).text : null;
+        // _audit.md goes into the last ZIP the run writes (an errors-only ZIP
+        // too: the outcome toast may point at it)
+        const auditText = info.isLast ? auditMarkdown('Notes Export', finalAudit()).text : null;
         const files = buildNotesFiles(notes, {
           meta: shell.meta,
           errors: info.errors,

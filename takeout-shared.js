@@ -322,10 +322,10 @@
       return { level: 'warning', message: `Cancelled: exported ${exported} of ${selected} ${kind}`, partial: true };
     }
     if (exported === 0 && selected > 0) {
-      return { level: 'error', message: `No ${kind} exported (${failed} failed, see errors.txt)`, partial: false };
+      return { level: 'error', message: `No ${kind} exported (${failed} failed, see errors.md)`, partial: false };
     }
     if (failed > 0) {
-      return { level: 'warning', message: `Exported ${exported} of ${selected} ${kind} (${failed} failed, see errors.txt)`, partial: false };
+      return { level: 'warning', message: `Exported ${exported} of ${selected} ${kind} (${failed} failed, see errors.md)`, partial: false };
     }
     return { level: 'success', message: `Exported ${exported} of ${selected} ${kind}`, partial: false };
   }
@@ -443,7 +443,7 @@
     };
   }
 
-  // errors.txt line for a cancelled run; it also forces the ZIP (and so the
+  // errors.md line for a cancelled run; it also forces the ZIP (and so the
   // -PARTIAL name) for exports that otherwise write a single file.
   function cancellationNote({ kind, done = 0, total = 0 } = {}) {
     // Sources have no citation markers; notes and chat messages do
@@ -479,7 +479,7 @@
     };
   }
 
-  // One errors.txt format for notes, sources, chat and Download All.
+  // One errors.md format for notes, sources, chat and Download All.
   function buildErrorReport({ title = 'Export', generatedAt = '', errors = [], stats = {} } = {}) {
     const lines = [`# ${title} Error Report`, ''];
     if (generatedAt) lines.push(`Generated: ${generatedAt}`, '');
