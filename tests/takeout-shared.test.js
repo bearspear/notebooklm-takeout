@@ -263,6 +263,37 @@ test('formatTimingSummary lists phases and total', () => {
   assert.match(md, /Total: 3 m 12 s/);
 });
 
+test('createSettleGate lets only the newest settle finish', () => {
+  const gate = NLME.createSettleGate();
+  const first = gate.begin(false);
+  assert.equal(first.current(), true);
+  const second = gate.begin(false);
+  assert.equal(first.current(), false);
+  assert.equal(second.current(), true);
+});
+
+test('createSettleGate hands a rescan the discarded settle owed to the newer one', () => {
+  const gate = NLME.createSettleGate();
+  const first = gate.begin(true); // switched notebook: owes a rescan
+  assert.equal(first.owesRescan, true);
+  // A second navigation inside the same notebook discards the first settle but inherits the rescan
+  const second = gate.begin(false);
+  assert.equal(first.current(), false);
+  assert.equal(second.owesRescan, true);
+  second.settled();
+  // Once settled, nothing is owed any more
+  assert.equal(gate.begin(false).owesRescan, false);
+});
+
+test('createSettleGate: a stale settle cannot clear the debt', () => {
+  const gate = NLME.createSettleGate();
+  const first = gate.begin(true);
+  const second = gate.begin(false);
+  first.settled(); // stale: no effect
+  assert.equal(gate.begin(false).owesRescan, true);
+  second.settled();
+});
+
 test('createJobLock allows one job at a time', () => {
   const lock = NLME.createJobLock();
   assert.equal(lock.tryAcquire('notes'), true);
@@ -597,6 +628,19 @@ test('diffAudit returns what one part added to the run-wide audit', () => {
   assert.deepEqual(NLME.diffAudit(now, undefined), now);
 });
 
+test('partAudit gives one part its own item counts and keeps the rest of the diff', () => {
+  const before = { expected: { items: 3, formulas: 1 }, written: { items: 3, formulas: 1 }, cacheHits: 0, cachedItems: 0 };
+  const now = { expected: { items: 10, formulas: 3 }, written: { items: 7, formulas: 3 }, cacheHits: 0, cachedItems: 0 };
+  // Part 2 attempted 3 sources (one failed) and wrote 2
+  const part = NLME.partAudit(now, before, { attempted: 3, written: 2 });
+  assert.deepEqual(part.expected, { items: 3, formulas: 2 });
+  assert.deepEqual(part.written, { items: 2, formulas: 2 });
+  // The run-wide audit is not modified
+  assert.equal(now.expected.items, 10);
+  // First part: no snapshot
+  assert.equal(NLME.partAudit(now, undefined, { attempted: 4, written: 4 }).expected.items, 4);
+});
+
 test('unknownStudioIcons lists only unmapped icons', () => {
   assert.deepEqual(NLME.unknownStudioIcons(['tablet', 'copy', 'new_shape', 'article', 'new_shape', '']), ['new_shape']);
 });
@@ -784,6 +828,44 @@ test('buildManifest lists files with byte sizes and the notebook', () => {
   assert.equal(m.kind, 'notes'); assert.equal(m.partial, false); assert.equal(m.errorCount, 2);
   assert.deepEqual(m.files.map(f => f.bytes), [2, null, 5]);
   assert.equal(m.files[0].variant, 'base');
+});
+
+test('categoryIndexFrontMatter gives a category _index.md the same block as items, with kind index', () => {
+  const meta = { notebook: 'N: Math', notebook_url: 'https://x/notebook/i', notebook_id: 'i', exporter: 'NotebookLM Takeout 1.7.0', exported: '2026-11-03T10:00:00.000Z' };
+  assert.equal(NLME.categoryIndexFrontMatter(meta, { title: 'Notes \u2014 N: Math', category: 'notes' }),
+    '---\n' +
+    'title: "Notes \u2014 N: Math"\n' +
+    'notebook: "N: Math"\n' +
+    'notebook_url: "https://x/notebook/i"\n' +
+    'notebook_id: "i"\n' +
+    'exporter: "NotebookLM Takeout 1.7.0"\n' +
+    'exported: "2026-11-03T10:00:00.000Z"\n' +
+    'kind: "index"\n' +
+    'category: "notes"\n' +
+    '---\n\n');
+  // A part of a split export says which one
+  assert.match(NLME.categoryIndexFrontMatter(meta, { title: 'T', category: 'sources', part: 2 }), /category: "sources"\npart: 2\n---/);
+});
+
+test('buildManifest uses the size read after a url entry was downloaded', () => {
+  const meta = { notebook: 'N', notebook_url: 'u', notebook_id: 'i', exporter: 'x', exported: 'T' };
+  const m = NLME.buildManifest({ meta, kind: 'artifacts', files: [
+    { path: 'slides/Deck.pptx', url: 'https://x', bytes: 2048 },
+    { path: 'slides/Other.pdf', url: 'https://y', bytes: null },
+    { path: 'slides/Third.pdf', url: 'https://z' }
+  ] });
+  assert.deepEqual(m.files.map(f => f.bytes), [2048, null, null]);
+});
+
+test('downloadSizeStatus reads fileSize only from a completed download', () => {
+  assert.deepEqual(NLME.downloadSizeStatus({ state: 'complete', fileSize: 1234 }), { done: true, bytes: 1234 });
+  // Chrome reports -1 when it does not know
+  assert.deepEqual(NLME.downloadSizeStatus({ state: 'complete', fileSize: -1 }), { done: true, bytes: null });
+  assert.deepEqual(NLME.downloadSizeStatus({ state: 'complete' }), { done: true, bytes: null });
+  assert.deepEqual(NLME.downloadSizeStatus({ state: 'in_progress', fileSize: 10 }), { done: false, bytes: null });
+  assert.deepEqual(NLME.downloadSizeStatus({ state: 'interrupted', fileSize: 10 }), { done: true, bytes: null });
+  // Not found (erased from history): nothing more to wait for
+  assert.deepEqual(NLME.downloadSizeStatus(undefined), { done: true, bytes: null });
 });
 
 test('zipName matches the existing pattern, with PARTIAL and parts', () => {
@@ -1433,6 +1515,42 @@ test('citation cache helpers never throw on storage errors or a missing notebook
   assert.deepEqual(ok.data, {});
 });
 
+test('versionLess compares dotted versions numerically', () => {
+  assert.equal(NLME.versionLess('1.6.0', '1.7.0'), true);
+  assert.equal(NLME.versionLess('1.7.0', '1.7.0'), false);
+  assert.equal(NLME.versionLess('1.7.1', '1.7.0'), false);
+  assert.equal(NLME.versionLess('1.9.0', '1.10.0'), true);
+  assert.equal(NLME.versionLess('1.6', '1.6.1'), true);
+  assert.equal(NLME.versionLess('1.7', '1.7.0'), false);
+  assert.equal(NLME.versionLess('0.9.9', '1.0.0'), true);
+});
+
+test('versionLess treats a missing or malformed version as not older', () => {
+  assert.equal(NLME.versionLess(undefined, '1.7.0'), false);
+  assert.equal(NLME.versionLess('', '1.7.0'), false);
+  assert.equal(NLME.versionLess('abc', '1.7.0'), false);
+  assert.equal(NLME.versionLess('1.6.0', undefined), false);
+});
+
+test('shouldClearCitationCache fires only on an update from before 1.7.0 to 1.7.0 or later', () => {
+  const clear = (details, current) => NLME.shouldClearCitationCache(details, current);
+  assert.equal(clear({ reason: 'update', previousVersion: '1.6.0' }, '1.7.0'), true);
+  assert.equal(clear({ reason: 'update', previousVersion: '1.5.2' }, '1.7.1'), true);
+  // Fresh install: the cache is empty anyway
+  assert.equal(clear({ reason: 'install' }, '1.7.0'), false);
+  assert.equal(clear({ reason: 'install', previousVersion: '1.6.0' }, '1.7.0'), false);
+  // Already on 1.7.0 or later: a reload or a later update keeps the cache
+  assert.equal(clear({ reason: 'update', previousVersion: '1.7.0' }, '1.7.0'), false);
+  assert.equal(clear({ reason: 'update', previousVersion: '1.7.0' }, '1.7.1'), false);
+  // An update that stays before 1.7.0 has no new converter
+  assert.equal(clear({ reason: 'update', previousVersion: '1.5.0' }, '1.6.0'), false);
+  // browser update / shared module update / missing details
+  assert.equal(clear({ reason: 'chrome_update' }, '1.7.0'), false);
+  assert.equal(clear(undefined, '1.7.0'), false);
+  // No previousVersion on an update: cannot say it is older
+  assert.equal(clear({ reason: 'update' }, '1.7.0'), false);
+});
+
 test('citationCacheClear removes every nlme.cite.* key and nothing else', async () => {
   const st = fakeStorage({ settings: { a: 1 }, 'nlme.cite.nb1': { entries: {} }, 'nlme.cite.meta': { 'nlme.cite.nb1': 1 }, 'nlme.other': 1 });
   assert.equal(await NLME.citationCacheClear(st), true);
@@ -1708,4 +1826,148 @@ test('studioTargetMatches needs the exact label', () => {
   assert.equal(NLME.studioTargetMatches(null, 'My note'), false);
   assert.equal(NLME.studioTargetMatches('My note', ''), false);
   assert.equal(NLME.studioTargetMatches('My note', undefined), false);
+});
+
+test('NLME.MSG is frozen and maps each type name to itself', () => {
+  assert.equal(Object.isFrozen(NLME.MSG), true);
+  assert.equal(NLME.MSG.EXTRACT_NOTE, 'EXTRACT_NOTE');
+  for (const [key, value] of Object.entries(NLME.MSG)) assert.equal(value, key);
+});
+
+// ---- Milestone 3d Task 5: footnote citations and Obsidian-friendly names ----
+
+test('footnoteLabel is unique per item in combined output', () => {
+  // Single-item files: the plain citation number
+  assert.equal(NLME.footnoteLabel(0, 3), '3');
+  assert.equal(NLME.footnoteLabel(4, 3, { combined: false }), '3');
+  // Combined files: item number first, so note 1's [1] and note 2's [1] differ
+  assert.equal(NLME.footnoteLabel(0, 1, { combined: true }), '1-1');
+  assert.equal(NLME.footnoteLabel(1, 1, { combined: true }), '2-1');
+  const labels = [];
+  for (let item = 0; item < 4; item++) for (let n = 1; n <= 12; n++) labels.push(NLME.footnoteLabel(item, n, { combined: true }));
+  assert.equal(new Set(labels).size, labels.length);
+  // 1-11 vs 11-1 never collide (the item part always ends at the first dash)
+  assert.notEqual(NLME.footnoteLabel(0, 11, { combined: true }), NLME.footnoteLabel(10, 1, { combined: true }));
+});
+
+test('footnoteLabel keeps a label a footnote can carry', () => {
+  assert.equal(NLME.footnoteLabel(0, 'a b]^'), 'a-b-');
+});
+
+test('footnoteDefinition writes title and quote inline, continuation lines indented by 4 spaces', () => {
+  assert.equal(NLME.footnoteDefinition('2', 'Source A', 'one line'), '[^2]: **Source A** — one line');
+  assert.equal(NLME.footnoteDefinition('2', 'Source A', 'first\nsecond\n\nthird'),
+    '[^2]: **Source A** — first\n    second\n\n    third');
+  assert.equal(NLME.footnoteDefinition('2', 'Source A', ''), '[^2]: **Source A**');
+  assert.equal(NLME.footnoteDefinition('2', '', 'only a quote'), '[^2]: only a quote');
+  assert.equal(NLME.footnoteDefinition('2', 'A\nB', null), '[^2]: **A B**');
+});
+
+test('footnoteDefinitions writes one definition per entry, even for titles-only sources', () => {
+  const entries = [
+    { number: '1', text: 'Same', quote: '' },
+    { number: '2', text: 'Same', quote: '' },
+    { number: '3', text: '(citation details unavailable)', quote: '', missing: true }
+  ];
+  const out = NLME.footnoteDefinitions(entries, n => `x${n}`);
+  assert.equal(out, '[^x1]: **Same**\n\n[^x2]: **Same**\n\n[^x3]: **(citation details unavailable)**\n\n');
+  assert.equal(NLME.footnoteDefinitions([], n => n), '');
+  // A repeated number still gets one definition
+  assert.equal(NLME.footnoteDefinitions([{ number: '1', text: 'A' }, { number: '1', text: 'B' }], n => n), '[^1]: **A**\n\n');
+});
+
+test('obsidianSafeName strips link-breaking characters into single spaces', () => {
+  assert.equal(NLME.obsidianSafeName('[mind-map] Title'), 'mind-map Title');
+  assert.equal(NLME.obsidianSafeName('A#B^C|D\\E:F*G?H"I<J>K'), 'A B C D E F G H I J K');
+  assert.equal(NLME.obsidianSafeName('a ## b'), 'a b');
+  assert.equal(NLME.obsidianSafeName('Plain name'), 'Plain name');
+  assert.equal(NLME.obsidianSafeName(null), '');
+});
+
+test('obsidianSafeName keeps names unique through uniqueStems', () => {
+  const stems = NLME.uniqueStems(['A#B', 'A B', 'A[B]'], [], [], { obsidian: true });
+  assert.equal(new Set(stems.map(s => s.toLowerCase())).size, 3);
+  assert.equal(stems.every(s => !/[\[\]#^|\\:*?"<>]/.test(s)), true);
+  // Brackets survive sanitizeFilename, so the option does change them
+  assert.deepEqual(NLME.uniqueStems(['A[1]']), ['A[1]']);
+  assert.deepEqual(NLME.uniqueStems(['A[1]'], [], [], { obsidian: true }), ['A-1']);
+});
+
+test('uniqueStems without the obsidian option is unchanged', () => {
+  assert.deepEqual(NLME.uniqueStems(['A#B', 'A B']), ['A-B', 'A-B-2']);
+  assert.deepEqual(NLME.uniqueStems(['A#B', 'A B'], [], [], {}), ['A-B', 'A-B-2']);
+});
+
+test('prefixedStem keeps [prefix]_ names, and turns them into "prefix - " for Obsidian', () => {
+  assert.equal(NLME.prefixedStem('NOTE', 'My Note'), '[NOTE]_My-Note');
+  assert.equal(NLME.prefixedStem('mind-map', 'A: B'), '[mind-map]_A-B');
+  assert.equal(NLME.prefixedStem('NOTE', 'My Note', { obsidian: true }), 'note - My-Note');
+  assert.equal(NLME.prefixedStem('mind-map', 'A[1] #b', { obsidian: true }), 'mind-map - A-1-b');
+});
+
+test('singleArtifactPackage renames the same way with the obsidian option', () => {
+  const files = [{ path: 'x.svg' }, { path: 'x.json' }];
+  const off = NLME.singleArtifactPackage({ type: 'Mind Map', title: 'Map', files });
+  assert.equal(off.zipName, '[mind-map]_Map.zip');
+  assert.equal(off.entries[0].path, '[mind-map]_Map.svg');
+  const on = NLME.singleArtifactPackage({ type: 'Mind Map', title: 'Map', files, obsidian: true });
+  assert.equal(on.zipName, 'mind-map - Map.zip');
+  assert.equal(on.entries[1].path, 'mind-map - Map.json');
+  const table = NLME.singleArtifactPackage({ type: 'Data Table', title: 'T[1]', files: [{ path: 'a.csv' }, { path: 'a-references.txt' }], obsidian: true });
+  assert.equal(table.zipName, 'data-table - T-1.zip');
+  assert.equal(table.entries[0].path, 'T-1.csv');
+});
+
+test('artifactStems with the obsidian option strips link-breaking characters', () => {
+  const items = [{ type: 'Report', label: 'R[1]' }, { type: 'Report', label: 'R 1' }];
+  assert.deepEqual(NLME.artifactStems(items), ['R[1]', 'R-1']);
+  assert.deepEqual(NLME.artifactStems(items, { obsidian: true }), ['R-1', 'R-1-2']);
+});
+
+test('groupedSourcesMarkdown is unchanged without footnotes', () => {
+  const entries = [{ number: '1', text: 'A' }, { number: '2', text: 'A' }];
+  assert.equal(NLME.groupedSourcesMarkdown(entries, 'x-'),
+    '<a id="x-src-1"></a><a id="x-src-2"></a>\n**[[1]](#x-cite-ref-1-1) [[2]](#x-cite-ref-2-1)** A\n\n');
+});
+
+test('footnoteDefinition escapes * in the title and trims continuation indentation', () => {
+  assert.equal(NLME.footnoteDefinition('1', 'A*B*', 'q'), '[^1]: **A\\*B\\*** — q');
+  assert.equal(NLME.footnoteDefinition('1', 'T', 'first\n      deep\n\tTab'), '[^1]: **T** — first\n    deep\n    Tab');
+});
+
+test('DEFAULT_SETTINGS pins the shipped defaults and cannot be changed', () => {
+  const d = NLME.DEFAULT_SETTINGS;
+  assert.ok(Object.isFrozen(d));
+  assert.equal(d.autoZip, false);
+  assert.equal(d.showNotifications, true);
+  assert.equal(d.refreshInterval, 10);
+  assert.equal(d.exportSourceBase, true);
+  assert.equal(d.exportSourcePlusMeta, true);
+  assert.equal(d.exportSourceWithImages, false);
+  assert.equal(d.exportSourcePlusMetaWithImages, false);
+  assert.equal(d.exportNoteBase, true);
+  assert.equal(d.exportNoteCodeBlocks, true);
+  assert.equal(d.exportNoteWithImages, false);
+  assert.equal(d.sourcesPerZip, 25);
+  assert.equal(d.notesPerZip, 25);
+  assert.equal(d.cleanOCRArtifacts, true);
+  assert.equal(d.showStudioTab, false);
+  assert.equal(d.slidesFormat, 'pdf');
+  assert.equal(d.citationDetail, 'quotes');
+  assert.equal(d.reuseCitations, true);
+  assert.equal(d.citationStyle, 'links');
+  assert.equal(d.obsidianNames, false);
+  assert.ok('takeoutZip' in d);
+  assert.equal(d.takeoutZip, undefined);
+});
+
+test('resetSettings returns fresh defaults and keeps only the Full Takeout ZIP choice', () => {
+  const current = { ...NLME.DEFAULT_SETTINGS, autoZip: true, citationStyle: 'footnotes', obsidianNames: true, sourcesPerZip: 7, takeoutZip: true };
+  const reset = NLME.resetSettings(current);
+  assert.deepEqual(reset, { ...NLME.DEFAULT_SETTINGS, takeoutZip: true });
+  assert.ok(!Object.isFrozen(reset));
+  reset.autoZip = true;
+  assert.equal(NLME.DEFAULT_SETTINGS.autoZip, false);
+  assert.deepEqual(NLME.resetSettings({}), { ...NLME.DEFAULT_SETTINGS });
+  assert.deepEqual(NLME.resetSettings(undefined), { ...NLME.DEFAULT_SETTINGS });
 });

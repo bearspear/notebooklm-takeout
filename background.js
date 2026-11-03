@@ -11,6 +11,21 @@ function isNotebookUrl(url) {
   return NLME.isNotebookUrl(url);
 }
 
+// 1.7.0 converts formulas to LaTeX, which quotes cached by 1.6.0 and earlier
+// lack: clear the citation cache once, on the update that crosses 1.7.0 (never on a
+// fresh install, whose cache is empty). onInstalled fires once per update.
+chrome.runtime.onInstalled.addListener(details => {
+  try {
+    if (!NLME.shouldClearCitationCache(details, chrome.runtime.getManifest().version)) return;
+    // citationCacheClear catches its own storage errors and resolves false
+    NLME.citationCacheClear(chrome.storage.local)
+      .then(ok => console.log('[Background] Citation cache cleared for the 1.7.0 update:', ok))
+      .catch(error => console.warn('[Background] Citation cache clear failed:', error));
+  } catch (error) {
+    console.warn('[Background] onInstalled handler failed:', error);
+  }
+});
+
 // Handle extension icon click - open sidebar
 chrome.action.onClicked.addListener(async (tab) => {
   // Open the side panel for the current window
@@ -64,7 +79,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
 
 
-    case 'START_INTERCEPT_DOWNLOAD':
+    case NLME.MSG.START_INTERCEPT_DOWNLOAD:
       // Add to pending downloads queue with intercept flag
       const interceptRequestId = nextRequestId++;
       const interceptDownload = {
@@ -73,7 +88,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         timestamp: Date.now(),
         requestId: interceptRequestId,
         intercept: true,  // Flag to intercept and re-download
-        folder: message.folder || ''
+        folder: message.folder || '',
+        obsidian: !!message.obsidian // Obsidian-friendly file names (⚙️)
       };
       pendingDownloads.push(interceptDownload);
       console.log('[Background] Intercept download queued:', interceptDownload.name, 'ID:', interceptRequestId);
@@ -90,7 +106,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true, requestId: interceptRequestId });
       break;
 
-    case 'GET_INTERCEPTED_DOWNLOAD':
+    case NLME.MSG.GET_INTERCEPTED_DOWNLOAD:
       // Check if any downloads were intercepted (return most recent)
       if (interceptedDownloads.size > 0) {
         // Get the most recent intercepted download
@@ -107,7 +123,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       break;
 
-    case 'CANCEL_INTERCEPT':
+    case NLME.MSG.CANCEL_INTERCEPT:
       // Remove all intercept requests from queue
       const cancelledCount = pendingDownloads.filter(d => d.intercept).length;
       if (cancelledCount > 0) {
@@ -123,18 +139,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ success: true });
       break;
 
-    case 'EXTRACT_MINDMAP_FRAME':
+    case NLME.MSG.EXTRACT_MINDMAP_FRAME:
       extractMindmapFromAppFrame(message.tabId)
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ success: false, error: error.message }));
       return true;
 
-    case 'NAME_NEXT_DOWNLOAD':
+    case NLME.MSG.NAME_NEXT_DOWNLOAD:
       nameNextDownload(message.url, message.filename);
       sendResponse({ success: true });
       break;
 
-    case 'DIRECT_DOWNLOAD_URL':
+    case NLME.MSG.DIRECT_DOWNLOAD_URL:
       // Direct download from intercepted URL (no tab opened)
       // Start download and use onDeterminingFilename to rename
       (async () => {
@@ -268,7 +284,7 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
     const typePrefix = getArtifactTypePrefix(pendingRequest.type);
     console.log('[Background] Artifact type:', pendingRequest.type, '-> prefix:', typePrefix);
     let newFilename = NLME.downloadFolderPath(pendingRequest.folder,
-      `[${typePrefix}]_${sanitizeFilename(pendingRequest.name || 'download')}${extension}`);
+      `${NLME.prefixedStem(typePrefix, pendingRequest.name || 'download', { obsidian: pendingRequest.obsidian })}${extension}`);
 
     // Safety check: if still no extension, we'll try to get it in onDeterminingFilename
     if (!extension) {
@@ -446,6 +462,6 @@ async function extractMindmapFromAppFrame(tabId) {
     }
     return { success: false, error: 'Mind map not found in app frame (check *.scf.usercontent.goog permission)' };
   } finally {
-    chrome.tabs.sendMessage(tabId, { type: 'NAVIGATE_BACK' }).catch(() => {});
+    chrome.tabs.sendMessage(tabId, { type: NLME.MSG.NAVIGATE_BACK }).catch(() => {});
   }
 }

@@ -312,6 +312,28 @@
     };
   }
 
+  // In-app navigation settle (side panel): each settle wait takes a token; only
+  // the newest token is current, so an older wait that finishes later can tell
+  // that a newer navigation replaced it and does nothing. A settle for a switched
+  // notebook owes a rescan: if a newer settle discards it, the newer one inherits
+  // that debt (owesRescan) and clears it with settled() once it decides.
+  function createSettleGate() {
+    let generation = 0;
+    let owed = false;
+    return {
+      begin(switched) {
+        const mine = ++generation;
+        owed = owed || !!switched;
+        const owesRescan = owed;
+        return {
+          owesRescan,
+          current: () => mine === generation,
+          settled() { if (mine === generation) owed = false; }
+        };
+      }
+    };
+  }
+
   // One truthful end-of-export message for notes, sources, chat and artifacts.
   function summarizeExportOutcome({ kind, selected = 0, exported = 0, failed = 0, cancelled = false } = {}) {
     if (cancelled) {
@@ -660,21 +682,49 @@
     return ARTIFACT_PREFIXES[type] || String(type || 'artifact').toLowerCase().replace(/\s+/g, '-');
   }
 
+  // "Obsidian-friendly file names" (Milestone 3d, opt-in): characters that
+  // break [[wiki links]] and heading/block references ([ ] # ^ | \\ : * ? " < >)
+  // become a space; runs collapse into one space. sanitizeFilename runs after
+  // it (spaces become dashes), so "A#B" and "A B" still end up as different
+  // stems once uniqueStems numbers the repeat.
+  function obsidianSafeName(name) {
+    return String(name == null ? '' : name)
+      .replace(/[\[\]#^|\\:*?"<>]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  // The one file-name stem: sanitizeFilename, preceded by obsidianSafeName
+  // when `obsidian` is on. Off, it is exactly sanitizeFilename.
+  function fileStem(name, { obsidian = false } = {}) {
+    return sanitizeFilename(obsidian ? obsidianSafeName(name) : name);
+  }
+
+  // "[NOTE]_Title" / "[mind-map]_Title" (the historic names of single
+  // downloads). With `obsidian`: "note - Title" / "mind-map - Title", since
+  // square brackets cannot be part of a link target.
+  function prefixedStem(prefix, title, { obsidian = false } = {}) {
+    return obsidian
+      ? `${String(prefix).toLowerCase()} - ${fileStem(title, { obsidian })}`
+      : `[${prefix}]_${fileStem(title)}`;
+  }
+
   // One ZIP for a single Data Table or mind map download, as before
   // Milestone 3a: { zipName, entries } with the inner files renamed, or null
   // when the artifact stays loose (other types, or a lone file).
-  function singleArtifactPackage({ type, title, files }) {
+  function singleArtifactPackage({ type, title, files, obsidian = false }) {
     if ((type !== 'Data Table' && type !== 'Mind Map') || !files || files.length < 2) return null;
-    const clean = sanitizeFilename(title);
+    const clean = fileStem(title, { obsidian });
     const isTable = type === 'Data Table';
-    const base = isTable ? clean : `[${artifactTypePrefix(type)}]_${clean}`;
+    const prefixed = prefixedStem(artifactTypePrefix(type), title, { obsidian });
+    const base = isTable ? clean : prefixed;
     const entries = files.map(file => {
       const path = String(file.path || '');
       if (isTable && /-references\.txt$/i.test(path)) return { ...file, path: 'references.txt' };
       const ext = (path.match(/\.[^./\\]+$/) || [''])[0];
       return { ...file, path: `${base}${ext}` };
     });
-    return { zipName: `${isTable ? `[${artifactTypePrefix(type)}]_${clean}` : base}.zip`, entries };
+    return { zipName: `${isTable ? prefixed : base}.zip`, entries };
   }
 
   // 'YYYY-MM-DDTHH-MM-SS' (UTC) for export file names
@@ -824,6 +874,16 @@
     return sub(current, before);
   }
 
+  // The audit of one part of a split export: the run-wide audit minus the
+  // snapshot from the previous part, with this part's own item counts
+  // (items attempted, items written) instead of the run-wide ones.
+  function partAudit(current, before, { attempted, written }) {
+    const part = diffAudit(current, before);
+    part.expected.items = attempted;
+    part.written.items = written;
+    return part;
+  }
+
   // Studio icons the extension cannot classify (new artifact types appear
   // this way first); notes' icons count as known
   function unknownStudioIcons(iconTexts) {
@@ -885,6 +945,53 @@
     return out;
   }
 
+  // ---- Footnote citations (Milestone 3d, ⚙️ Citation style: Footnotes) ----
+  // A marker is [^LABEL] and the Sources section holds one definition per
+  // label. Labels must be unique per FILE: citation numbers restart in every
+  // note and every chat answer, so a combined file prefixes the item number.
+
+  // itemIndex: 0-based note (or chat answer) in the file. combined: the file
+  // holds several items. Single-item files keep the plain number ('3'),
+  // combined ones get '<item>-<n>' ('2-3'). Characters a label cannot carry
+  // (whitespace, [ ] ^) become dashes; digits, the normal case, are untouched.
+  function footnoteLabel(itemIndex, n, { combined = false } = {}) {
+    const num = String(n).replace(/[\s\[\]^]+/g, '-');
+    return combined ? `${(Number(itemIndex) || 0) + 1}-${num}` : num;
+  }
+
+  // '[^LABEL]: **Title** \u2014 quote'. The quote stays inline: its
+  // continuation lines are indented by 4 spaces (blank lines stay empty), as
+  // CommonMark footnotes and Obsidian require. No quote: just the title; no
+  // title: just the quote.
+  function footnoteDefinition(label, title, quote) {
+    const head = String(title == null ? '' : title).replace(/\s+/g, ' ').trim().replace(/\*/g, '\\*');
+    // Continuation lines lose their own leading whitespace, so a quote line
+    // never turns into an indented code block inside the definition
+    const body = String(quote == null ? '' : quote).replace(/\r\n?/g, '\n').trim()
+      .split('\n').map((line, i) => (i === 0 || !line.trim() ? line.trimEnd() : `    ${line.trim()}`)).join('\n');
+    const lead = `[^${label}]:`;
+    if (head && body) return `${lead} **${head}** \u2014 ${body}`;
+    if (head) return `${lead} **${head}**`;
+    return body ? `${lead} ${body}` : `${lead} **(untitled source)**`;
+  }
+
+  // The definitions for Sources entries ({number, text, quote?}): one per
+  // number, in the entries' order, even when several numbers share a title
+  // (every [^label] reference needs its own definition). labelOf(number)
+  // gives the label; quoteOf(entry) the quote text to use (default: none for
+  // placeholders). Returns '' for no entries.
+  function footnoteDefinitions(entries, labelOf, { quoteOf = e => (e.missing ? '' : e.quote) } = {}) {
+    const seen = new Set();
+    let out = '';
+    for (const entry of entries || []) {
+      const number = String(entry.number);
+      if (seen.has(number)) continue;
+      seen.add(number);
+      out += `${footnoteDefinition(labelOf(number), entry.text, quoteOf(entry))}\n\n`;
+    }
+    return out;
+  }
+
   // The citation popover of a long, unpunctuated source (a YouTube
   // transcript) shows only a window of about 1,000 characters, cut
   // mid-word. Mark such a quote with "\u2026" where it was cut. Short
@@ -925,7 +1032,9 @@
   // `reserved` names (package files that share the folder, such as
   // 'errors' or '_index' when the items sit next to them) are never handed out.
   // Names compare after NFC normalization.
-  function uniqueStems(titles, suffixes = [], reserved = []) {
+  // `obsidian` (4th parameter): the "Obsidian-friendly file names" option, see
+  // obsidianSafeName. Off, the stems are exactly as before.
+  function uniqueStems(titles, suffixes = [], reserved = [], { obsidian = false } = {}) {
     // Names compare as NFC, lower-cased: "Café" typed as e + combining accent
     // and as the single é look identical and collide on a macOS disk
     const fold = name => String(name).normalize('NFC').toLowerCase();
@@ -933,7 +1042,7 @@
     const endings = ['', ...suffixes];
     const names = candidate => endings.map(s => fold(candidate + s));
     return (titles || []).map(title => {
-      const base = sanitizeFilename(title);
+      const base = fileStem(title, { obsidian });
       let candidate = base;
       for (let n = 2; names(candidate).some(name => used.has(name)); n++) candidate = `${base}-${n}`;
       names(candidate).forEach(name => used.add(name));
@@ -1237,7 +1346,18 @@
     if (typeof data === 'string') return new TextEncoder().encode(data).length;
     if (typeof Blob !== 'undefined' && data instanceof Blob) return data.size;
     if (data && typeof data.byteLength === 'number') return data.byteLength;
+    // A url entry the browser downloaded: the size read from the download
+    if (typeof entry.bytes === 'number') return entry.bytes;
     return null;
+  }
+
+  // Where a chrome.downloads item stands for reading its size: done once it
+  // completed, was interrupted or is gone; bytes only for a completed download
+  // that reports a size (fileSize is -1 when unknown).
+  function downloadSizeStatus(item) {
+    if (!item || item.state === 'interrupted') return { done: true, bytes: null };
+    if (item.state !== 'complete') return { done: false, bytes: null };
+    return { done: true, bytes: typeof item.fileSize === 'number' && item.fileSize >= 0 ? item.fileSize : null };
   }
 
   // manifest.json: what is in a ZIP, so a takeout can be audited or resumed
@@ -1378,7 +1498,7 @@
   // One stem per Studio artifact (aligned with items), unique within the
   // artifact's type folder: different types may share a name, since their
   // folders differ. Data Tables also write <stem>-references.txt.
-  function artifactStems(items) {
+  function artifactStems(items, { obsidian = false } = {}) {
     const stems = new Array(items.length);
     const byFolder = new Map();
     items.forEach((item, idx) => {
@@ -1388,7 +1508,7 @@
     });
     for (const idxs of byFolder.values()) {
       const suffixes = idxs.some(i => items[i].type === 'Data Table') ? ['-references'] : [];
-      uniqueStems(idxs.map(i => items[i].label), suffixes).forEach((stem, k) => { stems[idxs[k]] = stem; });
+      uniqueStems(idxs.map(i => items[i].label), suffixes, [], { obsidian }).forEach((stem, k) => { stems[idxs[k]] = stem; });
     }
     return stems;
   }
@@ -1439,6 +1559,23 @@
   // folder-mode one, which has no ZIP name to show for it)
   function categoryWritten(c) {
     return c.exported > 0 || (c.zips || []).length > 0 || c.parts > 0 || c.packages > 0;
+  }
+
+  // Front matter of a category's _index.md (notes, sources, chat, artifacts):
+  // the item block (title, notebook, exporter...) with kind 'index' and the
+  // category; `part` only for a part of a split export.
+  function categoryIndexFrontMatter(meta, { title, category, part } = {}) {
+    return frontMatter({
+      title,
+      notebook: meta.notebook,
+      notebook_url: meta.notebook_url,
+      notebook_id: meta.notebook_id,
+      exporter: meta.exporter,
+      exported: meta.exported,
+      kind: 'index',
+      category,
+      part
+    });
   }
 
   // _index.md at the root of a Full Takeout: one row per category (Sources,
@@ -1762,6 +1899,32 @@ footer { margin-top: 3rem; }
     }
   }
 
+  // True when `a` is an older dotted version than `b` ('1.6.0' < '1.7.0',
+  // '1.9.0' < '1.10.0'; a missing part counts as 0). A missing or malformed
+  // version is never "older": callers act only on a version they can read.
+  function versionLess(a, b) {
+    const parse = v => (typeof v === 'string' && /^\d+(\.\d+)*$/.test(v) ? v.split('.').map(Number) : null);
+    const x = parse(a);
+    const y = parse(b);
+    if (!x || !y) return false;
+    for (let i = 0; i < Math.max(x.length, y.length); i++) {
+      const d = (x[i] || 0) - (y[i] || 0);
+      if (d !== 0) return d < 0;
+    }
+    return false;
+  }
+
+  // 1.7.0 changed how formulas convert (LaTeX), so quotes cached by an older
+  // version lack them: clear the citation cache once, on the update that crosses
+  // 1.7.0. `details` is chrome.runtime.onInstalled's; a fresh install has an empty
+  // cache, a reload of 1.7.0 or later (previousVersion not older) keeps it.
+  const CITE_CACHE_CLEAR_BELOW = '1.7.0';
+  function shouldClearCitationCache(details, currentVersion) {
+    if (!details || details.reason !== 'update') return false;
+    return versionLess(details.previousVersion, CITE_CACHE_CLEAR_BELOW) &&
+      !versionLess(currentVersion, CITE_CACHE_CLEAR_BELOW);
+  }
+
   async function citationCacheClear(storage) {
     if (!storage) return false;
     try {
@@ -1802,7 +1965,78 @@ footer { margin-top: 3rem; }
     return typeof label === 'string' && label !== '' && String(titleText == null ? '' : titleText).trim() === label;
   }
 
+  // Every message type the extension sends or handles. tests/message-protocol.test.js
+  // keeps this list in step with the code.
+  const MSG = Object.freeze({
+    CANCEL_EXPORT: 'CANCEL_EXPORT',
+    CANCEL_INTERCEPT: 'CANCEL_INTERCEPT',
+    CHECK_DOM_HEALTH: 'CHECK_DOM_HEALTH',
+    DELETE_SOURCE_NOTE: 'DELETE_SOURCE_NOTE',
+    DELETE_STUDIO_ITEM: 'DELETE_STUDIO_ITEM',
+    DIRECT_DOWNLOAD_URL: 'DIRECT_DOWNLOAD_URL',
+    DOWNLOAD_ARTIFACT: 'DOWNLOAD_ARTIFACT',
+    DOWNLOAD_IMAGE_AS_BASE64: 'DOWNLOAD_IMAGE_AS_BASE64',
+    EXTRACT_MESSAGE_CITATIONS: 'EXTRACT_MESSAGE_CITATIONS',
+    EXTRACT_MINDMAP_FRAME: 'EXTRACT_MINDMAP_FRAME',
+    EXTRACT_NOTE: 'EXTRACT_NOTE',
+    EXTRACT_SOURCE: 'EXTRACT_SOURCE',
+    FETCH_FILE: 'FETCH_FILE',
+    GET_DOM_ERRORS: 'GET_DOM_ERRORS',
+    GET_INTERCEPTED_DOWNLOAD: 'GET_INTERCEPTED_DOWNLOAD',
+    GET_PROJECT_NAME: 'GET_PROJECT_NAME',
+    HIDE_EXPORT_OVERLAY: 'HIDE_EXPORT_OVERLAY',
+    NAME_NEXT_DOWNLOAD: 'NAME_NEXT_DOWNLOAD',
+    NAVIGATE_BACK: 'NAVIGATE_BACK',
+    NLME_DOWNLOAD_URL_INTERCEPTED: 'NLME_DOWNLOAD_URL_INTERCEPTED',
+    PING: 'PING',
+    REQUEST_EXPORT_CANCEL: 'REQUEST_EXPORT_CANCEL',
+    RESET_DOM_TRACKER: 'RESET_DOM_TRACKER',
+    RUN_COMPREHENSIVE_HEALTH_CHECK: 'RUN_COMPREHENSIVE_HEALTH_CHECK',
+    SCAN_CHAT: 'SCAN_CHAT',
+    SCAN_NOTES: 'SCAN_NOTES',
+    SCAN_SOURCES: 'SCAN_SOURCES',
+    SCAN_STUDIO_ITEMS: 'SCAN_STUDIO_ITEMS',
+    SHOW_EXPORT_OVERLAY: 'SHOW_EXPORT_OVERLAY',
+    START_INTERCEPT_DOWNLOAD: 'START_INTERCEPT_DOWNLOAD',
+    UPDATE_EXPORT_OVERLAY: 'UPDATE_EXPORT_OVERLAY'
+  });
+
+  // The ⚙️ settings as shipped. The side panel starts from these and
+  // "Reset to defaults" returns to them. takeoutZip is Full Takeout's own ZIP
+  // tick (on its tab, not in ⚙️): unset until the user ticks it.
+  const DEFAULT_SETTINGS = Object.freeze({
+    autoZip: false,
+    takeoutZip: undefined,
+    showNotifications: true,
+    refreshInterval: 10,
+    exportSourceBase: true,
+    exportSourcePlusMeta: true,
+    exportSourceWithImages: false,
+    exportSourcePlusMetaWithImages: false,
+    exportNoteBase: true,
+    exportNoteCodeBlocks: true,
+    exportNoteWithImages: false,
+    sourcesPerZip: 25,
+    notesPerZip: 25,
+    cleanOCRArtifacts: true,
+    showStudioTab: false,
+    slidesFormat: 'pdf',
+    citationDetail: 'quotes',
+    reuseCitations: true,
+    citationStyle: 'links',
+    obsidianNames: false
+  });
+
+  // A fresh, editable copy of the defaults. Keeps only the Full Takeout ZIP
+  // choice from `current`, since that tick is not one of the ⚙️ options.
+  function resetSettings(current) {
+    const fresh = { ...DEFAULT_SETTINGS };
+    if (current && current.takeoutZip !== undefined) fresh.takeoutZip = current.takeoutZip;
+    return fresh;
+  }
+
   const NLME = {
+    MSG,
     studioTargetMatches,
     isNotesHeaderText,
     buildRootIndex,
@@ -1815,6 +2049,7 @@ footer { margin-top: 3rem; }
     chatSelectedCount,
     categoryWritten,
     frontMatter,
+    categoryIndexFrontMatter,
     uniqueStems,
     notebookIdFromUrl,
     listItemKeys,
@@ -1841,6 +2076,7 @@ footer { margin-top: 3rem; }
     restoreListState,
     exportMeta,
     buildManifest,
+    downloadSizeStatus,
     zipName,
     filesByteSize,
     artifactFolder,
@@ -1850,6 +2086,12 @@ footer { margin-top: 3rem; }
     artifactStems,
     groupCitationEntries,
     groupedSourcesMarkdown,
+    footnoteLabel,
+    footnoteDefinition,
+    footnoteDefinitions,
+    obsidianSafeName,
+    fileStem,
+    prefixedStem,
     markWindowedQuote,
     noteHasImages,
     countMarkdownFormulas,
@@ -1857,6 +2099,7 @@ footer { margin-top: 3rem; }
     unknownStudioIcons,
     auditExport,
     diffAudit,
+    partAudit,
     buildSourcesIndex,
     citationTitleFromAriaLabel,
     fenceFor,
@@ -1892,6 +2135,7 @@ footer { margin-top: 3rem; }
     combineRetryOutcomes,
     groupErrorsForPanel,
     createJobLock,
+    createSettleGate,
     createPhaseTimer,
     formatTimingSummary,
     cleanOcrArtifacts,
@@ -1925,9 +2169,13 @@ footer { margin-top: 3rem; }
     citationCacheRead,
     citationCacheWrite,
     citationCacheClear,
+    versionLess,
+    shouldClearCitationCache,
     citationSourcesComplete,
     CITE_MAX_BYTES_PER_NOTEBOOK,
-    CITE_KEEP_NOTEBOOKS
+    CITE_KEEP_NOTEBOOKS,
+    DEFAULT_SETTINGS,
+    resetSettings
   };
 
   root.NLME = NLME;

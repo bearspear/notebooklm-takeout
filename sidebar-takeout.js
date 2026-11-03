@@ -57,7 +57,7 @@ async function fetchDownload(url, { tabId } = {}) {
       targetTab = tab?.id;
     }
     if (targetTab == null) throw new Error('no notebook tab');
-    const result = await chrome.tabs.sendMessage(targetTab, { type: 'FETCH_FILE', url });
+    const result = await chrome.tabs.sendMessage(targetTab, { type: NLME.MSG.FETCH_FILE, url });
     if (result && result.success && result.data != null) {
       return base64ToBlob(result.data, result.mime);
     }
@@ -82,22 +82,45 @@ function entryBlob(entry) {
 async function downloadBlobToFolderPath(blob, target) {
   const blobUrl = URL.createObjectURL(blob);
   try {
-    await chrome.runtime.sendMessage({ type: 'NAME_NEXT_DOWNLOAD', url: blobUrl, filename: target });
+    await chrome.runtime.sendMessage({ type: NLME.MSG.NAME_NEXT_DOWNLOAD, url: blobUrl, filename: target });
     await chrome.downloads.download({ url: blobUrl, filename: target, conflictAction: 'uniquify', saveAs: false });
   } finally {
     setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
   }
 }
 
-// Have the background download a url entry to Downloads/<target>.
+// Have the background download a url entry to Downloads/<target>. Returns
+// the Chrome download id (null if the background did not report one).
 async function downloadUrlTo(entry, target) {
   const response = await chrome.runtime.sendMessage({
-    type: 'DIRECT_DOWNLOAD_URL',
+    type: NLME.MSG.DIRECT_DOWNLOAD_URL,
     url: entry.url,
     filename: target
   });
   if (!response || !response.success) {
     throw new Error(`Download failed for ${entry.path}: ${(response && response.error) || 'no response'}`);
+  }
+  return response.downloadId ?? null;
+}
+
+// The size of a finished download, read from chrome.downloads (fileSize), for
+// the manifest of a folder-mode export. Polls until the download completes,
+// is interrupted or is gone, up to timeoutMs. Never rejects and never blocks
+// a job: null means "not available" (the manifest keeps null, as before).
+async function downloadSizeWhenDone(downloadId, { timeoutMs = 120000, intervalMs = 500 } = {}) {
+  if (downloadId == null) return null;
+  try {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const [item] = await chrome.downloads.search({ id: downloadId });
+      const status = NLME.downloadSizeStatus(item);
+      if (status.done) return status.bytes;
+      if (Date.now() >= deadline) return null;
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Could not read a download size:', error);
+    return null;
   }
 }
 
@@ -117,7 +140,10 @@ async function downloadUrlTo(entry, target) {
  *
  * @param {Array<{path: string, data?: string|Blob|Uint8Array, url?: string}>} files
  * @param {{ zipName?: string, folder?: string }} [options]
- * @returns {Promise<{ saved: number, zipped: boolean }>}
+ * @returns {Promise<{ saved: number, zipped: boolean, sizes?: Array<Promise<number|null>|undefined> }>}
+ *   sizes (folder mode): per entry, in order, a promise of the downloaded file's
+ *   size for url entries (downloadSizeWhenDone; resolves null when unknown),
+ *   undefined for data entries. Not awaited here: downloads finish on their own.
  */
 async function saveFiles(files, { zipName, folder } = {}) {
   if (zipName) {
@@ -138,16 +164,18 @@ async function saveFiles(files, { zipName, folder } = {}) {
 
   if (folder) {
     let saved = 0;
+    const sizes = [];
     for (const entry of files) {
       const target = NLME.downloadFolderPath(folder, entry.path);
       if (entry.data !== undefined) {
         await downloadBlobToFolderPath(entryBlob(entry), target);
+        sizes.push(undefined);
       } else {
-        await downloadUrlTo(entry, target);
+        sizes.push(downloadSizeWhenDone(await downloadUrlTo(entry, target)));
       }
       saved++;
     }
-    return { saved, zipped: false };
+    return { saved, zipped: false, sizes };
   }
 
   let saved = 0;
@@ -253,9 +281,9 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
 
     // Reset DOM tracker and run the pre-export health check
     if (healthType) {
-      await chrome.tabs.sendMessage(tab.id, { type: 'RESET_DOM_TRACKER' });
+      await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.RESET_DOM_TRACKER });
       const healthCheck = await chrome.tabs.sendMessage(tab.id, {
-        type: 'CHECK_DOM_HEALTH',
+        type: NLME.MSG.CHECK_DOM_HEALTH,
         data: { type: healthType }
       });
       if (healthCheck && !healthCheck.healthy) {
@@ -269,7 +297,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
 
     // Overlay on the page
     await chrome.tabs.sendMessage(tab.id, {
-      type: 'SHOW_EXPORT_OVERLAY',
+      type: NLME.MSG.SHOW_EXPORT_OVERLAY,
       message: overlayMessage || 'Preparing to export...'
     });
     overlayShown = true;
@@ -282,7 +310,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
 
     // Listen for cancellation (overlay Cancel or side-panel Cancel)
     cancelListener = (message) => {
-      if (message.type === 'CANCEL_EXPORT') cancelled = true;
+      if (message.type === NLME.MSG.CANCEL_EXPORT) cancelled = true;
     };
     chrome.runtime.onMessage.addListener(cancelListener);
 
@@ -300,7 +328,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
         progressFill.style.width = `${percent}%`;
         progressText.textContent = text;
         chrome.tabs.sendMessage(tabId, {
-          type: 'UPDATE_EXPORT_OVERLAY',
+          type: NLME.MSG.UPDATE_EXPORT_OVERLAY,
           message: text,
           progress: percent
         }).catch(() => {}); // overlay is cosmetic; never abort the job
@@ -329,7 +357,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
     // Hide page overlay
     if (overlayShown) {
       try {
-        await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
+        await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.HIDE_EXPORT_OVERLAY });
       } catch (error) {
         console.error('[NotebookLM Takeout] Failed to hide overlay:', error);
       }
@@ -404,8 +432,10 @@ async function runFullTakeout() {
 
   await withExportShell({ label: 'takeout', healthType: 'notes', overlayMessage: 'Preparing Full Takeout...', tabId: tab.id }, async shell => {
     const tabId = shell.tab.id;
-    const root = sanitizeFilename(shell.projectName);
-    const folder = zipMode ? null : `${shell.projectName} takeout ${shell.timestamp}`;
+    const root = NLME.fileStem(shell.projectName, { obsidian: !!settings.obsidianNames });
+    // Obsidian-friendly names also cover the folder (its name is part of every link path)
+    const folderName = settings.obsidianNames ? (NLME.obsidianSafeName(shell.projectName) || 'notebook') : shell.projectName;
+    const folder = zipMode ? null : `${folderName} takeout ${shell.timestamp}`;
     console.log(`[NotebookLM Takeout] Full Takeout (${zipMode ? 'ZIP' : `folder "${folder}"`})`);
 
     const categories = [
@@ -808,7 +838,6 @@ function resumeJob(record) {
     }
 
     // Find the items again, category by category
-    showToast('Checking what is left\u2026', 'info');
     // The tab must still show the record's notebook right before each scan and
     // again after it (in-app navigation changes the URL before the page is drawn)
     const onNotebook = async () => {
@@ -820,46 +849,65 @@ function resumeJob(record) {
     const itemsByName = {};
     const missingByCategory = {};
     const extraErrors = [];
-    for (const { category, name, scan, regionOfType } of RESUME_CATEGORIES) {
-      const keys = NLME.jobResumeKeys(live, category);
-      if (keys.length === 0) continue;
-      if (chainCancelRequested) { showToast('Resume cancelled', 'info'); return; }
-      if (!(await onNotebook())) {
-        showToast('The tab left that notebook; resume stopped', 'warning');
-        return;
-      }
-      let items;
-      try {
-        items = await scan(tabId);
-      } catch (error) {
-        console.error(`[NotebookLM Takeout] Resume: ${name} scan failed:`, error);
-        extraErrors.push({ type: 'scan_failed', title: name, message: `Could not scan ${name.toLowerCase()} (${(error && error.message) || error}); its items stay in the list to resume` });
-        continue;
-      }
-      if (!(await onNotebook())) {
-        showToast('The tab left that notebook; resume stopped', 'warning');
-        return;
-      }
-      stampJobKeys(category, items); // over the full scan, before any subset is cut
-      // NLME.planResume: a scan that matches nothing (empty, still drawing, the wrong
-      // page) or lacks a whole region (Studio notes not drawn) cannot say a key is
-      // gone; those keys are `unknown`, reported and kept in the record
-      const { matched, missing, unknown } = NLME.planResume(keys, items, { ...JOB_KEY_ACCESSORS[category], regionOfType });
-      let runnable = matched;
-      if (category === 'artifacts') {
-        runnable = matched.filter(item => !item.disabled);
-        for (const item of matched.filter(item => item.disabled)) {
-          extraErrors.push({ type: 'not_ready', title: name, message: `${item.label} is not ready to download; it stays in the list to resume` });
+    // No export shell is active while the categories are scanned, so show the
+    // progress panel with its Cancel button here (requestCancel sets
+    // chainCancelRequested, checked before each scan and again after the last).
+    // The finally hides it on every path: return, throw or normal end. The
+    // export steps that follow show it again through their own shells.
+    const scanPanel = document.getElementById('download-progress');
+    const scanFill = document.getElementById('progress-fill');
+    const scanText = document.getElementById('progress-text');
+    const scanSteps = RESUME_CATEGORIES.filter(c => NLME.jobResumeKeys(live, c.category).length > 0).length;
+    let scanDone = 0;
+    scanPanel.style.display = 'block';
+    scanText.textContent = 'Checking what is left\u2026';
+    scanFill.style.width = '0%';
+    try {
+      for (const { category, name, scan, regionOfType } of RESUME_CATEGORIES) {
+        const keys = NLME.jobResumeKeys(live, category);
+        if (keys.length === 0) continue;
+        scanText.textContent = `Checking ${name.toLowerCase()}\u2026`;
+        scanFill.style.width = `${(scanDone++ / scanSteps) * 100}%`;
+        if (chainCancelRequested) { showToast('Resume cancelled', 'info'); return; }
+        if (!(await onNotebook())) {
+          showToast('The tab left that notebook; resume stopped', 'warning');
+          return;
+        }
+        let items;
+        try {
+          items = await scan(tabId);
+        } catch (error) {
+          console.error(`[NotebookLM Takeout] Resume: ${name} scan failed:`, error);
+          extraErrors.push({ type: 'scan_failed', title: name, message: `Could not scan ${name.toLowerCase()} (${(error && error.message) || error}); its items stay in the list to resume` });
+          continue;
+        }
+        if (!(await onNotebook())) {
+          showToast('The tab left that notebook; resume stopped', 'warning');
+          return;
+        }
+        stampJobKeys(category, items); // over the full scan, before any subset is cut
+        // NLME.planResume: a scan that matches nothing (empty, still drawing, the wrong
+        // page) or lacks a whole region (Studio notes not drawn) cannot say a key is
+        // gone; those keys are `unknown`, reported and kept in the record
+        const { matched, missing, unknown } = NLME.planResume(keys, items, { ...JOB_KEY_ACCESSORS[category], regionOfType });
+        let runnable = matched;
+        if (category === 'artifacts') {
+          runnable = matched.filter(item => !item.disabled);
+          for (const item of matched.filter(item => item.disabled)) {
+            extraErrors.push({ type: 'not_ready', title: name, message: `${item.label} is not ready to download; it stays in the list to resume` });
+          }
+        }
+        if (runnable.length) itemsByName[name] = runnable;
+        if (unknown.length) {
+          for (const key of unknown) extraErrors.push({ type: 'scan_failed', title: name, message: `${NLME.jobKeyTitle(key)} could not be checked (the ${name.toLowerCase()} list looks incomplete; the page may still be loading); it stays in the list to resume` });
+        }
+        if (missing.length) {
+          missingByCategory[category] = missing;
+          for (const key of missing) extraErrors.push({ type: 'not_found', title: name, message: `${NLME.jobKeyTitle(key)} is no longer in the notebook` });
         }
       }
-      if (runnable.length) itemsByName[name] = runnable;
-      if (unknown.length) {
-        for (const key of unknown) extraErrors.push({ type: 'scan_failed', title: name, message: `${NLME.jobKeyTitle(key)} could not be checked (the ${name.toLowerCase()} list looks incomplete; the page may still be loading); it stays in the list to resume` });
-      }
-      if (missing.length) {
-        missingByCategory[category] = missing;
-        for (const key of missing) extraErrors.push({ type: 'not_found', title: name, message: `${NLME.jobKeyTitle(key)} is no longer in the notebook` });
-      }
+    } finally {
+      scanPanel.style.display = 'none';
     }
     if (chainCancelRequested) { showToast('Resume cancelled', 'info'); return; }
     await clearMissingFromRecord(live, missingByCategory);

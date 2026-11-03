@@ -176,7 +176,7 @@
     };
     cancelButton.onclick = () => {
       exportCancelled = true;
-      chrome.runtime.sendMessage({ type: 'CANCEL_EXPORT' });
+      chrome.runtime.sendMessage({ type: NLME.MSG.CANCEL_EXPORT });
       removeExportOverlay();
     };
 
@@ -256,210 +256,292 @@
     return exportCancelled;
   }
 
+  // One entry per message type this content script answers (Milestone 3d).
+  // `async: true` means sendResponse is called after the listener returns, so
+  // the listener returns true to keep the message channel open.
+  const HANDLERS = {
+    [NLME.MSG.PING]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        // Simple ping to check if content script is loaded
+        sendResponse({ success: true });
+      }
+    },
+    [NLME.MSG.GET_PROJECT_NAME]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        // Extract project name from the page
+        try {
+          // Look for the project title in the header
+          // One chain for file names, chat export and the health check
+          const titleSelectors = NLME.PROJECT_TITLE_SELECTORS;
+
+          let projectName = null;
+          for (const selector of titleSelectors) {
+            const titleElement = document.querySelector(selector);
+            if (titleElement && titleElement.textContent.trim()) {
+              projectName = titleElement.textContent.trim();
+              console.log('[NotebookLM Takeout] Found project name:', projectName);
+              break;
+            }
+          }
+
+          sendResponse({ projectName: projectName || 'NotebookLM' });
+        } catch (error) {
+          console.error('[NotebookLM Takeout] Error extracting project name:', error);
+          sendResponse({ projectName: 'NotebookLM' });
+        }
+      }
+    },
+    [NLME.MSG.FETCH_FILE]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Fetch file with page credentials - used by batch download
+        fetchFileWithCredentials(message.url)
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ success: false, error: error.message }));
+      }
+    },
+    [NLME.MSG.REQUEST_EXPORT_CANCEL]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        // Side panel Cancel button: same effect as the overlay's Cancel
+        exportCancelled = true;
+        chrome.runtime.sendMessage({ type: NLME.MSG.CANCEL_EXPORT }).catch(() => {});
+        removeExportOverlay();
+        sendResponse({ success: true });
+      }
+    },
+    [NLME.MSG.EXTRACT_NOTE]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Extract note content
+        // 'titles' and 'none' both skip hovering ('none' drops the markers later)
+        citationDetailMode = ['titles', 'none'].includes(message.data.citationDetail) ? 'titles' : 'quotes';
+        reuseCitations = message.data.reuseCitations === true;
+        withRequestTiming(() => (typeof message.data.sourceIndex === 'number'
+          ? extractSourcesPanelNote(message.data.sourceIndex, message.data.noteTitle, message.data.includeCitationImages)
+          : extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages)))
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ error: error.message || 'Extraction failed' }));
+      }
+    },
+    [NLME.MSG.SCAN_NOTES]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        // Scan for notes
+        const notes = scanForNotes();
+        sendResponse({ notes });
+      }
+    },
+    [NLME.MSG.SCAN_SOURCES]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Scan for sources
+        scanForSources()
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ error: error.message }));
+      }
+    },
+    [NLME.MSG.EXTRACT_SOURCE]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Extract source content
+        withRequestTiming(() => extractSourceContent(message.data.sourceIndex, message.data.title || '', message.data.needsGuide !== false))
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ error: error.message }));
+      }
+    },
+    [NLME.MSG.NAVIGATE_BACK]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Navigate back to notes list
+        navigateBackToNotesList()
+          .then(() => sendResponse({ success: true }))
+          .catch(error => sendResponse({ success: false, error: error.message }));
+      }
+    },
+    [NLME.MSG.SHOW_EXPORT_OVERLAY]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        showExportOverlay(message.message || 'Preparing export...');
+        sendResponse({ success: true });
+      }
+    },
+    [NLME.MSG.UPDATE_EXPORT_OVERLAY]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        updateExportOverlay(message.message, message.progress || 0);
+        sendResponse({ success: true });
+      }
+    },
+    [NLME.MSG.HIDE_EXPORT_OVERLAY]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        removeExportOverlay();
+        sendResponse({ success: true });
+      }
+    },
+    [NLME.MSG.DOWNLOAD_ARTIFACT]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Download artifact via message passing (new pattern)
+        handleArtifactDownload(
+          message.data.artifactIndex,
+          message.data.artifactType,
+          message.data.skipMoreButton || false,
+          message.data.artifactName || null,
+          message.data.downloadPreference || 'pdf'
+        )
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ success: false, error: error.message || 'Download failed' }));
+      }
+    },
+    [NLME.MSG.SCAN_CHAT]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Scan chat messages
+        scanChat()
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ error: error.message }));
+      }
+    },
+    [NLME.MSG.EXTRACT_MESSAGE_CITATIONS]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Extract citations for a specific message
+        console.log('[NotebookLM Takeout] ====== EXTRACT_MESSAGE_CITATIONS message received ======');
+        console.log('[NotebookLM Takeout] Message index:', message.data.messageIndex);
+        console.log('[NotebookLM Takeout] Source indices:', message.data.sourceIndices);
+        console.log('[NotebookLM Takeout] Message HTML length:', message.data.messageHTML?.length || 0);
+        console.log('[NotebookLM Takeout] Include citation images:', message.data.includeCitationImages);
+
+        try {
+          withRequestTiming(() => extractMessageCitations(
+            message.data.messageIndex,
+            message.data.messageHTML,
+            message.data.sourceIndices,
+            message.data.includeCitationImages || false
+          ))
+            .then(result => {
+              console.log('[NotebookLM Takeout] ====== Message citations extracted ======');
+              console.log('[NotebookLM Takeout] Result:', result);
+              sendResponse(result);
+            })
+            .catch(error => {
+              console.error('[NotebookLM Takeout] ====== Message citations extraction error ======', error);
+              console.error('[NotebookLM Takeout] Error stack:', error.stack);
+              sendResponse({ sourcesByIndex: {}, errors: [error.message] });
+            });
+        } catch (error) {
+          console.error('[NotebookLM Takeout] ====== Message citations extraction SYNC error ======', error);
+          console.error('[NotebookLM Takeout] Error stack:', error.stack);
+          sendResponse({ sourcesByIndex: {}, errors: [error.message] });
+        }
+      }
+    },
+    [NLME.MSG.CHECK_DOM_HEALTH]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        // Pre-export health check (basic version - use RUN_COMPREHENSIVE_HEALTH_CHECK for full check)
+        const type = message.data?.type || 'notes';
+        const checks = {
+          // Only the studio list container is required: a notebook with no
+          // studio notes (or notes shown in the Sources panel) is not drift.
+          notes: ['.artifact-library-container'],
+          sources: ['.single-source-container', '.scroll-area-desktop'],
+          artifacts: ['artifact-library-item'],
+          chat: ['.chat-message-pair', '.from-user-container', '.to-user-container']
+        };
+        const issues = [];
+        for (const selector of (checks[type] || [])) {
+          if (!document.querySelector(selector)) {
+            issues.push(`${selector} not found`);
+          }
+        }
+        sendResponse({
+          healthy: issues.length === 0,
+          issues,
+          trackerIssues: DOMHealthTracker.getIssues()
+        });
+      }
+    },
+    [NLME.MSG.GET_DOM_ERRORS]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        // Get current DOM error state
+        sendResponse({
+          shouldWarn: DOMHealthTracker.shouldWarn(),
+          issues: DOMHealthTracker.getIssues()
+        });
+      }
+    },
+    [NLME.MSG.RESET_DOM_TRACKER]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        // Reset tracker at start of new export
+        DOMHealthTracker.reset();
+        sendResponse({ success: true });
+      }
+    },
+    [NLME.MSG.RUN_COMPREHENSIVE_HEALTH_CHECK]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Comprehensive DOM health check for preflight validation
+        runComprehensiveHealthCheck(message.options || {})
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({
+            overallHealthy: false,
+            error: error.message,
+            categories: {},
+            criticalFailures: [error.message],
+            recommendations: ['Try refreshing the page and running the check again.'],
+            duration: 0
+          }));
+      }
+    },
+    [NLME.MSG.SCAN_STUDIO_ITEMS]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        // Unified Studio scan: artifacts + notes/mindmaps in DOM order.
+        try {
+          sendResponse({ items: scanStudioItems() });
+        } catch (e) {
+          sendResponse({ items: [], error: e.message });
+        }
+      }
+    },
+    [NLME.MSG.DELETE_STUDIO_ITEM]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // Resolve by label plus combined index (row delete: the title at that index
+        // must match the label, otherwise the delete is refused) or by label alone
+        // (bulk delete). When a label is given there is no index-only fallback.
+        deleteStudioItem(message.data || {})
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ success: false, error: error.message || 'Delete failed' }));
+      }
+    },
+    [NLME.MSG.DELETE_SOURCE_NOTE]: {
+      async: true,
+      run(message, sender, sendResponse) {
+        // A note in the Sources panel's "Notes" group (Milestone 3c)
+        deleteSourceNote(message.data || {})
+          .then(result => sendResponse(result))
+          .catch(error => sendResponse({ success: false, error: error.message || 'Delete failed' }));
+      }
+    }
+  };
+
   // Listen for messages from popup/background
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[NotebookLM Takeout] Received message:', message.type);
 
-    if (message.type === 'PING') {
-      // Simple ping to check if content script is loaded
-      sendResponse({ success: true });
-    } else if (message.type === 'GET_PROJECT_NAME') {
-      // Extract project name from the page
-      try {
-        // Look for the project title in the header
-        // One chain for file names, chat export and the health check
-        const titleSelectors = NLME.PROJECT_TITLE_SELECTORS;
-
-        let projectName = null;
-        for (const selector of titleSelectors) {
-          const titleElement = document.querySelector(selector);
-          if (titleElement && titleElement.textContent.trim()) {
-            projectName = titleElement.textContent.trim();
-            console.log('[NotebookLM Takeout] Found project name:', projectName);
-            break;
-          }
-        }
-
-        sendResponse({ projectName: projectName || 'NotebookLM' });
-      } catch (error) {
-        console.error('[NotebookLM Takeout] Error extracting project name:', error);
-        sendResponse({ projectName: 'NotebookLM' });
-      }
-    } else if (message.type === 'FETCH_FILE') {
-      // Fetch file with page credentials - used by batch download
-      fetchFileWithCredentials(message.url)
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ success: false, error: error.message }));
-      return true; // Keep channel open for async
-    } else if (message.type === 'REQUEST_EXPORT_CANCEL') {
-      // Side panel Cancel button: same effect as the overlay's Cancel
-      exportCancelled = true;
-      chrome.runtime.sendMessage({ type: 'CANCEL_EXPORT' }).catch(() => {});
-      removeExportOverlay();
-      sendResponse({ success: true });
-    } else if (message.type === 'EXTRACT_NOTE') {
-      // Extract note content
-      // 'titles' and 'none' both skip hovering ('none' drops the markers later)
-      citationDetailMode = ['titles', 'none'].includes(message.data.citationDetail) ? 'titles' : 'quotes';
-      reuseCitations = message.data.reuseCitations === true;
-      withRequestTiming(() => (typeof message.data.sourceIndex === 'number'
-        ? extractSourcesPanelNote(message.data.sourceIndex, message.data.noteTitle, message.data.includeCitationImages)
-        : extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages)))
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ error: error.message || 'Extraction failed' }));
-      return true; // Keep channel open for async
-    } else if (message.type === 'SCAN_NOTES') {
-      // Scan for notes
-      const notes = scanForNotes();
-      sendResponse({ notes });
-    } else if (message.type === 'SCAN_SOURCES') {
-      // Scan for sources
-      scanForSources()
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ error: error.message }));
-      return true;
-    } else if (message.type === 'EXTRACT_SOURCE') {
-      // Extract source content
-      withRequestTiming(() => extractSourceContent(message.data.sourceIndex, message.data.title || '', message.data.needsGuide !== false))
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ error: error.message }));
-      return true;
-    } else if (message.type === 'NAVIGATE_BACK') {
-      // Navigate back to notes list
-      navigateBackToNotesList()
-        .then(() => sendResponse({ success: true }))
-        .catch(error => sendResponse({ success: false, error: error.message }));
-      return true; // Keep channel open for async
-    } else if (message.type === 'SHOW_EXPORT_OVERLAY') {
-      showExportOverlay(message.message || 'Preparing export...');
-      sendResponse({ success: true });
-      return true;
-    } else if (message.type === 'UPDATE_EXPORT_OVERLAY') {
-      updateExportOverlay(message.message, message.progress || 0);
-      sendResponse({ success: true });
-      return true;
-    } else if (message.type === 'HIDE_EXPORT_OVERLAY') {
-      removeExportOverlay();
-      sendResponse({ success: true });
-      return true;
-    } else if (message.type === 'DOWNLOAD_ARTIFACT') {
-      // Download artifact via message passing (new pattern)
-      handleArtifactDownload(
-        message.data.artifactIndex,
-        message.data.artifactType,
-        message.data.skipMoreButton || false,
-        message.data.artifactName || null,
-        message.data.downloadPreference || 'pdf'
-      )
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ success: false, error: error.message || 'Download failed' }));
-      return true; // Keep channel open for async
-    } else if (message.type === 'SCAN_CHAT') {
-      // Scan chat messages
-      scanChat()
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ error: error.message }));
-      return true;
-    } else if (message.type === 'EXTRACT_MESSAGE_CITATIONS') {
-      // Extract citations for a specific message
-      console.log('[NotebookLM Takeout] ====== EXTRACT_MESSAGE_CITATIONS message received ======');
-      console.log('[NotebookLM Takeout] Message index:', message.data.messageIndex);
-      console.log('[NotebookLM Takeout] Source indices:', message.data.sourceIndices);
-      console.log('[NotebookLM Takeout] Message HTML length:', message.data.messageHTML?.length || 0);
-      console.log('[NotebookLM Takeout] Include citation images:', message.data.includeCitationImages);
-
-      try {
-        withRequestTiming(() => extractMessageCitations(
-          message.data.messageIndex,
-          message.data.messageHTML,
-          message.data.sourceIndices,
-          message.data.includeCitationImages || false
-        ))
-          .then(result => {
-            console.log('[NotebookLM Takeout] ====== Message citations extracted ======');
-            console.log('[NotebookLM Takeout] Result:', result);
-            sendResponse(result);
-          })
-          .catch(error => {
-            console.error('[NotebookLM Takeout] ====== Message citations extraction error ======', error);
-            console.error('[NotebookLM Takeout] Error stack:', error.stack);
-            sendResponse({ sourcesByIndex: {}, errors: [error.message] });
-          });
-      } catch (error) {
-        console.error('[NotebookLM Takeout] ====== Message citations extraction SYNC error ======', error);
-        console.error('[NotebookLM Takeout] Error stack:', error.stack);
-        sendResponse({ sourcesByIndex: {}, errors: [error.message] });
-      }
-      return true;
-    } else if (message.type === 'CHECK_DOM_HEALTH') {
-      // Pre-export health check (basic version - use RUN_COMPREHENSIVE_HEALTH_CHECK for full check)
-      const type = message.data?.type || 'notes';
-      const checks = {
-        // Only the studio list container is required: a notebook with no
-        // studio notes (or notes shown in the Sources panel) is not drift.
-        notes: ['.artifact-library-container'],
-        sources: ['.single-source-container', '.scroll-area-desktop'],
-        artifacts: ['artifact-library-item'],
-        chat: ['.chat-message-pair', '.from-user-container', '.to-user-container']
-      };
-      const issues = [];
-      for (const selector of (checks[type] || [])) {
-        if (!document.querySelector(selector)) {
-          issues.push(`${selector} not found`);
-        }
-      }
-      sendResponse({
-        healthy: issues.length === 0,
-        issues,
-        trackerIssues: DOMHealthTracker.getIssues()
-      });
-    } else if (message.type === 'GET_DOM_ERRORS') {
-      // Get current DOM error state
-      sendResponse({
-        shouldWarn: DOMHealthTracker.shouldWarn(),
-        issues: DOMHealthTracker.getIssues()
-      });
-    } else if (message.type === 'RESET_DOM_TRACKER') {
-      // Reset tracker at start of new export
-      DOMHealthTracker.reset();
-      sendResponse({ success: true });
-    } else if (message.type === 'RUN_COMPREHENSIVE_HEALTH_CHECK') {
-      // Comprehensive DOM health check for preflight validation
-      runComprehensiveHealthCheck(message.options || {})
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({
-          overallHealthy: false,
-          error: error.message,
-          categories: {},
-          criticalFailures: [error.message],
-          recommendations: ['Try refreshing the page and running the check again.'],
-          duration: 0
-        }));
-      return true;
-    } else if (message.type === 'SCAN_STUDIO_ITEMS') {
-      // Unified Studio scan: artifacts + notes/mindmaps in DOM order.
-      try {
-        sendResponse({ items: scanStudioItems() });
-      } catch (e) {
-        sendResponse({ items: [], error: e.message });
-      }
-    } else if (message.type === 'DELETE_STUDIO_ITEM') {
-      // Resolve by label plus combined index (row delete: the title at that index
-      // must match the label, otherwise the delete is refused) or by label alone
-      // (bulk delete). When a label is given there is no index-only fallback.
-      deleteStudioItem(message.data || {})
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ success: false, error: error.message || 'Delete failed' }));
-      return true;
-    } else if (message.type === 'DELETE_SOURCE_NOTE') {
-      // A note in the Sources panel's "Notes" group (Milestone 3c)
-      deleteSourceNote(message.data || {})
-        .then(result => sendResponse(result))
-        .catch(error => sendResponse({ success: false, error: error.message || 'Delete failed' }));
-      return true;
-    }
-
-    return true;
+    const handler = Object.prototype.hasOwnProperty.call(HANDLERS, message.type) ? HANDLERS[message.type] : null;
+    // Unknown type: nothing to run; return true exactly as the old chain's trailing `return true` did
+    if (!handler) return true;
+    handler.run(message, sender, sendResponse);
+    return handler.async;
   });
 
   // Fetch file with page credentials (for batch download)
@@ -512,7 +594,7 @@
 
   function handleInjectedMessage(data) {
     switch (data.type) {
-      case 'NLME_DOWNLOAD_URL_INTERCEPTED': {
+      case NLME.MSG.NLME_DOWNLOAD_URL_INTERCEPTED: {
         const entry = { url: data.payload?.url, timestamp: data.payload?.timestamp || Date.now() };
         // The page can post anything; accept Gemini Notebook download hosts only
         if (!NLME.isAllowedDownloadUrl(entry.url)) {
@@ -2074,7 +2156,7 @@
           // Extract summary and convert to markdown
           const summaryElement = sourceGuideContainer.querySelector('.summary');
           if (summaryElement) {
-            sourceGuideMarkdown = htmlToMarkdown(summaryElement);
+            sourceGuideMarkdown = NLMEMarkdown.htmlToMarkdownPlain(summaryElement);
             console.log(`[NotebookLM Takeout] Extracted source guide summary (${sourceGuideMarkdown.length} chars)`);
           } else {
             console.log(`[NotebookLM Takeout] No summary element found in container`);
@@ -2125,7 +2207,7 @@
         console.log(`[NotebookLM Takeout] Requesting sidebar to download image: ${url.substring(0, 80)}...`);
 
         const response = await chrome.runtime.sendMessage({
-          type: 'DOWNLOAD_IMAGE_AS_BASE64',
+          type: NLME.MSG.DOWNLOAD_IMAGE_AS_BASE64,
           url: url
         });
 
@@ -2198,281 +2280,11 @@
     }
 
     // Now convert to markdown
-    return htmlToMarkdown(element);
+    return NLMEMarkdown.htmlToMarkdownPlain(element);
   }
 
-  // Convert HTML element to markdown (preserves formatting)
-  function htmlToMarkdown(element) {
-    if (!element) return '';
-
-    let markdown = '';
-
-    // Helper function to process table cells with proper escaping
-    const processTableCell = (cell, context) => {
-      let text = processNode(cell, context).trim();
-
-      // Escape pipe characters (Markdown table delimiter)
-      text = text.replace(/\|/g, '\\|');
-
-      // Replace newlines with spaces (tables must be single-line)
-      text = text.replace(/\n+/g, ' ');
-
-      // Warn about colspan/rowspan if present (cannot be represented in Markdown)
-      const colspan = parseInt(cell.getAttribute('colspan') || '1');
-      const rowspan = parseInt(cell.getAttribute('rowspan') || '1');
-      if (colspan > 1 || rowspan > 1) {
-        console.warn('[NotebookLM Takeout] Table cell spans multiple columns/rows - this cannot be represented in Markdown');
-      }
-
-      return text;
-    };
-
-    // Helper function to process table elements
-    const processTable = (tableNode, context) => {
-      const rows = [];
-      let isFirstRowHeader = false;
-
-      // Find all rows (in thead and tbody, or directly in table)
-      const thead = tableNode.querySelector('thead');
-      const tbody = tableNode.querySelector('tbody');
-
-      if (thead) {
-        const headerRows = thead.querySelectorAll('tr');
-        headerRows.forEach((tr, idx) => {
-          const cells = Array.from(tr.querySelectorAll('th, td'));
-          const cellContents = cells.map(cell => processTableCell(cell, context));
-          rows.push(cellContents);
-          if (idx === 0) isFirstRowHeader = true;
-        });
-      }
-
-      if (tbody) {
-        const bodyRows = tbody.querySelectorAll('tr');
-        bodyRows.forEach(tr => {
-          const cells = Array.from(tr.querySelectorAll('td, th'));
-          const cellContents = cells.map(cell => processTableCell(cell, context));
-          rows.push(cellContents);
-        });
-      }
-
-      // If no thead/tbody, get rows directly from table
-      if (!thead && !tbody) {
-        const allRows = tableNode.querySelectorAll('tr');
-        allRows.forEach((tr, idx) => {
-          const cells = Array.from(tr.querySelectorAll('th, td'));
-          const cellContents = cells.map(cell => processTableCell(cell, context));
-
-          // Check if first row has <th> elements
-          if (idx === 0 && tr.querySelector('th')) {
-            isFirstRowHeader = true;
-          }
-
-          rows.push(cellContents);
-        });
-      }
-
-      if (rows.length === 0) return '';
-
-      // Determine number of columns
-      const numCols = Math.max(...rows.map(row => row.length));
-
-      // Build markdown table
-      let tableMarkdown = '\n';
-
-      rows.forEach((row, rowIdx) => {
-        // Pad row to match column count
-        while (row.length < numCols) {
-          row.push('');
-        }
-
-        // Add row
-        tableMarkdown += '| ' + row.join(' | ') + ' |\n';
-
-        // Add separator after first row if it's a header
-        if (rowIdx === 0 && (isFirstRowHeader || thead)) {
-          tableMarkdown += '| ' + Array(numCols).fill('---').join(' | ') + ' |\n';
-        }
-      });
-
-      tableMarkdown += '\n';
-      return tableMarkdown;
-    };
-
-    // Helper function to process list elements
-    const processList = (listNode, context) => {
-      const isOrdered = listNode.tagName.toLowerCase() === 'ol';
-      // Find all <li> elements, but filter out those that belong to nested lists
-      // (handles Angular wrapper components like <labs-tailwind-structural-element-view-v2>)
-      const allLis = Array.from(listNode.querySelectorAll('li'));
-      const items = allLis.filter(li => {
-        // Check if this <li> has a list ancestor between it and listNode
-        let parent = li.parentElement;
-        while (parent && parent !== listNode) {
-          if (parent.tagName && (parent.tagName.toLowerCase() === 'ul' || parent.tagName.toLowerCase() === 'ol')) {
-            return false; // This <li> belongs to a nested list
-          }
-          parent = parent.parentElement;
-        }
-        return true; // This <li> belongs directly to this list
-      });
-      let listMarkdown = '\n';
-
-      items.forEach((li, idx) => {
-        const indent = '  '.repeat(context.listDepth);
-        const marker = isOrdered ? `${idx + 1}.` : '*';
-
-        // Process the list item content
-        const itemContext = { ...context, listDepth: context.listDepth + 1 };
-        const itemContent = Array.from(li.childNodes)
-          .map(child => processNode(child, itemContext))
-          .join('')
-          .trim();
-
-        // Split multi-line content and indent continuation lines
-        const lines = itemContent.split('\n');
-        listMarkdown += `${indent}${marker} ${lines[0]}\n`;
-        for (let i = 1; i < lines.length; i++) {
-          if (lines[i].trim()) {
-            listMarkdown += `${indent}  ${lines[i]}\n`;
-          }
-        }
-      });
-
-      listMarkdown += '\n';
-      return listMarkdown;
-    };
-
-    // Helper function to process blockquote elements
-    const processBlockquote = (blockquoteNode, context) => {
-      const content = Array.from(blockquoteNode.childNodes)
-        .map(child => processNode(child, context))
-        .join('')
-        .trim();
-
-      // For citations, blockquotes are just semantic wrappers - extract content without markdown syntax
-      // (the citation itself is already clearly a quote in the footnote)
-      return '\n' + content + '\n\n';
-    };
-
-    const processNode = (node, context = { listDepth: 0 }) => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        return node.textContent;
-      }
-
-      if (node.nodeType !== Node.ELEMENT_NODE) {
-        return '';
-      }
-
-      const tag = node.tagName.toLowerCase();
-
-      // Special handling for tables
-      if (tag === 'table') {
-        return processTable(node, context);
-      }
-
-      // Special handling for lists
-      if (tag === 'ul' || tag === 'ol') {
-        return processList(node, context);
-      }
-
-      // Special handling for blockquotes
-      if (tag === 'blockquote') {
-        return processBlockquote(node, context);
-      }
-
-      // Special handling for ARIA headings (e.g., <div role="heading" aria-level="4">)
-      if (node.getAttribute('role') === 'heading') {
-        const ariaLevel = parseInt(node.getAttribute('aria-level') || '1', 10);
-        const level = Math.min(Math.max(ariaLevel, 1), 6); // Clamp between 1-6
-        const content = Array.from(node.childNodes).map(child => processNode(child, context)).join('');
-        const hashes = '#'.repeat(level);
-        return `\n${hashes} ${content}\n\n`;
-      }
-
-      // For table sub-elements, process children normally
-      // (they're handled by processTable when it encounters a table)
-      if (['thead', 'tbody', 'tr', 'th', 'td'].includes(tag)) {
-        return Array.from(node.childNodes).map(child => processNode(child, context)).join('');
-      }
-
-      // For list items within the list processor, just process children
-      if (tag === 'li' && context.listDepth > 0) {
-        return Array.from(node.childNodes).map(child => processNode(child, context)).join('');
-      }
-
-      const content = Array.from(node.childNodes).map(child => processNode(child, context)).join('');
-
-      switch (tag) {
-        // Headings
-        case 'h1':
-          return `\n# ${content}\n\n`;
-        case 'h2':
-          return `\n## ${content}\n\n`;
-        case 'h3':
-          return `\n### ${content}\n\n`;
-        case 'h4':
-          return `\n#### ${content}\n\n`;
-        case 'h5':
-          return `\n##### ${content}\n\n`;
-        case 'h6':
-          return `\n###### ${content}\n\n`;
-
-        // Text formatting
-        case 'b':
-        case 'strong':
-          return `**${content}**`;
-        case 'i':
-        case 'em':
-          return `*${content}*`;
-        case 's':
-        case 'del':
-        case 'strike':
-          return `~~${content}~~`;
-
-        // Links and images
-        case 'a':
-          const href = node.getAttribute('href') || '';
-          return href ? `[${content}](${href})` : content;
-        case 'img':
-          const src = node.getAttribute('src') || '';
-          const alt = node.getAttribute('alt') || '';
-          return src ? `![${alt}](${src})` : '';
-
-        // Code
-        case 'code':
-          // Check if this is inside a <pre> tag (already handled as code block)
-          if (node.parentElement && node.parentElement.tagName.toLowerCase() === 'pre') {
-            return content;
-          }
-          return `\`${content}\``;
-        case 'pre':
-          // Code block
-          const codeElement = node.querySelector('code');
-          const codeContent = codeElement ? codeElement.textContent : node.textContent;
-          const language = codeElement ? (codeElement.className.match(/language-(\w+)/) || [])[1] || '' : '';
-          return `\n\`\`\`${language}\n${codeContent}\n\`\`\`\n\n`;
-
-        // Horizontal rule
-        case 'hr':
-          return '\n---\n\n';
-
-        // Line breaks and blocks
-        case 'br':
-          return '\n';
-        case 'p':
-        case 'div':
-          return content + '\n';
-        case 'span':
-          return content;
-
-        default:
-          return content;
-      }
-    };
-
-    markdown = processNode(element);
-    return markdown.trim();
-  }
+  // htmlToMarkdown moved to takeout-markdown.js (Milestone 3d):
+  // NLMEMarkdown.htmlToMarkdownPlain
 
   // Extract content from Tailwind viewer format. The overlay container is
   // hidden during the citation hover loop and always restored, even on error,
@@ -3397,8 +3209,77 @@
     return new Set(document.querySelectorAll(DIALOG_SELECTOR));
   }
 
-  function closeMenuBackdrops() {
-    document.querySelectorAll('.cdk-overlay-backdrop').forEach(b => b.click());
+  // The backdrops that belong to the overlay holding `panel`. CDK builds
+  //   .cdk-overlay-container > [.cdk-overlay-backdrop] + host
+  //   host (.cdk-overlay-connected-position-bounding-box or .cdk-global-overlay-wrapper)
+  //     > .cdk-overlay-pane > panel
+  // so the backdrop is the host's previous sibling, or (some CDK versions, global
+  // overlays) a child of the host next to the pane. Only those two places are
+  // looked at: another overlay's backdrop is never reached from here.
+  function overlayBackdropsOf(panel) {
+    const pane = panel && panel.closest ? panel.closest('.cdk-overlay-pane') : null;
+    const host = pane && pane.parentElement;
+    if (!host) return [];
+    const found = [];
+    const isBackdrop = el => !!el && el.classList.contains('cdk-overlay-backdrop');
+    if (isBackdrop(host.previousElementSibling)) found.push(host.previousElementSibling);
+    for (const child of host.children) {
+      if (isBackdrop(child)) found.push(child);
+    }
+    return found;
+  }
+
+  // Click the backdrop(s) of the menu overlay(s) around `panels` (menu panel elements
+  // the caller has bound: a clicked trigger's aria-controls panel, or the open menu
+  // panels). Without `panels` no menu is bound and every backdrop is clicked (the
+  // old behavior). A bound menu whose overlay cannot be found falls back to the
+  // transparent backdrops only, which menus use; a dialog's dark backdrop is never
+  // clicked on a menu's behalf.
+  function closeMenuBackdrops(panels) {
+    if (panels === undefined) {
+      document.querySelectorAll('.cdk-overlay-backdrop').forEach(b => b.click());
+      return;
+    }
+    let backdrops = [...new Set(panels.filter(Boolean).flatMap(overlayBackdropsOf))];
+    if (backdrops.length === 0) backdrops = [...document.querySelectorAll('.cdk-overlay-transparent-backdrop')];
+    backdrops.forEach(b => b.click());
+  }
+
+  // Dismiss the dialogs a delete opened itself (not in `existing`, the snapshot
+  // taken before the delete click). Used only when that delete timed out, so a
+  // confirm dialog is not left open. Each dialog's own backdrop is clicked; a
+  // dialog without one gets Escape only if it is the last overlay pane (never a
+  // snack bar or tooltip). Dialogs that existed before are never touched.
+  function closeNewDialogs(existing) {
+    const isOld = el => [...existing].some(old => old === el || old.contains(el));
+    const fresh = Array.from(document.querySelectorAll(DIALOG_SELECTOR))
+      .filter(el => !isOld(el) && !el.querySelector('.mat-mdc-menu-panel') && !el.closest('.mat-mdc-menu-panel'));
+    const backdrops = new Set();
+    const noBackdrop = [];
+    for (const dlg of fresh) {
+      const found = overlayBackdropsOf(dlg);
+      if (found.length) found.forEach(b => backdrops.add(b));
+      else noBackdrop.push(dlg);
+    }
+    backdrops.forEach(b => b.click());
+    // Escape reaches the topmost overlay with keydown subscribers (CDK listens on
+    // document.body), so it goes only to a fresh dialog that is the last pane;
+    // snack bars and tooltips never get it, they could make it close an older dialog.
+    const DIALOG_PARTS = 'mat-dialog-container, mat-mdc-dialog-container, [role="dialog"], [role="alertdialog"]';
+    const NOT_DIALOG = 'mat-snack-bar-container, mat-mdc-snack-bar-container, .mat-mdc-tooltip, mat-tooltip-component, [role="tooltip"]';
+    const escaped = new Set();
+    for (const dlg of noBackdrop) {
+      if (!dlg.isConnected) continue;
+      const pane = dlg.closest('.cdk-overlay-pane');
+      if (!pane || escaped.has(pane)) continue;
+      const isDialog = dlg.matches(DIALOG_PARTS) || !!dlg.querySelector(DIALOG_PARTS) || !!dlg.closest(DIALOG_PARTS);
+      if (!isDialog || pane.matches(NOT_DIALOG) || pane.querySelector(NOT_DIALOG)) continue;
+      const container = pane.closest('.cdk-overlay-container');
+      const panes = container ? container.querySelectorAll('.cdk-overlay-pane') : [];
+      if (panes.length === 0 || panes[panes.length - 1] !== pane) continue;
+      escaped.add(pane);
+      dlg.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+    }
   }
 
   // Close every open menu panel; false if one is still open after ~1 s.
@@ -3406,7 +3287,7 @@
     const deadline = Date.now() + 1000;
     while (document.querySelector('.mat-mdc-menu-panel')) {
       if (Date.now() > deadline) return false;
-      closeMenuBackdrops();
+      closeMenuBackdrops(Array.from(document.querySelectorAll('.mat-mdc-menu-panel')));
       await new Promise(r => setTimeout(r, 100));
     }
     return true;
@@ -3419,7 +3300,8 @@
     const deadline = Date.now() + 2000;
     while (trigger.getAttribute('aria-expanded') !== 'true') {
       if (Date.now() > deadline) {
-        closeMenuBackdrops();
+        const controlled = trigger.getAttribute('aria-controls');
+        closeMenuBackdrops([controlled ? document.getElementById(controlled) : null]);
         throw new Error('More menu did not open');
       }
       await new Promise(r => setTimeout(r, 50));
@@ -3429,7 +3311,7 @@
     const panelId = trigger.getAttribute('aria-controls');
     const panel = panelId ? document.getElementById(panelId) : null;
     if (!panel || !panel.classList.contains('mat-mdc-menu-panel')) {
-      closeMenuBackdrops();
+      closeMenuBackdrops([panel]);
       throw new Error('More menu could not be identified');
     }
     return panel;
@@ -3500,7 +3382,7 @@
     const deleteItem = Array.from(panel.querySelectorAll('.mat-mdc-menu-item, [role="menuitem"]'))
       .find(el => (el.textContent || '').toLowerCase().includes('delete')) || null;
     if (!deleteItem) {
-      closeMenuBackdrops();
+      closeMenuBackdrops([panel]);
       throw new Error('Delete menu item not found');
     }
     const existingDialogs = snapshotDialogPanes();
@@ -3533,7 +3415,8 @@
       await new Promise(r => setTimeout(r, 100));
     }
 
-    closeMenuBackdrops();
+    closeMenuBackdrops([panel]);
+    closeNewDialogs(existingDialogs);
     throw new Error(confirmed
       ? 'Item did not disappear after clicking confirm'
       : 'Delete did not take effect (no dialog, no removal)');
@@ -3567,7 +3450,6 @@
       return { success: false, error: STALE };
     }
 
-    const closeMenu = closeMenuBackdrops;
     const guardOk = () => container.isConnected && isNoteSourceContainer(container) &&
       getSourceContainerTitle(container) === title;
 
@@ -3602,7 +3484,7 @@
         return text.includes('remove note') && !text.includes('source');
       }) || null;
     if (!deleteItem) {
-      closeMenu();
+      closeMenuBackdrops([panel]);
       return { success: false, error: 'Remove note menu item not found' };
     }
     const existingDialogs = snapshotDialogPanes();
@@ -3624,7 +3506,8 @@
       await new Promise(r => setTimeout(r, 100));
     }
 
-    closeMenu();
+    closeMenuBackdrops([panel]);
+    closeNewDialogs(existingDialogs);
     return {
       success: false,
       error: confirmed
@@ -4060,7 +3943,7 @@
     const summaryEl = document.querySelector('.notebook-summary .summary-content');
     if (summaryEl) {
       // Convert summary HTML to markdown using the same converter as citations
-      notebookSummary = htmlToMarkdown(summaryEl);
+      notebookSummary = NLMEMarkdown.htmlToMarkdownPlain(summaryEl);
       console.log('[NotebookLM Takeout] Found notebook summary:', notebookSummary.substring(0, 100) + '...');
     }
 

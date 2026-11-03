@@ -288,12 +288,51 @@ are disabled and a second click shows "… is still running".
 | Slide deck format | PDF | PDF or PowerPoint |
 | Source versions | base + metadata | Any mix of: base, with AI summary & topics, each optionally with images |
 | Citation detail (notes and chat) | Full quotes | "Source titles only" skips reading each citation's popup: much faster, every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. |
+| Citation style | Links | "Footnotes (Obsidian, Typora, …)" writes `[^n]` markers and one footnote definition per source instead of `<sup>` links (see below). Notes and chat, "Full quotes" or "Source titles only"; the code-blocks version keeps links. |
+| Obsidian-friendly file names | off | Strips `[ ] # ^ \| \ : * ? " < >` from note, source, chat and artifact file names and names single downloads `note - Title` and `mind-map - Title` instead of `[NOTE]_Title` and `[mind-map]_Title` (see below) |
 | Reuse citation quotes from earlier exports | on | Notes and chat answers that have not changed since an earlier full-quote export take their citation quotes from a local cache instead of hovering every marker again (much faster re-exports). Not used for "Source titles only", "No citations" or image versions; only complete reads are stored. **Clear citation cache** empties it, for example after you edit a source. The cache needs the "unlimitedStorage" permission (no install warning), so reused quotes are kept for up to 20 notebooks. The `_audit.md` and `_index.md` show "Citations from cache: N of M items" when it was used. |
 | Note versions | base + code blocks | Base always; code-block quotes and an image version are added only when a note has quotes or images |
 | Sources / notes per ZIP | 25 | Batch size for large exports |
 | Clean OCR artifacts from citations | on | Strips `~~~`, `:~:` and similar noise |
 
 The chat export uses the note version settings.
+
+**Reset to defaults** (bottom of ⚙️) puts every option above back to the values in this table,
+after a confirm. It keeps the citation cache, Full Takeout's own ZIP tick and saved exports to resume.
+
+### Footnote citations and Obsidian-friendly names
+
+Both are opt-in; with them off every file is exactly as before.
+
+**Citation style: Footnotes.** In the link style a citation is a small `[n]` link and the Sources
+section holds an anchor and a quote for it. With Footnotes the body holds `[^n]` and the Sources
+section holds one definition per source:
+
+```
+… the claim.[^1] [^2]
+
+[^1]: **Source title** — the quoted passage
+    which continues on indented lines.
+
+[^2]: **Another source**
+```
+
+- "Source titles only" still gets one definition per number (a reference needs its own
+  definition), and a citation whose popup could not be read gets `**(citation details unavailable)**`.
+- In a combined notes file (`combined-notes*.md`) the label is `note-number`, so note 2's
+  citation 1 is `[^2-1]` and never clashes with note 1's. The same holds in `chat.md`, where
+  numbers restart in every answer: the label is `answer-number`. The single-note files keep
+  plain numbers.
+- The code-blocks version (`-code-blocks`) keeps its links: a fenced quote cannot sit inside a
+  footnote definition reliably.
+- Obsidian, Typora and similar apps show these as real footnotes (Obsidian lists them at the end
+  of the note). Please check how yours looks; if something renders oddly, switch back to Links.
+
+**Obsidian-friendly file names.** Obsidian cannot link to a file whose name holds `[ ] # ^ | \`
+and a few more characters, and `[NOTE]_Title` is awkward in `[[links]]`. With this option those
+characters become a space (then a dash, like any other space), single downloads are named
+`note - Title.md` / `mind-map - Title.zip` / `report - Title.md`, and repeats still get `-2`, `-3`.
+The links in `_index.md`, `_index.html` and `manifest.json` follow the new names.
 
 ## What an export contains
 
@@ -409,7 +448,14 @@ Plain JavaScript Manifest V3 extension: no build step, no npm dependencies.
 
 ```
 manifest.json         Manifest V3
-sidebar.html/.js      Side panel UI and export orchestration (Markdown, formulas, per-category runners)
+sidebar.html          Side panel UI
+sidebar-core.js       Settings, tab and notebook switching, job lock, shared helpers, Markdown and formulas
+sidebar-artifacts.js  Artifacts tab: scan, Download Selected, Download All, table converters
+sidebar-notes.js      Notes tab: scan, list, note export jobs
+sidebar-sources.js    Sources tab: scan, list, source export jobs
+sidebar-chat.js       Chat tab: scan, chat export job
+sidebar-generated.js  Generated tab: list, download and delete
+sidebar-health.js     DOM health check panel and report
 sidebar-list.js       List toolbar: filter, type chips, sort, select all visible, remembered state
 sidebar-results.js    Results panel (outcome, saved files, errors, Retry)
 sidebar-takeout.js    File writer (ZIP/folder/single), export shell and Full Takeout
@@ -417,19 +463,20 @@ takeout-job.js        The one export job runner: batching, cancel, errors (unit 
 styles.css            Side panel styles
 content.js            Runs in the notebook page: scanning, extraction, citation popups
 takeout-shared.js     Selectors and DOM-free helpers shared by all contexts (unit tested)
+takeout-markdown.js   The one Markdown converter and KaTeX → LaTeX (side panel and page)
 mindmap-extract.js    Mind map extraction (page and sandboxed mind map frame)
 background.js         Service worker: download interception and naming, mind map frame extraction
 injected.js           Page-world hook that captures download URLs
 mindmap-template.html Interactive mind map viewer template
 turndown.min.js       HTML → Markdown (bundled)
 jszip.min.js          ZIP creation (bundled)
-tests/                node:test unit tests for takeout-shared.js and takeout-job.js
+tests/                node:test unit tests for takeout-shared.js, takeout-job.js, the message protocol and file structure
 ```
 
 Check your changes:
 
 ```bash
-for f in sidebar.js sidebar-takeout.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js; do node --check "$f"; done
+for f in sidebar-*.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js takeout-markdown.js; do node --check "$f"; done
 node --test tests/
 ```
 
@@ -438,6 +485,23 @@ DOM behaviour is verified in Chrome with the health check and real exports.
 contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
+
+**1.7.0 (Nov 2026)**: one converter, clean structure, footnotes.
+- New ⚙️ options, both off by default: footnote-style citations (`[^1]`, for Obsidian, Typora and
+  other Markdown apps) and Obsidian-friendly file names.
+- Formulas are now written as LaTeX in source guides, the notebook summary and citation quotes
+  (they used to come out as doubled text). The citation cache is cleared once when updating to
+  1.7.0, so quotes are read again with formulas.
+- Numbered lists that start after 1 keep their numbering in quotes, guides and the summary.
+- Every category `_index.md` starts with front matter (`kind: index`), like the items.
+- Split sources exports get an `_audit.md` per part; Resume can be cancelled while it scans;
+  folder-mode manifests record downloaded file sizes; Delete Selected counts only items it can
+  delete; a delete no longer clicks a dialog's backdrop on a menu's behalf or closes dialogs it didn't
+  open (it closes its own menu and confirm dialog).
+- ⚙️ has a **Reset to defaults** button; the citation cache and exports to resume are kept.
+- Under the hood: `sidebar.js` is split into one file per tab, the page script answers messages
+  through a handler table, and one module (`takeout-markdown.js`) holds all Markdown conversion.
+  Exports are otherwise byte-identical to 1.6.0.
 
 **1.6.0 (Nov 2026)**: faster re-exports, resume, and a complete Generated tab.
 - Re-exports reuse citation quotes read before (⚙️ "Reuse citation quotes from earlier exports", with a

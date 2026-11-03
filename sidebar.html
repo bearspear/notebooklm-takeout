@@ -330,6 +330,23 @@
         </div>
 
         <div class="setting-group">
+          <label for="citation-style-select">Citation style</label>
+          <select id="citation-style-select" class="number-input">
+            <option value="links">Links (default)</option>
+            <option value="footnotes">Footnotes (Obsidian, Typora, …)</option>
+          </select>
+          <p class="setting-help">Links writes each [n] as a link to its source, with the quote in the Sources section (works in any viewer). Footnotes writes [^n] markers with a footnote definition per source, which Obsidian, Typora and other Markdown apps show as real footnotes. Applies to notes and chat with "Full quotes" or "Source titles only"; the "code blocks" version keeps links. In combined files the footnotes are numbered per note (1-1, 2-1, …). Opt-in: please check how your Markdown app shows them.</p>
+        </div>
+
+        <div class="setting-group">
+          <label class="toggle-setting">
+            <input type="checkbox" id="obsidian-names-checkbox">
+            <span>Obsidian-friendly file names</span>
+          </label>
+          <p class="setting-help">Removes characters that break Obsidian links ([ ] # ^ | \ : * ? " &lt; &gt;) from note, source and artifact file names, and names single downloads "note - Title" and "mind-map - Title" instead of "[NOTE]_Title". Off by default; the usual file names are unchanged.</p>
+        </div>
+
+        <div class="setting-group">
           <label class="toggle-setting">
             <input type="checkbox" id="reuse-citations-checkbox" checked>
             <span>Reuse citation quotes from earlier exports (faster re-exports)</span>
@@ -378,6 +395,14 @@
             <span>Clean OCR artifacts from citations</span>
           </label>
           <p class="setting-help">Remove common OCR garbage characters (~~~, :~:, ~letter~, etc.) from citation quotes. Useful for documents that were scanned or have poor OCR quality. Disable if you need to preserve the original text exactly.</p>
+        </div>
+      </div>
+
+      <!-- Reset -->
+      <div class="setting-section">
+        <div class="setting-group">
+          <button id="reset-settings-btn" class="btn btn-secondary btn-small" type="button">Reset to defaults</button>
+          <p class="setting-help">Puts every setting on this panel back to how it shipped. The citation cache, Full Takeout's own ZIP choice and saved exports to resume are kept.</p>
         </div>
       </div>
     </div>
@@ -437,10 +462,17 @@
   <script src="jszip.min.js"></script>
   <script src="turndown.min.js"></script>
   <script src="takeout-shared.js"></script>
+  <script src="takeout-markdown.js"></script>
   <script src="takeout-job.js"></script>
   <script src="sidebar-list.js"></script>
   <script src="sidebar-results.js"></script>
-  <script src="sidebar.js"></script>
+  <script src="sidebar-core.js"></script>
+  <script src="sidebar-artifacts.js"></script>
+  <script src="sidebar-notes.js"></script>
+  <script src="sidebar-sources.js"></script>
+  <script src="sidebar-chat.js"></script>
+  <script src="sidebar-generated.js"></script>
+  <script src="sidebar-health.js"></script>
   <script src="sidebar-takeout.js"></script>
 </body>
 </html>
