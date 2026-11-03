@@ -3333,7 +3333,10 @@
     nodes.forEach((el, combinedIndex) => {
       const tag = el.tagName.toLowerCase();
       const titleEl = el.querySelector('.artifact-title, .note-title');
-      const label = titleEl?.textContent?.trim() || `Item ${combinedIndex + 1}`;
+      const title = titleEl?.textContent?.trim() || '';
+      // untitled: the label is made up for display; a delete by label must never use it
+      const untitled = title === '';
+      const label = title || `Item ${combinedIndex + 1}`;
       const detailsEl = el.querySelector('.artifact-details');
       const details = detailsEl?.textContent?.trim() || '';
       const iconEl = el.querySelector('mat-icon');
@@ -3353,6 +3356,7 @@
           moreIndex: hasMoreButton ? moreCursor : -1,
           kind: 'artifact',
           label,
+          untitled,
           details,
           type,
           downloadable: NLME.isDownloadableType(type),
@@ -3369,6 +3373,7 @@
           kindIndex: noteCursor,
           kind: 'note',
           label,
+          untitled,
           details,
           type,
           hasMoreButton

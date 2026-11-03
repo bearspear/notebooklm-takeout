@@ -5775,10 +5775,17 @@ async function handleStudioBulkDownload() {
 async function handleStudioBulkDelete() {
   // Only what is selected (and so visible) is deleted; the dialog names that count.
   const selectedItems = _studioListController ? _studioListController.selectedItems() : [];
-  const deletable = selectedItems.filter(isStudioItemDeletable);
-  if (deletable.length === 0) return;
+  // An untitled Studio item only has a made-up label ("Item 3"): deleting by it
+  // could hit a real item with that title, so a bulk delete skips it
+  const skippedUntitled = selectedItems.filter(item => item && item.untitled === true && item.kind !== 'source-note').length;
+  const deletable = selectedItems.filter(item => isStudioItemDeletable(item) && !(item.untitled === true && item.kind !== 'source-note'));
+  if (deletable.length === 0) {
+    if (skippedUntitled > 0) showToast(`Skipped ${skippedUntitled} untitled item(s): delete them one by one`, 'warning');
+    return;
+  }
 
-  if (!confirm(`Delete ${deletable.length} item(s)? This cannot be undone.`)) return;
+  const skippedNote = skippedUntitled > 0 ? `\n\n${skippedUntitled} untitled item(s) will be skipped; delete those one by one.` : '';
+  if (!confirm(`Delete ${deletable.length} item(s)? This cannot be undone.${skippedNote}`)) return;
 
   const bulkBtn = document.getElementById('studio-delete-selected-btn');
   if (bulkBtn) bulkBtn.disabled = true;
@@ -5807,7 +5814,8 @@ async function handleStudioBulkDelete() {
     }
   }
 
-  showToast(`Deleted ${okCount}/${queue.length} generated item(s)`, okCount === queue.length ? 'success' : 'warning');
+  const skippedText = skippedUntitled > 0 ? `, skipped ${skippedUntitled} untitled` : '';
+  showToast(`Deleted ${okCount}/${queue.length} generated item(s)${skippedText}`, okCount === queue.length && skippedUntitled === 0 ? 'success' : 'warning');
   await scanStudioPage();
 }
 
