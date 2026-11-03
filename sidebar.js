@@ -4446,7 +4446,12 @@ function renderChatSummary(chatData) {
 
   // Build summary HTML
   let html = '<div class="chat-summary">';
-  html += `<div class="summary-stat"><strong>${chatData.messagePairs.length}</strong> message pairs</div>`;
+  const chatStatsInfo = chatData.stats || {};
+  const pairsInDom = chatStatsInfo.pairsInDom ?? chatData.messagePairs.length;
+  html += `<div class="summary-stat"><strong>${chatData.messagePairs.length} of ${pairsInDom}</strong> messages</div>`;
+  if (chatData.messagePairs.length < pairsInDom || chatStatsInfo.collapsedRemaining > 0) {
+    html += `<div class="summary-stat warning">${pairsInDom - chatData.messagePairs.length} message(s) could not be read; ${chatStatsInfo.collapsedRemaining || 0} citation group(s) still collapsed. They are listed in errors.txt after export.</div>`;
+  }
   html += `<div class="summary-stat"><strong>${chatData.notebookTitle}</strong></div>`;
 
   if (chatData.dateRange) {
@@ -4540,6 +4545,13 @@ async function exportChat(chatData, extractFullCitations = false) {
     const messagePairs = chatData.messagePairs;
     const processedMessages = [];
     const allErrors = [];
+    // Scan completeness (Milestone 2, Resilience #2)
+    for (const skippedMessage of (chatData.stats?.skipped || [])) {
+      allErrors.push({ type: 'message_skipped', message: skippedMessage });
+    }
+    if (chatData.stats?.collapsedRemaining > 0) {
+      allErrors.push({ type: 'collapsed_citations', message: `${chatData.stats.collapsedRemaining} citation group(s) were still collapsed after the scan; their citations are missing` });
+    }
 
     // Track statistics for detailed error reporting
     const stats = {
@@ -4764,7 +4776,7 @@ async function exportChat(chatData, extractFullCitations = false) {
     // Versions (NLME.noteVariants): base always; code blocks only when some
     // answer has quotes; with-images only when the Markdown has images
     const chatAudit = newAudit();
-    chatAudit.expected.items = chatData.messagePairs.length;
+    chatAudit.expected.items = chatData.stats?.pairsInDom ?? chatData.messagePairs.length;
     chatAudit.written.items = processedMessages.length;
     const chatHtml = chatData.messagePairs.map(p => p.aiResponseHTML || '').join('\n');
     const baseMarkdown = convertCounted(chatAudit, chatHtml, () => convertChatToMarkdown(

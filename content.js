@@ -3893,6 +3893,14 @@
       // Step 3: Extract all messages
       console.log('[NotebookLM Takeout] Step 3: Extracting messages...');
       const chatData = extractChatMessages();
+      const panel = document.querySelector('chat-panel .chat-panel-content');
+      chatData.stats.reachedTop = !!scrollResult?.success;
+      chatData.stats.collapsedRemaining = panel
+        ? Array.from(panel.querySelectorAll('button.citation-marker')).filter(button => {
+            const icon = button.querySelector('mat-icon, span');
+            return NLME.isCollapsedCitationGroup({ iconText: icon?.textContent, ariaLabel: icon?.getAttribute('aria-label') });
+          }).length
+        : 0;
 
       return {
         success: true,
@@ -3936,9 +3944,12 @@
       console.log('[NotebookLM Takeout] Found notebook summary:', notebookSummary.substring(0, 100) + '...');
     }
 
-    // Extract date separators and message pairs
+    // Extract date separators and message pairs, in document order at any
+    // depth (walking only direct children silently drops pairs if Gemini
+    // Notebook wraps them; Milestone 2, Resilience #2)
     const messagePairs = [];
-    const elements = Array.from(chatPanel.children);
+    const skipped = [];
+    const elements = Array.from(chatPanel.querySelectorAll('.chat-message-pair, .date-separator'));
     // Live DOM position of each pair, used later to find its citation buttons.
     // Pairs that fail extraction are skipped, so the array index can't be used.
     const livePairs = Array.from(chatPanel.querySelectorAll('.chat-message-pair'));
@@ -3961,6 +3972,8 @@
         if (pair) {
           pair.domIndex = livePairs.indexOf(el);
           messagePairs.push(pair);
+        } else {
+          skipped.push(`Message ${livePairs.indexOf(el) + 1} could not be read and was skipped`);
         }
       }
     }
@@ -3979,7 +3992,13 @@
       notebookSummary: notebookSummary,
       messagePairs: messagePairs,
       dateRange: dateRange,
-      extractedAt: new Date().toISOString()
+      extractedAt: new Date().toISOString(),
+      // Completeness for the scan result, errors.txt and the audit
+      stats: {
+        pairsInDom: livePairs.length,
+        pairsExtracted: messagePairs.length,
+        skipped
+      }
     };
   }
 
