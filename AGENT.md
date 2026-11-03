@@ -1158,6 +1158,12 @@ onChange, canSelect }) -> { items, selectedItems(), selectedCount(), destroy() }
   unchanged; it does not blank the list with "Scanning..." either. A real change redraws and
   restores the Zip choice, scroll position and, if the filter box had focus, its focus and caret.
 
+- Notebook switch: `refreshForTab` (tab activation or `status === 'complete'`) compares
+  `NLME.notebookIdFromUrl(tab.url)` with the module-level `lastPanelNotebookId`. A different notebook
+  clears the Chat summary (`resetChatPanel`) and runs `rescanOpenPanelTab()` (scan for the open panel
+  tab: Artifacts, Notes, Sources, Studio; Chat has no auto-scan). The same notebook only runs `scanPage`;
+  a non-notebook tab is not a change; nothing runs while `jobLock` is held.
+
 ### Results panel and failed items (`sidebar-results.js`)
 
 Script order is now `jszip`, `turndown`, `takeout-shared.js`, `takeout-job.js`, `sidebar-list.js`,

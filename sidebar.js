@@ -533,6 +533,10 @@ async function init() {
   await checkStatus();
   setupEventListeners();
   setupTabSwitching();
+  try {
+    const [startTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    notebookSwitchedTo(startTab); // the first scan below covers this notebook
+  } catch (_) { /* no active tab */ }
   await scanSourcesPage(); // Start with Sources tab since it's now the default
 
   // Monitor tab changes
@@ -889,18 +893,7 @@ function setupTabSwitching() {
       });
 
       // Trigger scan for the active tab (not while a job runs)
-      if (jobLock.current()) {
-        // skip
-      } else if (targetTab === 'notes') {
-        await scanNotesPage();
-      } else if (targetTab === 'artifacts') {
-        await scanPage();
-      } else if (targetTab === 'sources') {
-        await scanSourcesPage();
-      } else if (targetTab === 'studio') {
-        await scanStudioPage();
-      }
-      // Chat tab: no auto-scan, user must click "Scan Chat" button manually
+      await rescanOpenPanelTab();
     });
   });
 }
@@ -925,10 +918,71 @@ function stopAutoRefresh() {
   }
 }
 
+// The panel tab that is open, as setupTabSwitching tracks it (the .active tab button).
+function openPanelTab() {
+  const btn = document.querySelector('.tab-btn.active');
+  return btn ? btn.dataset.tab : '';
+}
+
+// Scan the open panel tab (not while a job runs). Chat has no auto-scan: the
+// user clicks "Scan Chat".
+async function rescanOpenPanelTab() {
+  if (jobLock.current()) return;
+  switch (openPanelTab()) {
+    case 'artifacts': await scanPage(); break;
+    case 'notes': await scanNotesPage(); break;
+    case 'sources': await scanSourcesPage(); break;
+    case 'studio': await scanStudioPage(); break;
+    default: break;
+  }
+}
+
+// The notebook the panel last scanned. Only a notebook tab with a different id
+// counts as a switch: a non-notebook tab leaves it alone, so A -> other site -> A
+// is not a change.
+let lastPanelNotebookId = '';
+
+// Drop the scanned chat so it cannot be exported against another notebook, and
+// show the same prompt as before a scan.
+function resetChatPanel() {
+  window._currentChatData = null;
+  const chatResults = document.getElementById('chat-scan-results');
+  const chatCount = document.getElementById('chat-count');
+  const exportBtn = document.getElementById('export-chat-btn');
+  if (chatResults) chatResults.innerHTML = '<p class="empty-message">Click "Scan Chat" to load your conversation history.</p>';
+  if (chatCount) chatCount.textContent = '0';
+  if (exportBtn) exportBtn.style.display = 'none';
+}
+
+// True when tab shows a different notebook than the panel last scanned (and
+// records it). Synchronous, so overlapping tab events cannot both see a change.
+// Not while a job runs: the id stays as it was, so the next event still sees it.
+function notebookSwitchedTo(tab) {
+  if (jobLock.current()) return false;
+  const id = isNotebookUrl(tab?.url) ? NLME.notebookIdFromUrl(tab.url) : '';
+  if (!id || id === lastPanelNotebookId) return false;
+  lastPanelNotebookId = id;
+  return true;
+}
+
+// After a tab switch or navigation: a different notebook rescans the open panel
+// tab and clears the chat; the same notebook only refreshes Artifacts (the Notes
+// and Sources scans are slow).
+async function refreshForTab(tab) {
+  if (notebookSwitchedTo(tab)) {
+    resetChatPanel();
+    await rescanOpenPanelTab();
+  } else if (!jobLock.current()) {
+    await scanPage();
+  }
+}
+
 async function handleTabChange(activeInfo) {
   currentTabId = activeInfo.tabId;
   await checkStatus();
-  if (!jobLock.current()) await scanPage();
+  let tab = null;
+  try { tab = await chrome.tabs.get(activeInfo.tabId); } catch (_) { /* tab closed */ }
+  await refreshForTab(tab);
 }
 
 async function handleTabUpdate(tabId, changeInfo, tab) {
@@ -937,7 +991,7 @@ async function handleTabUpdate(tabId, changeInfo, tab) {
   if (activeTab && activeTab.id === tabId) {
     if (changeInfo.status === 'complete') {
       await checkStatus();
-      if (!jobLock.current()) await scanPage();
+      await refreshForTab(tab);
     }
   }
 }
