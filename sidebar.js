@@ -3366,9 +3366,14 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
         addCitationCoverage(state.audit, noteData.html, noteData.sources, settings.citationDetail === 'quotes', notePage);
       }
       if (notePage.citationNumbers.length > 0 && settings.citationDetail === 'quotes') {
-        state.notesWithMarkers++;
-        tallyCitationCache(noteData.fromCache === true, state.audit);
-        if ((noteData.sources || []).length === 0) state.unreadNotes++;
+        const fromCache = noteData.fromCache === true;
+        tallyCitationCache(fromCache, state.audit);
+        // Only hovered notes can show drift: a cache hit always has sources, so
+        // counting it would keep this guard from ever firing
+        if (!fromCache) {
+          state.notesWithMarkers++;
+          if ((noteData.sources || []).length === 0) state.unreadNotes++;
+        }
       }
       if (state.notesWithMarkers === 3 && state.unreadNotes === 3) {
         // The first three notes with citations all failed: the page has
