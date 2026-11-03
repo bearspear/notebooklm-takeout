@@ -91,6 +91,18 @@ test('runExportJob keeps an item that called ctx.warn and reports the warning', 
   assert.deepEqual(calls, [{ results: ['data'], errors: ['[N1] missing summary'] }]);
 });
 
+test('runExportJob keeps ctx.warn objects intact for the error report', async () => {
+  const calls = [];
+  const warning = { source: 'S1', type: 'missing_summary', message: 'Source guide/summary not found or empty' };
+  await NLME.runExportJob({
+    kind: 'sources', items: [{ title: 'S1' }],
+    extractOne: async (item, ctx) => { ctx.warn(warning); return 'data'; },
+    packageBatch: async (results, info) => { calls.push([...info.errors]); },
+    isCancelled: () => false
+  });
+  assert.deepEqual(calls, [[warning]]);
+});
+
 test('runExportJob cancel at a batch boundary sends errors in a new batch index', async () => {
   const { run, calls } = harness({ items: items(5), perZip: 2, cancelAfter: 2 });
   await run;

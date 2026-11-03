@@ -45,7 +45,9 @@
 
         const ctx = {
           index: attempted,
-          warn: error => { errors.push(typeof error === 'string' ? error : (error && error.message) || String(error)); },
+          // Strings and { source, type, message } objects stay as they are
+          // (buildErrorReport groups objects by type); anything else becomes text
+          warn: error => { errors.push(typeof error === 'string' || (error && typeof error === 'object') ? error : String(error)); },
           stop: reason => { stopped = true; errors.push(reason); }
         };
         attempted++;
