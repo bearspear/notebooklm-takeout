@@ -26,11 +26,15 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
   let sort = 'notebook';
   let selected = new Set();
   let order = list.map((_, i) => i); // visible indices in display order
-  let notebookId = _lastListNotebookId;
+  // The id is only trusted once the active tab has confirmed it; until then the previous
+  // render's id is a guess used for the instant in-memory restore, and nothing is saved.
+  const guessedId = _lastListNotebookId;
+  let notebookId = '';
   let touched = false;   // the user has changed something: stored state must not overwrite it
   let destroyed = false;
   let saveTimer = null;
   let appliedKey = null; // state key already applied from memory or storage
+  let guessApplied = false; // state from the guessed notebook is on screen
 
   const stateKey = () => NLME.listStateKey(notebookId, tab);
   const defaultKeys = () => keys.filter((_, i) => selectable[i] && defaultSelected === 'all');
@@ -101,7 +105,7 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
     const s = NLME.restoreListState(saved, {
       keys,
       types: chipTypes.map(c => c.type),
-      defaultSelected: 'none'
+      defaultSelected
     });
     query = s.query;
     activeTypes = new Set(s.types);
@@ -109,6 +113,16 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
     selected = new Set([...s.selected].filter(k => selectable[keyIndex.get(k)]));
     searchEl.value = query;
     sortEl.value = sort;
+    update(false);
+  }
+
+  function resetToDefaults() {
+    query = '';
+    activeTypes = new Set();
+    sort = 'notebook';
+    selected = new Set(defaultKeys());
+    searchEl.value = '';
+    sortEl.value = 'notebook';
     update(false);
   }
 
@@ -123,10 +137,14 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
 
     // Reorder the row nodes to match, hidden rows after the visible ones
     const shown = new Set(order);
-    const frag = document.createDocumentFragment();
-    order.forEach(i => frag.appendChild(rowEls[i]));
-    rowEls.forEach((row, i) => { if (!shown.has(i)) frag.appendChild(row); });
-    rowsEl.appendChild(frag);
+    // Move only the nodes that are out of place: re-inserting a focused row would blur it
+    let cursor = rowsEl.firstElementChild;
+    const place = row => {
+      if (row === cursor) cursor = cursor.nextElementSibling;
+      else rowsEl.insertBefore(row, cursor);
+    };
+    order.forEach(i => place(rowEls[i]));
+    rowEls.forEach((row, i) => { if (!shown.has(i)) place(row); });
     rowEls.forEach((row, i) => {
       row.hidden = !shown.has(i);
       row.querySelector('.row-check').checked = selected.has(keys[i]);
@@ -218,9 +236,11 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
 
   // ---- Initial state: memory first (instant), then storage once the notebook id is known ----
 
-  const remembered = notebookId ? _listStates.get(stateKey()) : null;
+  const guessKey = NLME.listStateKey(guessedId, tab);
+  const remembered = guessedId ? _listStates.get(guessKey) : null;
   if (remembered) {
-    appliedKey = stateKey();
+    appliedKey = guessKey;
+    guessApplied = true;
     applyState(remembered);
   } else {
     selected = new Set(defaultKeys());
@@ -236,9 +256,12 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
     if (destroyed) return;
     notebookId = id;
     _lastListNotebookId = id;
-    if (!id) return;
+    if (!id) {
+      if (guessApplied && !touched) resetToDefaults();
+      return;
+    }
     if (touched) { persist(); return; }
-    if (appliedKey === stateKey()) return;
+    if (appliedKey === stateKey()) { guessApplied = false; return; }
     appliedKey = stateKey();
     let saved = _listStates.get(stateKey());
     if (!saved) {
@@ -248,7 +271,12 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
       } catch (_) { /* storage unavailable */ }
       if (destroyed || touched) return;
     }
-    if (saved) applyState(saved);
+    if (saved) {
+      applyState(saved);
+    } else if (guessApplied) {
+      resetToDefaults(); // the previous notebook's filter is on screen
+    }
+    guessApplied = false;
   })();
 
   return controller;
