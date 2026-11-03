@@ -1290,6 +1290,26 @@ test('pruneCitationBuckets keeps the most recent notebooks', () => {
   const meta = [{ key: 'nlme.cite.a', at: 5 }, { key: 'nlme.cite.b', at: 9 }, { key: 'nlme.cite.c', at: 1 }];
   assert.deepEqual(NLME.pruneCitationBuckets(meta, { keep: 2 }), ['nlme.cite.c']);
 });
+test('pruneListStates counts a notebook once, however many tabs it saved', () => {
+  const k = (id, tab) => `nlme.list.${id}.${tab}`;
+  const meta = [
+    { key: k('a-1', 'notes'), at: 5 }, { key: k('a-1', 'sources'), at: 1 }, { key: k('a-1', 'generated'), at: 2 }, { key: k('a-1', 'chat'), at: 3 },
+    { key: k('b-2', 'notes'), at: 9 },
+    { key: k('c-3', 'notes'), at: 4 }, { key: k('c-3', 'sources'), at: 2 }
+  ];
+  // Newest per notebook: b-2 (9), a-1 (5), c-3 (4); keep 2 drops all of c-3
+  assert.deepEqual(NLME.pruneListStates(meta, { keep: 2 }).sort(), [k('c-3', 'notes'), k('c-3', 'sources')]);
+  // Under the cap: nothing to remove
+  assert.deepEqual(NLME.pruneListStates(meta), []);
+  assert.deepEqual(NLME.pruneListStates(null), []);
+});
+test('pruneListStates drops states without a timestamp first and never the current notebook', () => {
+  const meta = [{ key: 'nlme.list.old.notes' }, { key: 'nlme.list.new.notes', at: 7 }, { key: 'nlme.list.mid.notes', at: 3 }];
+  assert.deepEqual(NLME.pruneListStates(meta, { keep: 2 }), ['nlme.list.old.notes']);
+  // The current notebook counts toward the cap but is never returned
+  assert.deepEqual(NLME.pruneListStates(meta, { keep: 1, keepId: 'old' }).sort(), ['nlme.list.mid.notes', 'nlme.list.new.notes']);
+  assert.deepEqual(NLME.pruneListStates(meta, { keep: 1, keepId: 'old' }).includes('nlme.list.old.notes'), false);
+});
 test('citationCacheBucketKey is per notebook', () => {
   assert.equal(NLME.citationCacheBucketKey('abc'), 'nlme.cite.abc');
 });

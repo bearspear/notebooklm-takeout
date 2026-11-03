@@ -1138,6 +1138,33 @@
     return `nlme.list.${notebookId}.${tab}`;
   }
 
+  // meta: [{ key: 'nlme.list.<notebookId>.<tab>', at }] -> keys to remove. A
+  // notebook counts once (its newest `at`, or 0 when the state predates the
+  // timestamp); everything beyond the `keep` most recent notebooks goes.
+  // keepId: the notebook on screen; it takes a slot but its keys are never returned.
+  function pruneListStates(meta, { keep = 30, keepId = '' } = {}) {
+    const prefix = 'nlme.list.';
+    const byNotebook = new Map();
+    (meta || []).forEach((m, i) => {
+      const key = m && m.key;
+      if (typeof key !== 'string' || !key.startsWith(prefix)) return;
+      const dot = key.lastIndexOf('.');
+      const id = dot > prefix.length ? key.slice(prefix.length, dot) : key.slice(prefix.length);
+      if (!byNotebook.has(id)) byNotebook.set(id, { id, at: 0, first: i, keys: [] });
+      const group = byNotebook.get(id);
+      group.keys.push(key);
+      group.at = Math.max(group.at, Number(m.at) || 0);
+    });
+    const groups = [...byNotebook.values()];
+    // The notebook on screen counts as the newest
+    groups.forEach(g => { if (keepId && g.id === keepId) g.at = Infinity; });
+    return groups
+      .sort((a, b) => (b.at - a.at) || (a.first - b.first))
+      .slice(Math.max(0, keep))
+      .filter(g => !(keepId && g.id === keepId))
+      .flatMap(g => g.keys);
+  }
+
   // Rebuilds a list's toolbar state from storage, tolerating missing or malformed data.
   // saved: { query, types, sort, selected, known? } (see sidebar-list.js savedShape).
   function restoreListState(saved, { keys = [], types = null, defaultSelected } = {}) {
@@ -1767,6 +1794,7 @@ footer { margin-top: 3rem; }
     pruneSelection,
     listSummary,
     listStateKey,
+    pruneListStates,
     restoreListState,
     exportMeta,
     buildManifest,

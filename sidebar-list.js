@@ -8,6 +8,32 @@ const _listStates = new Map();
 let _lastListNotebookId = '';
 
 const LIST_SAVE_DELAY_MS = 300;
+const LIST_STATES_KEEP_NOTEBOOKS = 30;
+
+// Saved list states of notebooks the user stopped using are removed, once per
+// panel session: the most recent 30 notebooks stay (all tabs of one count
+// once), and the notebook on screen always does. Nothing here may throw.
+let _listStatesPruned = false;
+
+async function pruneListStatesOnce(currentId) {
+  if (_listStatesPruned) return;
+  _listStatesPruned = true;
+  try {
+    const storage = chrome.storage.local;
+    let keys;
+    if (typeof storage.getKeys === 'function') {
+      keys = await storage.getKeys();
+    } else {
+      keys = Object.keys((await storage.get(null)) || {});
+    }
+    keys = (keys || []).filter(k => typeof k === 'string' && k.startsWith('nlme.list.'));
+    if (!keys.length) return;
+    const stored = (await storage.get(keys)) || {};
+    const meta = keys.map(key => ({ key, at: stored[key] && Number(stored[key].at) || 0 }));
+    const doomed = NLME.pruneListStates(meta, { keep: LIST_STATES_KEEP_NOTEBOOKS, keepId: currentId });
+    if (doomed.length) await storage.remove(doomed);
+  } catch (_) { /* storage unavailable: old states stay */ }
+}
 
 function createListController({ tab, container, items, titleOf, typeOf, defaultSelected = 'none', rowHtml, onChange, canSelect }) {
   if (container._listController) container._listController.destroy();
@@ -89,7 +115,8 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
 
   function savedShape() {
     // known: every key at save time, so restoreListState can tell a new item from an unticked one
-    return { query, types: [...activeTypes], sort, selected: [...selected], known: [...keys] };
+    // at: when it was saved, for pruneListStates
+    return { query, types: [...activeTypes], sort, selected: [...selected], known: [...keys], at: Date.now() };
   }
 
   function persist() {
@@ -263,6 +290,7 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
     if (destroyed) return;
     notebookId = id;
     _lastListNotebookId = id;
+    if (id) pruneListStatesOnce(id); // not awaited: the restore below never waits on it
     if (!id) {
       if (guessApplied && !touched) resetToDefaults();
       return;
