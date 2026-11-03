@@ -1154,3 +1154,24 @@ test('takeoutZipChoice uses takeoutZip when it is a boolean, else autoZip', () =
   assert.equal(NLME.takeoutZipChoice({ autoZip: true }), true);
   assert.equal(NLME.takeoutZipChoice({}), false);
 });
+
+test('zipName with an unknown total uses a -partN suffix', () => {
+  assert.equal(NLME.zipName({ notebook: 'NB', kind: 'artifacts', timestamp: 'T', part: 2, totalParts: null }), 'NB-artifacts-T-part2.zip');
+  assert.equal(NLME.zipName({ notebook: 'NB', kind: 'artifacts', timestamp: 'T', partial: true, part: 3, totalParts: null }), 'NB-artifacts-T-PARTIAL-part3.zip');
+  assert.equal(NLME.zipName({ notebook: 'NB', kind: 'artifacts', timestamp: 'T', part: 1, totalParts: 1 }), 'NB-artifacts-T.zip');
+  assert.equal(NLME.zipName({ notebook: 'NB', kind: 'artifacts', timestamp: 'T', part: 2, totalParts: 3 }), 'NB-artifacts-T-part2of3.zip');
+});
+
+test('filesByteSize sums the data size of each file entry', () => {
+  assert.equal(NLME.filesByteSize([]), 0);
+  assert.equal(NLME.filesByteSize(undefined), 0);
+  assert.equal(NLME.filesByteSize([
+    { path: 'a', data: new Blob(['12345']) },
+    { path: 'b', data: new ArrayBuffer(10) },
+    { path: 'c', data: new Uint8Array(7) },
+    { path: 'd', data: 'abc' },
+    { path: 'e', data: { size: 100 } },
+    { path: 'f', url: 'https://x/y' },
+    { path: 'g' }
+  ]), 5 + 10 + 7 + 3 + 100);
+});

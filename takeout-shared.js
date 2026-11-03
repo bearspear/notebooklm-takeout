@@ -1027,8 +1027,24 @@
   }
 
   // ZIP file name: "<Notebook>-<kind>-<timestamp>[-PARTIAL][-partNofM].zip".
+  // totalParts null means the total is unknown (size-split parts): "-partN".
   function zipName({ notebook, kind, timestamp, partial = false, part = 1, totalParts = 1 } = {}) {
-    return `${sanitizeFilename(notebook)}-${kind}-${timestamp}${partial ? '-PARTIAL' : ''}${totalParts > 1 ? `-part${part}of${totalParts}` : ''}.zip`;
+    const suffix = totalParts === null ? `-part${part}` : totalParts > 1 ? `-part${part}of${totalParts}` : '';
+    return `${sanitizeFilename(notebook)}-${kind}-${timestamp}${partial ? '-PARTIAL' : ''}${suffix}.zip`;
+  }
+
+  // Approximate bytes of the data held by a list of file entries (Blob,
+  // ArrayBuffer, typed array, string); url entries carry no data and count 0.
+  function filesByteSize(files) {
+    let total = 0;
+    for (const f of files || []) {
+      const d = f && f.data;
+      if (d == null) continue;
+      if (typeof d === 'string') total += d.length;
+      else if (typeof d.size === 'number') total += d.size;
+      else if (typeof d.byteLength === 'number') total += d.byteLength;
+    }
+    return total;
   }
 
   const ARTIFACT_FOLDERS = {
@@ -1396,6 +1412,7 @@ footer { margin-top: 3rem; }
     exportMeta,
     buildManifest,
     zipName,
+    filesByteSize,
     artifactFolder,
     extensionFor,
     slideFormatsFor,
