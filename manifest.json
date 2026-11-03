@@ -5,6 +5,7 @@
   "description": "Export audio, slides, infographics, notes, and sources from NotebookLM",
   "permissions": [
     "storage",
+    "unlimitedStorage",
     "downloads",
     "scripting",
     "sidePanel",

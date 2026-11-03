@@ -1391,6 +1391,11 @@ footer { margin-top: 3rem; }
   }
 
   // --- Citation cache (pure) ---------------------------------------------
+  // Limits (needs the "unlimitedStorage" permission): bytes per notebook bucket
+  // and how many notebook buckets are kept.
+  const CITE_MAX_BYTES_PER_NOTEBOOK = 10 * 1024 * 1024;
+  const CITE_KEEP_NOTEBOOKS = 20;
+
   // 32-bit FNV-1a over UTF-16 code units (equals byte FNV-1a for ASCII).
   function fnv1a(text) {
     const str = String(text == null ? '' : text);
@@ -1423,7 +1428,7 @@ footer { margin-top: 3rem; }
     return JSON.parse(JSON.stringify(entry.sources));
   }
 
-  function cachePut(bucket, key, sources, { now, maxBytes = 2 * 1024 * 1024 } = {}) {
+  function cachePut(bucket, key, sources, { now, maxBytes = CITE_MAX_BYTES_PER_NOTEBOOK } = {}) {
     const entries = isCacheBucket(bucket) ? { ...bucket.entries } : {};
     const bytes = JSON.stringify(sources).length;
     if (bytes > maxBytes) return { entries };
@@ -1444,7 +1449,7 @@ footer { margin-top: 3rem; }
   }
 
   // bucketMeta: [{ key, at }] -> keys to remove (everything beyond the `keep` most recent).
-  function pruneCitationBuckets(bucketMeta, { keep = 20 } = {}) {
+  function pruneCitationBuckets(bucketMeta, { keep = CITE_KEEP_NOTEBOOKS } = {}) {
     return (bucketMeta || [])
       .map((m, i) => ({ m, i }))
       .sort((a, b) => (b.m.at - a.m.at) || (a.i - b.i))
@@ -1466,8 +1471,17 @@ footer { margin-top: 3rem; }
     if (!storage || !notebookId) return null;
     try {
       const bucketKey = citationCacheBucketKey(notebookId);
-      const stored = await storage.get(bucketKey);
-      return cacheGet(stored && stored[bucketKey], key);
+      const stored = await storage.get([bucketKey, CITE_META_KEY]);
+      const bucket = stored && stored[bucketKey];
+      if (bucket) {
+        // A bucket the meta map does not know yet (e.g. meta was lost): list it
+        // now (at = now) so it can be pruned later
+        const meta = (stored && stored[CITE_META_KEY]) || {};
+        if (!(bucketKey in meta)) {
+          try { await storage.set({ [CITE_META_KEY]: { ...meta, [bucketKey]: Date.now() } }); } catch (e) { /* best effort */ }
+        }
+      }
+      return cacheGet(bucket, key);
     } catch (e) {
       console.warn('[NotebookLM Takeout] Citation cache read failed:', e);
       return null;
@@ -1618,7 +1632,9 @@ footer { margin-top: 3rem; }
     citationCacheRead,
     citationCacheWrite,
     citationCacheClear,
-    citationSourcesComplete
+    citationSourcesComplete,
+    CITE_MAX_BYTES_PER_NOTEBOOK,
+    CITE_KEEP_NOTEBOOKS
   };
 
   root.NLME = NLME;

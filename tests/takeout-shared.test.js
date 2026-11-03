@@ -1286,3 +1286,20 @@ test('citationSourcesComplete accepts only full sets with quotes', () => {
   assert.equal(NLME.citationSourcesComplete([], 0), false);
   assert.equal(NLME.citationSourcesComplete(null, 1), false);
 });
+
+test('citationCacheRead lists an unlisted bucket in the meta map', async () => {
+  const st = fakeStorage({ 'nlme.cite.nb1': { entries: { k: { sources: srcs, at: 1, bytes: 10 } } } });
+  assert.deepEqual(await NLME.citationCacheRead(st, 'nb1', 'k'), srcs);
+  assert.ok(typeof st.data['nlme.cite.meta']['nlme.cite.nb1'] === 'number');
+  const before = st.data['nlme.cite.meta']['nlme.cite.nb1'];
+  await NLME.citationCacheRead(st, 'nb1', 'k');
+  assert.equal(st.data['nlme.cite.meta']['nlme.cite.nb1'], before);
+  const empty = fakeStorage();
+  await NLME.citationCacheRead(empty, 'nb9', 'k');
+  assert.deepEqual(empty.data, {});
+});
+
+test('citation cache limits are 10 MB per notebook and 20 notebooks', () => {
+  assert.equal(NLME.CITE_MAX_BYTES_PER_NOTEBOOK, 10 * 1024 * 1024);
+  assert.equal(NLME.CITE_KEEP_NOTEBOOKS, 20);
+});
