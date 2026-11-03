@@ -784,6 +784,14 @@ test('buildRootIndex links the folder of an errors-only package (folder mode: no
   assert.doesNotMatch(html, /href="chat\//);
 });
 
+test('chatSelectedCount counts the messages the page showed, not only the readable ones', () => {
+  assert.equal(NLME.chatSelectedCount({ messagePairs: [], stats: { pairsInDom: 3 } }), 3);
+  assert.equal(NLME.chatSelectedCount({ messagePairs: [{}, {}], stats: { pairsInDom: 5 } }), 5);
+  assert.equal(NLME.chatSelectedCount({ messagePairs: [{}, {}], stats: {} }), 2);
+  assert.equal(NLME.chatSelectedCount({ messagePairs: [{}] }), 1);
+  assert.equal(NLME.chatSelectedCount({ messagePairs: [] }), 0);
+});
+
 test('chatScanIsEmpty only when nothing was skipped', () => {
   assert.equal(NLME.chatScanIsEmpty({ messagePairs: [], stats: {} }), true);
   assert.equal(NLME.chatScanIsEmpty({ messagePairs: [] }), true);

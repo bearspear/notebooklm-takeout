@@ -1102,6 +1102,14 @@
       !((stats.skipped || []).length) && !(stats.collapsedRemaining > 0);
   }
 
+  // How many messages a chat scan "selected": the pairs it could read, or the
+  // messages the page showed when that is more (a chat of only unreadable
+  // messages is "0 of 3", not "0 of 0")
+  function chatSelectedCount(chatData) {
+    const pairs = ((chatData && chatData.messagePairs) || []).length;
+    return Math.max(pairs, (chatData && chatData.stats && chatData.stats.pairsInDom) || 0);
+  }
+
   // Did a takeout category put anything on disk? Exported items, a ZIP, a part,
   // or a package (packages: an errors-only package counts, and so does a
   // folder-mode one, which has no ZIP name to show for it)
@@ -1304,6 +1312,7 @@ footer { margin-top: 3rem; }
     summarizeTakeoutOutcome,
     takeoutCategoryStatus,
     chatScanIsEmpty,
+    chatSelectedCount,
     frontMatter,
     uniqueStems,
     notebookIdFromUrl,

@@ -396,7 +396,8 @@ async function runFullTakeout() {
           exportTimer.merge(lastChatScanTiming);
           return chatData;
         },
-        count: chatData => chatData.messagePairs.length,
+        // "0 of N" for a chat of only unreadable messages: N = messages on the page
+        count: chatData => NLME.chatSelectedCount(chatData),
         // Messages that could not be read are not "none in notebook": the
         // job still runs and writes them to errors.md
         isEmpty: chatData => NLME.chatScanIsEmpty(chatData),
