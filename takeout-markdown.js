@@ -341,8 +341,361 @@
     return text ? `${delim}${katexUnicodeToLatex(text)}${delim}` : '';
   }
 
+  // ==================== ONE TURNDOWN RULE SET ====================
+  // The notes/sources/reports rule set and the chat rule set were two copies
+  // (Milestone 3d merges them). Options:
+  //   variant 'note' (default) | 'chat'
+  //     note: markers become anchorPrefix + cite-ref-N-k → anchorPrefix + src-N;
+  //           any numbered marker form is recognised (button.citation-marker,
+  //           a[href^="#cite"], <source-link>, [data-source-index]);
+  //           <source-link> elsewhere keeps a link to #src-N
+  //     chat: only button.citation-marker; anchors are per message
+  //           (msg-I-cite-ref-N-k → msg-I-src-N, I from getMessageIndex());
+  //           a table is followed by the "[n] …" reference lines found in
+  //           its element-list-renderer
+  //   citations 'links' (default) | 'code-blocks' | 'none'
+  //     'none' drops every marker (and chat's table references). Links and
+  //     code blocks differ only in the Sources section, which the caller writes.
+  //   anchorPrefix (note), getMessageIndex (chat), log(context, message)
+  // Returns { turndownService, convert(html), citedNumbers() } — citedNumbers:
+  // the distinct marker numbers converted so far (note variant), in order.
+  // Turndown gives later-added rules priority; the order below is the notes
+  // order. Only rules with overlapping filters depend on it (reportHeadings vs
+  // blockquotes, sourceLink vs citationButtons), and both sets ordered those
+  // the same way.
+  function createConverter({ variant = 'note', citations = 'links', anchorPrefix = '', getMessageIndex = () => 0, log = null } = {}) {
+    const isChat = variant === 'chat';
+    const dropCitations = citations === 'none';
+    const info = typeof log === 'function' ? log : () => {};
+    const turndownService = createTurndownService();
+    // Note: number -> occurrences; chat: "messageIdx:number" -> occurrences
+    const citationOccurrences = new Map();
+
+    // Report headings (role="heading" with aria-level)
+    turndownService.addRule('reportHeadings', {
+      filter: (node) => {
+        return node.nodeName === 'DIV' &&
+               node.getAttribute('role') === 'heading' &&
+               node.hasAttribute('aria-level');
+      },
+      replacement: (content, node) => {
+        const level = parseInt(node.getAttribute('aria-level')) || 1;
+        const prefix = '#'.repeat(level);
+        return `\n${prefix} ${content.trim()}\n\n`;
+      }
+    });
+
+    // Blockquotes (callout boxes)
+    turndownService.addRule('blockquotes', {
+      filter: (node) => {
+        return node.nodeName === 'DIV' &&
+               node.classList.contains('blockquote');
+      },
+      replacement: (content, node) => {
+        // Get the text content and convert to blockquote format
+        const text = content.trim();
+        if (!text) return '';
+
+        // Split by lines and add > prefix to each line
+        const lines = text.split('\n').map(line => {
+          const trimmed = line.trim();
+          return trimmed ? `> ${trimmed}` : '>';
+        });
+
+        return `\n${lines.join('\n')}\n\n`;
+      }
+    });
+
+    // <source-link> elements (notes only; in notes the citationButtons rule,
+    // added later, takes them first, as it always did)
+    if (!isChat) {
+      turndownService.addRule('sourceLink', {
+        filter: 'source-link',
+        replacement: (content, node) => {
+          const sourceIndex = node.dataset.sourceIndex;
+          const linkText = node.textContent;
+          const anchor = `src-${sourceIndex}`;
+          return `[${linkText}](#${anchor})`;
+        }
+      });
+    }
+
+    // Strip Angular component wrappers (inner content only). Chat used only
+    // the first name; the other two are never in chat answers, and Turndown
+    // already keeps a non-block unknown element's content, so this is the same
+    // output either way.
+    turndownService.addRule('stripAngularComponents', {
+      filter: (node) => {
+        const nodeName = node.nodeName.toLowerCase();
+        return nodeName === 'labs-tailwind-structural-element-view-v2' ||
+               nodeName === 'labs-tailwind-doc-viewer' ||
+               nodeName === 'report-viewer';
+      },
+      replacement: (content) => {
+        return content; // Return inner content, strip wrapper
+      }
+    });
+
+    // Lists whose <li> elements sit inside Angular wrapper components
+    turndownService.addRule('listsWithWrappers', {
+      filter: (node) => {
+        return node.nodeName === 'OL' || node.nodeName === 'UL';
+      },
+      replacement: (content, node, options) => {
+        const isOrdered = node.nodeName === 'OL';
+
+        // Find all <li> elements at any depth
+        const allLis = Array.from(node.querySelectorAll('li'));
+
+        // Filter to only include <li> elements that belong directly to this list
+        // (exclude nested list items)
+        const items = allLis.filter(li => {
+          let parent = li.parentElement;
+          while (parent && parent !== node) {
+            const tagName = parent.tagName;
+            if (tagName === 'OL' || tagName === 'UL') {
+              return false; // This li belongs to a nested list
+            }
+            parent = parent.parentElement;
+          }
+          return true; // This li belongs to this list
+        });
+
+        if (items.length === 0) {
+          // No list items found, fall back to default behavior
+          return '\n' + content + '\n';
+        }
+
+        // Generate markdown for each list item
+        let markdown = '\n';
+        items.forEach((li, idx) => {
+          const marker = isOrdered ? `${idx + 1}.` : options.bulletListMarker;
+          const itemContent = turndownService.turndown(li.innerHTML).trim();
+          markdown += `${marker} ${itemContent}\n`;
+        });
+        markdown += '\n';
+
+        return markdown;
+      }
+    });
+
+    // Tables (Markdown table format)
+    turndownService.addRule('tables', {
+      filter: 'table',
+      replacement: (content, node) => {
+        const rows = Array.from(node.querySelectorAll('tr'));
+        if (rows.length === 0) return '';
+
+        let markdown = '\n\n';
+
+        // Helper to process cell content using turndown for full formatting/citation support
+        const processCellContent = (cell) => {
+          // Use turndown to process cell HTML - this handles citations, bold, italic, etc.
+          let text = turndownService.turndown(cell.innerHTML);
+          // Clean up for table cell: escape pipes, flatten to single line
+          text = text.replace(/\|/g, '\\|');
+          text = text.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+          return text;
+        };
+
+        // Process each row
+        rows.forEach((row, rowIndex) => {
+          const cells = Array.from(row.querySelectorAll('th, td'));
+          const cellContents = cells.map(processCellContent);
+
+          // Add row
+          markdown += '| ' + cellContents.join(' | ') + ' |\n';
+
+          // Add separator after header row
+          if (rowIndex === 0) {
+            const separators = cells.map(() => '---');
+            markdown += '| ' + separators.join(' | ') + ' |\n';
+          }
+        });
+
+        markdown += '\n';
+
+        if (!isChat) return markdown;
+
+        // Chat: capture footnotes that follow the table. Look for sibling
+        // elements after the table that contain footnote references
+        let currentElement = node.parentElement;
+        while (currentElement && currentElement.nodeName.toLowerCase() !== 'element-list-renderer') {
+          currentElement = currentElement.parentElement;
+        }
+
+        if (currentElement) {
+          // Find all structural elements that might contain footnotes
+          const structuralElements = currentElement.querySelectorAll('labs-tailwind-structural-element-view-v2');
+          const footnotes = [];
+
+          // Look for elements with footnote pattern [number] at start
+          structuralElements.forEach(el => {
+            const text = el.textContent.trim();
+            // Match footnotes like "[1] Some text" or "[86] Some text"
+            if (/^\[\d+\]/.test(text)) {
+              footnotes.push(text);
+            }
+          });
+
+          // Add footnotes if found
+          if (footnotes.length > 0 && !dropCitations) {
+            markdown += '\n**References:**\n\n';
+            footnotes.forEach(footnote => {
+              markdown += footnote + '\n\n';
+            });
+          }
+        }
+
+        return markdown;
+      }
+    });
+
+    // Strip mat-icon elements (Google Material icons that shouldn't appear in markdown)
+    turndownService.addRule('matIcons', {
+      filter: (node) => node.nodeName === 'MAT-ICON',
+      replacement: () => '' // Strip entirely
+    });
+
+    // KaTeX math notation (see convertKatexNodeToLatex)
+    turndownService.addRule('katexMath', {
+      filter: (node) => node.nodeName === 'SPAN' && node.classList.contains('katex'),
+      replacement: (_content, node) => convertKatexNodeToLatex(node)
+    });
+
+    // Citation markers
+    turndownService.addRule('citationButtons', isChat ? {
+      filter: (node) => {
+        if (node.nodeName !== 'BUTTON' || !node.classList.contains('citation-marker')) {
+          return false;
+        }
+        // Skip expand/collapse buttons (more_horiz, unfold_less icons)
+        const matIcon = node.querySelector('mat-icon');
+        if (matIcon) {
+          const iconText = matIcon.textContent?.trim();
+          const ariaLabel = matIcon.getAttribute('aria-label') || '';
+          if (iconText === 'more_horiz' || iconText === 'unfold_less' ||
+              ariaLabel.includes('additional citations')) {
+            return false;
+          }
+        }
+        return true;
+      },
+      replacement: (content, node) => {
+        if (dropCitations) return '';
+        // Try mat-icon first (new DOM), then span (old DOM)
+        const matIcon = node.querySelector('mat-icon');
+        const span = node.querySelector('span');
+        const sourceIndex = matIcon?.textContent?.trim() || span?.textContent?.trim();
+
+        // Skip invalid source indices
+        if (!sourceIndex ||
+            sourceIndex === '...' ||
+            sourceIndex === 'more_horiz' ||
+            sourceIndex === 'unfold_less' ||
+            sourceIndex.includes('<') ||
+            sourceIndex.includes('>') ||
+            !/^[0-9]+$/.test(sourceIndex)) {
+          console.warn('[Chat Export] Skipping invalid citation with sourceIndex:', sourceIndex);
+          return '';
+        }
+
+        // Get current message index
+        const messageIndex = getMessageIndex();
+        const key = `${messageIndex}:${sourceIndex}`;
+
+        // Track occurrences for this source within this message
+        if (!citationOccurrences.has(key)) {
+          citationOccurrences.set(key, 0);
+        }
+        const occurrenceCount = citationOccurrences.get(key) + 1;
+        citationOccurrences.set(key, occurrenceCount);
+
+        // Return citation with message-specific anchor and link to source
+        return `<sup><a id="msg-${messageIndex}-cite-ref-${sourceIndex}-${occurrenceCount}" href="#msg-${messageIndex}-src-${sourceIndex}">[${sourceIndex}]</a></sup>`;
+      }
+    } : {
+      filter: (node) => {
+        // Skip expand/collapse buttons (more_horiz, unfold_less icons)
+        if (node.nodeName === 'BUTTON') {
+          const matIcon = node.querySelector('mat-icon');
+          if (matIcon) {
+            const iconText = matIcon.textContent?.trim();
+            const ariaLabel = matIcon.getAttribute('aria-label') || '';
+            if (iconText === 'more_horiz' || iconText === 'unfold_less' ||
+                ariaLabel.includes('additional citations')) {
+              return false; // Skip these buttons entirely
+            }
+          }
+        }
+
+        // Markers are button.citation-marker; they lost ng-star-inserted in Nov 2026
+        if (node.nodeName === 'BUTTON' &&
+            (node.classList.contains('citation-marker') || node.classList.contains('ng-star-inserted'))) {
+          return true;
+        }
+        if (node.nodeName === 'A' && node.getAttribute('href')?.startsWith('#cite')) {
+          return true;
+        }
+        if (node.nodeName === 'SOURCE-LINK' || node.hasAttribute('data-source-index')) {
+          return true;
+        }
+        return false;
+      },
+      replacement: (content, node) => {
+        if (dropCitations) return '';
+        info('Citation', `Processing citation node: ${node.nodeName}`);
+        info('Citation', `  - content: "${content}"`);
+        info('Citation', `  - data-source-index: ${node.getAttribute('data-source-index')}`);
+        info('Citation', `  - href: ${node.getAttribute('href')}`);
+        info('Citation', `  - outerHTML preview: ${node.outerHTML?.substring(0, 200)}`);
+
+        let originalSourceIndex = node.getAttribute('data-source-index') ||
+                                  node.getAttribute('href')?.replace('#cite-', '');
+
+        if (!originalSourceIndex && node.nodeName === 'BUTTON') {
+          // The number is the span text; a mat-icon only appears on expanders
+          originalSourceIndex = root.NLME.parseCitationIndex(node.querySelector('span')?.textContent) || '';
+          if (!originalSourceIndex) {
+            // Not a numbered citation (e.g. an unrecognised button) — drop it
+            return '';
+          }
+        }
+
+        if (!originalSourceIndex) {
+          originalSourceIndex = content.trim();
+          info('Citation', `  - using content as originalSourceIndex: "${originalSourceIndex}"`);
+        }
+
+        info('Citation', `  - original sourceIndex: "${originalSourceIndex}"`);
+
+        // Original citation numbers everywhere so body links and the Sources
+        // section always agree (buildCitationEntries)
+        const displayNumber = originalSourceIndex;
+
+        if (!citationOccurrences.has(displayNumber)) {
+          citationOccurrences.set(displayNumber, 0);
+        }
+        const occurrenceCount = citationOccurrences.get(displayNumber) + 1;
+        citationOccurrences.set(displayNumber, occurrenceCount);
+
+        const output = `<sup><a id="${anchorPrefix}cite-ref-${displayNumber}-${occurrenceCount}" href="#${anchorPrefix}src-${displayNumber}">[${displayNumber}]</a></sup>`;
+        info('Citation', `  - generated: ${output}`);
+
+        return output;
+      }
+    });
+
+    return {
+      turndownService,
+      convert: (html) => turndownService.turndown(html),
+      citedNumbers: () => [...citationOccurrences.keys()]
+    };
+  }
+
   root.NLMEMarkdown = Object.assign(root.NLMEMarkdown || {}, {
     createTurndownService,
-    convertKatexNodeToLatex
+    convertKatexNodeToLatex,
+    createConverter
   });
 })(globalThis);

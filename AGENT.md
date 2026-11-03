@@ -400,8 +400,8 @@ side panel.
      Sources section, `buildChatAuditDoc` expects no citations, and with no quotes there is no
      code-blocks version.
    - `totalCitationsFound` counts numbered markers only (not group buttons).
-   - `convertChatToMarkdown` builds the final markdown using Turndown with chat-specific
-     rules (`addChatTurndownRules`).
+   - `convertChatToMarkdown` builds the final markdown with the shared converter
+     (`NLMEMarkdown.createConverter({ variant: 'chat' })`, takeout-markdown.js).
    - Produces up to 3 variants based on Note settings (`chat.md`, `chat-code-blocks.md`,
      `chat-with-images.md`), plus `_index.md`, `manifest.json`, `_audit.md` and `errors.md` when
      there are errors. One clean version downloads as a single `<Notebook>-chat-<ts>.md`.
@@ -665,9 +665,9 @@ sidebar shows a "DOM may be drifting" warning dialog.
 
 ## KaTeX → LaTeX conversion
 
-Entry point: `NLMEMarkdown.convertKatexNodeToLatex(node)` (takeout-markdown.js). Called from two
-Turndown rules (notes/sources rule and chat rule), both filter on
-`SPAN.classList.contains('katex')`.
+Entry point: `NLMEMarkdown.convertKatexNodeToLatex(node)` (takeout-markdown.js). Called from the
+`katexMath` rule of the shared Turndown converter (`createConverter`), which filters on
+`SPAN.classList.contains('katex')`, and from the page script's `htmlToMarkdownPlain`.
 
 ```
 1. Exact source via NLME.mathSourceToMarkdown(): the host span's data-math

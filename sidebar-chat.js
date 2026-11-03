@@ -659,15 +659,17 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
   markdown += `Total Messages: ${messages.length}\n\n`;
   markdown += '---\n\n';
 
-  // Initialize TurndownService with standardized configuration
-  const turndownService = NLMEMarkdown.createTurndownService();
-
   // Use closure to track current message index
   let currentMessageIndex = 0;
 
-  // Add custom rules with message index tracking
+  // One shared rule set (takeout-markdown.js, Milestone 3d), with
+  // per-message citation anchors
   console.log('[NotebookLM Takeout] Adding turndown rules for per-message citations');
-  addChatTurndownRules(turndownService, citationsCodeBlock, () => currentMessageIndex, dropCitations);
+  const converter = NLMEMarkdown.createConverter({
+    variant: 'chat',
+    citations: dropCitations ? 'none' : (citationsCodeBlock ? 'code-blocks' : 'links'),
+    getMessageIndex: () => currentMessageIndex
+  });
 
   let currentDate = null;
 
@@ -686,7 +688,7 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
     markdown += `## Q: ${msg.userMessage}\n\n`;
 
     // Convert AI response HTML to markdown
-    let aiResponseMarkdown = turndownService.turndown(msg.aiResponseHTML);
+    let aiResponseMarkdown = converter.convert(msg.aiResponseHTML);
     // Fix occurrence numbers skipped by rules that convert a subtree twice
     aiResponseMarkdown = NLME.renumberCitationAnchors(aiResponseMarkdown);
 
@@ -751,233 +753,4 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
   return markdown;
 }
 
-/**
- * Add TurndownService rules for chat conversion
- * dropCitations: citation markers (and the footnote list under a table) convert to nothing
- */
-function addChatTurndownRules(turndownService, citationsCodeBlock, getCurrentMessageIndex, dropCitations = false) {
-  // Track citation occurrences within each message
-  const citationOccurrences = new Map(); // "messageIdx:sourceIdx" -> count
-
-  // Rule: Strip Angular component wrappers
-  turndownService.addRule('stripAngularComponents', {
-    filter: (node) => {
-      const nodeName = node.nodeName.toLowerCase();
-      return nodeName === 'labs-tailwind-structural-element-view-v2';
-    },
-    replacement: (content) => content
-  });
-
-  // Rule: Handle lists with Angular wrapper components
-  turndownService.addRule('listsWithWrappers', {
-    filter: (node) => {
-      return node.nodeName === 'OL' || node.nodeName === 'UL';
-    },
-    replacement: (content, node, options) => {
-      const isOrdered = node.nodeName === 'OL';
-
-      // Find all <li> elements at any depth
-      const allLis = Array.from(node.querySelectorAll('li'));
-
-      // Filter to only include <li> elements that belong directly to this list
-      const items = allLis.filter(li => {
-        let parent = li.parentElement;
-        while (parent && parent !== node) {
-          const tagName = parent.tagName;
-          if (tagName === 'OL' || tagName === 'UL') {
-            return false; // This li belongs to a nested list
-          }
-          parent = parent.parentElement;
-        }
-        return true;
-      });
-
-      if (items.length === 0) {
-        return '\n' + content + '\n';
-      }
-
-      // Generate markdown for each list item
-      let markdown = '\n';
-      items.forEach((li, idx) => {
-        const marker = isOrdered ? `${idx + 1}.` : options.bulletListMarker;
-        const itemContent = turndownService.turndown(li.innerHTML).trim();
-        markdown += `${marker} ${itemContent}\n`;
-      });
-      markdown += '\n';
-
-      return markdown;
-    }
-  });
-
-  // Rule: Convert div headings with role="heading"
-  turndownService.addRule('reportHeadings', {
-    filter: (node) => {
-      return node.nodeName === 'DIV' &&
-             node.getAttribute('role') === 'heading' &&
-             node.hasAttribute('aria-level');
-    },
-    replacement: (content, node) => {
-      const level = parseInt(node.getAttribute('aria-level')) || 1;
-      const prefix = '#'.repeat(level);
-      return `\n${prefix} ${content.trim()}\n\n`;
-    }
-  });
-
-  // Rule: Convert blockquotes (callout boxes)
-  turndownService.addRule('blockquotes', {
-    filter: (node) => {
-      return node.nodeName === 'DIV' &&
-             node.classList.contains('blockquote');
-    },
-    replacement: (content, node) => {
-      // Get the text content and convert to blockquote format
-      const text = content.trim();
-      if (!text) return '';
-
-      // Split by lines and add > prefix to each line
-      const lines = text.split('\n').map(line => {
-        const trimmed = line.trim();
-        return trimmed ? `> ${trimmed}` : '>';
-      });
-
-      return `\n${lines.join('\n')}\n\n`;
-    }
-  });
-
-  // Rule: Convert tables to markdown table format
-  turndownService.addRule('tables', {
-    filter: 'table',
-    replacement: (content, node) => {
-      const rows = Array.from(node.querySelectorAll('tr'));
-      if (rows.length === 0) return '';
-
-      let markdown = '\n\n';
-
-      // Helper to process cell content using turndown for full formatting/citation support
-      const processCellContent = (cell) => {
-        // Use turndown to process cell HTML - this handles citations, bold, italic, etc.
-        let text = turndownService.turndown(cell.innerHTML);
-        // Clean up for table cell: escape pipes, flatten to single line
-        text = text.replace(/\|/g, '\\|');
-        text = text.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
-        return text;
-      };
-
-      // Process each row
-      rows.forEach((row, rowIndex) => {
-        const cells = Array.from(row.querySelectorAll('th, td'));
-        const cellContents = cells.map(processCellContent);
-
-        // Add row
-        markdown += '| ' + cellContents.join(' | ') + ' |\n';
-
-        // Add separator after header row
-        if (rowIndex === 0) {
-          const separators = cells.map(() => '---');
-          markdown += '| ' + separators.join(' | ') + ' |\n';
-        }
-      });
-
-      markdown += '\n';
-
-      // Try to capture footnotes that follow the table
-      // Look for sibling elements after the table that contain footnote references
-      let currentElement = node.parentElement;
-      while (currentElement && currentElement.nodeName.toLowerCase() !== 'element-list-renderer') {
-        currentElement = currentElement.parentElement;
-      }
-
-      if (currentElement) {
-        // Find all structural elements that might contain footnotes
-        const structuralElements = currentElement.querySelectorAll('labs-tailwind-structural-element-view-v2');
-        const footnotes = [];
-
-        // Look for elements with footnote pattern [number] at start
-        structuralElements.forEach(el => {
-          const text = el.textContent.trim();
-          // Match footnotes like "[1] Some text" or "[86] Some text"
-          if (/^\[\d+\]/.test(text)) {
-            footnotes.push(text);
-          }
-        });
-
-        // Add footnotes if found
-        if (footnotes.length > 0 && !dropCitations) {
-          markdown += '\n**References:**\n\n';
-          footnotes.forEach(footnote => {
-            markdown += footnote + '\n\n';
-          });
-        }
-      }
-
-      return markdown;
-    }
-  });
-
-  // Strip mat-icon elements (Google Material icons that shouldn't appear in markdown)
-  turndownService.addRule('matIcons', {
-    filter: (node) => node.nodeName === 'MAT-ICON',
-    replacement: () => ''
-  });
-
-  // Handle KaTeX math notation — delegates to the shared converter so notes,
-  // sources, and chat all use the same logic. See convertKatexNodeToLatex().
-  turndownService.addRule('katexMath', {
-    filter: (node) => node.nodeName === 'SPAN' && node.classList.contains('katex'),
-    replacement: (_content, node) => NLMEMarkdown.convertKatexNodeToLatex(node)
-  });
-
-  // Rule: Citation buttons - with message-specific anchors
-  turndownService.addRule('citationButtons', {
-    filter: (node) => {
-      if (node.nodeName !== 'BUTTON' || !node.classList.contains('citation-marker')) {
-        return false;
-      }
-      // Skip expand/collapse buttons (more_horiz, unfold_less icons)
-      const matIcon = node.querySelector('mat-icon');
-      if (matIcon) {
-        const iconText = matIcon.textContent?.trim();
-        const ariaLabel = matIcon.getAttribute('aria-label') || '';
-        if (iconText === 'more_horiz' || iconText === 'unfold_less' ||
-            ariaLabel.includes('additional citations')) {
-          return false;
-        }
-      }
-      return true;
-    },
-    replacement: (content, node) => {
-      if (dropCitations) return '';
-      // Try mat-icon first (new DOM), then span (old DOM)
-      const matIcon = node.querySelector('mat-icon');
-      const span = node.querySelector('span');
-      const sourceIndex = matIcon?.textContent?.trim() || span?.textContent?.trim();
-
-      // Skip invalid source indices
-      if (!sourceIndex ||
-          sourceIndex === '...' ||
-          sourceIndex === 'more_horiz' ||
-          sourceIndex === 'unfold_less' ||
-          sourceIndex.includes('<') ||
-          sourceIndex.includes('>') ||
-          !/^[0-9]+$/.test(sourceIndex)) {
-        console.warn('[Chat Export] Skipping invalid citation with sourceIndex:', sourceIndex);
-        return '';
-      }
-
-      // Get current message index
-      const messageIndex = getCurrentMessageIndex();
-      const key = `${messageIndex}:${sourceIndex}`;
-
-      // Track occurrences for this source within this message
-      if (!citationOccurrences.has(key)) {
-        citationOccurrences.set(key, 0);
-      }
-      const occurrenceCount = citationOccurrences.get(key) + 1;
-      citationOccurrences.set(key, occurrenceCount);
-
-      // Return citation with message-specific anchor and link to source
-      return `<sup><a id="msg-${messageIndex}-cite-ref-${sourceIndex}-${occurrenceCount}" href="#msg-${messageIndex}-src-${sourceIndex}">[${sourceIndex}]</a></sup>`;
-    }
-  });
-}
 // ========== END CHAT EXPORT FUNCTIONS ==========
