@@ -142,8 +142,10 @@ The quoted passage from the source…
    - With **ZIP on**, **Download Selected** writes one `{notebook}-artifacts-{timestamp}.zip` with
      type folders (`audio/ video/ slides/ infographics/ reports/ tables/ mind-maps/`), an
      `_index.md`, a `manifest.json` and `errors.md` when something failed. The side panel builds
-     it in memory, so a full notebook with audio/video can be too large for a ZIP; use folder
-     mode for those.
+     each ZIP in memory, so a big notebook is split into parts of about 500 MB:
+     `{notebook}-artifacts-{timestamp}-part1.zip`, `-part2.zip`, and so on. Each part has its
+     own type folders, `_index.md` and `manifest.json`. A part can pass 500 MB by one file, and a
+     single file over 500 MB gets a part of its own. Folder mode is not split (files go straight to disk).
    - Reports are always Markdown (with front matter), never raw HTML.
 3. Slide decks download as PDF or PowerPoint depending on **Settings → Slide deck format**.
 
@@ -201,6 +203,10 @@ New-Physics/chat/_index.md              New-Physics/artifacts/audio/<stem>.m4a
 A category that needed several ZIPs (batch size under
 Settings) is split into `part-1/`, `part-2/`, … subfolders and the ZIPs are named
 `…-takeout-notes-<ts>-part1of3.zip`, so the parts never overwrite each other.
+
+The artifacts category is split the same way by size: with ZIP on, each ZIP holds about 500 MB
+(`…-takeout-artifacts-<ts>-part1.zip`, `-part2.zip`, …), and a split category unpacks to
+`artifacts/part-1/`, `artifacts/part-2/`, … The takeout index links each part.
 
 *With ZIP off* everything is saved into a folder `Downloads/<Notebook> takeout <timestamp>/`
 that contains the same `<Notebook>/` tree, so the files land at
@@ -404,6 +410,8 @@ contract with Gemini Notebook, past drift and recipes.
   "Retry N failed" for notes, sources and artifacts, also after a Full Takeout.
 - Chat follows ⚙️ Citation detail (full quotes, source titles only, or no citations); its own
   checkbox is gone.
+- ZIP exports of artifacts are split into parts of about 500 MB (`-part1.zip`, `-part2.zip`; in a
+  takeout `artifacts/part-1/`, …), so a big notebook no longer builds one huge ZIP in memory.
 - Full Takeout always includes `-with-images` versions for items that have images, and puts
   notes and sources straight into `notes/` and `sources/` (no more `notes/notes/`).
 - Fixes: the takeout index keeps parts written before a failure and links folders that hold only

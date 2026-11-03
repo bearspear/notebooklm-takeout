@@ -358,7 +358,7 @@ function takeoutZipEnabled() {
  * name). A category written in several batches has part-N/ folders.
  *
  * - ZIP on (takeoutZipEnabled): each category's batches go to
- *   <Notebook>-takeout-<category>-<ts>[-PARTIAL][-partNofM].zip, the root
+ *   <Notebook>-takeout-<category>-<ts>[-PARTIAL][-partNofM|-partN].zip, the root
  *   files to <Notebook>-takeout-index-<ts>.zip; unzipped into one folder
  *   they form one tree.
  * - ZIP off: everything goes to Downloads/<Notebook> takeout <ts>/; artifacts

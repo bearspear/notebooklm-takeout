@@ -2943,7 +2943,7 @@ async function saveCategoryBatch(shell, files, info, { prefix = '', zipKind, fol
   const placed = prefix ? files.map(f => ({ ...f, path: prefix + f.path })) : files;
   const record = () => {
     written.count++;
-    written.multi = info.totalBatches > 1;
+    written.multi = !!info.multi;
     written.parts = prefix && written.multi ? written.count : 0;
   };
   if (folder) {
@@ -2957,20 +2957,22 @@ async function saveCategoryBatch(shell, files, info, { prefix = '', zipKind, fol
     timestamp: shell.timestamp,
     partial: info.partial,
     part: info.batchIndex,
-    totalParts: info.totalBatches
+    // Count-based batches know their total (-partNofM); size-split parts do
+    // not (-partN); a single package has no suffix
+    totalParts: info.multi ? info.totalBatches : 1
   });
   await saveFiles(placed, { zipName });
   written.zips.push(zipName);
   record();
 }
 
-// A takeout category written in several batches puts each batch in its own
+// A takeout category written in several batches (or size-split parts) puts each in its own
 // part-N/ folder: every batch has its own _index.md and manifest.json, and
 // note/source stems are only unique within a batch, so parts unzipped into one
 // tree (or saved into one folder) must not share a folder. Tab exports (no
 // prefix) keep their separate ZIPs as before.
 function batchPrefix(pathPrefix, info) {
-  if (!pathPrefix || info.totalBatches <= 1) return pathPrefix;
+  if (!pathPrefix || !info.multi) return pathPrefix;
   return `${pathPrefix}part-${info.batchIndex}/`;
 }
 
@@ -5475,8 +5477,13 @@ async function handleStudioBulkDelete() {
 }
 
 
-// Download All (Milestone 3a): every artifact on the job runner. ZIP on: one
-// <Notebook>-artifacts-<ts>.zip; ZIP off: Downloads/<Notebook>/, one item
+// Size cap of one artifacts ZIP (ZIP mode): JSZip builds a ZIP in the side
+// panel's memory, so a big notebook is split into parts. The size is checked
+// after each item; a part may pass the cap by one item.
+const ARTIFACT_ZIP_MAX_BYTES = 500 * 1024 * 1024;
+
+// Download All (Milestone 3a): every artifact on the job runner. ZIP on:
+// <Notebook>-artifacts-<ts>.zip, or -partN.zip parts past the size cap; ZIP off: Downloads/<Notebook>/, one item
 // per call. Either way: <type folder>/<stem>.<ext>, _index.md, errors.md,
 // manifest.json. Returns withExportShell's outcome, like exportNotesAsMarkdown.
 async function downloadAllArtifacts(tabId, items) {
@@ -5508,7 +5515,9 @@ async function downloadAllArtifacts(tabId, items) {
 
 /**
  * Run the artifacts job inside an export shell. ZIP mode (no target.folder):
- * every file is fetched and packed into one ZIP with the root files. Folder
+ * every file is fetched and packed into ZIPs of about ARTIFACT_ZIP_MAX_BYTES
+ * each (parts: -partN.zip, or part-N/ in a takeout), every part with its own
+ * root files. Folder
  * mode: each item is saved into the folder as it is fetched (CDN media
  * straight to disk), the root files after the last one.
  *
@@ -5534,6 +5543,8 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
     kind: 'artifacts',
     items,
     perZip: zipMode ? Infinity : 1,
+    // ZIP mode only: split by size (folder mode streams to disk)
+    ...(zipMode ? { maxBatchBytes: ARTIFACT_ZIP_MAX_BYTES, sizeOf: r => NLME.filesByteSize(r.files) } : {}),
     titleOf: item => item.label,
     extractOne: async (item, ctx) => {
       const typeFolder = NLME.artifactFolder(item.type);
@@ -5587,12 +5598,14 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
     packageBatch: async (results, info) => {
       if (zipMode) {
         const files = results.flatMap(r => r.files);
-        shell.progress('Creating ZIP...', 1);
-        files.push(...artifactsRootFiles(files, results.map(r => r.item), { meta: shell.meta, info }));
-        const zipName = NLME.zipName({ notebook: shell.projectName, kind: zipKind, timestamp: shell.timestamp, partial: info.partial });
-        await saveFiles(place(files), { zipName });
-        written.zips.push(zipName);
-        written.count++;
+        shell.progress(info.multi ? `Creating ZIP part ${info.batchIndex}...` : 'Creating ZIP...', 1);
+        // Each part gets its own root files, listing that part's files only
+        files.push(...artifactsRootFiles(files, results.map(r => r.item), {
+          meta: shell.meta, info, part: info.batchIndex, totalParts: info.multi ? null : 1
+        }));
+        // Memory: the Blobs live only in this call; the runner drops `results`
+        // once it returns, and `written` keeps names and counts only
+        await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder: null, written });
         return;
       }
       // Folder mode (one item per call): the item is already saved; the
@@ -5620,9 +5633,10 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
  *
  * @param {object[]} files every artifact file in the export (type-folder paths)
  * @param {object[]} exportedItems the items those files came from
- * @param {{ meta: object, info: { errors: Array, partial: boolean } }} options
+ * @param {{ meta: object, info: { errors: Array, partial: boolean }, part?: number, totalParts?: number|null }} options
+ *   part/totalParts: this ZIP's place in a size-split export (totalParts null: unknown)
  */
-function artifactsRootFiles(files, exportedItems, { meta, info }) {
+function artifactsRootFiles(files, exportedItems, { meta, info, part = 1, totalParts = 1 }) {
   const errors = info.errors || [];
   const root = [];
 
@@ -5643,6 +5657,7 @@ function artifactsRootFiles(files, exportedItems, { meta, info }) {
 
   let index = `# Artifacts — ${meta.notebook}\n\n`;
   index += `Generated: ${new Date().toLocaleString()}\n\n`;
+  if (part > 1 || totalParts !== 1) index += `**Part ${part}**\n\n`;
   index += `Total Artifacts: ${exportedItems.length}\n\n`;
   index += '---\n\n';
   for (const [typeFolder, { type, labels }] of folders) {
@@ -5680,6 +5695,8 @@ function artifactsRootFiles(files, exportedItems, { meta, info }) {
     data: JSON.stringify(NLME.buildManifest({
       meta,
       kind: 'artifacts',
+      part,
+      totalParts,
       partial: info.partial,
       files: [...files, ...root],
       counts,

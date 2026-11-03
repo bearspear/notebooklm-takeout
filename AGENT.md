@@ -1111,6 +1111,22 @@ download (`triggerItemDownload`); it is not a system notification.
 
 - Full Takeout's ZIP choice is its own: `NLME.takeoutZipChoice(settings)` returns `settings.takeoutZip` when it is a boolean, else `!!settings.autoZip`. The header's `#takeout-zip-checkbox` shows it and saves `settings.takeoutZip` on change (outside `saveSettings`); the Artifacts tab's `#zip-checkbox` only affects Download Selected.
 
+- Size-split artifacts ZIPs: `NLME.runExportJob` takes optional `maxBatchBytes` and `sizeOf(result) -> bytes`
+  (both needed). The size is checked after each item; when the batch total reaches the cap the batch is
+  packaged at once and a new one starts, so a part may pass the cap by one item and one item over the
+  cap gets its own part. `info.totalBatches` is `null` (unknown) in this mode; count-based batching
+  (`perZip`) is unchanged. `info.multi`: true when the job has or will have more than one package
+  (count-based `totalBatches > 1`; size-based `batchIndex > 1 || !isLast`). Use `info.multi`, not
+  `totalBatches > 1`, in `saveCategoryBatch` / `batchPrefix` (`part-N/` in a takeout). Errors still go
+  only to the last package (an errors-only package when the final items failed). Delivered results are
+  dropped, so Blobs can be freed.
+- `runArtifactsJob` (ZIP mode only) passes `maxBatchBytes: ARTIFACT_ZIP_MAX_BYTES` (500 MB, `sidebar.js`) and
+  `sizeOf: r => NLME.filesByteSize(r.files)`; folder mode stays `perZip: 1`. Each part writes its own
+  `artifactsRootFiles` (`_index.md`, `_index.html`, `manifest.json` with `part`, `totalParts` null when
+  split; `errors.md` in the last part). Names: `NLME.zipName({ part, totalParts: null })` gives `-partN`
+  (`-partNofM` stays for a known total); a single package has no suffix. `NLME.filesByteSize(files)` sums
+  Blob `.size`, buffer/typed-array `.byteLength`, string `.length`; `url` entries count 0.
+
 ### List controller (`sidebar-list.js`)
 
 Script order is now `jszip`, `turndown`, `takeout-shared.js`, `takeout-job.js`,
