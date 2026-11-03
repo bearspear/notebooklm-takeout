@@ -84,19 +84,31 @@ async function downloadBlobToFolderPath(blob, target) {
   }
 }
 
+// Have the background download a url entry to Downloads/<target>.
+async function downloadUrlTo(entry, target) {
+  const response = await chrome.runtime.sendMessage({
+    type: 'DIRECT_DOWNLOAD_URL',
+    url: entry.url,
+    filename: target
+  });
+  if (!response || !response.success) {
+    throw new Error(`Download failed for ${entry.path}: ${(response && response.error) || 'no response'}`);
+  }
+}
+
 /**
  * Write files: one ZIP, a Downloads subfolder, or single downloads.
  *
  * FileEntry: { path, data } or { path, url }. `data` is a string, Blob or
  * Uint8Array; `url` is a Gemini Notebook download URL fetched with
- * fetchDownload (ZIP) or downloaded by the background (folder).
+ * fetchDownload (ZIP) or downloaded by the background (folder, single).
  *
  * - zipName set: one ZIP via JSZip, downloaded with downloadBlob. Strings are
  *   DEFLATEd; Blob/Uint8Array (media, already compressed) are STOREd.
  * - folder set (no zipName): each entry is saved to Downloads/<folder>/<path>.
- * - neither: each entry is a single download via downloadBlob. (downloadBlob
- *   itself routes to the folder branch only while Download All folder mode is
- *   active; that branch never calls downloadBlob, so there is no loop.)
+ * - neither: each entry is a single download to Downloads/<path>: data via
+ *   downloadBlob, url via the background (DIRECT_DOWNLOAD_URL streams large
+ *   media to disk and fixes the extension from the real download).
  *
  * @param {Array<{path: string, data?: string|Blob|Uint8Array, url?: string}>} files
  * @param {{ zipName?: string, folder?: string }} [options]
@@ -126,14 +138,7 @@ async function saveFiles(files, { zipName, folder } = {}) {
       if (entry.data !== undefined) {
         await downloadBlobToFolderPath(entryBlob(entry.data), target);
       } else {
-        const response = await chrome.runtime.sendMessage({
-          type: 'DIRECT_DOWNLOAD_URL',
-          url: entry.url,
-          filename: target
-        });
-        if (!response || !response.success) {
-          throw new Error(`Download failed for ${entry.path}: ${(response && response.error) || 'no response'}`);
-        }
+        await downloadUrlTo(entry, target);
       }
       saved++;
     }
@@ -142,8 +147,11 @@ async function saveFiles(files, { zipName, folder } = {}) {
 
   let saved = 0;
   for (const entry of files) {
-    const blob = entry.data !== undefined ? entryBlob(entry.data) : await fetchDownload(entry.url);
-    await downloadBlob(blob, entry.path);
+    if (entry.data !== undefined) {
+      await downloadBlob(entryBlob(entry.data), entry.path);
+    } else {
+      await downloadUrlTo(entry, entry.path);
+    }
     saved++;
   }
   return { saved, zipped: false };

@@ -134,17 +134,6 @@ test('buildCitationEntries without placeholders still lists extracted sources', 
   assert.deepEqual(entries.map(e => e.number), ['2']);
 });
 
-test('uniqueFilenames suffixes repeated names before the extension', () => {
-  assert.deepEqual(
-    NLME.uniqueFilenames(['The-Electric-Universe.pdf', 'The-Electric-Universe.pdf', 'The-Electric-Universe.pdf']),
-    ['The-Electric-Universe.pdf', 'The-Electric-Universe (2).pdf', 'The-Electric-Universe (3).pdf']
-  );
-});
-
-test('uniqueFilenames leaves distinct names and extensionless names usable', () => {
-  assert.deepEqual(NLME.uniqueFilenames(['Map.svg', 'Map.json', 'README', 'README']), ['Map.svg', 'Map.json', 'README', 'README (2)']);
-});
-
 test('renumberCitationAnchors numbers occurrences in document order per message and source', () => {
   const md = 'a<a id="msg-0-cite-ref-8-2" href="#msg-0-src-8">[8]</a> b<a id="msg-0-cite-ref-8-5" href="#msg-0-src-8">[8]</a>' +
     ' c<a id="msg-1-cite-ref-8-3" href="#msg-1-src-8">[8]</a> d<a id="msg-0-cite-ref-9-4" href="#msg-0-src-9">[9]</a>';
@@ -382,15 +371,6 @@ test('pickFreshIntercept ignores URLs from before the click', () => {
   const entries = [{ url: 'old', timestamp: 5 }, { url: 'new', timestamp: 12 }];
   assert.equal(NLME.pickFreshIntercept(entries, 10), 'new');
   assert.equal(NLME.pickFreshIntercept(entries, 20), null);
-});
-
-test('formatErrorsTxt lists every error and the issues link', () => {
-  const txt = NLME.formatErrorsTxt({ title: 'Artifacts', generatedAt: '11/2/2026, 1:00 PM', errors: ['Deck A: Download was not captured', 'Map B: Item changed'] });
-  assert.match(txt, /^# Artifacts Error Report/);
-  assert.match(txt, /- Deck A: Download was not captured/);
-  assert.match(txt, /- Map B: Item changed/);
-  assert.match(txt, /11\/2\/2026, 1:00 PM/);
-  assert.ok(txt.includes(NLME.ISSUES_URL));
 });
 
 test('extensionFromDownloadUrl reads the filename parameter', () => {

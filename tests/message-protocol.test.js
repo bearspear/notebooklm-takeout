@@ -51,3 +51,9 @@ test('every sent message type has a handler', () => {
     .map(t => `${t} (sent from ${[...new Set(sent.get(t))].join(', ')})`);
   assert.deepEqual(unhandled, [], `Sent but never handled:\n  ${unhandled.join('\n  ')}`);
 });
+
+test('background no longer builds ZIPs', () => {
+  const bg = fs.readFileSync(path.join(ROOT, 'background.js'), 'utf8');
+  assert.doesNotMatch(bg, /jszip/i);
+  assert.doesNotMatch(bg, /BATCH_DOWNLOAD_ALL|GET_BATCH_STATUS|CANCEL_BATCH_DOWNLOAD|createZipFromFiles/);
+});

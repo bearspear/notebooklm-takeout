@@ -971,7 +971,7 @@ async function retryDownload(downloadFn, maxRetries = 3, itemName = 'item') {
   throw lastError || new Error('Download failed after all retries');
 }
 
-// ==================== MESSAGE-BASED DOWNLOAD ====================
+// ==================== ARTIFACT FILES ====================
 
 /**
  * Get artifact type prefix for filenames
@@ -980,290 +980,183 @@ function getArtifactTypePrefix(artifactType) {
   return NLME.artifactTypePrefix(artifactType);
 }
 
-/**
- * Download artifact using message passing (NEW PATTERN)
- * Replaces script injection with content script messaging
- */
-async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName) {
-  logger.info('Download', `Downloading artifact ${artifactIndex} (${artifactType})`, artifactName);
+// Notebook metadata for a single download (Download All passes the shell's)
+async function artifactMeta(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  return NLME.exportMeta({
+    notebookTitle: await getProjectName(tabId),
+    tabUrl: tab.url,
+    version: chrome.runtime.getManifest().version,
+    exportedAt: new Date()
+  });
+}
 
+// A mind map as <stem>.svg, <stem>.json and the interactive <stem>.html
+// (the viewer is skipped when its template cannot load)
+async function mindmapFiles(stem, svgContent, treeData, title) {
+  const files = [
+    { path: `${stem}.svg`, data: svgContent || '' },
+    { path: `${stem}.json`, data: JSON.stringify(treeData || {}, null, 2) }
+  ];
   try {
-    // Ensure content script is loaded
-    await ensureContentScriptLoaded(tabId);
+    files.push({ path: `${stem}.html`, data: await generateMindmapHTML(svgContent || '', title) });
+  } catch (e) {
+    console.warn('[NotebookLM Takeout] Mindmap HTML viewer template unavailable:', e);
+  }
+  return files;
+}
 
-    // For Reports and Data Tables, skip More button entirely - content script will click artifact directly
-    let response;
-    if (artifactType === 'Report' || artifactType === 'Data Table' || artifactType === 'Mind Map') {
-      logger.info('Download', `${artifactType} detected - skipping More button, extracting content directly`);
+// A Data Table as <stem>.csv, plus (from HTML) <stem>.json, the clean
+// <stem>.html and <stem>-references.txt when it has footnotes
+function dataTableFiles(stem, response, title) {
+  if (response.format !== 'html') return [{ path: `${stem}.csv`, data: response.data || '' }];
 
-      response = await chrome.tabs.sendMessage(tabId, {
-        type: 'DOWNLOAD_ARTIFACT',
-        data: {
-          artifactIndex: artifactIndex,
-          artifactType: artifactType,
-          artifactName: artifactName,
-          skipMoreButton: true
-        }
-      });
-    } else {
-      // The content script resolves the row by title and clicks its own More
-      // button (Milestone 1); no separate index-only click from here.
+  const files = [{ path: `${stem}.csv`, data: convertTableToCSV(response.data) }];
+  const tableData = extractTableDataAsJSON(response.data);
+  const footnotes = extractFootnotesFromHTML(response.data);
+  const hasFootnotes = !!(footnotes && footnotes.trim().length > 0);
+  if (tableData) {
+    files.push({
+      path: `${stem}.json`,
+      data: JSON.stringify({
+        title,
+        exported: new Date().toISOString(),
+        table: tableData,
+        footnotes: hasFootnotes ? footnotes.split('\n\n').filter(line => /^\[\d+\]/.test(line.trim())) : []
+      }, null, 2)
+    });
+  }
+  const cleanHTML = createCleanTableHTML(response.data, title, footnotes);
+  if (cleanHTML) files.push({ path: `${stem}.html`, data: cleanHTML });
+  if (hasFootnotes) files.push({ path: `${stem}-references.txt`, data: footnotes });
+  return files;
+}
 
-      // For non-extractable artifacts, enable intercept mode BEFORE clicking download button
-      // This prevents tabs from opening for slides and infographics
-      logger.info('Download', `Enabling intercept mode (preventive) for: "${artifactName}"`);
-      await chrome.runtime.sendMessage({
-        type: 'START_INTERCEPT_DOWNLOAD',
-        name: artifactName,
-        artifactType: artifactType,
-        // Download All folder mode: the fallback capture must land there too
-        folder: activeDownloadFolder
-      });
+// A Report as Markdown with front matter (never the raw HTML)
+function reportFile(stem, response, title, meta) {
+  const markdown = response.format === 'html'
+    // skipTitle: the report's own H1 is already in the content
+    ? convertToMarkdown(response.data, citationTitlesFromHtml(response.data), title, false, true, null, false)
+    : (response.data || '');
+  return { path: `${stem}.md`, data: noteFrontMatter(meta, { title, kind: 'report' }) + markdown };
+}
 
-      // Send download message to content script
-      response = await chrome.tabs.sendMessage(tabId, {
-        type: 'DOWNLOAD_ARTIFACT',
-        data: {
-          artifactIndex: artifactIndex,
-          artifactType: artifactType,
-          artifactName: artifactName,
-          downloadPreference: settings.slidesFormat
-        }
-      });
+/**
+ * Fetch one Studio artifact as file entries: the one per-method conversion
+ * behind single downloads and Download All (Milestone 3a). Paths are
+ * relative (the caller adds a type folder or nothing).
+ *
+ * - Report: <stem>.md; Data Table: .csv/.json/.html/-references.txt;
+ *   Mind Map: .svg/.json/.html; rendered infographic: <stem>.svg|.png
+ * - url_intercepted: 'zip' fetches the file ({ path, data }); 'folder' and
+ *   'single' leave it to the background ({ path, url }, DIRECT_DOWNLOAD_URL)
+ * - button_click (no URL): the background captured and saved Chrome's own
+ *   download (into `folder` when given): files [], savedOutside true
+ *
+ * The intercept request armed before the click is always cancelled before
+ * this returns or throws, so it can never rename a later download.
+ *
+ * @param {number} tabId
+ * @param {{ index: number, type: string, label: string }} item
+ * @param {{ stem: string, mode: 'single'|'zip'|'folder', meta?: object, folder?: string }} options
+ *   meta: front matter metadata (computed from the tab when omitted);
+ *   folder: Downloads subfolder for a captured button_click download
+ * @returns {Promise<{ files: Array<{path: string, data?: string|Blob, url?: string}>, savedOutside: boolean }>}
+ */
+async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '' }) {
+  const { index, type, label } = item;
+  logger.info('Download', `Downloading artifact ${index} (${type})`, label);
+  await ensureContentScriptLoaded(tabId);
+
+  // Reports, Data Tables and Mind Maps are read from the page; the rest go
+  // through the item's More → Download menu
+  const extractable = type === 'Report' || type === 'Data Table' || type === 'Mind Map';
+  try {
+    if (!extractable) {
+      // Armed BEFORE the click: a real Chrome download (no intercepted URL)
+      // is captured, renamed and kept from opening a tab
+      await chrome.runtime.sendMessage({ type: 'START_INTERCEPT_DOWNLOAD', name: label, artifactType: type, folder });
     }
 
-    // Handle response (common for both Reports and other artifacts)
+    const response = await chrome.tabs.sendMessage(tabId, {
+      type: 'DOWNLOAD_ARTIFACT',
+      data: extractable
+        ? { artifactIndex: index, artifactType: type, artifactName: label, skipMoreButton: true }
+        : { artifactIndex: index, artifactType: type, artifactName: label, downloadPreference: settings.slidesFormat }
+    });
     if (!response || !response.success) {
       throw new Error(response?.error || 'Download failed');
     }
+    logger.download(label, 'success', `Method: ${response.method}, Duration: ${response.duration}ms`);
+    const title = response.title || label;
 
-    logger.download(artifactName, 'success', `Method: ${response.method}, Duration: ${response.duration}ms`);
-
-    // Handle different download methods
-    if (response.method === 'mindmap_app_frame') {
-      const frame = await chrome.runtime.sendMessage({ type: 'EXTRACT_MINDMAP_FRAME', tabId });
-      if (!frame || !frame.success) {
-        throw new Error(frame?.error || 'Failed to extract mind map');
+    switch (response.method) {
+      case 'mindmap_app_frame': {
+        const frame = await chrome.runtime.sendMessage({ type: 'EXTRACT_MINDMAP_FRAME', tabId });
+        if (!frame || !frame.success) throw new Error(frame?.error || 'Failed to extract mind map');
+        return { files: await mindmapFiles(stem, frame.svgContent, frame.treeData, title), savedOutside: false };
       }
-      await downloadMindmapFiles(frame.svgContent, frame.treeData, response.title || artifactName, { zipped: true });
-      logger.download(artifactName, 'success', 'Mind map exported as SVG/JSON/HTML');
-    } else if (response.method === 'mindmap_extraction') {
-      await downloadMindmapFiles(response.svgContent, response.treeData, response.title || artifactName, { zipped: true });
-      logger.download(artifactName, 'success', 'Mind map exported as SVG/JSON/HTML');
-    } else if (response.method === 'content_extraction') {
-      // Content extraction (Reports and Data Tables)
-      const baseFilename = response.title || artifactName || 'artifact';
-      const typePrefix = getArtifactTypePrefix(artifactType);
-
-      // For Data Tables, convert to CSV
-      if (artifactType === 'Data Table') {
-        logger.info('Download', `Downloading extracted content as CSV: "${baseFilename}"`);
-
-        // Convert HTML table to CSV and JSON
-        let csvContent;
-        let tableData = null;
-        let footnotes = '';
-        if (response.format === 'html') {
-          logger.info('Download', `Converting HTML table to CSV for: "${baseFilename}"`);
-          csvContent = convertTableToCSV(response.data);
-
-          // Extract structured table data for JSON
-          tableData = extractTableDataAsJSON(response.data);
-
-          // Extract footnotes from HTML
-          footnotes = extractFootnotesFromHTML(response.data);
-        } else {
-          csvContent = response.data;
+      case 'mindmap_extraction':
+        return { files: await mindmapFiles(stem, response.svgContent, response.treeData, title), savedOutside: false };
+      case 'content_extraction':
+        return {
+          files: type === 'Data Table'
+            ? dataTableFiles(stem, response, title)
+            : [reportFile(stem, response, title, meta || await artifactMeta(tabId))],
+          savedOutside: false
+        };
+      case 'svg_extract':
+      case 'canvas_export': {
+        const blob = await (await fetch(response.data)).blob();
+        const ext = NLME.extensionFor({ mime: blob.type }) || (response.format === 'svg' ? '.svg' : '.png');
+        return { files: [{ path: stem + ext, data: blob }], savedOutside: false };
+      }
+      case 'url_intercepted': {
+        const url = response.url;
+        if (mode === 'zip') {
+          const blob = await fetchDownload(url, { tabId });
+          return { files: [{ path: stem + NLME.extensionFor({ url, mime: blob.type, type }), data: blob }], savedOutside: false };
         }
-
-        // If there are footnotes or structured data, create a ZIP with CSV, JSON, HTML, and references
-        if ((footnotes && footnotes.trim().length > 0) || tableData) {
-          logger.info('Download', `Creating ZIP with CSV, JSON, HTML, and references for: "${baseFilename}"`);
-
-          const zip = new JSZip();
-          const sanitizedName = sanitizeFilename(baseFilename);
-          zip.file(`${sanitizedName}.csv`, csvContent);
-
-          // Add JSON version with table data and footnotes
-          if (tableData) {
-            const jsonData = {
-              title: baseFilename,
-              exported: new Date().toISOString(),
-              table: tableData,
-              footnotes: footnotes ? footnotes.split('\n\n').filter(line => /^\[\d+\]/.test(line.trim())) : []
-            };
-            zip.file(`${sanitizedName}.json`, JSON.stringify(jsonData, null, 2));
-          }
-
-          // Add clean HTML version with table and footnotes
-          const cleanHTML = createCleanTableHTML(response.data, baseFilename, footnotes);
-          if (cleanHTML) {
-            zip.file(`${sanitizedName}.html`, cleanHTML);
-            logger.info('Download', `Added clean HTML table to ZIP`);
-          }
-
-          // Add references text file
-          if (footnotes && footnotes.trim().length > 0) {
-            zip.file('references.txt', footnotes);
-          }
-
-          await downloadBlob(await zip.generateAsync({ type: 'blob' }), `[${typePrefix}]_${sanitizedName}.zip`);
-          logger.download(baseFilename, 'success', `Downloaded as ZIP with CSV, HTML, JSON, and references`);
-        } else {
-          // No footnotes or structured data - just download CSV
-          await downloadBlob(new Blob([csvContent], { type: 'text/csv' }), `[${typePrefix}]_${sanitizeFilename(baseFilename)}.csv`);
-          logger.download(baseFilename, 'success', `Downloaded as CSV (${csvContent.length} chars)`);
+        return { files: [{ path: stem + NLME.extensionFor({ url, type }), url }], savedOutside: false };
+      }
+      case 'button_click': {
+        // No URL came back: wait for the background to capture Chrome's
+        // download, and fail loudly if it never does (Milestone 1)
+        let result = null;
+        for (let waited = 0; waited < 20000; waited += 250) {
+          result = await chrome.runtime.sendMessage({ type: 'GET_INTERCEPTED_DOWNLOAD' });
+          if (result && result.success) break;
+          await new Promise(resolve => setTimeout(resolve, 250));
         }
-
-        // Cancel intercept mode (wasn't needed)
-        chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
-      } else {
-        // For Reports and other content, convert to markdown
-        logger.info('Download', `Downloading extracted content as markdown: "${baseFilename}"`);
-
-        // Convert HTML to markdown (content.js returns HTML, we convert it here)
-        let markdownContent;
-        if (response.format === 'html') {
-          logger.info('Download', `Converting HTML to markdown for: "${baseFilename}"`);
-          // For Reports, skip adding title if it's already in the content (prevents duplicate H1)
-          const skipTitle = (artifactType === 'Report');
-          markdownContent = convertToMarkdown(response.data, citationTitlesFromHtml(response.data), baseFilename, false, skipTitle, null, false);
-        } else {
-          // Already markdown
-          markdownContent = response.data;
-        }
-
-        await downloadBlob(new Blob([markdownContent], { type: 'text/markdown' }), `[${typePrefix}]_${sanitizeFilename(baseFilename)}.md`);
-        chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
-        logger.download(baseFilename, 'success', `Downloaded as markdown (${markdownContent.length} chars)`);
+        if (!result || !result.success) throw new Error('Download was not captured');
+        logger.download(title, 'success', `Downloaded without tab: ${result.filename}`);
+        return { files: [], savedOutside: true };
       }
-    } else if (response.method === 'svg_extract' || response.method === 'canvas_export') {
-      // Direct extraction - download the data URL
-      // Use title from response (extracted from page) or fall back to artifactName parameter
-      const filename = response.title || artifactName || 'infographic';
-      logger.info('Download', `Using filename: "${filename}"`, { from: response.title ? 'response' : 'parameter' });
-      await handleSVGDownload(response.data, filename, response.format, artifactType);
-
-      // Cancel intercept mode (wasn't needed)
-      chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
-    } else if (response.method === 'url_intercepted') {
-      // URL was intercepted from window.open - no tab opened!
-      // Have background.js download so onDeterminingFilename can rename
-      const filename = response.title || artifactName;
-      const typePrefix = getArtifactTypePrefix(artifactType);
-
-      // No extension here: background.js takes it from the actual download
-      // (Slides can be PDF or PPTX, and new types have no fixed format)
-      const fullFilename = `[${typePrefix}]_${sanitizeFilename(filename)}`;
-
-      logger.info('Download', `URL intercepted (no tab), sending to background for download: ${fullFilename}`);
-
-      // Cancel intercept mode (wasn't needed for original flow)
-      chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
-
-      // Send to background.js to download with proper renaming
-      try {
-        const result = await chrome.runtime.sendMessage({
-          type: 'DIRECT_DOWNLOAD_URL',
-          url: response.url,
-          filename: NLME.downloadFolderPath(activeDownloadFolder, fullFilename),
-          artifactType: artifactType
-        });
-
-        if (result && result.success) {
-          logger.download(fullFilename, 'success', `Direct download via background: ${result.downloadId}`);
-        } else {
-          throw new Error(result?.error || 'Direct download failed');
-        }
-      } catch (downloadError) {
-        logger.error('Download', `Direct download failed: ${downloadError.message}`);
-        throw downloadError;
-      }
-    } else if (response.method === 'button_click') {
-      // Button click - intercept mode was already enabled, wait for completion
-      const filename = response.title || artifactName;
-
-      logger.info('Download', `Waiting for background intercept to complete...`);
-
-      // No intercepted URL came back: wait for the background to capture the
-      // download, and fail loudly if it never does (Milestone 1; this used to
-      // log a warning and report success).
-      let result = null;
-      for (let waited = 0; waited < 20000; waited += 250) {
-        result = await chrome.runtime.sendMessage({ type: 'GET_INTERCEPTED_DOWNLOAD' });
-        if (result && result.success) break;
-        await new Promise(resolve => setTimeout(resolve, 250));
-      }
-      if (result && result.success) {
-        logger.download(filename, 'success', `Downloaded without tab: ${result.filename}`);
-      } else {
-        chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
-        throw new Error('Download was not captured');
-      }
+      default:
+        throw new Error(`Unknown download method: ${response.method}`);
     }
-
-    return response;
-
   } catch (error) {
-    logger.error('Download', `Failed to download ${artifactName}`, error);
+    logger.error('Download', `Failed to download ${label}`, error);
+    throw error;
+  } finally {
     // A queued intercept request would otherwise rename the next unrelated
     // download (even the user's own) as this item for up to 20 s
-    chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
-    throw error;
+    await chrome.runtime.sendMessage({ type: 'CANCEL_INTERCEPT' }).catch(() => {});
   }
 }
 
 /**
- * Handle SVG/Canvas data URL downloads
- * Converts data URL to blob and triggers download
+ * Download one artifact (row button, Studio list): today's single-file
+ * names ([report]_Title.md, [audio-overview]_Title.m4a, ...); Data Tables
+ * and mind maps as loose files.
  */
-async function handleSVGDownload(dataUrl, filename, format, artifactType = 'Infographic') {
-  // Validate and sanitize filename
-  if (!filename || filename.trim() === '') {
-    filename = `infographic-${Date.now()}`;
-    logger.warn('Download', 'Empty filename provided, using default', filename);
-  }
-
-  logger.info('Download', `Handling ${format} download`, filename);
-
-  try {
-    // Convert data URL to blob
-    const response = await fetch(dataUrl);
-    const blob = await response.blob();
-
-    // Create download URL
-    const url = URL.createObjectURL(blob);
-
-    try {
-      // Trigger download with type prefix
-      const extension = format === 'svg' ? 'svg' : 'png';
-      const typePrefix = getArtifactTypePrefix(artifactType);
-      const sanitizedFilename = `[${typePrefix}]_${sanitizeFilename(filename)}.${extension}`;
-
-      logger.info('Download', `Sanitized filename: "${sanitizedFilename}"`);
-
-      const svgTarget = NLME.downloadFolderPath(activeDownloadFolder, sanitizedFilename);
-      await chrome.runtime.sendMessage({ type: 'NAME_NEXT_DOWNLOAD', url, filename: svgTarget });
-      await chrome.downloads.download({
-        url: url,
-        filename: svgTarget,
-        saveAs: false
-      });
-
-      logger.download(filename, 'success', `${format.toUpperCase()} downloaded as ${sanitizedFilename}`);
-
-      // Give download time to start before revoking URL
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-    } finally {
-      // Always clean up blob URL
-      URL.revokeObjectURL(url);
-    }
-
-  } catch (error) {
-    logger.error('Download', `Failed to handle ${format} download`, error);
-    throw error;
-  }
+async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName) {
+  const stem = `[${getArtifactTypePrefix(artifactType)}]_${sanitizeFilename(artifactName)}`;
+  const { files } = await fetchArtifactFiles(tabId,
+    { index: artifactIndex, type: artifactType, label: artifactName },
+    { stem, mode: 'single' });
+  await saveFiles(files);
+  return { success: true, files: files.length };
 }
 
 // ==================== STATUS CHECK ====================
@@ -2998,16 +2891,7 @@ function getEnabledNoteVersions({ hasQuotes = false, hasImages = false } = {}) {
 /**
  * Trigger a download of a blob as a single file (no ZIP, no user save-as dialog).
  */
-// Download All without ZIP saves each file into Downloads/<Notebook>/
-// (Milestone 1, Task 8b). Set for the duration of that job only; the job lock
-// guarantees no other export runs meanwhile.
-let activeDownloadFolder = '';
-
 function downloadBlob(blob, filename) {
-  if (activeDownloadFolder) {
-    // One writer for folder saves (sidebar-takeout.js saveFiles)
-    return saveFiles([{ path: filename, data: blob }], { folder: activeDownloadFolder });
-  }
   const url = URL.createObjectURL(blob);
   try {
     const a = document.createElement('a');
@@ -3029,32 +2913,6 @@ function downloadBlob(blob, filename) {
  * @param {{index: number, title: string, type?: string}} note
  * @returns {Promise<{success: boolean, filesWritten: number}>}
  */
-// Save a mind map as svg / json / interactive html: three loose files, or one
-// [MINDMAP]_<title>.zip containing them when zipped is true.
-// Returns the number of files written.
-async function downloadMindmapFiles(svgContent, treeData, title, { zipped = false } = {}) {
-  const base = `[MINDMAP]_${sanitizeFilename(title)}`;
-  const files = [
-    [`${base}.svg`, new Blob([svgContent], { type: 'image/svg+xml' })],
-    [`${base}.json`, new Blob([JSON.stringify(treeData, null, 2)], { type: 'application/json' })]
-  ];
-  try {
-    const html = await generateMindmapHTML(svgContent, title);
-    files.push([`${base}.html`, new Blob([html], { type: 'text/html' })]);
-  } catch (e) {
-    console.warn('[NotebookLM Takeout] Mindmap HTML viewer template unavailable:', e);
-  }
-
-  if (zipped) {
-    const zip = new JSZip();
-    for (const [filename, blob] of files) zip.file(filename, blob);
-    await downloadBlob(await zip.generateAsync({ type: 'blob' }), `${base}.zip`);
-  } else {
-    for (const [filename, blob] of files) await downloadBlob(blob, filename);
-  }
-  return files.length;
-}
-
 async function exportSingleNote(note) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!isNotebookUrl(tab?.url)) {
@@ -3097,8 +2955,9 @@ async function exportSingleNote(note) {
   let filesWritten = 0;
 
   if (noteData.isMindmap) {
-    filesWritten = await downloadMindmapFiles(noteData.svgContent, noteData.treeData, note.title);
-    return { success: true, filesWritten };
+    const files = await mindmapFiles(`[MINDMAP]_${sanitizedTitle}`, noteData.svgContent, noteData.treeData, note.title);
+    await saveFiles(files);
+    return { success: true, filesWritten: files.length };
   }
 
   // Regular note — produce enabled markdown versions, each as its own .md file.
@@ -5229,210 +5088,155 @@ async function handleStudioBulkDelete() {
 }
 
 
-// Download All - either ZIP or individual based on checkbox
+// Download All (Milestone 3a): every artifact on the job runner. ZIP on: one
+// <Notebook>-artifacts-<ts>.zip; ZIP off: Downloads/<Notebook>/, one item
+// per call. Either way: <type folder>/<stem>.<ext>, _index.md, errors.md,
+// manifest.json.
 async function downloadAllArtifacts(tabId, items) {
   await preflightWarn(tabId, 'artifacts');
-  const downloadBtn = document.getElementById('download-all-btn');
   const zipEnabled = document.getElementById('zip-checkbox')?.checked || false;
+  const downloadBtn = document.getElementById('download-all-btn');
+  if (downloadBtn) downloadBtn.disabled = true;
+  startExportTiming();
 
-  // Show overlay on the page
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  await chrome.tabs.sendMessage(tab.id, {
-    type: 'SHOW_EXPORT_OVERLAY',
-    message: 'Preparing to download artifacts...'
-  });
+  try {
+    await withExportShell({ label: 'artifacts', overlayMessage: 'Preparing to download artifacts...' }, async shell => {
+      const folder = shell.projectName || 'NotebookLM';
+      const stems = NLME.artifactStems(items);
+      const stemOf = new Map(items.map((item, idx) => [item, stems[idx]]));
+      // Folder mode: what earlier items saved, for _index.md and manifest.json
+      // (Blobs replaced by their size: the manifest needs no more)
+      const saved = [];
+      let savedOutside = 0;
 
-  if (downloadBtn) {
-    downloadBtn.disabled = true;
-  }
-
-  // Show progress panel
-  const progressPanel = document.getElementById('download-progress');
-  const progressFill = document.getElementById('progress-fill');
-  const progressText = document.getElementById('progress-text');
-  progressPanel.style.display = 'block';
-
-  let cancelled = false;
-
-  // Listen for cancellation
-  const cancelListener = (message) => {
-    if (message.type === 'CANCEL_EXPORT') {
-      cancelled = true;
-    }
-  };
-  chrome.runtime.onMessage.addListener(cancelListener);
-
-  if (zipEnabled) {
-    // ZIP pathway - runs in background
-    progressText.textContent = 'Creating ZIP...';
-    progressFill.style.width = '0%';
-
-    // Awaited (Milestone 1): the job lock is held until the batch really
-    // ends, and the toast reports the background's actual result.
-    try {
-      const start = await chrome.runtime.sendMessage({
-        type: 'BATCH_DOWNLOAD_ALL',
-        tabId: tabId,
-        items: items,
-        downloadPreference: settings.slidesFormat
+      const result = await NLME.runExportJob({
+        kind: 'artifacts',
+        items,
+        perZip: zipEnabled ? Infinity : 1,
+        titleOf: item => item.label,
+        extractOne: async (item, ctx) => {
+          const typeFolder = NLME.artifactFolder(item.type);
+          const fetched = await retryDownload(() => fetchArtifactFiles(shell.tab.id, item, {
+            stem: stemOf.get(item),
+            mode: zipEnabled ? 'zip' : 'folder',
+            meta: shell.meta,
+            folder: zipEnabled ? '' : folder
+          }), 3, item.label);
+          if (fetched.savedOutside) {
+            savedOutside++;
+            // Folder mode: the background captured it into the notebook folder
+            const where = zipEnabled ? 'Downloads' : `Downloads/${NLME.downloadFolderPath(folder, '').replace(/\/$/, '')}`;
+            ctx.warn(`[${item.label}] saved separately to ${where} (no capturable URL)`);
+          }
+          const files = fetched.files.map(f => ({ ...f, path: `${typeFolder}/${f.path}`, title: item.label, itemKind: 'artifact' }));
+          if (!zipEnabled) {
+            // Saved here, not in packageBatch, so a failed save fails this
+            // item (errors.md) instead of ending the whole job
+            await saveFiles(files, { folder });
+            saved.push({ item, files: files.map(f => (f.data instanceof Blob ? { ...f, data: { byteLength: f.data.size } } : f)) });
+          }
+          return { item, files };
+        },
+        // Pause between items so Gemini Notebook is not hammered
+        afterEach: async item => {
+          if (item !== items[items.length - 1]) await new Promise(resolve => setTimeout(resolve, 800));
+        },
+        packageBatch: async (results, info) => {
+          if (zipEnabled) {
+            const files = results.flatMap(r => r.files);
+            shell.progress('Creating ZIP...', 1);
+            files.push(...artifactsRootFiles(files, results.map(r => r.item), { meta: shell.meta, info }));
+            await saveFiles(files, {
+              zipName: NLME.zipName({ notebook: shell.projectName, kind: 'artifacts', timestamp: shell.timestamp, partial: info.partial })
+            });
+            return;
+          }
+          // Folder mode (one item per call): the item is already saved; the
+          // last call adds the root files
+          if (info.isLast) {
+            const all = saved.flatMap(r => r.files);
+            await saveFiles(artifactsRootFiles(all, saved.map(r => r.item), { meta: shell.meta, info }), { folder });
+          }
+        },
+        isCancelled: shell.isCancelled,
+        onProgress: ({ done, total, item }) => {
+          shell.progress(`Downloading ${done + 1}/${total}: ${item.label}`, (done + 1) / total);
+        }
       });
-      if (start && start.started === false) {
-        throw new Error(start.error || 'Batch download could not start');
-      }
 
-      let result = null;
-      let cancelSent = false;
-      let idlePolls = 0;
-      while (true) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-        if (cancelled && !cancelSent) {
-          cancelSent = true;
-          chrome.runtime.sendMessage({ type: 'CANCEL_BATCH_DOWNLOAD' }).catch(() => {});
-        }
-        const status = await chrome.runtime.sendMessage({ type: 'GET_BATCH_STATUS' });
-        if (status && status.status) {
-          progressText.textContent = status.status;
-          chrome.tabs.sendMessage(tab.id, {
-            type: 'UPDATE_EXPORT_OVERLAY',
-            message: status.status,
-            progress: 50
-          }).catch(() => {});
-        }
-        if (status && !status.inProgress) {
-          if (status.result) { result = status.result; break; }
-          if (++idlePolls >= 10) break; // finished without a result (e.g. cancelled early)
-        }
-      }
-
-      const errors = (result && result.errors) || [];
-      const outcome = NLME.summarizeExportOutcome({
+      shell.finish({
         kind: 'artifacts',
         selected: items.length,
-        exported: (result && result.count) || 0,
-        failed: errors.length,
-        cancelled
+        result,
+        errorNote: savedOutside > 0 ? `${savedOutside} saved separately to Downloads, see errors.md` : undefined
       });
-      // A cancel is reported as "Cancelled: X of Y", not as a failure
-      const wasCancelled = cancelled || (result && result.cancelled);
-      const hardFailure = result && result.error && !result.count && !wasCancelled;
-      const shown = wasCancelled
-        ? NLME.summarizeExportOutcome({ kind: 'artifacts', selected: items.length, exported: (result && result.count) || 0, failed: 0, cancelled: true })
-        : outcome;
-      showToast(hardFailure ? `Download All failed: ${result.error} (see errors.txt)` : shown.message,
-        hardFailure ? 'error' : shown.level);
-    } catch (error) {
-      console.error('Batch download failed:', error);
-      showToast(`Download All failed: ${error.message}`, 'error');
-    } finally {
-      chrome.runtime.onMessage.removeListener(cancelListener);
-      await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' }).catch(() => {});
-      progressPanel.style.display = 'none';
-      if (downloadBtn) downloadBtn.disabled = false;
-    }
-    return; // Early return for ZIP pathway
-  } else {
-    // Individual downloads into Downloads/<Notebook>/ (Milestone 1, Task 8b):
-    // each file streams to disk, so there is no size limit
-    try {
-      activeDownloadFolder = (await getProjectName(tabId)) || 'NotebookLM';
-      await downloadItemsSequentially(tabId, items, progressFill, progressText, () => cancelled);
-    } catch (error) {
-      // Fall through to the cleanup below (overlay, panel, button) either way
-      console.error('[NotebookLM Takeout] Download All failed:', error);
-      showToast(`Download All failed: ${error.message}`, 'error');
-    } finally {
-      activeDownloadFolder = '';
-    }
-  }
-
-  // Remove cancellation listener
-  chrome.runtime.onMessage.removeListener(cancelListener);
-
-  // Hide page overlay
-  try {
-    await chrome.tabs.sendMessage(tab.id, {
-      type: 'HIDE_EXPORT_OVERLAY'
     });
-  } catch (error) {
-    console.error('[NotebookLM Takeout] Failed to hide overlay:', error);
-  }
-
-  // Hide progress panel
-  progressPanel.style.display = 'none';
-
-  // Reset button
-  if (downloadBtn) {
-    downloadBtn.disabled = false;
+  } finally {
+    if (downloadBtn) downloadBtn.disabled = false;
   }
 }
 
-// Download items one by one with progress display and retry logic
-async function downloadItemsSequentially(tabId, items, progressFill, progressText, isCancelled) {
-  let successCount = 0;
-  let failureCount = 0;
-  let wasCancelled = false;
-  let skippedCount = 0;
+/**
+ * The root files of an artifacts export: errors.md (when there are errors),
+ * _index.md (by type folder) and manifest.json (last; lists every file).
+ *
+ * @param {object[]} files every artifact file in the export (type-folder paths)
+ * @param {object[]} exportedItems the items those files came from
+ * @param {{ meta: object, info: { errors: Array, partial: boolean } }} options
+ */
+function artifactsRootFiles(files, exportedItems, { meta, info }) {
+  const errors = info.errors || [];
+  const root = [];
 
-  logger.info('Batch Download', `Starting batch download of ${items.length} items`);
-
-  for (let i = 0; i < items.length; i++) {
-    // Check for cancellation
-    if (isCancelled && isCancelled()) {
-      console.log('[NotebookLM Takeout] Batch download cancelled by user');
-      wasCancelled = true;
-      break;
-    }
-
-    const item = items[i];
-    const progress = ((i + 1) / items.length) * 100;
-
-    // Update sidebar progress
-    progressFill.style.width = `${progress}%`;
-    progressText.textContent = `Downloading ${i + 1}/${items.length}: ${item.label}`;
-
-    // Update page overlay on the job's own tab (the active tab may have changed)
-    chrome.tabs.sendMessage(tabId, {
-      type: 'UPDATE_EXPORT_OVERLAY',
-      message: `Downloading ${i + 1}/${items.length}: ${item.label}`,
-      progress: progress
-    }).catch(() => {}); // overlay is cosmetic; never abort the job
-
-    logger.download(item.label, 'progress', `Item ${i + 1}/${items.length}`);
-
-    try {
-      // Use retry logic for each download (3 retries for batch)
-      await retryDownload(
-        () => downloadArtifact(tabId, item.index, item.type, item.label),
-        3,
-        item.label
-      );
-
-      successCount++;
-      logger.download(item.label, 'success', `Completed ${i + 1}/${items.length}`);
-
-    } catch (error) {
-      failureCount++;
-      logger.error('Batch Download', `Failed to download ${item.label}`, error);
-      // Continue with next item even if this one failed
-    }
-
-    // Delay between downloads to prevent rate limiting
-    if (i < items.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 800));
-    }
+  if (errors.length > 0) {
+    root.push({
+      path: 'errors.md',
+      data: NLME.buildErrorReport({ title: 'Artifacts Export', generatedAt: new Date().toLocaleString(), errors })
+    });
   }
 
-  // One truthful summary (Milestone 1), naming the folder the files went to
-  const outcome = NLME.summarizeExportOutcome({
-    kind: 'artifacts',
-    selected: items.length,
-    exported: successCount,
-    failed: failureCount,
-    cancelled: wasCancelled
+  // Items per type folder, in export order
+  const folders = new Map();
+  for (const item of exportedItems) {
+    const typeFolder = NLME.artifactFolder(item.type);
+    if (!folders.has(typeFolder)) folders.set(typeFolder, { type: item.type, labels: [] });
+    folders.get(typeFolder).labels.push(item.label);
+  }
+
+  let index = `# Artifacts — ${meta.notebook}\n\n`;
+  index += `Generated: ${new Date().toLocaleString()}\n\n`;
+  index += `Total Artifacts: ${exportedItems.length}\n\n`;
+  index += '---\n\n';
+  for (const [typeFolder, { type, labels }] of folders) {
+    index += `## ${type} (${typeFolder}/)\n\n`;
+    for (const label of new Set(labels)) {
+      const own = files.filter(f => f.title === label && f.path.startsWith(`${typeFolder}/`));
+      index += `### ${label}\n\n`;
+      index += own.length
+        ? own.map(f => `- [${f.path.slice(typeFolder.length + 1)}](${encodeURI(f.path)})`).join('\n') + '\n\n'
+        : '- Saved separately to Downloads (see errors.md)\n\n';
+    }
+  }
+  if (errors.length > 0) {
+    index += '## Errors\n\n';
+    index += '- [Export Errors](errors.md)\n\n';
+  }
+  root.push({ path: '_index.md', data: index + timingSummary() });
+
+  const counts = {};
+  for (const [typeFolder, { labels }] of folders) counts[typeFolder] = labels.length;
+  root.push({
+    path: 'manifest.json',
+    data: JSON.stringify(NLME.buildManifest({
+      meta,
+      kind: 'artifacts',
+      partial: info.partial,
+      files: [...files, ...root],
+      counts,
+      errorCount: errors.length
+    }), null, 2)
   });
-  const where = activeDownloadFolder ? ` into Downloads/${NLME.downloadFolderPath(activeDownloadFolder, '').replace(/\/$/, '')}` : '';
-  logger.info('Batch Download', outcome.message);
-  showToast(outcome.message.replace(/see errors\.txt/, 'see the side panel log') + where, outcome.level);
+  return root;
 }
 
 function showToast(message, type = 'success') {

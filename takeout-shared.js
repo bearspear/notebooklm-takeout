@@ -148,24 +148,6 @@
     return preferred !== undefined ? preferred : candidates[0];
   }
 
-  // Make ZIP entry names unique: repeats get " (2)", " (3)"... before the
-  // extension, so artifacts with the same title don't overwrite each other.
-  function uniqueFilenames(names) {
-    const used = new Set();
-    return (names || []).map(name => {
-      let candidate = name;
-      if (used.has(candidate)) {
-        const dot = name.lastIndexOf('.');
-        const stem = dot > 0 ? name.slice(0, dot) : name;
-        const ext = dot > 0 ? name.slice(dot) : '';
-        let n = 2;
-        do { candidate = `${stem} (${n++})${ext}`; } while (used.has(candidate));
-      }
-      used.add(candidate);
-      return candidate;
-    });
-  }
-
   // Citation anchors are numbered while Turndown runs, but some rules convert
   // a subtree twice (the list rule re-runs Turndown on each <li>), which skips
   // numbers and breaks the Sources back-links to "-1". Renumber the finished
@@ -400,10 +382,6 @@
     const fresh = (entries || []).filter(e => e && e.url && e.timestamp >= since);
     if (fresh.length === 0) return null;
     return fresh.reduce((a, b) => (b.timestamp >= a.timestamp ? b : a)).url;
-  }
-
-  function formatErrorsTxt({ title = 'Export', generatedAt = '', errors = [] } = {}) {
-    return buildErrorReport({ title, generatedAt, errors });
   }
 
 
@@ -938,7 +916,6 @@
     createStabilityTracker,
     downloadFolderPath,
     extensionFromDownloadUrl,
-    formatErrorsTxt,
     titlesMatch,
     pickByIndexThenTitleStrict,
     pickFreshIntercept,
@@ -954,7 +931,6 @@
     classifyKatexScript,
     isCollapsedCitationGroup,
     renumberCitationAnchors,
-    uniqueFilenames,
     pickDownloadMenuIndex,
     countFailedExtractions,
     ISSUES_URL,
