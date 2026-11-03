@@ -646,6 +646,32 @@ test('uniqueStems treats stem+variant names as taken', () => {
   assert.deepEqual(NLME.uniqueStems(['Summary', 'summary CODE blocks'], ['-code-blocks']), ['Summary', 'summary-CODE-blocks-2']);
 });
 
+test('takeoutVariantSettings turns on image versions and keeps the rest', () => {
+  const s = { exportNoteWithImages: false, exportSourceWithImages: false, exportSourcePlusMetaWithImages: false, exportNoteCodeBlocks: true };
+  const t = NLME.takeoutVariantSettings(s);
+  assert.equal(t.exportNoteWithImages, true);
+  assert.equal(t.exportSourceWithImages, true);
+  assert.equal(t.exportSourcePlusMetaWithImages, false);
+  assert.equal(t.exportNoteCodeBlocks, true);
+  assert.equal(s.exportNoteWithImages, false); // input not mutated
+});
+
+test('takeoutVariantSettings makes the variant sets include the image versions', () => {
+  const t = NLME.takeoutVariantSettings({});
+  assert.deepEqual(NLME.noteVariants(t, { hasImages: true }).map(v => v.suffix), ['', '-with-images']);
+  assert.deepEqual(NLME.sourceVariants(t, { hasImages: true }).map(v => v.suffix), ['', '-with-images']);
+  assert.deepEqual(NLME.noteVariants(t, { hasImages: false }).map(v => v.suffix), ['']);
+});
+
+test('uniqueStems keeps reserved names free for package files', () => {
+  assert.deepEqual(NLME.uniqueStems(['errors', 'Errors', 'Combined Notes'], [], ['errors', 'combined-notes']),
+    ['errors-2', 'Errors-3', 'Combined-Notes-2']);
+  assert.deepEqual(NLME.uniqueStems(['combined-notes'], ['-with-images'], ['combined-notes-with-images', 'combined-notes']),
+    ['combined-notes-2']);
+  assert.deepEqual(NLME.uniqueStems(['ERRORS'], [], ['errors']), ['ERRORS-2']);
+  assert.deepEqual(NLME.uniqueStems(['errors']), ['errors']); // no reserved names: as before
+});
+
 test('exportMeta and notebookIdFromUrl describe the notebook', () => {
   const url = 'https://notebook.google.com/notebook/62d6e344-2fa7-42ed-b3ef-236f3007fdc3';
   assert.equal(NLME.notebookIdFromUrl(url), '62d6e344-2fa7-42ed-b3ef-236f3007fdc3');

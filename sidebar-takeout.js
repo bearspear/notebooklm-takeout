@@ -368,6 +368,8 @@ async function runFullTakeout() {
   startExportTiming();
   const zipMode = takeoutZipEnabled();
   const citationMode = NLME.chatCitationMode(settings);
+  // A takeout always includes the with-images versions, whatever the tab exports tick
+  const variantSettings = NLME.takeoutVariantSettings(settings);
 
   await withExportShell({ label: 'takeout', healthType: 'notes', overlayMessage: 'Preparing Full Takeout...' }, async shell => {
     const tabId = shell.tab.id;
@@ -379,12 +381,13 @@ async function runFullTakeout() {
       {
         name: 'Sources', folder: 'sources',
         scan: async () => (await scanSourcesData(tabId)).sources,
-        run: (catShell, items, target) => runSourcesJob(catShell, items, target)
+        // itemDir '': the category folder is already sources/ (notes/), no second one inside it
+        run: (catShell, items, target) => runSourcesJob(catShell, items, { ...target, variantSettings, itemDir: '' })
       },
       {
         name: 'Notes', folder: 'notes',
         scan: () => scanNotesData(tabId),
-        run: (catShell, items, target) => runNotesJob(catShell, items, target)
+        run: (catShell, items, target) => runNotesJob(catShell, items, { ...target, variantSettings, itemDir: '' })
       },
       {
         name: 'Chat', folder: 'chat',
@@ -397,7 +400,7 @@ async function runFullTakeout() {
         // Messages that could not be read are not "none in notebook": the
         // job still runs and writes them to errors.md
         isEmpty: chatData => NLME.chatScanIsEmpty(chatData),
-        run: (catShell, chatData, target) => runChatJob(catShell, chatData, { ...target, citationMode, forceZip: true })
+        run: (catShell, chatData, target) => runChatJob(catShell, chatData, { ...target, citationMode, forceZip: true, variantSettings })
       },
       {
         name: 'Artifacts', folder: 'artifacts',

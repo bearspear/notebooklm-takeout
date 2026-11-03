@@ -1032,7 +1032,7 @@ extension stopped the job. One export runs at a time (`runExclusive`).
   plus `youtube_url` (YouTube sources) or `messages` (chat). Strings are JSON-quoted; empty
   values are dropped. `NLME.exportMeta` supplies the notebook fields once per run.
 - A file entry carries `title`, `variant` and `itemKind` when the manifest should list them.
-- **One naming scheme: `NLME.uniqueStems(titles, suffixes)`.** Sanitized titles, repeats get
+- **One naming scheme: `NLME.uniqueStems(titles, suffixes, reserved = [])`.** Sanitized titles, repeats get
   `-2`, `-3`, compared case-insensitively; a stem counts as taken when any stem+suffix name
   is in use (so `Diagram with images` cannot overwrite `Diagram`'s `-with-images` variant).
   `NLME.artifactStems` applies it per type folder. Do not add another uniquifier.
@@ -1061,11 +1061,29 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined out
 - **ZIP off**: `Downloads/<Notebook> takeout <ts>/<root>/…`: the same `<root>/` tree sits
   inside the timestamped folder, because every path (category files and root files) carries the
   `<root>/` prefix and `folder` is the Downloads subfolder; artifacts run in folder mode.
-- **Doubled category folder (intended for now):** each category folder is a self-contained
-  export, i.e. the normal builder layout under `<root>/<category>/`: `sources/sources/<stem>.md`,
-  `notes/notes/<stem>.md` (+ `combined-notes*.md`), `chat/chat.md`, `artifacts/<type>/…`, each with
-  its own `_index.md`, `manifest.json` (and `_audit.md` / `errors.md`), so `_index.md` links stay
-  valid. Do not flatten it without reworking those links.
+- **Category folders:** each is a self-contained export, i.e. the builder layout under
+  `<root>/<category>/`, each with its own `_index.md`, `manifest.json` (and `_audit.md` /
+  `errors.md`), so `_index.md` links stay valid. The runners get `itemDir: ''` (see below), so
+  note and source files sit directly in it: `sources/<stem>.md`, `notes/<stem>.md` (+
+  `combined-notes*.md`, `mind-maps/`), `chat/chat.md`, `artifacts/<type>/…`; with parts,
+  `notes/part-1/<stem>.md`. `sources/youtube-urls*.txt` keep their package-relative path (so
+  `<root>/sources/sources/youtube-urls.txt` in a takeout).
+- **`variantSettings` and `itemDir` (`CategoryTarget`, Milestone 3b Task 7):** `runNotesJob`,
+  `runSourcesJob` and `runChatJob` read every `exportNote*` / `exportSource*` setting and every
+  `NLME.noteVariants` / `sourceVariants` call from `variantSettings` (default: the global
+  `settings`), threaded through `extractNoteItem`, `extractSourceItem` / `buildSourceData`,
+  `extractChatPair` and `buildNotesFiles` / `buildSourcesFiles` / `buildChatFiles`. Full Takeout
+  passes `NLME.takeoutVariantSettings(settings)` (a copy with `exportNoteWithImages` and
+  `exportSourceWithImages` on), so a takeout always writes `-with-images` versions for items that
+  have images; `exportSourcePlusMetaWithImages` is the user's. `exportSingleNote` is not a job
+  and keeps the global `settings`. `itemDir` (default `'notes/'` / `'sources/'`) is the folder of
+  the note and source files inside the package; `''` in a takeout. `mind-maps/`, combined files
+  and `youtube-urls*.txt` ignore it. The notes `_index.md` picks note and combined entries by
+  `kind`, not by path prefix, and says "in this folder" when `itemDir` is empty. With `itemDir`
+  `''` the files share a folder with `errors.md` and `combined-notes*.md`, so
+  `NLME.uniqueStems(titles, suffixes, reserved)` gets those names as `reserved`. Tab exports
+  use the defaults and are unchanged. Retry failed items from a takeout runs the tab exports
+  (global `settings`, own ZIPs).
 - **Statuses**: `done` (complete), `partial` (cancelled), `skipped` (cancelled earlier),
   `empty` (none in notebook), `stopped` (the job stopped itself), `failed` (scan or write
   error, or nothing exported but items failed or errors recorded). After a runner the status
@@ -1158,7 +1176,7 @@ user clicks Dismiss.
   notes, sources and Download All (`downloadAllArtifacts(shell.tab.id, failed)`); chat passes none
   (its messages do not fail as a whole; re-export the chat).
 - Toasts remain for short notices (job refused, no tab, cancelled at the health check, unexpected
-  failure), and single-item exports. Full Takeout shows its combined outcome in the results panel (`showResults`).
+  failure) and single-item exports. Full Takeout shows its combined outcome in the results panel (`showResults`).
 
 ## Known issues and latent bugs
 

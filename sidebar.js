@@ -2811,8 +2811,16 @@ async function exportNotesAsMarkdown(selectedNotes) {
  * <Notebook>-<kind>-<ts>.zip, paths as the builders return them. Full
  * Takeout passes pathPrefix '<root>/<category>/', zipKind
  * 'takeout-<category>' and, with ZIP off, the takeout's Downloads folder.
+ * It also passes variantSettings (NLME.takeoutVariantSettings: the settings
+ * the notes, sources and chat paths read their variants from, default the
+ * global `settings`) and itemDir '' (note and source files go straight in the
+ * category folder, not in a notes/ or sources/ folder inside it).
  *
- * @typedef {{ pathPrefix?: string, zipKind?: string, folder?: string|null }} CategoryTarget
+ * @typedef {{ pathPrefix?: string, zipKind?: string, folder?: string|null,
+ *   variantSettings?: object, itemDir?: string }} CategoryTarget
+ *   itemDir: folder (with trailing '/') of the note or source files inside the
+ *   package; default 'notes/' / 'sources/'. mind-maps/, the combined files and
+ *   sources/youtube-urls*.txt keep their package-relative paths.
  */
 
 // One batch of a category's files to its ZIP (name pushed to `zips`) or, with
@@ -2856,7 +2864,7 @@ function batchPrefix(pathPrefix, info) {
  * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean }>}
  *   result: runExportJob's result
  */
-async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'notes', folder = null } = {}) {
+async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'notes', folder = null, variantSettings = settings, itemDir = 'notes/' } = {}) {
   const perZip = settings.notesPerZip;
   // Shared by every extractNoteItem call: audit counters, early-stop
   // counters, and the DOM-warning decision
@@ -2885,7 +2893,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
     kind: 'notes',
     items: selectedNotes,
     perZip,
-    extractOne: (note, ctx) => extractNoteItem(shell, note, ctx, state),
+    extractOne: (note, ctx) => extractNoteItem(shell, note, ctx, state, variantSettings),
     // Always close the note viewer, even if extraction failed
     afterEach: async () => {
       try {
@@ -2911,7 +2919,9 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
         auditText,
         batchIndex: info.batchIndex,
         totalBatches: info.totalBatches,
-        partial: info.partial
+        partial: info.partial,
+        variantSettings,
+        itemDir
       });
       await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, zips, written });
       console.log(`[NotebookLM Takeout] Downloaded notes ZIP ${info.batchIndex}/${info.totalBatches}`);
@@ -2952,10 +2962,11 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
  * @param {{index: number, title: string, sourceIndex?: number}} note
  * @param {{warn: Function, stop: Function}} ctx
  * @param {object} state counters shared across notes (see exportNotesAsMarkdown)
+ * @param {object} [variantSettings] where the export* variant settings come from (default `settings`)
  * @returns {Promise<object>} NoteData: { title, markdown, html, sources } or
  *   { title, isMindmap: true, svgContent, treeData }
  */
-async function extractNoteItem(shell, note, ctx, state) {
+async function extractNoteItem(shell, note, ctx, state, variantSettings = settings) {
   let noteData;
   try {
     noteData = await chrome.tabs.sendMessage(shell.tab.id, {
@@ -2965,7 +2976,7 @@ async function extractNoteItem(shell, note, ctx, state) {
         noteTitle: note.title,
         sourceIndex: note.sourceIndex,
         // Only download images if user has enabled an image version
-        includeCitationImages: !!settings.exportNoteWithImages,
+        includeCitationImages: !!variantSettings.exportNoteWithImages,
         citationDetail: settings.citationDetail
       }
     });
@@ -3187,11 +3198,15 @@ function noteFrontMatter(meta, { title, kind = 'note', variant }) {
  * @param {object[]} notes NoteData from extractNoteItem (may be empty for an
  *   errors-only ZIP)
  * @param {{ meta: object, errors?: Array, auditText?: string|null,
- *   batchIndex?: number, totalBatches?: number, partial?: boolean }} options
+ *   batchIndex?: number, totalBatches?: number, partial?: boolean,
+ *   variantSettings?: object, itemDir?: string }} options
  *   errors: ALL errors of the run, passed only to the last ZIP it writes
+ *   variantSettings: where noteVariants reads the export* settings (default `settings`)
+ *   itemDir: folder of the note files ('notes/'; '' puts them next to the
+ *   combined files)
  * @returns {Array<{path: string, data: string, title?: string, variant?: string, itemKind?: string}>}
  */
-function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchIndex = 1, totalBatches = 1, partial = false }) {
+function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchIndex = 1, totalBatches = 1, partial = false, variantSettings = settings, itemDir = 'notes/' }) {
   const files = [];
   const indexFiles = []; // Track all files for _index.md
 
@@ -3212,15 +3227,18 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
   };
   const hasQuotes = notes.some(n => (n.sources || []).some(src => src.quote && src.quote.trim()));
   const hasImages = notes.some(n => NLME.noteHasImages(n)); // body or citation quotes
-  const versions = NLME.noteVariants(settings, { hasQuotes, hasImages })
+  const versions = NLME.noteVariants(variantSettings, { hasQuotes, hasImages })
     .map(v => ({ ...NOTE_VERSION_INFO[v.suffix], variant: variantName(v.suffix) }));
 
   // Process regular notes (all versions in single notes/ folder with
   // suffixes); every variant of one note shares one stem, and no stem may
   // equal another note's stem+variant name
   if (regularNotes.length > 0) {
+    // Next to the package files (itemDir ''), no note may take the name of
+    // errors.md, _audit.md or a combined-notes file
+    const reserved = itemDir ? [] : ['errors', '_index', '_audit', ...versions.map(v => `combined-notes${v.combinedSuffix}`)];
     const stems = NLME.uniqueStems(regularNotes.map(n => n.title),
-      versions.map(v => v.fileSuffix).filter(Boolean));
+      versions.map(v => v.fileSuffix).filter(Boolean), reserved);
 
     versions.forEach(version => {
       // Individual note files with version suffix
@@ -3243,7 +3261,7 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
           markdown = stripImagesFromMarkdown(markdown);
         }
 
-        const path = `notes/${stems[idx]}${version.fileSuffix}.md`;
+        const path = `${itemDir}${stems[idx]}${version.fileSuffix}.md`;
         files.push({
           path,
           data: noteFrontMatter(meta, { title: note.title, variant: version.variant }) + markdown,
@@ -3256,7 +3274,8 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
           title: note.title,
           version: version.title,
           versionDescription: version.description,
-          itemType: 'Notes'
+          itemType: 'Notes',
+          kind: 'note'
         });
       });
 
@@ -3306,7 +3325,8 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
         title: `Combined Notes - ${version.title}`,
         version: version.title,
         versionDescription: version.description,
-        itemType: 'Notes'
+        itemType: 'Notes',
+        kind: 'combined'
       });
     });
   }
@@ -3367,7 +3387,7 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
     indexContent += `Versions: ${versions.length}\n\n`;
 
     // Combined files section
-    const combinedFiles = indexFiles.filter(f => f.path.startsWith('combined-notes') && f.itemType === 'Notes');
+    const combinedFiles = indexFiles.filter(f => f.kind === 'combined');
     if (combinedFiles.length > 0) {
       indexContent += `## Combined Notes (All in One File)\n\n`;
       indexContent += `Available in ${combinedFiles.length} version(s):\n\n`;
@@ -3381,10 +3401,10 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
     }
 
     // Individual notes section - grouped by note title
-    const noteFiles = indexFiles.filter(f => f.path.startsWith('notes/') && f.itemType === 'Notes');
+    const noteFiles = indexFiles.filter(f => f.kind === 'note');
     if (noteFiles.length > 0) {
       indexContent += `## Individual Notes\n\n`;
-      indexContent += `All versions available in the \`notes/\` folder with suffixes:\n\n`;
+      indexContent += `All versions available in ${itemDir ? 'the `' + itemDir + '` folder' : 'this folder'} with suffixes:\n\n`;
 
       // Group by note title
       const notesByTitle = new Map();
@@ -3400,7 +3420,7 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
         indexContent += `### ${title}\n\n`;
         titleFiles.forEach(file => {
           const versionLabel = file.version ? ` (${file.version})` : '';
-          indexContent += `- [${file.path.split('/')[1]}](${encodeURI(file.path)})${versionLabel}\n`;
+          indexContent += `- [${file.path.split('/').pop()}](${encodeURI(file.path)})${versionLabel}\n`;
         });
         indexContent += '\n';
       });
@@ -3617,7 +3637,7 @@ async function exportSources(selectedSources) {
  * @param {CategoryTarget} [target]
  * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean }>}
  */
-async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind = 'sources', folder = null } = {}) {
+async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind = 'sources', folder = null, variantSettings = settings, itemDir = 'sources/' } = {}) {
   const perZip = settings.sourcesPerZip;
   // Shared by every extractSourceItem call: audit counters and the
   // DOM-warning decision
@@ -3644,7 +3664,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
     kind: 'sources',
     items: selectedSources,
     perZip,
-    extractOne: (source, ctx) => extractSourceItem(shell, source, ctx, state),
+    extractOne: (source, ctx) => extractSourceItem(shell, source, ctx, state, variantSettings),
     // Close the source viewer once per source, whether extraction worked or not
     afterEach: async () => {
       try {
@@ -3668,7 +3688,9 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
         auditText,
         batchIndex: info.batchIndex,
         totalBatches: info.totalBatches,
-        partial: info.partial
+        partial: info.partial,
+        variantSettings,
+        itemDir
       });
       await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, zips, written });
       console.log(`[NotebookLM Takeout] Downloaded sources ZIP ${info.batchIndex}/${info.totalBatches}`);
@@ -3706,16 +3728,17 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
  * @param {{index: number, title: string}} source
  * @param {{warn: Function}} ctx
  * @param {object} state shared across sources (see exportSources)
+ * @param {object} [variantSettings] where the export* variant settings come from (default `settings`)
  * @returns {Promise<object>} SourceData: { title, youtubeUrl, summary,
  *   keyTopics, hasImages, imagesFound, imagesEmbedded,
  *   versions: { base, plusMeta, withImages, plusMetaWithImages } }
  *   (plusMeta null when no metadata version is enabled; image versions null
  *   when the source has no images or none are enabled)
  */
-async function extractSourceItem(shell, source, ctx, state) {
+async function extractSourceItem(shell, source, ctx, state, variantSettings = settings) {
   // Wait for and write the AI summary/guide only when a metadata version is
   // exported (avoids false "missing summary" errors when those are off)
-  const needsMeta = !!(settings.exportSourcePlusMeta || settings.exportSourcePlusMetaWithImages);
+  const needsMeta = !!(variantSettings.exportSourcePlusMeta || variantSettings.exportSourcePlusMetaWithImages);
   let sourceData;
   try {
     sourceData = await retryOperation(
@@ -3730,7 +3753,7 @@ async function extractSourceItem(shell, source, ctx, state) {
     mergeTiming(sourceData);
 
     if (sourceData && !sourceData.error) {
-      const data = await buildSourceData(source, sourceData, ctx, state.audit, needsMeta);
+      const data = await buildSourceData(source, sourceData, ctx, state.audit, needsMeta, variantSettings);
       console.log(`[NotebookLM Takeout] Successfully extracted "${source.title}"`);
       return data;
     }
@@ -3746,7 +3769,7 @@ async function extractSourceItem(shell, source, ctx, state) {
 }
 
 // The Markdown versions of one extracted source (see extractSourceItem)
-async function buildSourceData(source, sourceData, ctx, audit, needsMeta) {
+async function buildSourceData(source, sourceData, ctx, audit, needsMeta, variantSettings = settings) {
   const hasSummary = !!(sourceData.guideMarkdown && sourceData.guideMarkdown.trim().length > 0);
   const hasKeyTopics = !!(sourceData.keyTopics && sourceData.keyTopics.length > 0);
   if (needsMeta && !hasSummary) {
@@ -3781,7 +3804,7 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta) {
   let plusMetaWithImages = null;
   let imagesFound = 0;
   let imagesEmbedded = 0;
-  if (settings.exportSourceWithImages || settings.exportSourcePlusMetaWithImages) {
+  if (variantSettings.exportSourceWithImages || variantSettings.exportSourcePlusMetaWithImages) {
     try {
       const embedded = await embedImagesInMarkdown(baseMarkdown, source.title);
       imagesFound = embedded.imagesFound;
@@ -3899,38 +3922,45 @@ const SOURCE_VERSION_INFO = {
  * @param {object[]} sources SourceData from extractSourceItem (may be empty
  *   for an errors-only ZIP)
  * @param {{ meta: object, errors?: Array, auditText?: string|null,
- *   batchIndex?: number, totalBatches?: number, partial?: boolean }} options
+ *   batchIndex?: number, totalBatches?: number, partial?: boolean,
+ *   variantSettings?: object, itemDir?: string }} options
  *   errors: ALL errors of the run, passed only to the last ZIP it writes
+ *   variantSettings: where sourceVariants reads the export* settings (default `settings`)
+ *   itemDir: folder of the source files ('sources/'; '' puts them next to
+ *   errors.md and _index.md). youtube-urls*.txt stay in sources/ either way.
  * @returns {Array<{path: string, data: string, title?: string, variant?: string, itemKind?: string}>}
  */
-function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batchIndex = 1, totalBatches = 1, partial = false }) {
+function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batchIndex = 1, totalBatches = 1, partial = false, variantSettings = settings, itemDir = 'sources/' }) {
   const files = [];
   const indexEntries = [];
 
   // Every variant of one source shares one stem, and no stem may equal
   // another source's stem+variant name ('Report' vs 'Report plus meta')
-  const zipSuffixes = NLME.sourceVariants(settings, { hasImages: sources.some(s => s.hasImages) })
+  const zipSuffixes = NLME.sourceVariants(variantSettings, { hasImages: sources.some(s => s.hasImages) })
     .map(v => v.suffix).filter(Boolean);
-  const stems = NLME.uniqueStems(sources.map(s => s.title), zipSuffixes);
+  // Next to the package files (itemDir ''), no source may take the name of
+  // errors.md or _audit.md
+  const reserved = itemDir ? [] : ['errors', '_index', '_audit'];
+  const stems = NLME.uniqueStems(sources.map(s => s.title), zipSuffixes, reserved);
 
   sources.forEach((source, idx) => {
     const written = [];
     // Versions for this source (NLME.sourceVariants); image versions exist
     // only when the source has images
-    for (const { suffix } of NLME.sourceVariants(settings, { hasImages: !!source.hasImages })) {
+    for (const { suffix } of NLME.sourceVariants(variantSettings, { hasImages: !!source.hasImages })) {
       const info = SOURCE_VERSION_INFO[suffix];
       const markdown = source.versions[info.key];
       if (markdown == null) continue;
       const variant = variantName(suffix);
       const filename = `${stems[idx]}${suffix}.md`;
       files.push({
-        path: `sources/${filename}`,
+        path: `${itemDir}${filename}`,
         data: sourceFrontMatter(meta, { title: source.title, variant, youtubeUrl: source.youtubeUrl }) + markdown,
         title: source.title,
         variant,
         itemKind: 'source'
       });
-      written.push({ label: `${filename} - ${info.label}`, path: `sources/${filename}` });
+      written.push({ label: `${filename} - ${info.label}`, path: `${itemDir}${filename}` });
     }
 
     let details = '';
@@ -4009,7 +4039,7 @@ function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batch
     indexContent += '\n---\n\n';
 
     indexContent += '## File Naming Convention\n\n';
-    indexContent += `Each source is exported in ${variantsWritten.length} version(s), all in the \`sources/\` folder:\n\n`;
+    indexContent += `Each source is exported in ${variantsWritten.length} version(s), ${itemDir ? 'all in the `' + itemDir + '` folder' : 'all in this folder'}:\n\n`;
     let sectionNum = 1;
     for (const [suffix, info] of Object.entries(SOURCE_VERSION_INFO)) {
       if (!variantsWritten.includes(variantName(suffix))) continue;
@@ -4261,7 +4291,7 @@ async function exportChat(chatData) {
  *   forceZip: always the full file set (Full Takeout), never one loose .md
  * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean }>}
  */
-async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip = false, pathPrefix = '', zipKind = 'chat', folder = null } = {}) {
+async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip = false, pathPrefix = '', zipKind = 'chat', folder = null, variantSettings = settings } = {}) {
   const messagePairs = chatData.messagePairs;
   // Scan completeness (Milestone 2, Resilience #2): known before the job
   // starts, so they lead errors.md
@@ -4280,7 +4310,7 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
     items: messagePairs,
     perZip: Infinity,
     seedErrors,
-    extractOne: (pair, ctx) => extractChatPair(shell, pair, ctx, { citationMode, total: messagePairs.length }),
+    extractOne: (pair, ctx) => extractChatPair(shell, pair, ctx, { citationMode, total: messagePairs.length, variantSettings }),
     packageBatch: async (messages, info) => {
       console.log(`[NotebookLM Takeout] Processing complete: ${messages.length} messages`);
       shell.progress('Creating export...', 1);
@@ -4292,7 +4322,8 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
         auditDoc,
         partial: info.partial,
         forceZip,
-        citationMode
+        citationMode,
+        variantSettings
       });
       if (single) {
         // Today's download name for the single file
@@ -4322,13 +4353,14 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
  * @param {object} shell withExportShell's shell (tab, progress)
  * @param {{userMessage: string, aiResponseHTML: string, date?: string, domIndex?: number}} pair
  * @param {{index: number, warn: Function}} ctx
- * @param {{ citationMode?: 'quotes'|'titles'|'none', total: number }} options
+ * @param {{ citationMode?: 'quotes'|'titles'|'none', total: number, variantSettings?: object }} options
  *   total: message pairs in the job (progress text)
+ *   variantSettings: where the export* variant settings come from (default `settings`)
  * @returns {Promise<object>} ProcessedMessage: { date, userMessage,
  *   aiResponseHTML, sources: [{ sourceIndex, text, quote }], fullCitations,
  *   stats: { hasCitations, citationsFound, successfulExtractions, failedExtractions } }
  */
-async function extractChatPair(shell, pair, ctx, { citationMode = 'quotes', total }) {
+async function extractChatPair(shell, pair, ctx, { citationMode = 'quotes', total, variantSettings = settings }) {
   const n = ctx.index + 1;
   const stats = { hasCitations: false, citationsFound: 0, successfulExtractions: 0, failedExtractions: 0 };
   const message = sources => ({
@@ -4421,7 +4453,7 @@ async function extractChatPair(shell, pair, ctx, { citationMode = 'quotes', tota
             messageIndex: pair.domIndex ?? ctx.index,
             messageHTML: pair.aiResponseHTML,
             sourceIndices: sourceIndices,
-            includeCitationImages: !!settings.exportNoteWithImages
+            includeCitationImages: !!variantSettings.exportNoteWithImages
           }
         });
 
@@ -4520,14 +4552,15 @@ const CHAT_VERSION_INFO = {
  *   empty for an errors-only package: then no chat files)
  * @param {{ meta: object, chatData: object, errors?: Array,
  *   auditDoc: {ok: boolean, text: string}, partial?: boolean, forceZip?: boolean,
- *   citationMode?: 'quotes'|'titles'|'none' }} options
+ *   citationMode?: 'quotes'|'titles'|'none', variantSettings?: object }} options
+ *   variantSettings: where noteVariants reads the export* settings (default `settings`)
  *   forceZip: always return ZIP files (Full Takeout)
  *   citationMode: 'none' writes no [n] markers and no Sources section (and,
  *   with no quotes, no code-blocks version)
  * @returns {{ files: Array<{path: string, data: string, title?: string, variant?: string, itemKind?: string}>,
  *   single: object|null }} single is also files[0] when set
  */
-function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, partial = false, forceZip = false, citationMode = 'quotes' }) {
+function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, partial = false, forceZip = false, citationMode = 'quotes', variantSettings = settings }) {
   const chatTitle = `Chat — ${meta.notebook}`;
   const frontMatter = variant => NLME.frontMatter({
     title: chatTitle,
@@ -4549,7 +4582,7 @@ function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, parti
     const baseMarkdown = toMarkdown(false);
     const hasQuotes = messages.some(m => (m.sources || []).some(src => src.quote && src.quote.trim()));
     const hasImages = /!\[/.test(baseMarkdown);
-    for (const v of NLME.noteVariants(settings, { hasQuotes, hasImages })) {
+    for (const v of NLME.noteVariants(variantSettings, { hasQuotes, hasImages })) {
       const markdown = v.codeBlocks ? toMarkdown(true) : baseMarkdown;
       const variant = variantName(v.suffix);
       versionFiles.push({

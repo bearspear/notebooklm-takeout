@@ -691,6 +691,13 @@
     return variants;
   }
 
+  // Settings for a Full Takeout's notes, sources and chat: a takeout always
+  // writes the with-images versions (for items that have images), whatever
+  // the user ticked for tab exports. The input is not changed.
+  function takeoutVariantSettings(settings = {}) {
+    return { ...settings, exportNoteWithImages: true, exportSourceWithImages: true };
+  }
+
   // A code fence the quote cannot close early: longer than its longest
   // backtick run, at least three.
   function fenceFor(text) {
@@ -818,8 +825,10 @@
   // next to each stem ('-code-blocks'): a stem is taken only if none of its
   // stem+suffix names is already in use, so "Diagram with images" cannot
   // overwrite the -with-images variant of "Diagram".
-  function uniqueStems(titles, suffixes = []) {
-    const used = new Set();
+  // `reserved` names (package files that share the folder, such as
+  // 'errors' or '_index' when the items sit next to them) are never handed out.
+  function uniqueStems(titles, suffixes = [], reserved = []) {
+    const used = new Set((reserved || []).map(name => String(name).toLowerCase()));
     const endings = ['', ...suffixes];
     const names = candidate => endings.map(s => (candidate + s).toLowerCase());
     return (titles || []).map(title => {
@@ -1317,6 +1326,7 @@ footer { margin-top: 3rem; }
     toBlockquote,
     noteVariants,
     sourceVariants,
+    takeoutVariantSettings,
     isAllowedDownloadUrl,
     isNotebookDownload,
     NOTEBOOK_HOSTS,

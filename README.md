@@ -156,7 +156,10 @@ uses your Settings (versions, citation detail, slide format) and the Artifacts t
 toggle (the saved "Always use ZIP" setting until you open that tab). Chat follows
 ⚙️ **Citation detail** too, the same as the Chat tab (Full quotes, Source titles only or No
 citations). Every Slides artifact is saved twice, as `.pdf` and `.pptx`, whatever the slide
-format setting says (the Artifacts tab still uses that setting).
+format setting says (the Artifacts tab still uses that setting). Notes, sources and chat also
+always get their `-with-images` versions (for items that have images), whatever the image
+checkboxes in Settings say, so a takeout is complete without extra setup; the tabs still follow
+your checkboxes. The cost is bigger and slower takeouts for notebooks with many images.
 
 *With ZIP on* you get one ZIP per category plus an index ZIP:
 
@@ -180,16 +183,19 @@ New-Physics/
 ```
 
 Each category folder is a self-contained export: it holds that category's normal ZIP layout,
-with its own `_index.md` and `manifest.json` (so the links inside stay valid). That nests one
-level deeper than you might expect:
+with its own `_index.md` and `manifest.json` (so the links inside stay valid). Note and source
+files sit directly in their category folder:
 
 ```
 New-Physics/sources/_index.md           New-Physics/notes/_index.md
-New-Physics/sources/sources/<stem>.md   New-Physics/notes/notes/<stem>.md
-New-Physics/sources/manifest.json       New-Physics/notes/combined-notes.md
-New-Physics/chat/chat.md                New-Physics/artifacts/audio/<stem>.m4a
-New-Physics/chat/_index.md              New-Physics/artifacts/reports/<stem>.md
+New-Physics/sources/<stem>.md           New-Physics/notes/<stem>.md
+New-Physics/sources/manifest.json       New-Physics/notes/mind-maps/<stem>.svg
+New-Physics/chat/chat.md                New-Physics/notes/combined-notes.md
+New-Physics/chat/_index.md              New-Physics/artifacts/audio/<stem>.m4a
 ```
+
+(The YouTube URL lists of the sources are the one exception: they stay in a `sources/` folder
+of their own, so they are at `New-Physics/sources/sources/youtube-urls.txt`.)
 
 A category that needed several ZIPs (batch size under
 Settings) is split into `part-1/`, `part-2/`, … subfolders and the ZIPs are named
@@ -197,7 +203,7 @@ Settings) is split into `part-1/`, `part-2/`, … subfolders and the ZIPs are na
 
 *With ZIP off* everything is saved into a folder `Downloads/<Notebook> takeout <timestamp>/`
 that contains the same `<Notebook>/` tree, so the files land at
-`Downloads/<Notebook> takeout <timestamp>/<Notebook>/sources/sources/…` (the `<Notebook>/`
+`Downloads/<Notebook> takeout <timestamp>/<Notebook>/sources/…` (the `<Notebook>/`
 folder is the one the ZIPs also unpack into). Audio, video and other media go from Google's servers to disk without
 passing through memory, so this is the mode for large notebooks.
 
