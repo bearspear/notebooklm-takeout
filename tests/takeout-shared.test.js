@@ -589,3 +589,7 @@ test('auditExport flags missing citations', () => {
   assert.equal(r.ok, false);
   assert.ok(r.lines.some(l => l.includes('280 of 294') && l.startsWith('- ⚠️')));
 });
+
+test('unknownStudioIcons lists only unmapped icons', () => {
+  assert.deepEqual(NLME.unknownStudioIcons(['tablet', 'copy', 'new_shape', 'article', 'new_shape', '']), ['new_shape']);
+});

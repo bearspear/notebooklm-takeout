@@ -1146,16 +1146,51 @@
    * Hovers over a citation button to verify tooltip mechanics work
    * @returns {Promise<Object>} - { healthy: boolean, checks: [...] }
    */
+  // Studio artifacts: present, downloadable through a More menu, and of a
+  // known type (a new icon is how a new artifact type shows up first)
+  function checkArtifactsHealth() {
+    const checks = [];
+    const items = Array.from(document.querySelectorAll('artifact-library-item'));
+    checks.push({
+      name: 'Studio artifacts found',
+      selector: 'artifact-library-item',
+      passed: items.length > 0,
+      count: items.length,
+      critical: false, // a notebook may have no artifacts
+      note: items.length ? `Found ${items.length} artifact(s)` : 'No artifacts in this notebook'
+    });
+    if (items.length === 0) return { healthy: true, checks };
+
+    const withMore = items.filter(item => item.querySelector('button[aria-label="More"]'));
+    checks.push({
+      name: 'Artifact More menus',
+      selector: 'artifact-library-item button[aria-label="More"]',
+      passed: withMore.length > 0,
+      count: withMore.length,
+      critical: true,
+      note: `${withMore.length} of ${items.length} artifacts have a More menu (downloads go through it)`
+    });
+
+    const unknown = NLME.unknownStudioIcons(items.map(item => item.querySelector('mat-icon')?.textContent));
+    checks.push({
+      name: 'Artifact types recognised',
+      selector: 'artifact-library-item mat-icon',
+      passed: unknown.length === 0,
+      critical: false,
+      warning: true,
+      note: unknown.length ? `Unknown icon(s): ${unknown.join(', ')} — these items may be mislabelled` : 'All artifact icons are known types'
+    });
+
+    return { healthy: checks.filter(c => c.critical).every(c => c.passed), checks };
+  }
+
   async function checkCitationWorkflow() {
     const checks = [];
 
-    // Citation markers: button.citation-marker (lost xap-inline-dialog in Nov 2026)
-    // Can be in chat (.model-response) or in notes (note-editor, labs-tailwind-doc-viewer)
-    const citationButtons = document.querySelectorAll(
-      'button.citation-marker, ' +
-      'button.xap-inline-dialog[dialoglabel="Citation Details"]'
-    );
-
+    // Find numbered citation markers (not the collapsed-group buttons)
+    const citationButtons = Array.from(document.querySelectorAll(
+      'button.citation-marker, button.xap-inline-dialog[dialoglabel="Citation Details"]'))
+      .filter(btn => NLME.parseCitationIndex(btn.querySelector('span')?.textContent));
     const hasButtons = citationButtons.length > 0;
     checks.push({
       name: 'Citation buttons present',
@@ -1163,204 +1198,48 @@
       passed: hasButtons,
       count: citationButtons.length,
       critical: false, // Chat/notes might not have citations
-      note: hasButtons ? `Found ${citationButtons.length} citation button(s)` : 'No citations found (may be expected)'
+      note: hasButtons ? `Found ${citationButtons.length} citation button(s)` : 'No citations on this page'
     });
-
     if (!hasButtons) {
       return { healthy: true, checks }; // No citations to test
     }
 
-    // Filter to visible citation buttons only (not the "more_horiz" expand buttons)
-    const visibleButtons = Array.from(citationButtons).filter(btn => {
-      // Skip "show more citations" expander buttons
-      if (btn.querySelector('mat-icon')) return false;
-      if (!NLME.parseCitationIndex(btn.querySelector('span')?.textContent)) return false;
-      // Check visibility
-      return isElementVisible(btn);
-    });
-
-    console.log(`[NotebookLM Takeout] Health check: ${citationButtons.length} total citation buttons, ${visibleButtons.length} visible/testable`);
-    if (visibleButtons.length > 0) {
-      const sample = visibleButtons[0];
-      console.log('[NotebookLM Takeout] Sample button:', {
-        outerHTML: sample.outerHTML.substring(0, 200),
-        isVisible: isElementVisible(sample),
-        rect: sample.getBoundingClientRect()
-      });
+    // Probe two real markers with the same hover routine exports use
+    // (Milestone 2): if exports would fail to read citations, this fails too
+    const probes = citationButtons.filter(btn => isElementVisible(btn)).slice(0, 2);
+    const results = [];
+    for (const button of (probes.length ? probes : citationButtons.slice(0, 2))) {
+      const index = NLME.parseCitationIndex(button.querySelector('span')?.textContent);
+      results.push(await extractSingleCitationWithRetry(button, index, false, 2));
     }
+    const opened = results.filter(r => r.success);
+    const withQuote = opened.filter(r => (r.data.quote || '').trim().length > 0);
+    const withTitle = opened.filter(r => (r.data.text || '').trim().length > 0);
 
-    // Test hover mechanics - try up to 3 buttons
-    let tooltipAppeared = false;
-    let tooltipHadContent = false;
-    let tooltipClosed = false;
-    let testedButton = null;
-    const maxAttempts = Math.min(3, visibleButtons.length);
-
-    for (let attempt = 0; attempt < maxAttempts && !tooltipAppeared; attempt++) {
-      const testButton = visibleButtons[attempt];
-      testedButton = testButton;
-
-      try {
-        // Close any existing tooltip first
-        const existingTooltip = document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
-        if (existingTooltip) {
-          existingTooltip.remove();
-          await sleep(100);
-        }
-
-        // Scroll button into view and wait for scroll to complete
-        testButton.scrollIntoView({ behavior: 'instant', block: 'center' });
-        await sleep(300);
-
-        // Get button coordinates for realistic mouse events
-        const rect = testButton.getBoundingClientRect();
-        const centerX = rect.left + rect.width / 2;
-        const centerY = rect.top + rect.height / 2;
-
-        console.log(`[NotebookLM Takeout] Testing button at (${centerX.toFixed(0)}, ${centerY.toFixed(0)}), size: ${rect.width.toFixed(0)}x${rect.height.toFixed(0)}`);
-
-        // Focus the button first
-        testButton.focus();
-        await sleep(100);
-
-        // Try hover with proper coordinates (mouseover + mouseenter + pointerenter)
-        testButton.dispatchEvent(new PointerEvent('pointerenter', {
-          view: window,
-          bubbles: true,
-          cancelable: true,
-          clientX: centerX,
-          clientY: centerY,
-          pointerType: 'mouse'
-        }));
-        testButton.dispatchEvent(new MouseEvent('mouseover', {
-          view: window,
-          bubbles: true,
-          cancelable: true,
-          clientX: centerX,
-          clientY: centerY
-        }));
-        testButton.dispatchEvent(new MouseEvent('mouseenter', {
-          view: window,
-          bubbles: true,
-          cancelable: true,
-          clientX: centerX,
-          clientY: centerY
-        }));
-        await sleep(600);
-
-        // Check for tooltip
-        let tooltip = document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
-
-        // If hover didn't work, try click (some UIs require click for dialogs)
-        if (!tooltip) {
-          testButton.click();
-          await sleep(500);
-          tooltip = document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
-        }
-
-        // If still no tooltip, try waiting longer with waitForElement
-        if (!tooltip) {
-          tooltip = await waitForElement(NLME.CITATION_TOOLTIP_SELECTOR, 2000).catch(() => null);
-        }
-
-        // Debug: Check what dialogs/tooltips exist
-        const anyDialog = document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
-        const anyTooltip = document.querySelector('[role="dialog"]');
-        console.log(`[NotebookLM Takeout] Tooltip attempt ${attempt + 1}: found=${!!tooltip}, anyDialog=${!!anyDialog}, anyRoleDialog=${!!anyTooltip}`);
-        if (anyDialog && !tooltip) {
-          console.log('[NotebookLM Takeout] Dialog found but not matched:', anyDialog.outerHTML.substring(0, 300));
-        }
-
-        tooltipAppeared = !!tooltip;
-
-        if (tooltip) {
-          // Check if tooltip has content
-          await sleep(300); // Wait for content to load
-          const content = tooltip.textContent?.trim();
-          tooltipHadContent = content && content.length > 10;
-
-          // Close tooltip - try multiple methods
-          testButton.dispatchEvent(new MouseEvent('mouseleave', {
-            view: window,
-            bubbles: true,
-            cancelable: true
-          }));
-          await sleep(150);
-
-          // Method 2: Click elsewhere
-          let stillOpen = document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
-          if (stillOpen) {
-            document.body.click();
-            await sleep(150);
-          }
-
-          // Method 3: Escape key
-          stillOpen = document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
-          if (stillOpen) {
-            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-            await sleep(150);
-          }
-
-          // Method 4: Remove directly as last resort (cleanup)
-          stillOpen = document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
-          if (stillOpen) {
-            stillOpen.remove();
-            await sleep(50);
-          }
-
-          tooltipClosed = !document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
-        }
-      } catch (error) {
-        console.warn(`[NotebookLM Takeout] Citation workflow test attempt ${attempt + 1} error:`, error);
-        // Cleanup on error
-        const leftoverTooltip = document.querySelector(NLME.CITATION_TOOLTIP_SELECTOR);
-        if (leftoverTooltip) leftoverTooltip.remove();
-      }
-    } // end for loop
-
-    // Handle case where no testable buttons were found
-    if (visibleButtons.length === 0) {
-      checks.push({
-        name: 'Tooltip appears on hover',
-        selector: NLME.CITATION_TOOLTIP_SELECTOR,
-        passed: true, // Can't test, but not a failure
-        critical: false,
-        note: 'No testable citation buttons visible (all may be "show more" buttons)'
-      });
-      const healthy = checks.filter(c => c.critical).every(c => c.passed);
-      return { healthy, checks };
-    }
-
-    // Tooltip test is informational only - synthetic events can't trigger Angular overlays reliably.
-    // This limitation doesn't affect real exports which use click interactions.
     checks.push({
-      name: 'Tooltip hover test (informational)',
+      name: 'Citation popover opens',
       selector: NLME.CITATION_TOOLTIP_SELECTOR,
-      passed: tooltipAppeared,
-      critical: false, // Not critical - synthetic events often fail but real exports work
-      note: tooltipAppeared
-        ? 'Tooltip appeared successfully'
-        : 'Synthetic events cannot trigger Angular overlays - this is expected and does not affect exports'
+      passed: opened.length === results.length,
+      critical: true,
+      note: `${opened.length} of ${results.length} probed citations opened` +
+        (opened.length < results.length ? ` (${results.find(r => !r.success)?.error || 'no popover'})` : '')
+    });
+    checks.push({
+      name: 'Citation quote text read',
+      selector: '.citation-tooltip-text',
+      passed: opened.length > 0 && withQuote.length === opened.length,
+      critical: true,
+      note: `${withQuote.length} of ${opened.length} quotes read`
+    });
+    checks.push({
+      name: 'Citation source title read',
+      selector: '.citation-tooltip-header',
+      passed: opened.length > 0 && withTitle.length === opened.length,
+      critical: true,
+      note: withTitle.length ? `Sample: "${withTitle[0].data.text.slice(0, 40)}"` : 'No source title found in the popover'
     });
 
-    if (tooltipAppeared) {
-      checks.push({
-        name: 'Tooltip content loads',
-        passed: tooltipHadContent,
-        critical: false,
-        note: tooltipHadContent ? 'Content loaded successfully' : 'Tooltip was empty or content did not load'
-      });
-
-      checks.push({
-        name: 'Tooltip closes properly',
-        passed: tooltipClosed,
-        critical: false,
-        note: tooltipClosed ? 'Closed successfully' : 'Tooltip remained open (will not affect exports)'
-      });
-    }
-
-    // Citations category is healthy if buttons are present (tooltip test is informational)
-    const healthy = hasButtons;
+    const healthy = checks.filter(c => c.critical).every(c => c.passed);
     return { healthy, checks };
   }
 
@@ -1416,6 +1295,18 @@
       results.categories.sources = { healthy: false, checks: [], error: error.message };
       results.overallHealthy = false;
       results.criticalFailures.push(`Sources check failed: ${error.message}`);
+    }
+
+    try {
+      results.categories.artifacts = checkArtifactsHealth();
+      if (!results.categories.artifacts.healthy) {
+        results.overallHealthy = false;
+        results.criticalFailures.push('Artifacts: Studio items or their More menus not found');
+      }
+    } catch (error) {
+      results.categories.artifacts = { healthy: false, checks: [], error: error.message };
+      results.overallHealthy = false;
+      results.criticalFailures.push(`Artifacts check failed: ${error.message}`);
     }
 
     try {

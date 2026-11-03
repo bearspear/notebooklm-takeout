@@ -2563,6 +2563,19 @@ function citationTitlesFromHtml(html) {
   return [...byNumber.values()];
 }
 
+// Quick pre-flight before artifact downloads and chat exports: warn (don't
+// block) when the selectors they depend on are missing
+async function preflightWarn(tabId, type) {
+  try {
+    const health = await chrome.tabs.sendMessage(tabId, { type: 'CHECK_DOM_HEALTH', data: { type } });
+    if (health && health.healthy === false) {
+      showToast(`Gemini Notebook may have changed (${(health.issues || []).length} ${type} check(s) failed). Exporting anyway; run the health check 🩺 if results look wrong.`, 'warning');
+    }
+  } catch (e) {
+    console.warn('[NotebookLM Takeout] Pre-flight check failed:', e.message);
+  }
+}
+
 function cleanOCRArtifacts(text) {
   // Shared, unit-tested implementation (keeps paragraphs, tables, fences, ~~strike~~)
   return NLME.cleanOcrArtifacts(text);
@@ -4496,6 +4509,10 @@ function renderChatSummary(chatData) {
  */
 async function exportChat(chatData, extractFullCitations = false) {
   startExportTiming();
+  {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (activeTab) await preflightWarn(activeTab.id, 'chat');
+  }
   exportTimer.merge(lastChatScanTiming);
   console.log('[NotebookLM Takeout] Starting chat export...');
 
@@ -5595,6 +5612,7 @@ async function handleStudioBulkDelete() {
 
 // Download All - either ZIP or individual based on checkbox
 async function downloadAllArtifacts(tabId, items) {
+  await preflightWarn(tabId, 'artifacts');
   const downloadBtn = document.getElementById('download-all-btn');
   const zipEnabled = document.getElementById('zip-checkbox')?.checked || false;
 
@@ -5923,6 +5941,7 @@ function displayHealthCheckResults(results) {
     general: 'General',
     notes: 'Notes',
     sources: 'Sources',
+    artifacts: 'Artifacts',
     chat: 'Chat History',
     citations: 'Citations'
   };
@@ -6046,6 +6065,7 @@ function generateHealthReport(results) {
     general: 'General',
     notes: 'Notes',
     sources: 'Sources',
+    artifacts: 'Artifacts',
     chat: 'Chat History',
     citations: 'Citations'
   };
@@ -6091,9 +6111,8 @@ function generateHealthReport(results) {
 
   // Note about tooltip test
   lines.push('---');
-  lines.push('Note: The "Tooltip hover test" may show [FAIL] even when everything works correctly.');
-  lines.push('This is because synthetic JavaScript events cannot trigger Angular overlays.');
-  lines.push('If citation buttons are present, exports will work normally.');
+  lines.push('Note: The Citations category reads two real citations exactly the way exports do.');
+  lines.push('If it fails, note and chat exports would lose their quotes; please report it with this file.');
   lines.push('');
 
   return lines.join('\n');

@@ -674,7 +674,19 @@
     return { ok, lines };
   }
 
+  // Studio icons the extension cannot classify (new artifact types appear
+  // this way first); notes' icons count as known
+  function unknownStudioIcons(iconTexts) {
+    const unknown = new Set();
+    for (const raw of iconTexts || []) {
+      const icon = String(raw || '').trim();
+      if (icon && !ICON_TO_TYPE[icon] && !NOTE_ICONS.includes(icon)) unknown.add(icon);
+    }
+    return [...unknown];
+  }
+
   const NLME = {
+    unknownStudioIcons,
     auditExport,
     buildSourcesIndex,
     citationTitleFromAriaLabel,
