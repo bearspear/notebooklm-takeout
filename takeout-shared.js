@@ -827,10 +827,14 @@
   // overwrite the -with-images variant of "Diagram".
   // `reserved` names (package files that share the folder, such as
   // 'errors' or '_index' when the items sit next to them) are never handed out.
+  // Names compare after NFC normalization.
   function uniqueStems(titles, suffixes = [], reserved = []) {
-    const used = new Set((reserved || []).map(name => String(name).toLowerCase()));
+    // Names compare as NFC, lower-cased: "Café" typed as e + combining accent
+    // and as the single é look identical and collide on a macOS disk
+    const fold = name => String(name).normalize('NFC').toLowerCase();
+    const used = new Set((reserved || []).map(fold));
     const endings = ['', ...suffixes];
-    const names = candidate => endings.map(s => (candidate + s).toLowerCase());
+    const names = candidate => endings.map(s => fold(candidate + s));
     return (titles || []).map(title => {
       const base = sanitizeFilename(title);
       let candidate = base;

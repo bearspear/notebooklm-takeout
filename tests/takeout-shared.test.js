@@ -799,6 +799,20 @@ test('buildRootIndex links the folder of an errors-only package (folder mode: no
   assert.doesNotMatch(html, /href="chat\//);
 });
 
+test('uniqueStems treats the NFC and NFD spellings of a name as one name', () => {
+  const composed = 'Caf\u00e9';
+  const decomposed = 'Cafe\u0301';
+  assert.notEqual(composed, decomposed);
+  const s = NLME.uniqueStems([composed, decomposed]);
+  assert.notEqual(s[0].normalize('NFC'), s[1].normalize('NFC'));
+  assert.equal(s[1].normalize('NFC'), 'Caf\u00e9-2');
+  // Case still folds, variant suffixes and reserved names too
+  assert.equal(NLME.uniqueStems(['CAF\u00c9', decomposed])[1].normalize('NFC'), 'Caf\u00e9-2');
+  assert.equal(NLME.uniqueStems([decomposed], [], ['caf\u00e9'])[0].normalize('NFC'), 'Caf\u00e9-2');
+  const withSuffix = NLME.uniqueStems([composed + ' plus', decomposed], [' plus']);
+  assert.notEqual(withSuffix[0].normalize('NFC'), withSuffix[1].normalize('NFC'));
+});
+
 test('chatSelectedCount counts the messages the page showed, not only the readable ones', () => {
   assert.equal(NLME.chatSelectedCount({ messagePairs: [], stats: { pairsInDom: 3 } }), 3);
   assert.equal(NLME.chatSelectedCount({ messagePairs: [{}, {}], stats: { pairsInDom: 5 } }), 5);
