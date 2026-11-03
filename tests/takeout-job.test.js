@@ -154,3 +154,15 @@ test('runExportJob returns the items that threw as failedItems', async () => {
   });
   assert.deepEqual(r.failedItems, [items[1]]);
 });
+
+test('runExportJob tells packageBatch how many items were exported and failed so far', async () => {
+  const { run, calls } = harness({ items: items(5), perZip: 2, fail: ['N2', 'N5'] });
+  await run;
+  assert.deepEqual(calls.map(c => [c.exported, c.failed]), [[1, 1], [3, 1], [3, 2]]);
+});
+
+test('runExportJob counts on an errors-only package too', async () => {
+  const { run, calls } = harness({ items: items(2), fail: ['N1', 'N2'] });
+  await run;
+  assert.deepEqual(calls.map(c => [c.errorsOnly, c.exported, c.failed]), [[true, 0, 2]]);
+});

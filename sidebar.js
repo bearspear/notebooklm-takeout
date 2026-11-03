@@ -3705,7 +3705,9 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
         totalBatches: info.totalBatches,
         partial: info.partial,
         variantSettings,
-        itemDir
+        itemDir,
+        // errors.md summary, on the package that carries the errors (the last)
+        stats: { Selected: selectedSources.length, Exported: info.exported, Failed: info.failed }
       });
       await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, written });
       console.log(`[NotebookLM Takeout] Downloaded sources ZIP ${info.batchIndex}/${info.totalBatches}`);
@@ -3938,14 +3940,15 @@ const SOURCE_VERSION_INFO = {
  *   for an errors-only ZIP)
  * @param {{ meta: object, errors?: Array, auditText?: string|null,
  *   batchIndex?: number, totalBatches?: number, partial?: boolean,
- *   variantSettings?: object, itemDir?: string }} options
+ *   variantSettings?: object, itemDir?: string, stats?: object }} options
  *   errors: ALL errors of the run, passed only to the last ZIP it writes
+ *   stats: errors.md's summary ({ Selected, Exported, Failed }), passed with the errors
  *   variantSettings: where sourceVariants reads the export* settings (default `settings`)
  *   itemDir: folder of the source files and youtube-urls*.txt ('sources/';
  *   '' puts them next to errors.md and _index.md)
  * @returns {Array<{path: string, data: string, title?: string, variant?: string, itemKind?: string}>}
  */
-function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batchIndex = 1, totalBatches = 1, partial = false, variantSettings = settings, itemDir = 'sources/' }) {
+function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batchIndex = 1, totalBatches = 1, partial = false, variantSettings = settings, itemDir = 'sources/', stats = {} }) {
   const files = [];
   const indexEntries = [];
 
@@ -4016,7 +4019,8 @@ function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batch
       data: NLME.buildErrorReport({
         title: 'Sources Export',
         generatedAt: new Date().toLocaleString(),
-        errors
+        errors,
+        stats
       })
     });
   }

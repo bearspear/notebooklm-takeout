@@ -2,6 +2,8 @@
 // artifacts): batching, cancel/stop, error collection, and the guarantee that
 // the errors reach exactly one package. failedItems: the items whose
 // extractOne threw, in order (warnings do not count); the Retry button re-runs them.
+// packageBatch's info: batchIndex, totalBatches, isLast, partial, errors (the last
+// package only), errorsOnly, exported and failed (items so far).
 (function (root) {
   const NLME = root.NLME || require('./takeout-shared.js');
 
@@ -31,6 +33,8 @@
         partial: cancelled || stopped,
         errors: isLast ? [...errors] : [],
         errorsOnly: false,
+        // Items exported / failed so far; final on the last package
+        exported, failed: attempted - exported,
         ...extra
       });
     };
