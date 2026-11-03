@@ -146,7 +146,8 @@ uses your Settings (versions, citation detail, slide format) and the Artifacts t
 toggle (the saved "Always use ZIP" setting until you open that tab). Chat follows
 ⚙️ **Citation detail** too (Full quotes gives quoted chat citations, the other levels give
 titles-only sources); the Chat tab keeps its own **Extract Full Citations** checkbox for its
-own export.
+own export. Every Slides artifact is saved twice, as `.pdf` and `.pptx`, whatever the slide
+format setting says (the Artifacts tab still uses that setting).
 
 *With ZIP on* you get one ZIP per category plus an index ZIP:
 

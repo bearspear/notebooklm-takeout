@@ -1043,6 +1043,10 @@ in that order inside one shell, then writes the root `_index.md`
 category) and `manifest.json`. It does not call `shell.finish`: one combined toast comes from
 `NLME.summarizeTakeoutOutcome`.
 
+- **Slides in both formats:** it passes `bothSlideFormats: true` to `runArtifactsJob`, whose `extractOne`
+  loops `NLME.slideFormatsFor(type, …)` and calls `fetchArtifactFiles(…, { slidesFormat })` once per
+  format with the same stem (`extensionFor({ format })` guesses `.pdf`/`.pptx`); one format failing
+  warns, all failing fails the item. Tab downloads keep the single `settings.slidesFormat`.
 - **ZIP on** (`takeoutZipEnabled`: the Artifacts tab's Zip checkbox once rendered, else
   `settings.autoZip`): one ZIP per category, `<Notebook>-takeout-<category>-<ts>[-PARTIAL]
   [-partNofM].zip`, plus `<Notebook>-takeout-index-<ts>.zip`. Paths are prefixed

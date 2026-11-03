@@ -887,9 +887,19 @@
 
   // File extension for a downloaded artifact: the real file name in the URL
   // wins, then the MIME type, then what the artifact type usually is.
-  function extensionFor({ url = '', mime = '', type = '' } = {}) {
+  // `format` ('pdf'|'pptx') is the Slides format that was asked for: the
+  // last-resort guess, so a PDF and a PowerPoint of one deck never share a name.
+  function extensionFor({ url = '', mime = '', type = '', format = null } = {}) {
     const baseMime = String(mime || '').split(';')[0].trim().toLowerCase();
-    return extensionFromDownloadUrl(url) || MIME_EXTENSIONS[baseMime] || TYPE_EXTENSIONS[type] || '';
+    const typeGuess = type === 'Slides' && format === 'pptx' ? '.pptx' : TYPE_EXTENSIONS[type];
+    return extensionFromDownloadUrl(url) || MIME_EXTENSIONS[baseMime] || typeGuess || '';
+  }
+
+  // The Slides download formats to fetch for an artifact type: both for a
+  // Full Takeout, else the one preferred format. [null] = no format choice.
+  function slideFormatsFor(type, { both = false, preferred = 'pdf' } = {}) {
+    if (type !== 'Slides') return [null];
+    return both ? ['pdf', 'pptx'] : [preferred === 'pptx' ? 'pptx' : 'pdf'];
   }
 
   // Everything extensionFor can return
@@ -1130,6 +1140,7 @@ footer { margin-top: 3rem; }
     zipName,
     artifactFolder,
     extensionFor,
+    slideFormatsFor,
     withRealExtension,
     artifactStems,
     groupCitationEntries,

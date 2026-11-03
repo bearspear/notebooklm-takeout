@@ -393,7 +393,7 @@ async function runFullTakeout() {
       {
         name: 'Artifacts', folder: 'artifacts',
         scan: async () => (await scanArtifactsData(tabId)).filter(item => !item.disabled),
-        run: (catShell, items, target) => runArtifactsJob(catShell, items, target)
+        run: (catShell, items, target) => runArtifactsJob(catShell, items, { ...target, bothSlideFormats: true })
       }
     ].map(c => ({ ...c, status: null, selected: 0, exported: 0, failed: 0, zips: [], errors: [], auditOk: true, items: null }));
     const takeoutErrors = []; // not tied to one category

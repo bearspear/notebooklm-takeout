@@ -906,3 +906,19 @@ test('takeoutChatFullCitations follows the Citation detail setting', () => {
   assert.equal(NLME.takeoutChatFullCitations({ citationDetail: 'none' }), false);
   assert.equal(NLME.takeoutChatFullCitations({}), true);
 });
+
+test('slideFormatsFor gives both formats only when asked', () => {
+  assert.deepEqual(NLME.slideFormatsFor('Slides', { both: true }), ['pdf', 'pptx']);
+  assert.deepEqual(NLME.slideFormatsFor('Slides', { both: true, preferred: 'pptx' }), ['pdf', 'pptx']);
+  assert.deepEqual(NLME.slideFormatsFor('Slides', { preferred: 'pptx' }), ['pptx']);
+  assert.deepEqual(NLME.slideFormatsFor('Slides'), ['pdf']);
+  assert.deepEqual(NLME.slideFormatsFor('Report', { both: true }), [null]);
+  assert.deepEqual(NLME.slideFormatsFor('Report'), [null]);
+});
+
+test('extensionFor guesses the requested slide format when nothing else says', () => {
+  assert.equal(NLME.extensionFor({ type: 'Slides', format: 'pptx' }), '.pptx');
+  assert.equal(NLME.extensionFor({ type: 'Slides', format: 'pdf' }), '.pdf');
+  assert.equal(NLME.extensionFor({ type: 'Slides' }), '.pdf');
+  assert.equal(NLME.extensionFor({ type: 'Infographic', format: 'pptx' }), '.png');
+});

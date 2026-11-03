@@ -1063,13 +1063,15 @@ function reportFile(stem, response, title, meta) {
  *
  * @param {number} tabId
  * @param {{ index: number, type: string, label: string }} item
- * @param {{ stem: string, mode: 'single'|'zip'|'folder', meta?: object, folder?: string }} options
+ * @param {{ stem: string, mode: 'single'|'zip'|'folder', meta?: object, folder?: string, slidesFormat?: 'pdf'|'pptx' }} options
  *   meta: front matter metadata (computed from the tab when omitted);
- *   folder: Downloads subfolder for a captured button_click download
+ *   folder: Downloads subfolder for a captured button_click download;
+ *   slidesFormat: Slides format for this call (default: the ⚙️ setting)
  * @returns {Promise<{ files: Array<{path: string, data?: string|Blob, url?: string}>, savedOutside: boolean }>}
  */
-async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '' }) {
+async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', slidesFormat = settings.slidesFormat }) {
   const { index, type, label } = item;
+  const format = slidesFormat === 'pptx' ? 'pptx' : 'pdf';
   logger.info('Download', `Downloading artifact ${index} (${type})`, label);
   await ensureContentScriptLoaded(tabId);
 
@@ -1087,7 +1089,7 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '' }
       type: 'DOWNLOAD_ARTIFACT',
       data: extractable
         ? { artifactIndex: index, artifactType: type, artifactName: label, skipMoreButton: true }
-        : { artifactIndex: index, artifactType: type, artifactName: label, downloadPreference: settings.slidesFormat }
+        : { artifactIndex: index, artifactType: type, artifactName: label, downloadPreference: format }
     });
     if (!response || !response.success) {
       throw new Error(response?.error || 'Download failed');
@@ -1120,9 +1122,9 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '' }
         const url = response.url;
         if (mode === 'zip') {
           const blob = await fetchDownload(url, { tabId });
-          return { files: [{ path: stem + NLME.extensionFor({ url, mime: blob.type, type }), data: blob }], savedOutside: false };
+          return { files: [{ path: stem + NLME.extensionFor({ url, mime: blob.type, type, format }), data: blob }], savedOutside: false };
         }
-        return { files: [{ path: stem + NLME.extensionFor({ url, type }), url }], savedOutside: false };
+        return { files: [{ path: stem + NLME.extensionFor({ url, type, format }), url }], savedOutside: false };
       }
       case 'button_click': {
         // No URL came back: wait for the background to capture Chrome's
@@ -5280,11 +5282,13 @@ async function downloadAllArtifacts(tabId, items) {
  *
  * @param {object} shell withExportShell's shell
  * @param {Array<{ index, label, type }>} items downloadable artifacts (scanArtifactsData)
- * @param {CategoryTarget} [target]
+ * @param {CategoryTarget & { bothSlideFormats?: boolean }} [target]
+ *   bothSlideFormats: save every Slides artifact as PDF and PowerPoint
+ *   (Full Takeout); otherwise the ⚙️ slides format alone
  * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, savedOutside: number }>}
  *   savedOutside: items Chrome saved itself (no capturable URL)
  */
-async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artifacts', folder = null } = {}) {
+async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artifacts', folder = null, bothSlideFormats = false } = {}) {
   const zipMode = !folder;
   const place = files => (pathPrefix ? files.map(f => ({ ...f, path: pathPrefix + f.path })) : files);
   const stems = NLME.artifactStems(items);
@@ -5302,12 +5306,33 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
     titleOf: item => item.label,
     extractOne: async (item, ctx) => {
       const typeFolder = NLME.artifactFolder(item.type);
-      const fetched = await retryDownload(() => fetchArtifactFiles(shell.tab.id, item, {
-        stem: stemOf.get(item),
-        mode: zipMode ? 'zip' : 'folder',
-        meta: shell.meta,
-        folder: zipMode ? '' : folder
-      }), 3, item.label);
+      // One fetch per slide format with the same stem: the files differ by
+      // extension (the guessed one follows the format; the background's
+      // real-extension rename keeps them apart)
+      const formats = NLME.slideFormatsFor(item.type, { both: bothSlideFormats, preferred: settings.slidesFormat });
+      const fetched = { files: [], savedOutside: false };
+      const failures = [];
+      for (const format of formats) {
+        try {
+          const one = await retryDownload(() => fetchArtifactFiles(shell.tab.id, item, {
+            stem: stemOf.get(item),
+            mode: zipMode ? 'zip' : 'folder',
+            meta: shell.meta,
+            folder: zipMode ? '' : folder,
+            ...(format ? { slidesFormat: format } : {})
+          }), 3, item.label);
+          fetched.files.push(...one.files);
+          fetched.savedOutside = fetched.savedOutside || one.savedOutside;
+        } catch (error) {
+          failures.push({ format, error });
+        }
+      }
+      // Every format failed: the item fails as with a single format
+      if (failures.length === formats.length) throw failures[failures.length - 1].error;
+      // One format failed, another saved: keep the item, say what is missing
+      for (const { format, error } of failures) {
+        ctx.warn(`[${item.label}] ${format.toUpperCase()} version failed: ${error.message}`);
+      }
       if (fetched.savedOutside) {
         savedOutside++;
         // Folder mode: the background captured it into the folder's top level
