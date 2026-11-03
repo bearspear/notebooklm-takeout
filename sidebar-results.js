@@ -88,7 +88,7 @@ function hideResults() {
  * Show the "earlier export stopped" banner above the results panel (its own
  * element, so a new results panel does not wipe it).
  *
- * @param {object} record the job record (NLME.jobResumeProgress gives its numbers)
+ * @param {object} record the job record (NLME.resumeBannerView words it)
  * @param {object} handlers
  * @param {() => Promise<void>|void} handlers.onResume starts the resume; the
  *   banner hides itself first (the finished job shows it again if items are left)
@@ -102,13 +102,14 @@ function showResumeBanner(record, { onResume, onDiscard, running = false } = {})
   const banner = document.getElementById('resume-banner');
   if (!banner) return;
   const esc = NLME.escapeHtml;
-  const { done, total, left } = NLME.jobResumeProgress(record);
-  const label = NLME.resumeBannerLabel(record);
+  // Stopped: "stopped at N of M" + Resume; only failed keys left: "finished with
+  // N failed" + Retry. Both re-run the same keys.
+  const view = NLME.resumeBannerView(record);
 
   banner.innerHTML = `
-    <p class="resume-text">An earlier ${esc(label)} stopped at ${esc(String(done))} of ${esc(String(total))}.</p>
+    <p class="resume-text">${esc(view.text)}</p>
     <div class="resume-actions">
-      <button type="button" class="btn btn-primary resume-go"${running ? ' disabled' : ''}>Resume (${esc(String(left))} left)</button>
+      <button type="button" class="btn btn-primary resume-go"${running ? ' disabled' : ''}>${esc(view.actionLabel)}</button>
       <button type="button" class="btn btn-secondary resume-discard">Discard</button>
     </div>`;
   banner.style.display = 'block';
