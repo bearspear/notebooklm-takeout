@@ -20,8 +20,8 @@ anywhere except the requests Gemini Notebook itself makes.
 | **Notes** | Markdown with citations: each `[n]` links to a Sources section with the quoted passage, and back to the text |
 | **Chat** | The whole conversation as Markdown, with date headings, per-answer citations and quotes |
 | **Reports** | Markdown |
-| **Data tables** | CSV, JSON, HTML and footnotes (loose files, or in `tables/` inside a ZIP) |
-| **Mind maps** | SVG, JSON tree and an interactive HTML viewer (loose files, or in `mind-maps/` inside a ZIP) |
+| **Data tables** | CSV, JSON, HTML and footnotes (one ZIP per single download; loose files in `tables/` in archives and folder exports) |
+| **Mind maps** | SVG, JSON tree and an interactive HTML viewer (one ZIP per single download; loose files in `mind-maps/` in archives and folder exports) |
 | **Slide decks** | PDF or PowerPoint (your choice in Settings) |
 | **Audio / video overviews, infographics** | The original file Gemini Notebook serves |
 
@@ -125,7 +125,7 @@ The quoted passage from the source…
 1. **Artifacts** tab lists everything in the Studio panel.
 2. Click **Download** on a row, or **Download All**.
    - **Download** saves one file named `[type]_Title.ext` (for example `[report]_Title.md`,
-     `[mind-map]_Title.svg`). Data Tables and mind maps save as several loose files.
+     `[mind-map]_Title.svg`). A Data Table or mind map saves as one ZIP (`[data-table]_Title.zip`, `[MINDMAP]_Title.zip`).
    - With **ZIP off** (recommended for whole notebooks), **Download All** saves every file into
      `Downloads/<Notebook name>/<type>/…`, one file at a time, so even large audio and video
      overviews work.

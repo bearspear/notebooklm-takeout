@@ -561,6 +561,23 @@
     return ARTIFACT_PREFIXES[type] || String(type || 'artifact').toLowerCase().replace(/\s+/g, '-');
   }
 
+  // One ZIP for a single Data Table or mind map download, as before
+  // Milestone 3a: { zipName, entries } with the inner files renamed, or null
+  // when the artifact stays loose (other types, or a lone file).
+  function singleArtifactPackage({ type, title, files }) {
+    if ((type !== 'Data Table' && type !== 'Mind Map') || !files || files.length < 2) return null;
+    const clean = sanitizeFilename(title);
+    const isTable = type === 'Data Table';
+    const base = isTable ? clean : `[MINDMAP]_${clean}`;
+    const entries = files.map(file => {
+      const path = String(file.path || '');
+      if (isTable && /-references\.txt$/i.test(path)) return { ...file, path: 'references.txt' };
+      const ext = (path.match(/\.[^./\\]+$/) || [''])[0];
+      return { ...file, path: `${base}${ext}` };
+    });
+    return { zipName: `${isTable ? `[${artifactTypePrefix(type)}]_${clean}` : base}.zip`, entries };
+  }
+
   // 'YYYY-MM-DDTHH-MM-SS' (UTC) for export file names
   function exportTimestamp(date = new Date()) {
     return date.toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -1012,6 +1029,7 @@
     isNotebookUrl,
     sanitizeFilename,
     artifactTypePrefix,
+    singleArtifactPackage,
     exportTimestamp,
     escapeHtml,
     PROJECT_TITLE_SELECTORS,

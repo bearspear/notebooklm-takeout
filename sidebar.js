@@ -1152,15 +1152,18 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '' }
 
 /**
  * Download one artifact (row button, Studio list): today's single-file
- * names ([report]_Title.md, [audio-overview]_Title.m4a, ...); Data Tables
- * and mind maps as loose files.
+ * names ([report]_Title.md, [audio-overview]_Title.m4a, ...); a Data Table
+ * or mind map is one ZIP ([data-table]_Title.zip, [MINDMAP]_Title.zip).
  */
 async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName) {
   const stem = `[${getArtifactTypePrefix(artifactType)}]_${sanitizeFilename(artifactName)}`;
   const { files } = await fetchArtifactFiles(tabId,
     { index: artifactIndex, type: artifactType, label: artifactName },
     { stem, mode: 'single' });
-  await saveFiles(files);
+  // Data Tables and mind maps are several files: one ZIP, as before 3a
+  const pkg = NLME.singleArtifactPackage({ type: artifactType, title: artifactName, files });
+  if (pkg) await saveFiles(pkg.entries, { zipName: pkg.zipName });
+  else await saveFiles(files);
   return { success: true, files: files.length };
 }
 

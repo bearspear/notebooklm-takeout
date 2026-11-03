@@ -778,3 +778,44 @@ test('mimeForPath types files by extension', () => {
   assert.equal(NLME.mimeForPath('audio/a.m4a'), 'application/octet-stream');
   assert.equal(NLME.mimeForPath('noext'), 'application/octet-stream');
 });
+
+test('singleArtifactPackage bundles data tables and mind maps like before', () => {
+  const table = NLME.singleArtifactPackage({
+    type: 'Data Table',
+    title: 'Q3 Sales: Plan',
+    files: [
+      { path: '[data-table]_Q3-Sales-Plan.csv', data: 'a,b' },
+      { path: '[data-table]_Q3-Sales-Plan.json', data: '{}' },
+      { path: '[data-table]_Q3-Sales-Plan.html', data: '<table/>' },
+      { path: '[data-table]_Q3-Sales-Plan-references.txt', data: '[1] x' }
+    ]
+  });
+  assert.equal(table.zipName, '[data-table]_Q3-Sales-Plan.zip');
+  assert.deepEqual(table.entries.map(e => e.path),
+    ['Q3-Sales-Plan.csv', 'Q3-Sales-Plan.json', 'Q3-Sales-Plan.html', 'references.txt']);
+  assert.equal(table.entries[0].data, 'a,b');
+  assert.equal(table.entries[3].data, '[1] x');
+
+  const map = NLME.singleArtifactPackage({
+    type: 'Mind Map',
+    title: 'Big Ideas',
+    files: [
+      { path: '[mind-map]_Big-Ideas.svg', data: '<svg/>' },
+      { path: '[mind-map]_Big-Ideas.json', data: '{}' },
+      { path: '[mind-map]_Big-Ideas.html', data: '<html/>' }
+    ]
+  });
+  assert.equal(map.zipName, '[MINDMAP]_Big-Ideas.zip');
+  assert.deepEqual(map.entries.map(e => e.path),
+    ['[MINDMAP]_Big-Ideas.svg', '[MINDMAP]_Big-Ideas.json', '[MINDMAP]_Big-Ideas.html']);
+  assert.equal(map.entries[1].data, '{}');
+
+  // A lone CSV (no footnotes, no structured data) stays a plain file
+  assert.equal(NLME.singleArtifactPackage({
+    type: 'Data Table', title: 'T', files: [{ path: '[data-table]_T.csv', data: 'a' }]
+  }), null);
+  // Other types are never bundled
+  assert.equal(NLME.singleArtifactPackage({
+    type: 'Report', title: 'R', files: [{ path: 'a.md' }, { path: 'b.md' }]
+  }), null);
+});

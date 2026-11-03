@@ -451,8 +451,9 @@ in every answer, so sources must never be keyed by number across answers.
      `onDeterminingFilename` listener exists and does not suggest one.
 
 Filename convention for a single artifact download: `[{prefix}]_{sanitized-title}.{ext}`
-(`NLME.artifactTypePrefix`; mind maps are `[mind-map]_Title.*`). Data Tables and mind maps
-save as loose files. Inside a ZIP or folder export the name is `<type folder>/<stem>.<ext>`,
+(`NLME.artifactTypePrefix`). A single Data Table or mind map is one ZIP instead
+(`NLME.singleArtifactPackage`: `[data-table]_Title.zip` with `Title.csv/.json/.html` and
+`references.txt`; `[MINDMAP]_Title.zip` with `[MINDMAP]_Title.svg/.json/.html`). Inside a ZIP or folder export the name is `<type folder>/<stem>.<ext>`,
 repeats become `-2`, `-3` (`NLME.uniqueStems`).
 
 ### Studio (new)
@@ -1105,8 +1106,9 @@ heavy load, bump to 1500ms.
 ### 6. Mind maps: ZIP folder vs loose files
 
 Legacy in-page mind map notes are bundled in the `mind-maps/` folder of the notes ZIP; Studio
-mind maps are artifacts (`mind-maps/` in a Download All ZIP). A single mind map download is
-three loose files. This asymmetry is intentional but worth knowing.
+mind maps are artifacts (`mind-maps/` in a Download All ZIP). A single mind map artifact download is
+one `[MINDMAP]_Title.zip`; inside Download All / Takeout archives and folder exports they stay
+loose files in `mind-maps/`. This asymmetry is intentional but worth knowing.
 
 ### 7. Flashcards and Quiz are not exportable
 
