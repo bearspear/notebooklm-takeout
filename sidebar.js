@@ -4628,7 +4628,8 @@ function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, parti
     totals.successful += m.stats.successfulExtractions;
     totals.failed += m.stats.failedExtractions;
   }
-  const totalMessages = chatData.messagePairs.length;
+  // The messages in this package: on a partial run (cancelled, stopped) fewer than the scan found
+  const totalMessages = messages.length;
 
   // errors.md only when something went wrong (no "Errors: 0" files)
   if (errors.length > 0) {
