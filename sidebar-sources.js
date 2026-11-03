@@ -647,7 +647,8 @@ function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batch
   // (versions actually written: image versions only exist for sources with
   // images, so settings alone overcount)
   const variantsWritten = NLME.distinctVariants(files.filter(f => f.itemKind === 'source'));
-  let indexContent = `# Sources — ${meta.notebook}\n\n`;
+  let indexContent = NLME.categoryIndexFrontMatter(meta, { title: `Sources — ${meta.notebook}`, category: 'sources', part: totalBatches > 1 ? batchIndex : undefined }) +
+    `# Sources — ${meta.notebook}\n\n`;
   indexContent += `Generated: ${new Date().toLocaleString()}\n\n`;
   if (totalBatches > 1) {
     indexContent += `**Part ${batchIndex} of ${totalBatches}**\n\n`;

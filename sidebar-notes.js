@@ -677,7 +677,8 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
   }
 
   // Generate _index.md with links to all files
-  let indexContent = `# Notes — ${meta.notebook}\n\n`;
+  let indexContent = NLME.categoryIndexFrontMatter(meta, { title: `Notes — ${meta.notebook}`, category: 'notes', part: totalBatches > 1 ? batchIndex : undefined }) +
+    `# Notes — ${meta.notebook}\n\n`;
   indexContent += `Generated: ${new Date().toLocaleString()}\n\n`;
 
   if (totalBatches > 1) {

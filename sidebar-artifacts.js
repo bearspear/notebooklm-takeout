@@ -1123,7 +1123,8 @@ function artifactsRootFiles(files, exportedItems, { meta, info, part = 1, totalP
   // In a split export errors.md exists only in the last part
   const errorsRef = info.multi && !info.isLast ? 'errors.md in the last part' : 'errors.md';
 
-  let index = `# Artifacts — ${meta.notebook}\n\n`;
+  let index = NLME.categoryIndexFrontMatter(meta, { title: `Artifacts — ${meta.notebook}`, category: 'artifacts', part: part > 1 || totalParts !== 1 ? part : undefined }) +
+    `# Artifacts — ${meta.notebook}\n\n`;
   index += `Generated: ${new Date().toLocaleString()}\n\n`;
   if (part > 1 || totalParts !== 1) index += `**Part ${part}**\n\n`;
   index += `Total Artifacts: ${exportedItems.length}\n\n`;

@@ -580,7 +580,7 @@ function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, parti
   files.push({ path: '_audit.md', data: auditDoc.text });
 
   // _index.md with links to every version and the error report
-  let indexContent = `# ${chatTitle}\n\n`;
+  let indexContent = NLME.categoryIndexFrontMatter(meta, { title: chatTitle, category: 'chat' }) + `# ${chatTitle}\n\n`;
   indexContent += `Generated: ${new Date().toLocaleString()}\n\n`;
   indexContent += `Total Messages: ${totalMessages}\n`;
   if (citationMode !== 'none') indexContent += `Messages with Citations: ${totals.withCitations}\n`;

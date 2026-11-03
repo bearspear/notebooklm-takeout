@@ -830,6 +830,23 @@ test('buildManifest lists files with byte sizes and the notebook', () => {
   assert.equal(m.files[0].variant, 'base');
 });
 
+test('categoryIndexFrontMatter gives a category _index.md the same block as items, with kind index', () => {
+  const meta = { notebook: 'N: Math', notebook_url: 'https://x/notebook/i', notebook_id: 'i', exporter: 'NotebookLM Takeout 1.7.0', exported: '2026-11-03T10:00:00.000Z' };
+  assert.equal(NLME.categoryIndexFrontMatter(meta, { title: 'Notes \u2014 N: Math', category: 'notes' }),
+    '---\n' +
+    'title: "Notes \u2014 N: Math"\n' +
+    'notebook: "N: Math"\n' +
+    'notebook_url: "https://x/notebook/i"\n' +
+    'notebook_id: "i"\n' +
+    'exporter: "NotebookLM Takeout 1.7.0"\n' +
+    'exported: "2026-11-03T10:00:00.000Z"\n' +
+    'kind: "index"\n' +
+    'category: "notes"\n' +
+    '---\n\n');
+  // A part of a split export says which one
+  assert.match(NLME.categoryIndexFrontMatter(meta, { title: 'T', category: 'sources', part: 2 }), /category: "sources"\npart: 2\n---/);
+});
+
 test('buildManifest uses the size read after a url entry was downloaded', () => {
   const meta = { notebook: 'N', notebook_url: 'u', notebook_id: 'i', exporter: 'x', exported: 'T' };
   const m = NLME.buildManifest({ meta, kind: 'artifacts', files: [

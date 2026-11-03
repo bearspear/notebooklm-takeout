@@ -1561,6 +1561,23 @@
     return c.exported > 0 || (c.zips || []).length > 0 || c.parts > 0 || c.packages > 0;
   }
 
+  // Front matter of a category's _index.md (notes, sources, chat, artifacts):
+  // the item block (title, notebook, exporter...) with kind 'index' and the
+  // category; `part` only for a part of a split export.
+  function categoryIndexFrontMatter(meta, { title, category, part } = {}) {
+    return frontMatter({
+      title,
+      notebook: meta.notebook,
+      notebook_url: meta.notebook_url,
+      notebook_id: meta.notebook_id,
+      exporter: meta.exporter,
+      exported: meta.exported,
+      kind: 'index',
+      category,
+      part
+    });
+  }
+
   // _index.md at the root of a Full Takeout: one row per category (Sources,
   // Notes, Chat, Artifacts) with its counts, status and folder, the ZIPs each
   // category wrote, and a link to the combined errors.md.
@@ -1972,6 +1989,7 @@ footer { margin-top: 3rem; }
     chatSelectedCount,
     categoryWritten,
     frontMatter,
+    categoryIndexFrontMatter,
     uniqueStems,
     notebookIdFromUrl,
     listItemKeys,
