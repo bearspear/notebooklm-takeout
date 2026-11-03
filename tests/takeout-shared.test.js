@@ -435,6 +435,23 @@ test('cancellationNote says how far the export got and what is missing', () => {
   assert.match(note, /not exported/);
 });
 
+test('cancellationNote mentions citations only for exports that have them', () => {
+  assert.match(NLME.cancellationNote({ kind: 'notes', done: 1, total: 3 }), /incomplete citations/);
+  const note = NLME.cancellationNote({ kind: 'sources', done: 2, total: 4 });
+  assert.doesNotMatch(note, /citations/);
+  assert.match(note, /Cancelled by user after 2 of 4 sources/);
+  assert.match(note, /not exported/);
+});
+
+test('distinctVariants lists the versions actually written, in order', () => {
+  const files = [
+    { variant: 'base' }, { variant: 'plusMeta' },
+    { variant: 'base' }, { variant: 'plusMeta' }, { variant: 'withImages' }
+  ];
+  assert.deepEqual(NLME.distinctVariants(files), ['base', 'plusMeta', 'withImages']);
+  assert.deepEqual(NLME.distinctVariants([]), []);
+});
+
 test('normalizeExportError handles note strings, objects and cancellation notes', () => {
   assert.deepEqual(NLME.normalizeExportError('[Deck A] Failed to extract: x'),
     { type: 'error', item: 'Deck A', message: 'Failed to extract: x', detail: '' });
@@ -461,4 +478,173 @@ test('buildErrorReport groups mixed errors without throwing', () => {
 test('buildErrorReport prints summary stats', () => {
   const report = NLME.buildErrorReport({ title: 'Chat Export', errors: [], stats: { 'Total Messages': 17 } });
   assert.match(report, /- Total Messages: 17/);
+});
+
+test('isNotebookUrl matches hosts exactly', () => {
+  assert.equal(NLME.isNotebookUrl('https://notebook.google.com/notebook/x'), true);
+  assert.equal(NLME.isNotebookUrl('https://notebooklm.google.com/'), true);
+  assert.equal(NLME.isNotebookUrl('https://www.google.com/search?q=notebook.google.com'), false);
+  assert.equal(NLME.isNotebookUrl(undefined), false);
+});
+
+test('sanitizeFilename keeps emoji pairs whole at the cut', () => {
+  const out = NLME.sanitizeFilename('a'.repeat(99) + '😀x', 100);
+  assert.ok(out.endsWith('😀'), out.slice(-4));
+  assert.doesNotMatch(out, /[\ud800-\udbff](?![\udc00-\udfff])/);
+});
+
+test('sanitizeFilename avoids reserved and empty names', () => {
+  assert.equal(NLME.sanitizeFilename('CON'), '_CON');
+  assert.equal(NLME.sanitizeFilename('name.'), 'name');
+  assert.equal(NLME.sanitizeFilename('\u0001'), 'untitled');
+});
+
+test('artifactTypePrefix maps known and unknown types', () => {
+  assert.equal(NLME.artifactTypePrefix('Slides'), 'slides');
+  assert.equal(NLME.artifactTypePrefix('Mind Map'), 'mind-map');
+  assert.equal(NLME.artifactTypePrefix('Weird Thing'), 'weird-thing');
+});
+
+test('exportTimestamp formats a fixed date', () => {
+  assert.equal(NLME.exportTimestamp(new Date('2026-11-03T10:20:30.456Z')), '2026-11-03T10-20-30');
+});
+
+test('escapeHtml escapes quotes', () => {
+  assert.equal(NLME.escapeHtml('"a" & <b>'), '&quot;a&quot; &amp; &lt;b&gt;');
+  assert.equal(NLME.escapeHtml("it's"), 'it&#39;s');
+});
+
+test('isAllowedDownloadUrl accepts Gemini Notebook download hosts', () => {
+  assert.equal(NLME.isAllowedDownloadUrl('https://contribution.usercontent.google.com/download?filename=a.pdf'), true);
+  assert.equal(NLME.isAllowedDownloadUrl('https://lh3.googleusercontent.com/notebooklm/x'), true);
+});
+
+test('isAllowedDownloadUrl rejects other hosts and schemes', () => {
+  assert.equal(NLME.isAllowedDownloadUrl('https://drive.google.com/uc?id=1'), false);
+  assert.equal(NLME.isAllowedDownloadUrl('http://contribution.usercontent.google.com/x'), false);
+  assert.equal(NLME.isAllowedDownloadUrl('https://evil.com/?q=googleusercontent.com'), false);
+  assert.equal(NLME.isAllowedDownloadUrl('blob:chrome-extension://abc/123'), false);
+});
+
+test('isNotebookDownload rejects a Drive download from another tab', () => {
+  assert.equal(NLME.isNotebookDownload({ url: 'https://drive.usercontent.google.com/download?id=1', referrer: 'https://drive.google.com/' }), false);
+  assert.equal(NLME.isNotebookDownload({ url: 'https://contribution.usercontent.google.com/download?c=x', referrer: 'https://notebook.google.com/' }), true);
+  assert.equal(NLME.isNotebookDownload({ url: 'https://contribution.usercontent.google.com/download?c=x', referrer: '' }), true);
+  assert.equal(NLME.isNotebookDownload({ url: 'https://lh3.googleusercontent.com/x', referrer: 'https://mail.google.com/' }), false);
+});
+
+const suffixes = list => list.map(v => v.suffix);
+
+test('noteVariants always includes base', () => {
+  assert.deepEqual(suffixes(NLME.noteVariants({}, { hasQuotes: false, hasImages: false })), ['']);
+});
+
+test('noteVariants skips code blocks without quotes', () => {
+  assert.deepEqual(suffixes(NLME.noteVariants({ exportNoteCodeBlocks: true }, { hasQuotes: false, hasImages: false })), ['']);
+});
+
+test('noteVariants keeps differing variants', () => {
+  const v = NLME.noteVariants({ exportNoteBase: true, exportNoteCodeBlocks: true, exportNoteWithImages: true, exportNoteCodeBlocksWithImages: true },
+    { hasQuotes: true, hasImages: true });
+  assert.deepEqual(suffixes(v), ['', '-code-blocks', '-with-images']);
+  assert.deepEqual(v[1], { suffix: '-code-blocks', codeBlocks: true, images: false });
+  assert.deepEqual(v[2], { suffix: '-with-images', codeBlocks: false, images: true });
+});
+
+test('sourceVariants needs images for image variants', () => {
+  const all = { exportSourceBase: true, exportSourcePlusMeta: true, exportSourceWithImages: true, exportSourcePlusMetaWithImages: true };
+  assert.deepEqual(suffixes(NLME.sourceVariants(all, { hasImages: false })), ['', '-plus-meta']);
+  assert.deepEqual(suffixes(NLME.sourceVariants(all, { hasImages: true })), ['', '-plus-meta', '-with-images', '-plus-meta-with-images']);
+});
+
+test('fenceFor outgrows backtick runs in the quote', () => {
+  assert.equal(NLME.fenceFor('a ```js x``` b'), '````');
+  assert.equal(NLME.fenceFor('plain'), '```');
+  assert.equal(NLME.fenceFor('````` five'), '``````');
+});
+
+test('toBlockquote prefixes every line', () => {
+  assert.equal(NLME.toBlockquote('a\n\nb'), '> a\n>\n> b');
+  assert.equal(NLME.toBlockquote('- item\n- item 2'), '> - item\n> - item 2');
+});
+
+test('citationTitleFromAriaLabel strips the number prefix', () => {
+  assert.equal(NLME.citationTitleFromAriaLabel('3: Donald E. Scott: Indeed, Our Sun is Electric', 3), 'Donald E. Scott: Indeed, Our Sun is Electric');
+  assert.equal(NLME.citationTitleFromAriaLabel('12: ZFC', '12'), 'ZFC');
+});
+
+test('citationTitleFromAriaLabel falls back to Source N', () => {
+  assert.equal(NLME.citationTitleFromAriaLabel('', 4), 'Source 4');
+  assert.equal(NLME.citationTitleFromAriaLabel(null, 4), 'Source 4');
+  assert.equal(NLME.citationTitleFromAriaLabel('4:', 4), 'Source 4');
+});
+
+test('buildSourcesIndex links each same-titled source to its own file', () => {
+  const md = NLME.buildSourcesIndex([
+    { title: 'Electric Universe', files: [{ label: 'Base', path: 'sources/Electric-Universe.md' }] },
+    { title: 'Electric Universe', files: [{ label: 'Base', path: 'sources/Electric-Universe (2).md' }] }
+  ]);
+  assert.match(md, /### 1\. Electric Universe/);
+  assert.match(md, /### 2\. Electric Universe/);
+  assert.ok(md.includes('(sources/Electric-Universe.md)'));
+  assert.ok(md.includes('(sources/Electric-Universe%20(2).md)'));
+});
+
+test('buildSourcesIndex never throws on odd characters', () => {
+  const md = NLME.buildSourcesIndex([{ title: 'Ω \ud83d', files: [{ label: 'Base', path: 'sources/\ud83d-x.md' }] }]);
+  assert.match(md, /### 1\./);
+});
+
+test('auditExport passes when everything was written', () => {
+  const r = NLME.auditExport({ expected: { items: 10, citations: 246 }, written: { items: 10, citations: 246 } });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.lines, ['- items: 10 of 10', '- citations: 246 of 246']);
+});
+
+test('auditExport flags missing citations', () => {
+  const r = NLME.auditExport({ expected: { items: 17, citations: 294 }, written: { items: 17, citations: 280 } });
+  assert.equal(r.ok, false);
+  assert.ok(r.lines.some(l => l.includes('280 of 294') && l.startsWith('- ⚠️')));
+});
+
+test('unknownStudioIcons lists only unmapped icons', () => {
+  assert.deepEqual(NLME.unknownStudioIcons(['tablet', 'copy', 'new_shape', 'article', 'new_shape', '']), ['new_shape']);
+});
+
+test('noteHasImages finds images in citation quotes, not only the body', () => {
+  assert.equal(NLME.noteHasImages({ html: '<p>text</p>', sources: [{ quote: 'See ![fig](data:image/png;base64,AA)' }] }), true);
+  assert.equal(NLME.noteHasImages({ html: '<p><img src="x"></p>', sources: [] }), true);
+  assert.equal(NLME.noteHasImages({ html: '<p>text</p>', sources: [{ quote: 'plain' }] }), false);
+});
+
+test('countMarkdownFormulas counts each formula once in the final Markdown', () => {
+  assert.equal(NLME.countMarkdownFormulas('a $x^2$ b $$\\frac{1}{2}$$ c $y$'), 3);
+  assert.equal(NLME.countMarkdownFormulas('costs $5 and $10 today'), 0);
+  assert.equal(NLME.countMarkdownFormulas(''), 0);
+});
+
+test('citationCoverage counts distinct markers against sources actually read', () => {
+  const sources = [{ sourceIndex: '1', text: 'A', quote: 'q' }, { sourceIndex: '2', text: 'B', quote: '' }, { sourceIndex: '3', text: '', quote: '' }];
+  assert.deepEqual(NLME.citationCoverage({ markerNumbers: ['1', '2', '3', '3'], sources, needQuotes: true }), { expected: 3, written: 1 });
+  assert.deepEqual(NLME.citationCoverage({ markerNumbers: ['1', '2', '3'], sources, needQuotes: false }), { expected: 3, written: 2 });
+});
+
+test('groupCitationEntries puts all numbers of one source on one line, in first-seen order', () => {
+  const groups = NLME.groupCitationEntries([
+    { number: '1', text: 'Invent math' }, { number: '2', text: 'Invent math' },
+    { number: '3', text: 'ZFC angels' }, { number: '4', text: 'Invent math' }
+  ]);
+  assert.deepEqual(groups, [
+    { text: 'Invent math', numbers: ['1', '2', '4'] },
+    { text: 'ZFC angels', numbers: ['3'] }
+  ]);
+});
+
+test('groupCitationEntries keeps unavailable placeholders apart from real sources', () => {
+  const groups = NLME.groupCitationEntries([
+    { number: '1', text: '(citation details unavailable)', missing: true },
+    { number: '2', text: '(citation details unavailable)', missing: true },
+    { number: '3', text: 'A' }
+  ]);
+  assert.deepEqual(groups.map(g => g.numbers), [['1', '2'], ['3']]);
 });

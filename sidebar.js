@@ -96,7 +96,7 @@ function showDOMWarningDialog(issues, isMidExport = false) {
             ? 'Multiple errors occurred. NotebookLM may have been updated.'
             : 'Some expected elements were not found. The extension may need an update.'}
         </p>
-        <ul>${issues.map(i => `<li>${i}</li>`).join('')}</ul>
+        <ul>${issues.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>
         <div class="dialog-actions">
           <button class="btn btn-secondary" data-action="cancel">Cancel</button>
           <button class="btn btn-primary" data-action="continue">
@@ -119,19 +119,6 @@ function showDOMWarningDialog(issues, isMidExport = false) {
       }
     });
   });
-}
-
-/**
- * Show the warning banner in the sidebar
- * @param {string} message - Warning message to display
- */
-function showWarningBanner(message) {
-  const banner = document.getElementById('dom-warning-banner');
-  const messageEl = document.getElementById('warning-message');
-  if (banner && messageEl) {
-    messageEl.textContent = message;
-    banner.style.display = 'flex';
-  }
 }
 
 /**
@@ -478,10 +465,9 @@ function convertKatexNodeToLatex(node) {
 // Google renamed NotebookLM to "Gemini Notebook" and moved it from
 // notebooklm.google.com to notebook.google.com (Jul 2026). The old host 301s to
 // the new one; keep both so users mid-rollout still work.
-const NOTEBOOK_HOSTS = ['notebook.google.com', 'notebooklm.google.com'];
 
 function isNotebookUrl(url) {
-  return !!url && NOTEBOOK_HOSTS.some(host => url.includes(host));
+  return NLME.isNotebookUrl(url);
 }
 
 let currentTabId = null;
@@ -500,7 +486,6 @@ let settings = {
   exportNoteBase: true, // Base version (always enabled, can't be disabled)
   exportNoteCodeBlocks: true, // Code blocks, no images (was: citationsCodeBlock)
   exportNoteWithImages: false, // With images, markdown (was: includeCitationImages)
-  exportNoteCodeBlocksWithImages: false, // Code blocks + images
   // Batch sizes
   sourcesPerZip: 25, // Number of sources per ZIP file (prevents memory issues)
   notesPerZip: 25, // Number of notes per ZIP file (prevents memory issues)
@@ -509,7 +494,10 @@ let settings = {
   // Interface
   showStudioTab: false, // Show the Studio tab (unified per-item list with delete)
   // Slide deck download format offered by the More menu ('pdf' | 'pptx')
-  slidesFormat: 'pdf'
+  slidesFormat: 'pdf',
+  // Note citations: 'quotes' hovers every marker; 'titles' takes source
+  // titles from the markers only (no hovering); 'none' drops markers and Sources
+  citationDetail: 'quotes'
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -632,11 +620,8 @@ async function loadSettings() {
   document.getElementById('export-note-base-checkbox').checked = settings.exportNoteBase;
   document.getElementById('export-note-code-blocks-checkbox').checked = settings.exportNoteCodeBlocks;
   document.getElementById('export-note-with-images-checkbox').checked = settings.exportNoteWithImages;
-  document.getElementById('export-note-code-blocks-with-images-checkbox').checked = settings.exportNoteCodeBlocksWithImages;
 
   // Sync legacy settings for chat export compatibility
-  settings.citationsCodeBlock = settings.exportNoteCodeBlocks || settings.exportNoteCodeBlocksWithImages;
-  settings.includeCitationImages = settings.exportNoteWithImages || settings.exportNoteCodeBlocksWithImages;
 
   // Batch sizes
   document.getElementById('sources-per-zip-input').value = settings.sourcesPerZip;
@@ -648,6 +633,7 @@ async function loadSettings() {
   // Interface
   document.getElementById('show-studio-tab-checkbox').checked = settings.showStudioTab;
   document.getElementById('slides-format-select').value = settings.slidesFormat;
+  document.getElementById('citation-detail-select').value = settings.citationDetail;
   applyStudioTabVisibility();
 }
 
@@ -689,11 +675,8 @@ async function saveSettings() {
   settings.exportNoteBase = document.getElementById('export-note-base-checkbox').checked;
   settings.exportNoteCodeBlocks = document.getElementById('export-note-code-blocks-checkbox').checked;
   settings.exportNoteWithImages = document.getElementById('export-note-with-images-checkbox').checked;
-  settings.exportNoteCodeBlocksWithImages = document.getElementById('export-note-code-blocks-with-images-checkbox').checked;
 
   // Sync legacy settings for chat export compatibility
-  settings.citationsCodeBlock = settings.exportNoteCodeBlocks || settings.exportNoteCodeBlocksWithImages;
-  settings.includeCitationImages = settings.exportNoteWithImages || settings.exportNoteCodeBlocksWithImages;
 
   // Batch sizes
   settings.sourcesPerZip = parseInt(document.getElementById('sources-per-zip-input').value) || 25;
@@ -705,6 +688,8 @@ async function saveSettings() {
   // Interface
   settings.showStudioTab = document.getElementById('show-studio-tab-checkbox').checked;
   settings.slidesFormat = document.getElementById('slides-format-select').value === 'pptx' ? 'pptx' : 'pdf';
+  settings.citationDetail = ['titles', 'none'].includes(document.getElementById('citation-detail-select').value)
+    ? document.getElementById('citation-detail-select').value : 'quotes';
   applyStudioTabVisibility();
 
   await chrome.storage.local.set({ settings });
@@ -732,8 +717,10 @@ function setupEventListeners() {
   });
 
   // Health check panel
+  // The health check hovers real citations, so it must never run during an
+  // export (its popovers would race the export's own hovers)
   document.getElementById('health-check-btn').addEventListener('click', () => {
-    runHealthCheck();
+    runExclusive('Health check', runHealthCheck);
   });
 
   document.getElementById('close-health-check-btn').addEventListener('click', () => {
@@ -741,7 +728,7 @@ function setupEventListeners() {
   });
 
   document.getElementById('rerun-health-check-btn').addEventListener('click', () => {
-    runHealthCheck();
+    runExclusive('Health check', runHealthCheck);
   });
 
   document.getElementById('copy-health-report-btn').addEventListener('click', () => {
@@ -796,8 +783,7 @@ function setupEventListeners() {
   // Note version checkboxes - parent/child relationships
   // Parent checkboxes control whether child "include images" checkboxes are enabled
   const noteParentChildPairs = [
-    { parent: 'export-note-base-checkbox', child: 'export-note-with-images-checkbox' },
-    { parent: 'export-note-code-blocks-checkbox', child: 'export-note-code-blocks-with-images-checkbox' }
+    { parent: 'export-note-base-checkbox', child: 'export-note-with-images-checkbox' }
   ];
 
   // Function to update child checkbox state based on parent
@@ -991,16 +977,7 @@ async function retryDownload(downloadFn, maxRetries = 3, itemName = 'item') {
  * Get artifact type prefix for filenames
  */
 function getArtifactTypePrefix(artifactType) {
-  const typeMap = {
-    'Audio Overview': 'audio-overview',
-    'Data Table': 'data-table',
-    'Report': 'report',
-    'Infographic': 'infographic',
-    'Slides': 'slides',
-    'Video Overview': 'video-overview',
-    'Mind Map': 'mind-map'
-  };
-  return typeMap[artifactType] || artifactType.toLowerCase().replace(/\s+/g, '-');
+  return NLME.artifactTypePrefix(artifactType);
 }
 
 /**
@@ -1038,7 +1015,9 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
       await chrome.runtime.sendMessage({
         type: 'START_INTERCEPT_DOWNLOAD',
         name: artifactName,
-        artifactType: artifactType
+        artifactType: artifactType,
+        // Download All folder mode: the fallback capture must land there too
+        folder: activeDownloadFolder
       });
 
       // Send download message to content script
@@ -1148,7 +1127,7 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
           logger.info('Download', `Converting HTML to markdown for: "${baseFilename}"`);
           // For Reports, skip adding title if it's already in the content (prevents duplicate H1)
           const skipTitle = (artifactType === 'Report');
-          markdownContent = convertToMarkdown(response.data, [], baseFilename, settings.citationsCodeBlock, skipTitle, null, false);
+          markdownContent = convertToMarkdown(response.data, citationTitlesFromHtml(response.data), baseFilename, false, skipTitle, null, false);
         } else {
           // Already markdown
           markdownContent = response.data;
@@ -1287,58 +1266,6 @@ async function handleSVGDownload(dataUrl, filename, format, artifactType = 'Info
   }
 }
 
-/**
- * Wait for Chrome download to complete
- * Uses chrome.downloads API to verify download
- */
-async function waitForChromeDownload(expectedFilename, timeout = 10000) {
-  return new Promise((resolve, reject) => {
-    const startTime = Date.now();
-    let downloadId = null;
-
-    const timeoutId = setTimeout(() => {
-      if (listener) {
-        chrome.downloads.onCreated.removeListener(listener);
-      }
-      logger.warn('Download', `Timeout waiting for download: ${expectedFilename}`);
-      resolve(); // Don't reject - download might still succeed
-    }, timeout);
-
-    const listener = (downloadItem) => {
-      // Check if this download matches our expected filename
-      const filename = downloadItem.filename || '';
-      const matches = filename.toLowerCase().includes(expectedFilename.toLowerCase().substring(0, 20));
-
-      if (matches) {
-        downloadId = downloadItem.id;
-        logger.info('Download', `Chrome download started: ${downloadItem.filename}`);
-
-        // Monitor download progress
-        const progressListener = (delta) => {
-          if (delta.id === downloadId && delta.state) {
-            if (delta.state.current === 'complete') {
-              clearTimeout(timeoutId);
-              chrome.downloads.onChanged.removeListener(progressListener);
-              chrome.downloads.onCreated.removeListener(listener);
-              logger.download(expectedFilename, 'success', `Downloaded in ${Date.now() - startTime}ms`);
-              resolve();
-            } else if (delta.state.current === 'interrupted') {
-              clearTimeout(timeoutId);
-              chrome.downloads.onChanged.removeListener(progressListener);
-              chrome.downloads.onCreated.removeListener(listener);
-              reject(new Error('Download interrupted'));
-            }
-          }
-        };
-
-        chrome.downloads.onChanged.addListener(progressListener);
-      }
-    };
-
-    chrome.downloads.onCreated.addListener(listener);
-  });
-}
-
 // ==================== STATUS CHECK ====================
 
 async function checkStatus() {
@@ -1432,11 +1359,6 @@ async function scanPage() {
       ` : ''}
     `;
 
-    // Store items for handlers
-    window._scanItems = items;
-    window._enabledItems = enabledItems;
-    window._currentTabId = tab.id;
-
     // Add click handlers for individual download buttons with status feedback
     resultsEl.querySelectorAll('button[data-index]').forEach((btn) => {
       btn.addEventListener('click', async () => {
@@ -1453,7 +1375,13 @@ async function scanPage() {
         }
 
         try {
-          await runExclusive('Artifact download', () => triggerItemDownload(tab.id, idx, item.label, item.type));
+          const outcome = await runExclusive('Artifact download', () => triggerItemDownload(tab.id, idx, item.label, item.type));
+          if (outcome === JOB_BUSY) {
+            // Refused: another job is running; nothing was downloaded
+            if (statusSpan) { statusSpan.textContent = ''; statusSpan.className = 'download-status'; }
+            btn.disabled = false;
+            return;
+          }
 
           // Show success status
           if (statusSpan) {
@@ -1499,7 +1427,7 @@ async function scanPage() {
 
   } catch (error) {
     console.error('Scan failed:', error);
-    resultsEl.innerHTML = `<p class="error">Scan failed: ${error.message}</p>`;
+    resultsEl.innerHTML = `<p class="error">Scan failed: ${escapeHtml(error.message)}</p>`;
   }
 }
 
@@ -1553,12 +1481,7 @@ async function scanNotesPage() {
     // Send message to content script
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'SCAN_NOTES' });
     const notes = response?.notes || [];
-    window._currentNotes = notes;
-
-    // Debug: Also get raw note data from page
-    const debugResponse = await chrome.tabs.sendMessage(tab.id, { type: 'DEBUG_NOTES' });
     console.log('[NotebookLM Takeout] Scanned notes:', notes);
-    console.log('[NotebookLM Takeout] Raw notes from page:', debugResponse?.notes);
 
     renderNotesList(notes);
 
@@ -2188,7 +2111,9 @@ ${footnotesHTML}
 
 // citationPlaceholders: false when no citation extraction ran (reports, source
 // content), so unread markers don't produce "(citation details unavailable)".
-function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock = true, skipTitleIfPresent = false, noteId = null, citationPlaceholders = true) {
+// dropCitations: Citation detail 'none' — remove [n] markers and the Sources
+// section, leaving plain text
+function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock = true, skipTitleIfPresent = false, noteId = null, citationPlaceholders = true, dropCitations = false) {
   // Debug: Log what we're converting
   logger.info('Markdown', `Converting note: "${noteTitle}"`);
   logger.info('Markdown', `  - HTML content length: ${htmlContent.length} chars`);
@@ -2393,6 +2318,7 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
       return false;
     },
     replacement: (content, node) => {
+      if (dropCitations) return '';
       // Debug: Log what we're processing
       logger.info('Citation', `Processing citation node: ${node.nodeName}`);
       logger.info('Citation', `  - content: "${content}"`);
@@ -2485,8 +2411,17 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
 
   // Sources section: extracted sources plus a placeholder for any marker
   // whose tooltip could not be read, all under their original numbers
-  const entries = NLME.buildCitationEntries(sources, [...citationOccurrences.keys()], { placeholders: citationPlaceholders });
-  if (entries.length > 0) {
+  const entries = dropCitations ? [] : NLME.buildCitationEntries(sources, [...citationOccurrences.keys()], { placeholders: citationPlaceholders });
+  if (entries.length > 0 && entries.every(entry => !entry.quote)) {
+    // No quotes (titles-only, reports): one line per source with all its
+    // numbers; every number keeps its own anchor so body links still resolve
+    markdown += '\n\n---\n\n## Sources\n\n';
+    for (const group of NLME.groupCitationEntries(entries)) {
+      const anchors = group.numbers.map(n => `<a id="${anchorPrefix}src-${n}"></a>`).join('');
+      const links = group.numbers.map(n => `[[${n}]](#${anchorPrefix}cite-ref-${n}-1)`).join(' ');
+      markdown += `${anchors}\n**${links}** ${group.text}\n\n`;
+    }
+  } else if (entries.length > 0) {
     markdown += '\n\n---\n\n## Sources\n\n';
 
     entries.forEach(entry => {
@@ -2499,31 +2434,19 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
         // Optionally clean OCR artifacts, then escape markdown
         const cleanedQuote = settings.cleanOCRArtifacts ? cleanOCRArtifacts(entry.quote) : entry.quote;
         if (citationsCodeBlock) {
-          // Wrap in markdown code block for data separation
-          markdown += `\`\`\`markdown\n${cleanedQuote}\n\`\`\`\n\n`;
+          // Fence longer than any backtick run in the quote, so code inside
+          // the quote can't close it early and invert the rest of the file
+          const fence = NLME.fenceFor(cleanedQuote);
+          markdown += `${fence}markdown\n${cleanedQuote}\n${fence}\n\n`;
         } else {
-          // Escape markdown chars to prevent quote content from breaking formatting
-          markdown += `${escapeMarkdownInQuote(cleanedQuote)}\n\n`;
+          // Blockquote keeps the quote's own Markdown (lists, tables, emphasis)
+          markdown += `${NLME.toBlockquote(cleanedQuote)}\n\n`;
         }
       }
     });
   }
 
   return markdown;
-}
-
-/**
- * Escape markdown special characters in quote content to prevent rendering issues
- * @param {string} text - The quote text to escape
- * @returns {string} - Text with markdown characters escaped
- */
-function escapeMarkdownInQuote(text) {
-  if (!text) return '';
-  return text
-    .replace(/^(#{1,6})\s/gm, '\\$1 ')   // Escape headers
-    .replace(/^(\s*[-*+])\s/gm, '\\$1 ') // Escape list markers
-    .replace(/^>/gm, '\\>')              // Escape blockquotes
-    .replace(/\|/g, '\\|');              // Escape table pipes
 }
 
 /**
@@ -2557,6 +2480,46 @@ function timingSummary() {
   return '\n' + summary;
 }
 
+// Export audit (Milestone 2, Resilience #1): what the page showed vs what
+// the export wrote. Expected counts come from the HTML each export reads.
+function countPageContent(html) {
+  const doc = new DOMParser().parseFromString(html || '', 'text/html');
+  const citationNumbers = [...doc.querySelectorAll('button.citation-marker')]
+    .map(b => NLME.parseCitationIndex(b.querySelector('span')?.textContent))
+    .filter(Boolean);
+  const formulas = doc.querySelectorAll('.katex').length;
+  return { citationNumbers, formulas };
+}
+
+// Citations: distinct markers vs sources actually read (an anchor is written
+// for every marker even when its popup could not be read)
+function addCitationCoverage(audit, html, sources, needQuotes, page = null) {
+  const counts = page || countPageContent(html);
+  const coverage = NLME.citationCoverage({ markerNumbers: counts.citationNumbers, sources, needQuotes });
+  audit.expected.citations += coverage.expected;
+  audit.written.citations += coverage.written;
+}
+
+function newAudit() {
+  return { expected: { items: 0, citations: 0, formulas: 0 }, written: { items: 0, citations: 0, formulas: 0 } };
+}
+
+// Converts and counts formulas: .katex on the page vs formulas in the final
+// Markdown (counted in the output, so nested list/table conversions that run
+// the KaTeX converter twice can't inflate it)
+function convertCounted(audit, html, convert, page = null) {
+  const counts = page || countPageContent(html);
+  const markdown = convert();
+  audit.expected.formulas += counts.formulas;
+  audit.written.formulas += NLME.countMarkdownFormulas(markdown);
+  return markdown;
+}
+
+function auditMarkdown(title, audit) {
+  const result = NLME.auditExport(audit);
+  return { ok: result.ok, text: `# ${title} Audit\n\nWhat the page showed vs what was exported:\n\n${result.lines.join('\n')}\n` };
+}
+
 async function generateZipTimed(zip) {
   exportTimer?.start('zip.build');
   try {
@@ -2572,12 +2535,22 @@ async function generateZipTimed(zip) {
 const jobLock = NLME.createJobLock();
 let jobTabId = null;
 
+// Returned by runExclusive when another job holds the lock
+const JOB_BUSY = Symbol('job-busy');
+
 async function runExclusive(name, fn) {
   if (!jobLock.tryAcquire(name)) {
     showToast(`${jobLock.current()} is still running`, 'warning');
-    return undefined;
+    return JOB_BUSY;
   }
   document.body.classList.add('job-running');
+  // Disable (not just dim) the tab controls so keyboard activation is
+  // blocked too. Mark them: a scan may replace a control with a clone (the
+  // chat Export button), and the clone must be re-enabled too, so restore
+  // by the mark, not by the original element.
+  Array.from(document.querySelectorAll('.tab-content button, .tab-content input'))
+    .filter(el => !el.disabled && el.id !== 'cancel-download-btn')
+    .forEach(el => { el.disabled = true; el.setAttribute('data-job-disabled', ''); });
   try {
     // Remember the job's tab: Cancel must reach it even after a tab switch
     try {
@@ -2591,6 +2564,10 @@ async function runExclusive(name, fn) {
     jobLock.release(name);
     jobTabId = null;
     document.body.classList.remove('job-running');
+    document.querySelectorAll('[data-job-disabled]').forEach(el => {
+      el.disabled = false;
+      el.removeAttribute('data-job-disabled');
+    });
   }
 }
 
@@ -2606,39 +2583,47 @@ async function requestCancel() {
   }
 }
 
+// Sources for an exported report: one entry per citation number, titled
+// from the marker's aria-label ("3: Title"), so every [n] in the report links
+// to a Sources entry (Milestone 2, Output #4)
+function citationTitlesFromHtml(html) {
+  const doc = new DOMParser().parseFromString(html || '', 'text/html');
+  const byNumber = new Map();
+  doc.querySelectorAll('button.citation-marker').forEach(button => {
+    const span = button.querySelector('span');
+    const number = NLME.parseCitationIndex(span?.textContent);
+    if (number && !byNumber.has(number)) {
+      byNumber.set(number, {
+        sourceIndex: number,
+        text: NLME.citationTitleFromAriaLabel(span.getAttribute('aria-label'), number),
+        quote: ''
+      });
+    }
+  });
+  return [...byNumber.values()];
+}
+
+// Quick pre-flight before artifact downloads and chat exports: warn (don't
+// block) when the selectors they depend on are missing
+async function preflightWarn(tabId, type) {
+  try {
+    const health = await chrome.tabs.sendMessage(tabId, { type: 'CHECK_DOM_HEALTH', data: { type } });
+    if (health && health.healthy === false) {
+      showToast(`Gemini Notebook may have changed (${(health.issues || []).length} ${type} check(s) failed). Exporting anyway; run the health check 🩺 afterwards if results look wrong.`, 'warning');
+    }
+  } catch (e) {
+    console.warn('[NotebookLM Takeout] Pre-flight check failed:', e.message);
+  }
+}
+
 function cleanOCRArtifacts(text) {
   // Shared, unit-tested implementation (keeps paragraphs, tables, fences, ~~strike~~)
   return NLME.cleanOcrArtifacts(text);
 }
 
 function sanitizeFilename(filename) {
-  let clean = filename
-    // Replace OS-restricted characters with underscore
-    .replace(/[<>:"/\\|?*]/g, '_')
-    // Replace quotes and apostrophes (straight and curly) with nothing
-    // U+0027 ' straight apostrophe, U+0060 ` backtick, U+00B4 ´ acute accent
-    // U+2018 ' left single quote, U+2019 ' right single quote (curly apostrophe)
-    // U+201C " left double quote, U+201D " right double quote
-    .replace(/[\u0027\u0060\u00B4\u2018\u2019\u0022\u201C\u201D]/g, '')
-    // Replace other problematic characters
-    .replace(/[#%&{}$!@+]/g, '_')
-    // Replace multiple periods with single period (avoid confusion with extensions)
-    .replace(/\.{2,}/g, '.')
-    // Replace whitespace with hyphens
-    .replace(/\s+/g, '-')
-    // Collapse multiple hyphens/underscores
-    .replace(/[-_]+/g, '-')
-    // Remove leading/trailing hyphens
-    .replace(/^-+|-+$/g, '')
-    // Limit length (leave room for extension)
-    .substring(0, 100);
-
-  // Fallback if sanitization resulted in empty string
-  if (clean.length === 0) {
-    clean = 'untitled';
-  }
-
-  return clean;
+  // Shared, tested implementation (emoji-safe truncation, reserved names)
+  return NLME.sanitizeFilename(filename);
 }
 
 /**
@@ -2788,13 +2773,17 @@ async function getProjectName(tabId) {
 
 async function exportNotesAsMarkdown(selectedNotes) {
   startExportTiming();
+  const notesAudit = newAudit();
+  let stoppedEarly = false; // citations unreadable: stopped by the extension, not the user
+  let notesWithMarkers = 0;
+  let unreadNotes = 0;
   console.log('[NotebookLM Takeout] Starting export for notes:', selectedNotes.length);
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   // Get project name and timestamp at the start (same for all batches)
   const projectName = await getProjectName(tab.id);
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+  const timestamp = NLME.exportTimestamp();
   console.log('[NotebookLM Takeout] Export timestamp:', timestamp, 'Project:', projectName);
 
   // Reset DOM tracker and perform pre-export health check
@@ -2903,7 +2892,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
         console.log('[NotebookLM Takeout] Sending message to extract note content...');
 
         // Only download images if user has enabled an image version
-        const needsImages = settings.exportNoteWithImages || settings.exportNoteCodeBlocksWithImages;
+        const needsImages = !!settings.exportNoteWithImages;
 
         const noteData = await chrome.tabs.sendMessage(tab.id, {
           type: 'EXTRACT_NOTE',
@@ -2911,7 +2900,8 @@ async function exportNotesAsMarkdown(selectedNotes) {
             noteIndex: note.index,
             noteTitle: note.title,
             sourceIndex: note.sourceIndex,
-            includeCitationImages: needsImages
+            includeCitationImages: needsImages,
+            citationDetail: settings.citationDetail
           }
         });
 
@@ -2936,8 +2926,29 @@ async function exportNotesAsMarkdown(selectedNotes) {
               treeData: noteData.treeData
             });
           } else {
-            // Convert to markdown (without noteId for individual files)
-            const markdown = convertToMarkdown(noteData.html, noteData.sources, note.title, settings.citationsCodeBlock);
+            // Convert to markdown (without noteId for individual files),
+            // counting citations and formulas for the audit
+            const notePage = countPageContent(noteData.html);
+            const markdown = convertCounted(notesAudit, noteData.html,
+              () => convertToMarkdown(noteData.html, noteData.sources, note.title, false, false, null, true, settings.citationDetail === 'none'), notePage);
+            // 'none' drops citations on purpose: nothing to audit there
+            if (settings.citationDetail !== 'none') {
+              addCitationCoverage(notesAudit, noteData.html, noteData.sources, settings.citationDetail === 'quotes', notePage);
+            }
+            const pageCitations = notePage.citationNumbers.length;
+            if (pageCitations > 0 && settings.citationDetail === 'quotes') {
+              notesWithMarkers++;
+              if ((noteData.sources || []).length === 0) unreadNotes++;
+            }
+            if (notesWithMarkers === 3 && unreadNotes === 3) {
+              // The first three notes with citations all failed: the page
+              // has probably changed. Stop instead of exporting 150 notes
+              // without sources.
+              allErrors.push(`[${note.title}] Citations could not be read in the first 3 notes that have them; export stopped (Gemini Notebook may have changed — run the health check)`);
+              cancelNoted = true; // not a user cancel: no "Cancelled by user" note
+              stoppedEarly = true;
+              cancelled = true;
+            }
 
             exportedNotes.push({
               title: note.title,
@@ -3003,7 +3014,10 @@ async function exportNotesAsMarkdown(selectedNotes) {
       // the batch the user cancelled in. A cancelled run is named -PARTIAL.
       const isLastZip = zipIndex === totalZips - 1 || cancelled;
       exportedCount += exportedNotes.length;
-      await createNotesZip(exportedNotes, isLastZip ? allErrors : [], zipIndex + 1, totalZips, projectName, timestamp, cancelled ? '-PARTIAL' : '');
+      notesAudit.expected.items = selectedNotes.length;
+      notesAudit.written.items = exportedCount;
+      const notesAuditDoc = isLastZip ? auditMarkdown('Notes Export', notesAudit) : null;
+      await createNotesZip(exportedNotes, isLastZip ? allErrors : [], zipIndex + 1, totalZips, projectName, timestamp, cancelled ? '-PARTIAL' : '', notesAuditDoc?.text);
       if (isLastZip && allErrors.length > 0) errorsWritten = true;
 
       // CRITICAL: Clear memory after each ZIP to prevent crashes
@@ -3041,7 +3055,15 @@ async function exportNotesAsMarkdown(selectedNotes) {
       failed: Math.max(0, attemptedCount - exportedCount),
       cancelled
     });
-    showToast(outcome.message, outcome.level);
+    notesAudit.expected.items = selectedNotes.length;
+    notesAudit.written.items = exportedCount;
+    const finalAudit = NLME.auditExport(notesAudit);
+    if (stoppedEarly) {
+      showToast(`Stopped after ${exportedCount} of ${selectedNotes.length} notes: citations could not be read (Gemini Notebook may have changed). Run the health check 🩺; details in errors.txt.`, 'error');
+    } else {
+      showToast(finalAudit.ok ? outcome.message : `${outcome.message} — some content is missing, see _audit.md`,
+        finalAudit.ok ? outcome.level : (outcome.level === 'error' ? 'error' : 'warning'));
+    }
 
   } catch (error) {
     console.error('Export failed:', error);
@@ -3068,25 +3090,14 @@ async function exportNotesAsMarkdown(selectedNotes) {
  * Return the list of note export "versions" the user currently has enabled.
  * Matches the variant set built by createNotesZip.
  */
-function getEnabledNoteVersions() {
-  const versions = [];
-  if (settings.exportNoteBase) {
-    versions.push({ fileSuffix: '', citationsCodeBlock: false, stripImages: true });
-  }
-  if (settings.exportNoteCodeBlocks) {
-    versions.push({ fileSuffix: '-code-blocks', citationsCodeBlock: true, stripImages: true });
-  }
-  if (settings.exportNoteWithImages) {
-    versions.push({ fileSuffix: '-with-images', citationsCodeBlock: false, stripImages: false });
-  }
-  if (settings.exportNoteCodeBlocksWithImages) {
-    versions.push({ fileSuffix: '-code-blocks-with-images', citationsCodeBlock: true, stripImages: false });
-  }
-  // Safety net: always produce at least the base version.
-  if (versions.length === 0) {
-    versions.push({ fileSuffix: '', citationsCodeBlock: false, stripImages: true });
-  }
-  return versions;
+// Versions for one note (NLME.noteVariants): base always, the others only
+// when they would differ from base
+function getEnabledNoteVersions({ hasQuotes = false, hasImages = false } = {}) {
+  return NLME.noteVariants(settings, { hasQuotes, hasImages }).map(v => ({
+    fileSuffix: v.suffix,
+    citationsCodeBlock: v.codeBlocks,
+    stripImages: !v.images
+  }));
 }
 
 /**
@@ -3161,7 +3172,7 @@ async function exportSingleNote(note) {
 
   await ensureContentScriptLoaded(tab.id);
 
-  const needsImages = settings.exportNoteWithImages || settings.exportNoteCodeBlocksWithImages;
+  const needsImages = !!settings.exportNoteWithImages;
 
   let noteData;
   try {
@@ -3171,7 +3182,8 @@ async function exportSingleNote(note) {
         noteIndex: note.index,
         noteTitle: note.title,
         sourceIndex: note.sourceIndex,
-        includeCitationImages: needsImages
+        includeCitationImages: needsImages,
+        citationDetail: settings.citationDetail
       }
     });
   } finally {
@@ -3192,14 +3204,20 @@ async function exportSingleNote(note) {
   }
 
   // Regular note — produce enabled markdown versions, each as its own .md file.
-  const versions = getEnabledNoteVersions();
+  const versions = getEnabledNoteVersions({
+    hasQuotes: (noteData.sources || []).some(src => src.quote && src.quote.trim()),
+    hasImages: NLME.noteHasImages(noteData) // body or citation quotes
+  });
   for (const version of versions) {
     let markdown = convertToMarkdown(
       noteData.html,
       noteData.sources,
       note.title,
       version.citationsCodeBlock,
-      true // skipTitleIfPresent
+      true, // skipTitleIfPresent
+      null,
+      true,
+      settings.citationDetail === 'none'
     );
     if (version.stripImages) {
       markdown = stripImagesFromMarkdown(markdown);
@@ -3212,14 +3230,18 @@ async function exportSingleNote(note) {
   return { success: true, filesWritten };
 }
 
-async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches = 1, projectName = 'NotebookLM', timestamp = null, nameSuffix = '') {
+async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches = 1, projectName = 'NotebookLM', timestamp = null, nameSuffix = '', auditText = '') {
   const zip = new JSZip();
   const indexFiles = []; // Track all files for _index.md
   let versionCount = 0; // Track number of versions created
 
   // Use provided timestamp or generate new one
   if (!timestamp) {
-    timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    timestamp = NLME.exportTimestamp();
+  }
+
+  if (auditText) {
+    zip.file('_audit.md', auditText);
   }
 
   // Add errors.txt when the caller passes errors (it passes ALL errors to the
@@ -3237,62 +3259,21 @@ async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches =
   const regularNotes = notes.filter(n => !n.isMindmap);
   const mindmaps = notes.filter(n => n.isMindmap);
 
-  // Determine which versions to create based on settings
-  const versions = [];
+  // Which versions to write (NLME.noteVariants): base always; code blocks
+  // only if some note in this ZIP has quotes; with-images only if some note
+  // has images. Otherwise those files would be identical to base.
+  const NOTE_VERSION_INFO = {
+    '': { folderSuffix: '', fileSuffix: '', combinedSuffix: '', citationsCodeBlock: false, stripImages: true,
+      title: 'Base (markdown, no images)', description: 'Citations rendered as markdown, images stripped' },
+    '-code-blocks': { folderSuffix: '-code-blocks', fileSuffix: '-code-blocks', combinedSuffix: '-code-blocks', citationsCodeBlock: true, stripImages: true,
+      title: 'Code blocks (no images)', description: 'Citation quotes in code blocks, images stripped' },
+    '-with-images': { folderSuffix: '-with-images', fileSuffix: '-with-images', combinedSuffix: '-with-images', citationsCodeBlock: false, stripImages: false,
+      title: 'With images (markdown)', description: 'Citations rendered as markdown, with base64 images' }
+  };
+  const hasQuotes = notes.some(n => (n.sources || []).some(src => src.quote && src.quote.trim()));
+  const hasImages = notes.some(n => NLME.noteHasImages(n)); // body or citation quotes
+  const versions = NLME.noteVariants(settings, { hasQuotes, hasImages }).map(v => NOTE_VERSION_INFO[v.suffix]);
 
-  // Version 1: Base (markdown rendering, no images) - Always created if enabled
-  if (settings.exportNoteBase) {
-    versions.push({
-      folderSuffix: '',
-      fileSuffix: '',
-      combinedSuffix: '',
-      citationsCodeBlock: false,
-      stripImages: true,
-      title: 'Base (markdown, no images)',
-      description: 'Citations rendered as markdown, images stripped'
-    });
-  }
-
-  // Version 2: Code blocks, no images
-  if (settings.exportNoteCodeBlocks) {
-    versions.push({
-      folderSuffix: '-code-blocks',
-      fileSuffix: '-code-blocks',
-      combinedSuffix: '-code-blocks',
-      citationsCodeBlock: true,
-      stripImages: true,
-      title: 'Code blocks (no images)',
-      description: 'Citations in code blocks, images stripped'
-    });
-  }
-
-  // Version 3: Markdown rendering, with images
-  if (settings.exportNoteWithImages) {
-    versions.push({
-      folderSuffix: '-with-images',
-      fileSuffix: '-with-images',
-      combinedSuffix: '-with-images',
-      citationsCodeBlock: false,
-      stripImages: false,
-      title: 'With images (markdown)',
-      description: 'Citations rendered as markdown, with base64 images'
-    });
-  }
-
-  // Version 4: Code blocks, with images
-  if (settings.exportNoteCodeBlocksWithImages) {
-    versions.push({
-      folderSuffix: '-code-blocks-with-images',
-      fileSuffix: '-code-blocks-with-images',
-      combinedSuffix: '-code-blocks-with-images',
-      citationsCodeBlock: true,
-      stripImages: false,
-      title: 'Code blocks with images',
-      description: 'Citations in code blocks, with base64 images'
-    });
-  }
-
-  console.log(`[NotebookLM Takeout] Creating ${versions.length} version(s) of ${regularNotes.length} notes`);
   versionCount = versions.length;
 
   // Process regular notes (all versions in single notes/ folder with suffixes)
@@ -3324,7 +3305,10 @@ async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches =
           note.sources,
           note.title,
           version.citationsCodeBlock,
-          true // skipTitleIfPresent
+          true, // skipTitleIfPresent
+          null,
+          true,
+          settings.citationDetail === 'none'
         );
 
         // Strip images if needed
@@ -3358,7 +3342,9 @@ async function createNotesZip(notes, errors = [], batchIndex = 1, totalBatches =
           note.title,
           version.citationsCodeBlock,
           false, // skipTitleIfPresent
-          noteId // unique ID for this note's anchors
+          noteId, // unique ID for this note's anchors
+          true,
+          settings.citationDetail === 'none'
         );
 
         // Strip images if needed
@@ -3689,13 +3675,14 @@ function setupSourcesEventListeners(sources) {
  */
 async function exportSources(selectedSources) {
   startExportTiming();
+  const sourcesAudit = newAudit();
   console.log(`[NotebookLM Takeout] Exporting ${selectedSources.length} sources...`);
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   // Get project name and timestamp at the start (same for all batches)
   const projectName = await getProjectName(tab.id);
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+  const timestamp = NLME.exportTimestamp();
   console.log('[NotebookLM Takeout] Export timestamp:', timestamp, 'Project:', projectName);
 
   // Reset DOM tracker and perform pre-export health check
@@ -3902,7 +3889,9 @@ async function exportSources(selectedSources) {
 
           // Add the main content
           md += `## Content\n\n`;
-          md += convertToMarkdown(sourceData.html, sourceData.sources || [], '', settings.citationsCodeBlock, false, null, false);
+          // Count formulas once: buildMarkdown runs again for the plus-meta version
+          const convertSource = () => convertToMarkdown(sourceData.html, sourceData.sources || [], '', false, false, null, false);
+          md += includeMeta ? convertSource() : convertCounted(sourcesAudit, sourceData.html, convertSource);
 
           return md;
         };
@@ -4072,10 +4061,15 @@ async function exportSources(selectedSources) {
           return filename;
         };
 
-        // 1. Base version: [filename].md (no meta, no images) - Always created if enabled
-        if (settings.exportSourceBase) {
+        // Which versions to write for this source (NLME.sourceVariants)
+        const sourceVersionSet = new Set(
+          NLME.sourceVariants(settings, { hasImages: !!source.hasImages }).map(v => v.suffix));
+
+        // 1. Base version: [filename].md (no meta, no images) - always written
+        if (sourceVersionSet.has('')) {
           const baseFilename1 = getUniqueFilename();
           sourcesFolder.file(baseFilename1, source.versions.base);
+          (source.writtenFiles || (source.writtenFiles = [])).push({ variant: 'base', filename: baseFilename1 });
           indexFiles.push({
             path: `sources/${baseFilename1}`,
             title: source.title,
@@ -4086,9 +4080,10 @@ async function exportSources(selectedSources) {
         }
 
         // 2. Plus metadata version: [filename]-plus-meta.md (with meta, no images)
-        if (settings.exportSourcePlusMeta) {
+        if (sourceVersionSet.has('-plus-meta')) {
           const plusMetaFilename = getUniqueFilename('-plus-meta');
           sourcesFolder.file(plusMetaFilename, source.versions.plusMeta);
+          (source.writtenFiles || (source.writtenFiles = [])).push({ variant: 'plusMeta', filename: plusMetaFilename });
           indexFiles.push({
             path: `sources/${plusMetaFilename}`,
             title: source.title,
@@ -4100,9 +4095,10 @@ async function exportSources(selectedSources) {
 
         // 3. With images version: [filename]-with-images.md (no meta, with images)
         // Only create if setting enabled AND source actually has images
-        if (settings.exportSourceWithImages && source.hasImages && source.versions.withImages) {
+        if (sourceVersionSet.has('-with-images') && source.versions.withImages) {
           const withImagesFilename = getUniqueFilename('-with-images');
           sourcesFolder.file(withImagesFilename, source.versions.withImages);
+          (source.writtenFiles || (source.writtenFiles = [])).push({ variant: 'withImages', filename: withImagesFilename });
           indexFiles.push({
             path: `sources/${withImagesFilename}`,
             title: source.title,
@@ -4114,9 +4110,10 @@ async function exportSources(selectedSources) {
 
         // 4. Plus metadata with images version: [filename]-plus-meta-with-images.md (with meta, with images)
         // Only create if setting enabled AND source actually has images
-        if (settings.exportSourcePlusMetaWithImages && source.hasImages && source.versions.plusMetaWithImages) {
+        if (sourceVersionSet.has('-plus-meta-with-images') && source.versions.plusMetaWithImages) {
           const plusMetaWithImagesFilename = getUniqueFilename('-plus-meta-with-images');
           sourcesFolder.file(plusMetaWithImagesFilename, source.versions.plusMetaWithImages);
+          (source.writtenFiles || (source.writtenFiles = [])).push({ variant: 'plusMetaWithImages', filename: plusMetaWithImagesFilename });
           indexFiles.push({
             path: `sources/${plusMetaWithImagesFilename}`,
             title: source.title,
@@ -4133,20 +4130,16 @@ async function exportSources(selectedSources) {
       readmeContent += '---\n\n';
       readmeContent += '## File Naming Convention\n\n';
 
-      // Determine which versions were created based on settings
-      const enabledVersions = [];
-      if (settings.exportSourceBase) enabledVersions.push('base');
-      if (settings.exportSourcePlusMeta) enabledVersions.push('plusMeta');
-      if (settings.exportSourceWithImages) enabledVersions.push('withImages');
-      if (settings.exportSourcePlusMetaWithImages) enabledVersions.push('plusMetaWithImages');
-
+      // Versions actually written: image versions only exist for sources
+      // with images, so settings alone overcount
+      const enabledVersions = NLME.distinctVariants(indexFiles);
       const versionCount = enabledVersions.length;
       readmeContent += `Each source is exported in ${versionCount} version(s):\n\n`;
 
       let sectionNum = 1;
 
       // 1. Base version
-      if (settings.exportSourceBase) {
+      if (enabledVersions.includes('base')) {
         readmeContent += `### ${sectionNum}. Base files (e.g., \`Document-1.md\`)\n\n`;
         readmeContent += '- **Minimal version** - no metadata, no images\n';
         readmeContent += '- Smallest file size, fastest to process\n';
@@ -4156,7 +4149,7 @@ async function exportSources(selectedSources) {
       }
 
       // 2. Plus-meta version
-      if (settings.exportSourcePlusMeta) {
+      if (enabledVersions.includes('plusMeta')) {
         readmeContent += `### ${sectionNum}. Plus-meta files (e.g., \`Document-1-plus-meta.md\`)\n\n`;
         readmeContent += '- **With metadata** - includes AI-generated summary & key topics\n';
         readmeContent += '- No images (text only)\n';
@@ -4166,7 +4159,7 @@ async function exportSources(selectedSources) {
       }
 
       // 3. With-images version
-      if (settings.exportSourceWithImages) {
+      if (enabledVersions.includes('withImages')) {
         readmeContent += `### ${sectionNum}. With-images files (e.g., \`Document-1-with-images.md\`)\n\n`;
         readmeContent += '- **With embedded images** - images as base64 data URIs\n';
         readmeContent += '- No metadata (content only)\n';
@@ -4185,7 +4178,7 @@ async function exportSources(selectedSources) {
       }
 
       // 4. Plus-meta-with-images version
-      if (settings.exportSourcePlusMetaWithImages) {
+      if (enabledVersions.includes('plusMetaWithImages')) {
         readmeContent += `### ${sectionNum}. Plus-meta-with-images files (e.g., \`Document-1-plus-meta-with-images.md\`)\n\n`;
         readmeContent += '- **Complete version** - metadata + images\n';
         readmeContent += '- Largest file size\n';
@@ -4225,6 +4218,11 @@ async function exportSources(selectedSources) {
       // Include errors.txt in the LAST ZIP so it contains ALL errors from all batches
       // errors.txt goes into the last ZIP this run writes: the final batch,
       // or the batch the user cancelled in
+      if (zipIndex === totalZips - 1 || cancelled) {
+        sourcesAudit.expected.items = selectedSources.length;
+        sourcesAudit.written.items = exportedCount;
+        zip.file('_audit.md', auditMarkdown('Sources Export', sourcesAudit).text);
+      }
       if ((zipIndex === totalZips - 1 || cancelled) && allErrors.length > 0) {
         errorsWritten = true;
         // Shared report (handles string and object errors, e.g. the cancel note)
@@ -4310,68 +4308,27 @@ async function exportSources(selectedSources) {
 
       indexContent += '## Sources\n\n';
 
-      // Group sources by title for display (only for THIS batch)
-      exportedSources.forEach((source, idx) => {
-        if (idx > 0) indexContent += '---\n\n';
-
-        indexContent += `### ${source.title}\n\n`;
-
-        // Add YouTube URL if present
-        if (source.youtubeUrl) {
-          indexContent += `**YouTube Video:** ${source.youtubeUrl}\n\n`;
-        }
-
-        // Add summary if present
-        if (source.summary && source.summary.trim().length > 0) {
-          indexContent += `**Summary:**\n\n${source.summary}\n\n`;
-        }
-
-        // Add key topics if present
+      // One numbered entry per exported source, linking the files actually
+      // written for it (same-titled sources no longer share links)
+      const VARIANT_LABELS = {
+        base: 'Base version (no metadata, no images)',
+        plusMeta: 'With metadata, no images',
+        withImages: 'No metadata, with images',
+        plusMetaWithImages: 'With metadata and images'
+      };
+      indexContent += NLME.buildSourcesIndex(exportedSources.map(source => {
+        let details = '';
+        if (source.youtubeUrl) details += `**YouTube Video:** ${source.youtubeUrl}\n\n`;
+        if (source.summary && source.summary.trim().length > 0) details += `**Summary:**\n\n${source.summary}\n\n`;
         if (source.keyTopics && source.keyTopics.length > 0) {
-          indexContent += `**Key Topics:**\n\n`;
-          source.keyTopics.forEach(topic => {
-            indexContent += `- ${topic}\n`;
-          });
-          indexContent += '\n';
+          details += `**Key Topics:**\n\n${source.keyTopics.map(topic => `- ${topic}`).join('\n')}\n`;
         }
-
-        // Find all versions of this source
-        const versions = indexFiles.filter(f => f.title === source.title && f.path.startsWith('sources/'));
-
-        if (versions.length > 0) {
-          indexContent += `**Files:**\n\n`;
-
-          // Always show base version first
-          const baseVersion = versions.find(v => v.variant === 'base');
-          if (baseVersion) {
-            const filename = baseVersion.path.replace('sources/', '');
-            indexContent += `- [${filename}](${encodeURI(filename)}) - Base version (no metadata, no images)\n`;
-          }
-
-          // Show plus-meta if it exists
-          const plusMetaVersion = versions.find(v => v.variant === 'plusMeta');
-          if (plusMetaVersion) {
-            const filename = plusMetaVersion.path.replace('sources/', '');
-            indexContent += `- [${filename}](${encodeURI(filename)}) - With metadata, no images\n`;
-          }
-
-          // Show with-images if it exists
-          const withImagesVersion = versions.find(v => v.variant === 'withImages');
-          if (withImagesVersion) {
-            const filename = withImagesVersion.path.replace('sources/', '');
-            indexContent += `- [${filename}](${encodeURI(filename)}) - No metadata, with images\n`;
-          }
-
-          // Show plus-meta-with-images if it exists
-          const plusMetaWithImagesVersion = versions.find(v => v.variant === 'plusMetaWithImages');
-          if (plusMetaWithImagesVersion) {
-            const filename = plusMetaWithImagesVersion.path.replace('sources/', '');
-            indexContent += `- [${filename}](${encodeURI(filename)}) - With metadata and images\n`;
-          }
-
-          indexContent += '\n';
-        }
-      });
+        return {
+          title: source.title,
+          details,
+          files: (source.writtenFiles || []).map(f => ({ label: `${f.filename} - ${VARIANT_LABELS[f.variant]}`, path: f.filename }))
+        };
+      }));
 
       // Move _index.md to sources/ folder
       sourcesFolder.file('_index.md', indexContent + timingSummary());
@@ -4445,7 +4402,11 @@ async function exportSources(selectedSources) {
       failed: Math.max(0, attemptedCount - exportedCount),
       cancelled
     });
-    showToast(outcome.message, outcome.level);
+    sourcesAudit.expected.items = selectedSources.length;
+    sourcesAudit.written.items = exportedCount;
+    const sourcesAuditResult = NLME.auditExport(sourcesAudit);
+    showToast(sourcesAuditResult.ok ? outcome.message : `${outcome.message} — some content is missing, see _audit.md`,
+      sourcesAuditResult.ok ? outcome.level : (outcome.level === 'error' ? 'error' : 'warning'));
 
   } catch (error) {
     console.error('[NotebookLM Takeout] Export failed:', error);
@@ -4554,7 +4515,12 @@ function renderChatSummary(chatData) {
 
   // Build summary HTML
   let html = '<div class="chat-summary">';
-  html += `<div class="summary-stat"><strong>${chatData.messagePairs.length}</strong> message pairs</div>`;
+  const chatStatsInfo = chatData.stats || {};
+  const pairsInDom = chatStatsInfo.pairsInDom ?? chatData.messagePairs.length;
+  html += `<div class="summary-stat"><strong>${chatData.messagePairs.length} of ${pairsInDom}</strong> messages</div>`;
+  if (chatData.messagePairs.length < pairsInDom || chatStatsInfo.collapsedRemaining > 0) {
+    html += `<div class="summary-stat warning">${pairsInDom - chatData.messagePairs.length} message(s) could not be read; ${chatStatsInfo.collapsedRemaining || 0} citation group(s) still collapsed. They are listed in errors.txt after export.</div>`;
+  }
   html += `<div class="summary-stat"><strong>${chatData.notebookTitle}</strong></div>`;
 
   if (chatData.dateRange) {
@@ -4599,6 +4565,10 @@ function renderChatSummary(chatData) {
  */
 async function exportChat(chatData, extractFullCitations = false) {
   startExportTiming();
+  {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (activeTab) await preflightWarn(activeTab.id, 'chat');
+  }
   exportTimer.merge(lastChatScanTiming);
   console.log('[NotebookLM Takeout] Starting chat export...');
 
@@ -4623,7 +4593,7 @@ async function exportChat(chatData, extractFullCitations = false) {
   let cancelNoted = false;
   let processedCount = 0;
   // One truthful end-of-export toast (cancel no longer overwritten by success)
-  const showChatOutcome = (errorCount) => {
+  const showChatOutcome = (errorCount, auditOk = true) => {
     const outcome = NLME.summarizeExportOutcome({
       kind: 'messages',
       selected: chatData.messagePairs.length,
@@ -4631,7 +4601,8 @@ async function exportChat(chatData, extractFullCitations = false) {
       failed: 0,
       cancelled
     });
-    const extra = !cancelled && errorCount > 0 ? ` (${errorCount} citation error(s), see errors.txt)` : '';
+    let extra = !cancelled && errorCount > 0 ? ` (${errorCount} citation error(s), see errors.txt)` : '';
+    if (!auditOk) extra += ' — some content is missing, see _audit.md';
     showToast(outcome.message + extra, extra ? 'warning' : outcome.level);
   };
 
@@ -4647,6 +4618,13 @@ async function exportChat(chatData, extractFullCitations = false) {
     const messagePairs = chatData.messagePairs;
     const processedMessages = [];
     const allErrors = [];
+    // Scan completeness (Milestone 2, Resilience #2)
+    for (const skippedMessage of (chatData.stats?.skipped || [])) {
+      allErrors.push({ type: 'message_skipped', message: skippedMessage });
+    }
+    if (chatData.stats?.collapsedRemaining > 0) {
+      allErrors.push({ type: 'collapsed_citations', message: `${chatData.stats.collapsedRemaining} citation group(s) were still collapsed after the scan; their citations are missing` });
+    }
 
     // Track statistics for detailed error reporting
     const stats = {
@@ -4768,7 +4746,7 @@ async function exportChat(chatData, extractFullCitations = false) {
                 messageIndex: pair.domIndex ?? i,
                 messageHTML: pair.aiResponseHTML,
                 sourceIndices: sourceIndices,
-                includeCitationImages: settings.includeCitationImages
+                includeCitationImages: !!settings.exportNoteWithImages
               }
             });
 
@@ -4865,77 +4843,47 @@ async function exportChat(chatData, extractFullCitations = false) {
     console.log(`[NotebookLM Takeout] Processing complete: ${processedMessages.length} messages`);
 
     // Generate all permutations based on settings (cumulative approach)
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    const timestamp = NLME.exportTimestamp();
     const baseFilename = `${sanitizeFilename(chatData.notebookTitle)}-chat-${timestamp}`;
 
-    const versions = [];
-
-    // Base version (Scenario 1): Always included - markdown rendering, no images
-    const baseMarkdown = convertChatToMarkdown(
+    // Versions (NLME.noteVariants): base always; code blocks only when some
+    // answer has quotes; with-images only when the Markdown has images
+    const chatAudit = newAudit();
+    chatAudit.expected.items = chatData.stats?.pairsInDom ?? chatData.messagePairs.length;
+    chatAudit.written.items = processedMessages.length;
+    const chatHtml = chatData.messagePairs.map(p => p.aiResponseHTML || '').join('\n');
+    // Citations per answer: numbers restart in every answer
+    chatData.messagePairs.forEach((pair, i) => {
+      const processed = processedMessages[i];
+      addCitationCoverage(chatAudit, pair.aiResponseHTML, processed ? processed.sources : [], !!extractFullCitations);
+    });
+    const baseMarkdown = convertCounted(chatAudit, chatHtml, () => convertChatToMarkdown(
       chatData.notebookTitle,
       chatData.notebookSummary,
       processedMessages,
-      false // citationsCodeBlock = false
-    );
-    const baseMarkdownNoImages = stripImagesFromMarkdown(baseMarkdown);
-
-    versions.push({
-      filename: `${baseFilename}.md`,
-      content: baseMarkdownNoImages,
-      title: 'Base (markdown, no images)',
-      description: 'Citations rendered as markdown, images stripped'
+      false
+    ));
+    const chatAuditDoc = auditMarkdown('Chat Export', chatAudit);
+    const chatHasQuotes = processedMessages.some(m => (m.sources || []).some(src => src.quote && src.quote.trim()));
+    const chatHasImages = /!\[/.test(baseMarkdown);
+    const CHAT_VERSION_INFO = {
+      '': { title: 'Base (markdown, no images)', description: 'Citations rendered as markdown, images stripped' },
+      '-code-blocks': { title: 'Code blocks (no images)', description: 'Citation quotes in code blocks, images stripped' },
+      '-with-images': { title: 'With images (markdown)', description: 'Citations rendered as markdown, with base64 images' }
+    };
+    const versions = NLME.noteVariants(settings, { hasQuotes: chatHasQuotes, hasImages: chatHasImages }).map(v => {
+      const markdown = v.codeBlocks
+        ? convertChatToMarkdown(chatData.notebookTitle, chatData.notebookSummary, processedMessages, true)
+        : baseMarkdown;
+      return {
+        filename: `${baseFilename}${v.suffix}.md`,
+        content: v.images ? markdown : stripImagesFromMarkdown(markdown),
+        ...CHAT_VERSION_INFO[v.suffix]
+      };
     });
 
-    // Scenario 2 addition: Code blocks, no images (if citationsCodeBlock is ON)
-    if (settings.citationsCodeBlock) {
-      const codeBlocksMarkdown = convertChatToMarkdown(
-        chatData.notebookTitle,
-        chatData.notebookSummary,
-        processedMessages,
-        true // citationsCodeBlock = true
-      );
-      const codeBlocksMarkdownNoImages = stripImagesFromMarkdown(codeBlocksMarkdown);
-
-      versions.push({
-        filename: `${baseFilename}-code-blocks.md`,
-        content: codeBlocksMarkdownNoImages,
-        title: 'Code blocks (no images)',
-        description: 'Citations in code blocks, images stripped'
-      });
-    }
-
-    // Scenario 3 addition: Markdown rendering, with images (if includeCitationImages is ON)
-    if (settings.includeCitationImages) {
-      // This version already has images from the conversion
-      versions.push({
-        filename: `${baseFilename}-with-images.md`,
-        content: baseMarkdown, // Keep images
-        title: 'With images (markdown)',
-        description: 'Citations rendered as markdown, with base64 images'
-      });
-    }
-
-    // Scenario 4 addition: Code blocks, with images (if BOTH settings are ON)
-    if (settings.citationsCodeBlock && settings.includeCitationImages) {
-      const codeBlocksMarkdownWithImages = convertChatToMarkdown(
-        chatData.notebookTitle,
-        chatData.notebookSummary,
-        processedMessages,
-        true // citationsCodeBlock = true
-      );
-
-      versions.push({
-        filename: `${baseFilename}-code-blocks-with-images.md`,
-        content: codeBlocksMarkdownWithImages, // Keep images
-        title: 'Code blocks with images',
-        description: 'Citations in code blocks, with base64 images'
-      });
-    }
-
-    console.log(`[NotebookLM Takeout] Created ${versions.length} chat version(s)`);
-
     // Determine if we need ZIP (for multiple files OR errors)
-    const shouldZip = versions.length > 1 || allErrors.length > 0;
+    const shouldZip = versions.length > 1 || allErrors.length > 0 || !chatAuditDoc.ok;
 
     if (shouldZip) {
       // Create ZIP with all versions + errors.txt
@@ -4971,8 +4919,13 @@ async function exportChat(chatData, extractFullCitations = false) {
         stats: chatStats
       });
 
-      zip.file('errors.txt', errorsContent);
-      indexFiles.push({ path: 'errors.txt', title: 'Export Error Report' });
+      zip.file('_audit.md', chatAuditDoc.text);
+
+      // Only when something went wrong (no "Total Errors: 0" files)
+      if (allErrors.length > 0) {
+        zip.file('errors.txt', errorsContent);
+        indexFiles.push({ path: 'errors.txt', title: 'Export Error Report' });
+      }
 
       // Generate _index.md with links to all files
       let indexContent = '# NotebookLM Chat Export - File Index\n\n';
@@ -5021,7 +4974,7 @@ async function exportChat(chatData, extractFullCitations = false) {
         a.click();
         document.body.removeChild(a);
 
-        showChatOutcome(allErrors.length);
+        showChatOutcome(allErrors.length, chatAuditDoc.ok);
       } finally {
         URL.revokeObjectURL(url);
       }
@@ -5150,11 +5103,10 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
           // Optionally clean OCR artifacts, then escape markdown
           const cleanedQuote = settings.cleanOCRArtifacts ? cleanOCRArtifacts(source.quote) : source.quote;
           if (citationsCodeBlock) {
-            // Wrap in markdown code block for data separation (same as note export)
-            markdown += `\`\`\`markdown\n${cleanedQuote}\n\`\`\`\n\n`;
+            const fence = NLME.fenceFor(cleanedQuote);
+            markdown += `${fence}markdown\n${cleanedQuote}\n${fence}\n\n`;
           } else {
-            // Escape markdown chars to prevent quote content from breaking formatting
-            markdown += `\n${escapeMarkdownInQuote(cleanedQuote)}\n\n`;
+            markdown += `\n${NLME.toBlockquote(cleanedQuote)}\n\n`;
           }
         }
         markdown += '\n';
@@ -5718,67 +5670,10 @@ async function handleStudioBulkDelete() {
   await scanStudioPage();
 }
 
-// OLD IMPLEMENTATION (ROLLBACK) - Keep for reference but commented out
-/*
-async function triggerItemDownload_OLD(tabId, itemIndex, artifactName, artifactType) {
-  try {
-    // Tell background script what name to use for this download
-    await chrome.runtime.sendMessage({
-      type: 'SET_PENDING_DOWNLOAD',
-      name: artifactName,
-      artifactType: artifactType
-    });
-
-    // Trigger the download by clicking More menu -> Download
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      func: clickDownloadForItem,
-      args: [itemIndex]
-    });
-
-    if (settings.showNotifications) {
-      showToast(`Downloading ${artifactName}...`);
-    }
-  } catch (error) {
-    console.error('Download trigger failed:', error);
-    showToast('Failed to trigger download', 'error');
-  }
-}
-*/
-
-// This runs in the page context to click download for a specific item
-function clickDownloadForItem(itemIndex) {
-  const moreButtons = document.querySelectorAll('button[aria-label="More"]');
-
-  const btn = moreButtons[itemIndex];
-  if (!btn) {
-    console.error('[NotebookLM Takeout] Button not found at index', itemIndex);
-    return;
-  }
-
-  btn.click();
-
-  // Wait for menu to appear, then click Download
-  setTimeout(() => {
-    const menuItems = document.querySelectorAll('.mat-mdc-menu-item');
-
-    for (const item of menuItems) {
-      const textSpan = item.querySelector('.mat-mdc-menu-item-text');
-      const text = (textSpan?.textContent || '').trim().toLowerCase();
-
-      if (text === 'download') {
-        item.click();
-        return;
-      }
-    }
-
-    // No Download found - close menu
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-  }, 400);
-}
 
 // Download All - either ZIP or individual based on checkbox
 async function downloadAllArtifacts(tabId, items) {
+  await preflightWarn(tabId, 'artifacts');
   const downloadBtn = document.getElementById('download-all-btn');
   const zipEnabled = document.getElementById('zip-checkbox')?.checked || false;
 
@@ -6107,6 +6002,7 @@ function displayHealthCheckResults(results) {
     general: 'General',
     notes: 'Notes',
     sources: 'Sources',
+    artifacts: 'Artifacts',
     chat: 'Chat History',
     citations: 'Citations'
   };
@@ -6230,6 +6126,7 @@ function generateHealthReport(results) {
     general: 'General',
     notes: 'Notes',
     sources: 'Sources',
+    artifacts: 'Artifacts',
     chat: 'Chat History',
     citations: 'Citations'
   };
@@ -6275,9 +6172,8 @@ function generateHealthReport(results) {
 
   // Note about tooltip test
   lines.push('---');
-  lines.push('Note: The "Tooltip hover test" may show [FAIL] even when everything works correctly.');
-  lines.push('This is because synthetic JavaScript events cannot trigger Angular overlays.');
-  lines.push('If citation buttons are present, exports will work normally.');
+  lines.push('Note: The Citations category reads two real citations exactly the way exports do.');
+  lines.push('If it fails, note and chat exports would lose their quotes; please report it with this file.');
   lines.push('');
 
   return lines.join('\n');
@@ -6303,9 +6199,7 @@ async function copyHealthReport() {
 }
 
 function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+  return NLME.escapeHtml(text);
 }
 
 // Cleanup on unload

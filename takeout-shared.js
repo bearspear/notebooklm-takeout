@@ -446,7 +446,15 @@
   // errors.txt line for a cancelled run; it also forces the ZIP (and so the
   // -PARTIAL name) for exports that otherwise write a single file.
   function cancellationNote({ kind, done = 0, total = 0 } = {}) {
-    return `Cancelled by user after ${done} of ${total} ${kind}; the last one may have incomplete citations and the rest were not exported`;
+    // Sources have no citation markers; notes and chat messages do
+    const last = kind === 'sources' ? '' : 'the last one may have incomplete citations and ';
+    return `Cancelled by user after ${done} of ${total} ${kind}; ${last}the rest were not exported`;
+  }
+
+  // Version names actually written (from index entries with a `variant`),
+  // first-seen order, so README and _index count real files, not settings
+  function distinctVariants(files) {
+    return [...new Set((files || []).map(f => f.variant))];
   }
 
   // Exports collect errors as strings ("[Title] message", cancellation
@@ -500,10 +508,254 @@
     return lines.join('\n') + '\n';
   }
 
+  // ---- Shared helpers (one copy for content, sidebar, background) ----
+
+  const NOTEBOOK_HOSTS = ['notebook.google.com', 'notebooklm.google.com'];
+
+  // Exact hostname match; substring checks also accepted e.g. a Google search
+  // URL containing "notebook.google.com"
+  function isNotebookUrl(url) {
+    try {
+      return NOTEBOOK_HOSTS.includes(new URL(url).hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+  // File-system-safe name: the historic replacement chain, plus control
+  // characters stripped, code-point truncation (never splits an emoji),
+  // no trailing dots/spaces, and Windows reserved names prefixed.
+  function sanitizeFilename(name, maxLength = 100) {
+    let clean = String(name == null ? '' : name)
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      .replace(/[<>:"/\\|?*]/g, '_')
+      .replace(/[\u0027\u0060\u00B4\u2018\u2019\u0022\u201C\u201D]/g, '')
+      .replace(/[#%&{}$!@+]/g, '_')
+      .replace(/\.{2,}/g, '.')
+      .replace(/\s+/g, '-')
+      .replace(/[-_]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+    clean = Array.from(clean).slice(0, maxLength).join('');
+    clean = clean.replace(/[.\s-]+$/g, '');
+    if (!clean) return 'untitled';
+    if (WINDOWS_RESERVED.test(clean)) clean = `_${clean}`;
+    return clean;
+  }
+
+  const ARTIFACT_PREFIXES = {
+    'Audio Overview': 'audio-overview',
+    'Data Table': 'data-table',
+    'Report': 'report',
+    'Infographic': 'infographic',
+    'Slides': 'slides',
+    'Video Overview': 'video-overview',
+    'Mind Map': 'mind-map'
+  };
+
+  function artifactTypePrefix(type) {
+    return ARTIFACT_PREFIXES[type] || String(type || 'artifact').toLowerCase().replace(/\s+/g, '-');
+  }
+
+  // 'YYYY-MM-DDTHH-MM-SS' (UTC) for export file names
+  function exportTimestamp(date = new Date()) {
+    return date.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  }
+
+  function escapeHtml(text) {
+    return String(text == null ? '' : text)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  // Notebook title in the page header, most specific first (one chain for
+  // file names, chat export and the health check)
+  const PROJECT_TITLE_SELECTORS = [
+    '.title-label-inner',
+    'editable-project-title .title-label span',
+    '.title-container .title span',
+    '[class*="title-label"]',
+    '.notebook-title'
+  ];
+
+  // Hosts Gemini Notebook serves downloads from. URLs posted from the page or
+  // seen by the downloads listeners are trusted only if they match.
+  function isAllowedDownloadUrl(url) {
+    let u;
+    try { u = new URL(url); } catch { return false; }
+    if (u.protocol !== 'https:') return false;
+    const host = u.hostname;
+    return host === 'contribution.usercontent.google.com' ||
+      host === 'googleusercontent.com' || host.endsWith('.googleusercontent.com');
+  }
+
+  // A download Gemini Notebook started: an allowed host, and (when Chrome
+  // knows it) a notebook page as referrer. Downloads from other tabs, e.g.
+  // Drive, are left alone.
+  function isNotebookDownload({ url, finalUrl, referrer } = {}) {
+    if (!isAllowedDownloadUrl(url) && !isAllowedDownloadUrl(finalUrl)) return false;
+    return !referrer || isNotebookUrl(referrer);
+  }
+
+  // Which Markdown variants to write per note/chat. Base is always written;
+  // a variant that would be byte-identical to base is skipped: code blocks
+  // need quotes, with-images needs images. (Code blocks + images was dropped:
+  // images inside a fence never render.)
+  function noteVariants(settings = {}, { hasQuotes = false, hasImages = false } = {}) {
+    const variants = [{ suffix: '', codeBlocks: false, images: false }];
+    if (settings.exportNoteCodeBlocks && hasQuotes) variants.push({ suffix: '-code-blocks', codeBlocks: true, images: false });
+    if (settings.exportNoteWithImages && hasImages) variants.push({ suffix: '-with-images', codeBlocks: false, images: true });
+    return variants;
+  }
+
+  // Source variants: base always; metadata versions when enabled; image
+  // versions only when the source actually has images.
+  function sourceVariants(settings = {}, { hasImages = false } = {}) {
+    const variants = [{ suffix: '', meta: false, images: false }];
+    if (settings.exportSourcePlusMeta) variants.push({ suffix: '-plus-meta', meta: true, images: false });
+    if (settings.exportSourceWithImages && hasImages) variants.push({ suffix: '-with-images', meta: false, images: true });
+    if (settings.exportSourcePlusMetaWithImages && hasImages) variants.push({ suffix: '-plus-meta-with-images', meta: true, images: true });
+    return variants;
+  }
+
+  // A code fence the quote cannot close early: longer than its longest
+  // backtick run, at least three.
+  function fenceFor(text) {
+    const runs = String(text || '').match(/`+/g) || [];
+    const longest = runs.reduce((max, r) => Math.max(max, r.length), 0);
+    return '`'.repeat(Math.max(3, longest + 1));
+  }
+
+  // Quote as a Markdown blockquote, keeping its own Markdown (lists,
+  // emphasis, tables) intact instead of escaping it.
+  function toBlockquote(text) {
+    return String(text || '').split('\n').map(line => (line.trim() ? `> ${line}` : '>')).join('\n');
+  }
+
+  // Source title from a citation marker's aria-label ("3: Title"); markers
+  // without one become "Source N" (titles-only mode, report Sources)
+  function citationTitleFromAriaLabel(label, number) {
+    const title = String(label || '').replace(/^\s*\d+\s*:\s*/, '').trim();
+    return title || `Source ${number}`;
+  }
+
+  // Encode each path segment separately; a lone surrogate (from a cut emoji)
+  // would make encodeURI throw, so it is replaced first.
+  function encodePath(path) {
+    return String(path || '').split('/').map(seg => {
+      const safe = seg.replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '\ufffd');
+      return encodeURIComponent(safe).replace(/%28/g, '(').replace(/%29/g, ')');
+    }).join('/');
+  }
+
+  // Sources _index.md from the files actually written, in export order, so
+  // two same-titled sources each link to their own file
+  function buildSourcesIndex(entries) {
+    const lines = [];
+    (entries || []).forEach((entry, i) => {
+      lines.push(`### ${i + 1}. ${entry.title}`, '');
+      if (entry.details) lines.push(entry.details.trimEnd(), '');
+      if ((entry.files || []).length > 0) {
+        lines.push('**Files:**', '');
+        for (const file of entry.files) lines.push(`- [${file.label}](${encodePath(file.path)})`);
+        lines.push('');
+      }
+    });
+    return lines.join('\n');
+  }
+
+  // Compare what an export wrote with what the page showed. ok is false when
+  // anything came out short; each key gets one "written of expected" line.
+  function auditExport({ expected = {}, written = {} } = {}) {
+    let ok = true;
+    const lines = Object.keys(expected).map(key => {
+      const want = expected[key] || 0;
+      const got = written[key] || 0;
+      const short = got < want;
+      if (short) ok = false;
+      return `- ${short ? '⚠️ ' : ''}${key}: ${got} of ${want}`;
+    });
+    return { ok, lines };
+  }
+
+  // Studio icons the extension cannot classify (new artifact types appear
+  // this way first); notes' icons count as known
+  function unknownStudioIcons(iconTexts) {
+    const unknown = new Set();
+    for (const raw of iconTexts || []) {
+      const icon = String(raw || '').trim();
+      if (icon && !ICON_TO_TYPE[icon] && !NOTE_ICONS.includes(icon)) unknown.add(icon);
+    }
+    return [...unknown];
+  }
+
+  // A note has images if its body or any citation quote does (citation
+  // images are embedded in the quotes, not the body)
+  function noteHasImages({ html = '', sources = [] } = {}) {
+    if (/<img\b/i.test(html || '')) return true;
+    return (sources || []).some(src => /!\[/.test((src && src.quote) || ''));
+  }
+
+  // Formulas in final Markdown ($$...$$ and $...$), each counted once,
+  // however many times the converter ran on nested lists or tables
+  function countMarkdownFormulas(markdown) {
+    const re = /\$\$[\s\S]+?\$\$|(?<![\\$\w])\$(?!\s)[^$\n]+?(?<!\s)\$(?![\w$])/g;
+    return (String(markdown || '').match(re) || []).length;
+  }
+
+  // Citation audit: distinct marker numbers on the page vs sources actually
+  // read (with a quote when quotes were requested, else at least a title)
+  function citationCoverage({ markerNumbers = [], sources = [], needQuotes = false } = {}) {
+    const expected = new Set((markerNumbers || []).map(String)).size;
+    const read = new Set((sources || [])
+      .filter(src => src && (needQuotes ? (src.quote || '').trim() : ((src.text || '').trim() || (src.quote || '').trim())))
+      .map(src => String(src.sourceIndex)));
+    return { expected, written: read.size };
+  }
+
+  // Titles-only Sources sections: one line per source with all its citation
+  // numbers (instead of 21 lines repeating the same title). Entries are
+  // {number, text}; order follows each source's first citation.
+  function groupCitationEntries(entries) {
+    const groups = new Map();
+    for (const e of entries || []) {
+      const key = (e.missing ? '\u0000missing:' : '') + (e.text || '');
+      if (!groups.has(key)) groups.set(key, { text: e.text || '', numbers: [] });
+      groups.get(key).numbers.push(String(e.number));
+    }
+    return [...groups.values()];
+  }
+
   const NLME = {
+    groupCitationEntries,
+    noteHasImages,
+    countMarkdownFormulas,
+    citationCoverage,
+    unknownStudioIcons,
+    auditExport,
+    buildSourcesIndex,
+    citationTitleFromAriaLabel,
+    fenceFor,
+    toBlockquote,
+    noteVariants,
+    sourceVariants,
+    isAllowedDownloadUrl,
+    isNotebookDownload,
+    NOTEBOOK_HOSTS,
+    isNotebookUrl,
+    sanitizeFilename,
+    artifactTypePrefix,
+    exportTimestamp,
+    escapeHtml,
+    PROJECT_TITLE_SELECTORS,
     normalizeExportError,
     buildErrorReport,
     cancellationNote,
+    distinctVariants,
     createStabilityTracker,
     downloadFolderPath,
     extensionFromDownloadUrl,

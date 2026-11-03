@@ -316,6 +316,16 @@
         <h3 class="setting-section-title">Note Options</h3>
 
         <div class="setting-group">
+          <label for="citation-detail-select">Citation detail</label>
+          <select id="citation-detail-select" class="number-input">
+            <option value="quotes">Full quotes (slower)</option>
+            <option value="titles">Source titles only (fast)</option>
+            <option value="none">No citations (plain text, fast)</option>
+          </select>
+          <p class="setting-help">"Source titles only" skips reading each citation's popup: every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. Both are much faster for large exports.</p>
+        </div>
+
+        <div class="setting-group">
           <label style="font-weight: 500; display: block; margin-bottom: 8px;">Export Versions (select which file types to create)</label>
           <p class="setting-help" style="margin-top: 0; margin-bottom: 12px;">Choose which combinations of note files to export. At least one version must be selected.</p>
 
@@ -334,10 +344,6 @@
             <label class="version-parent">
               <input type="checkbox" id="export-note-code-blocks-checkbox" checked>
               <span>Code blocks (citations in code blocks)</span>
-            </label>
-            <label class="version-child">
-              <input type="checkbox" id="export-note-code-blocks-with-images-checkbox">
-              <span>Include images (embedded base64)</span>
             </label>
           </div>
         </div>

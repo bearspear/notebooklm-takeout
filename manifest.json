@@ -1,23 +1,21 @@
 {
   "manifest_version": 3,
   "name": "NotebookLM Takeout",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Export audio, slides, infographics, notes, and sources from NotebookLM",
   "permissions": [
-    "activeTab",
     "storage",
     "downloads",
     "scripting",
     "notifications",
-    "cookies",
     "sidePanel",
     "tabs"
   ],
   "host_permissions": [
     "https://notebook.google.com/*",
     "https://notebooklm.google.com/*",
+    "https://contribution.usercontent.google.com/*",
     "https://*.googleusercontent.com/*",
-    "https://*.google.com/*",
     "https://*.scf.usercontent.goog/*"
   ],
   "action": {
@@ -43,9 +41,6 @@
         "takeout-shared.js",
         "mindmap-extract.js",
         "content.js"
-      ],
-      "css": [
-        "content-styles.css"
       ],
       "run_at": "document_idle"
     },

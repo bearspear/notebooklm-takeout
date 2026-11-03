@@ -7,8 +7,8 @@ the table of contents to jump.
 - Repo root: `/Users/mbehringer/Downloads/notebooklm-exporter`
 - Remote: `git@github.com-personal:bearspear/notebooklm-takeout.git`
 - Manifest: V3 Chrome extension, no build step
-- Latest meaningful work: Milestone 1 "Trustworthy and faster" (v1.2.0), branch
-  `fix/milestone-1-trustworthy-faster`, after PR #2 (`27e073c`, v1.1.0)
+- Latest meaningful work: Milestone 2 "Lean, shared and correct output" (v1.3.0), branch
+  `plan/milestone-2-lean-correct`; Milestone 1 (v1.2.0) was PR #3
 - Branch: `main`
 
 ## Table of contents
@@ -129,17 +129,16 @@ sendResponse later).
 ```
 notebooklm-exporter/
 ├── manifest.json           — V3 manifest, permissions, side_panel, content_scripts
-├── takeout-shared.js (488) — Selectors + DOM-free helpers (NLME global); content script,
+├── takeout-shared.js (746) — Selectors + DOM-free helpers (NLME global); content script,
 │                             sidebar, service worker (importScripts) and Node tests load it
 ├── tests/                  — node:test unit tests for takeout-shared.js
 ├── sidebar.html  ( 423)    — Side panel UI: tabs, controls, settings/health panels
-├── sidebar.js    (6404)    — UI logic, export orchestration, KaTeX, mindmap helpers
+├── sidebar.js    (6164)    — UI logic, export orchestration, KaTeX, mindmap helpers
 ├── styles.css    (1635)    — Side panel styles
-├── content.js    (5042)    — DOM scraping + extraction, runs on NotebookLM
+├── content.js    (4149)    — DOM scraping + extraction, runs on NotebookLM
 ├── mindmap-extract.js (325) — Mind map SVG/tree extraction; content script and injected
 │                             by background into the *.scf.usercontent.goog app frame
-├── content-styles.css (57) — Page overlay styles (export progress overlay)
-├── background.js (1186)    — Service worker, download interception, batch ZIP, frame extraction
+├── background.js (949)    — Service worker, download interception, batch ZIP, frame extraction
 ├── injected.js   (  68)    — MAIN-world download hook (window.open + link clicks), armed per click
 ├── mindmap-template.html (371) — Standalone interactive mindmap viewer (used as template)
 ├── jszip.min.js  (  12)    — Bundled JSZip
@@ -148,7 +147,6 @@ notebooklm-exporter/
 ├── docs/                   — Misc internal notes (untracked locally)
 ├── README.md               — User-facing docs (features, usage, settings, troubleshooting)
 ├── CHANGELOG.md            — Not maintained; use git log
-├── popup.html.backup       — Tracked leftover from the pre-side-panel popup
 └── TECHNICAL.md            — Untracked earlier deep dive; partly superseded, cross-check
 ```
 
@@ -200,7 +198,6 @@ Storage: `chrome.storage.local`, single key `settings`. Defaults in `let setting
   exportNoteBase: true,                      // markdown-citation format
   exportNoteCodeBlocks: true,                // citations rendered as code blocks
   exportNoteWithImages: false,               // base + embedded images
-  exportNoteCodeBlocksWithImages: false,
   notesPerZip: 25,
 
   // Text cleanup
@@ -211,6 +208,7 @@ Storage: `chrome.storage.local`, single key `settings`. Defaults in `let setting
 
   // Downloads
   slidesFormat: 'pdf',                       // 'pdf' | 'pptx' — slide deck More-menu item
+  citationDetail: 'quotes',                  // 'quotes' (hover) | 'titles' (aria-labels) | 'none' (no citations)
 }
 ```
 
@@ -278,9 +276,6 @@ respond synchronously (and `return true` is omitted) or asynchronously (must
 |---|---|---|
 | `PING` | — | `{success: true}` |
 | `GET_PROJECT_NAME` | — | `{projectName}` (used for filenames) |
-| `TRIGGER_DOWNLOAD` | `{artifactType, artifact}` | `{success}` |
-| `DEBUG_PAGE` | — | dumps DOM structure to console |
-| `SCAN_ARTIFACTS` | — | `{success}` only (legacy; the polling scan was removed Nov 2026) |
 | `FETCH_FILE` | `{url}` | `{success, content?}` — fetches with page credentials |
 | `EXTRACT_NOTE` | `{noteIndex, noteTitle, sourceIndex?, includeCitationImages}` | `{html, sources, errors}` or `{isMindmap, svgContent, treeData}`. With `sourceIndex` the note is opened from the Sources panel "Notes" group |
 | `SCAN_NOTES` | — | `{notes: [{index, title, type, iconType, sourceIndex?}]}` — Sources-panel notes have `index: -1`, `type: 'Note (Sources panel)'` |
@@ -291,11 +286,8 @@ respond synchronously (and `return true` is omitted) or asynchronously (must
 | `SHOW_EXPORT_OVERLAY` | `{message}` | `{success}` — page overlay on NotebookLM |
 | `UPDATE_EXPORT_OVERLAY` | `{message, progress}` | `{success}` |
 | `HIDE_EXPORT_OVERLAY` | — | `{success}` |
-| `CHECK_EXPORT_CANCELLED` | — | `{cancelled}` |
-| `DEBUG_NOTES` | — | diagnostic — list of titles |
 | `DOWNLOAD_ARTIFACT` | `{artifactIndex, artifactType, artifactName, skipMoreButton, downloadPreference}` (content resolves the row strictly by title and clicks its own More button) | `method`: `content_extraction` / `mindmap_extraction` / `mindmap_app_frame` / `url_intercepted` / `button_click` / `svg_extract` / `canvas_export`. `artifactIndex` = index among `artifact-library-item`s with a More button |
 | `SCAN_CHAT` | — | `{notebookTitle, notebookSummary, messagePairs, dateRange}` |
-| `EXTRACT_ALL_CHAT_CITATIONS` | — | `{sourcesByIndex, errors}` |
 | `EXTRACT_MESSAGE_CITATIONS` | `{messageIndex, messageHTML, sourceIndices, includeCitationImages}` | `{sourcesByIndex, errors}` |
 | `CHECK_DOM_HEALTH` | `{type: 'notes'\|'sources'\|'artifacts'\|'chat'}` | `{healthy, issues, trackerIssues}` |
 | `GET_DOM_ERRORS` | — | `{shouldWarn, issues}` |
@@ -308,20 +300,14 @@ respond synchronously (and `return true` is omitted) or asynchronously (must
 
 | Type | Purpose |
 |---|---|
-| `SET_PENDING_DOWNLOAD` | Tell background to rename the next `chrome.downloads.onCreated` event |
 | `START_INTERCEPT_DOWNLOAD` | Enter intercept mode (capture URL, suppress tab) |
 | `GET_INTERCEPTED_DOWNLOAD` | Read the captured intercept result |
 | `CANCEL_INTERCEPT` | Exit intercept mode (extraction succeeded another way) |
-| `START_BATCH_DOWNLOAD` | Begin batch capture for ZIP packaging |
-| `END_BATCH_DOWNLOAD` | Stop batch capture |
-| `GET_CAPTURED_DOWNLOAD` | Pull a captured URL out of batch state |
-| `FETCH_FILE_CONTENT` | Fetch a URL with credentials (background context) |
 | `BATCH_DOWNLOAD_ALL` | Dispatch a batch ZIP build (`{tabId, items, downloadPreference}`) |
 | `CANCEL_BATCH_DOWNLOAD` | Stop the batch between items |
 | `EXTRACT_MINDMAP_FRAME` | Inject `mindmap-extract.js` into the mind map app iframe, extract, close viewer |
 | `GET_BATCH_STATUS` | Poll batch progress |
 | `DIRECT_DOWNLOAD_URL` | Hand a finalised URL + filename to background to call `chrome.downloads.download` |
-| `ARTIFACT_DETECTED` / `GET_ARTIFACTS` / `CLEAR_ARTIFACTS` | Legacy `capturedArtifacts` map. Nothing sends `ARTIFACT_DETECTED` since the polling scan was removed; the map is cleared at startup |
 
 ### Page-world → content (via `window.postMessage`, in `injected.js`)
 
@@ -909,6 +895,35 @@ Found while checking real exports after #8; the export bugs below predate it.
 - If chat citation counts drop between exports → check the citation group button labels
   ("Show/Hide additional citations").
 
+## Milestone 2 contracts (v1.3.0)
+
+- **Errors:** every export pushes strings (`[Title] message`, cancellation notes) or
+  objects (`{source|userQuestion|title, type, message|error, stack|url}`). Always render
+  them with `NLME.buildErrorReport` (via `normalizeExportError`); never read object fields
+  directly — a string error crashed the chat report once.
+- **Variants:** `NLME.noteVariants` / `NLME.sourceVariants` decide the files. Base always;
+  code blocks only with quotes; with-images only with images. "Code blocks + images" is gone.
+- **Quotes:** `NLME.toBlockquote` (plain) or `NLME.fenceFor` (code blocks). Don't escape quotes.
+- **Citation detail:** `settings.citationDetail === 'titles'` makes `EXTRACT_NOTE` build
+  Sources from `NLME.citationTitleFromAriaLabel` without hovering; quote-less Sources render
+  one line per source (`NLME.groupCitationEntries`: `**[1] [4]** Title`). `'none'` also skips
+  hovering and passes `dropCitations` to `convertToMarkdown`: no `[n]` markers, no Sources,
+  no citation audit. Reports always get a Sources section from marker titles
+  (`citationTitlesFromHtml`).
+- **Audit:** notes, sources and chat write `_audit.md` (`NLME.auditExport`): items, citation
+  anchors vs numbered markers, formulas converted (`katexConversions`) vs `.katex`. A notes
+  export stops when the first three notes with markers return no sources.
+- **Chat scan** returns `chatData.stats {pairsInDom, pairsExtracted, skipped, reachedTop,
+  collapsedRemaining}`.
+- **Health check:** Citations probes two real markers (critical); new Artifacts category.
+- **Trust:** downloads are accepted only from `NLME.isAllowedDownloadUrl` hosts; the download
+  listeners use `NLME.isNotebookDownload` and ignore `byExtensionId` downloads. Permissions:
+  storage, downloads, scripting, notifications, sidePanel, tabs; hosts: notebook sites,
+  `contribution.usercontent.google.com`, `*.googleusercontent.com`, `*.scf.usercontent.goog`.
+- **Helpers:** one copy each in `takeout-shared.js` — `isNotebookUrl` (exact host),
+  `sanitizeFilename` (code-point safe), `artifactTypePrefix`, `exportTimestamp`, `escapeHtml`,
+  `PROJECT_TITLE_SELECTORS`, `buildSourcesIndex`.
+
 ## Known issues and latent bugs
 
 These are deliberate non-fixes or known limitations. Don't "fix" them without checking the
@@ -1048,7 +1063,9 @@ to keep your real notebook untouched while iterating.
 
 ## Testing and verification
 
-Unit tests cover the DOM-free helpers in `takeout-shared.js` (76 tests, `node --test
+Unit tests cover the DOM-free helpers in `takeout-shared.js` (104 tests including
+`tests/message-protocol.test.js`, which fails when a message type is handled but never
+sent or sent but never handled; `node --test
 tests/`). Everything that touches the page is verified in Chrome. When a fix is DOM-only,
 verify it live: replicate the changed function in the page console (via Claude in Chrome
 or DevTools) and compare before/after on real elements, then confirm with a real export.
@@ -1130,7 +1147,7 @@ node --test tests/
 - Don't `git add -A`. Stage explicit paths.
 - `popup.js.backup`, `.claude/`, `docs/`, `icons/README.md`, `TECHNICAL.md` are
   untracked. Don't accidentally commit them; talk to the user if you think they should be
-  tracked. (`popup.html.backup` is tracked.)
+  tracked.
 - Work on a branch and open a PR against `main`; PRs are squash-merged.
 - Push: `bearspear/notebooklm-takeout` on GitHub via the SSH host alias
   `github.com-personal` (`~/.ssh/config`; don't change it). ssh-agent offers a work key
@@ -1142,6 +1159,6 @@ node --test tests/
 
 ---
 
-**Last refreshed**: 2026-11-02 (Milestone 1, v1.2.0). After significant drift events or pipeline rewrites, update
+**Last refreshed**: 2026-11-03 (Milestone 2, v1.3.0). After significant drift events or pipeline rewrites, update
 this file. It is the single document an agent should read before doing anything in this
 repo.

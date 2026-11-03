@@ -148,7 +148,8 @@ are disabled and a second click shows "… is still running".
 | Always use ZIP for batch downloads | off | Default for the Artifacts ZIP toggle |
 | Slide deck format | PDF | PDF or PowerPoint |
 | Source versions | base + metadata | Any mix of: base, with AI summary & topics, each optionally with images |
-| Note versions | base + code blocks | Any mix of: Markdown citations, citations in code blocks, each optionally with images |
+| Citation detail | Full quotes | "Source titles only" skips reading each citation's popup: much faster, every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. |
+| Note versions | base + code blocks | Base always; code-block quotes and an image version are added only when a note has quotes or images |
 | Sources / notes per ZIP | 25 | Batch size for large exports |
 | Clean OCR artifacts from citations | on | Strips `~~~`, `:~:` and similar noise |
 
@@ -163,7 +164,9 @@ to the clipboard.
 - **General:** notebook title, the Studio viewer close button, and whether formulas carry
   their LaTeX source
 - **Notes, Sources, Chat:** the lists and viewers each export reads
-- **Citations:** opens one citation popup and checks it can be read and closed
+- **Artifacts:** Studio items, their download menus, and unknown item types
+- **Citations:** reads two real citations exactly the way exports do; if this fails, exports
+  would lose their quotes
 
 `[OK]` is fine. `[WARN]` means exports still work but with reduced fidelity: for example, a
 formula without LaTeX source will be rebuilt from its rendered form. `[FAIL]` on a critical
@@ -210,10 +213,12 @@ causes no extra requests to Gemini Notebook.
 - It works inside your signed-in notebook tab and uses Gemini Notebook's own download
   links for media files.
 
-**Permissions:** `sidePanel`, `tabs`, `activeTab`, `scripting` (run inside the notebook tab),
-`downloads`, `storage` (settings), `notifications`, `cookies`. Host access to
-`notebook.google.com` / `notebooklm.google.com`, and to Google's download hosts
-(`*.googleusercontent.com`, `*.google.com`, `*.scf.usercontent.goog` for mind maps).
+**Permissions:** `sidePanel`, `tabs`, `scripting` (run inside the notebook tab), `downloads`,
+`storage` (settings) and `notifications`. Host access is limited to `notebook.google.com` /
+`notebooklm.google.com` and the hosts Gemini Notebook serves downloads from
+(`contribution.usercontent.google.com`, `*.googleusercontent.com`, and
+`*.scf.usercontent.goog` for mind maps). Downloads from any other host, or from other tabs,
+are never touched.
 
 ## Development
 
@@ -228,7 +233,6 @@ takeout-shared.js     Selectors and DOM-free helpers shared by all contexts (uni
 mindmap-extract.js    Mind map extraction (page and sandboxed mind map frame)
 background.js         Service worker: download interception, batch ZIPs
 injected.js           Page-world hook that captures download URLs
-content-styles.css    Export overlay styles
 mindmap-template.html Interactive mind map viewer template
 turndown.min.js       HTML → Markdown (bundled)
 jszip.min.js          ZIP creation (bundled)
@@ -247,6 +251,17 @@ DOM behaviour is verified in Chrome with the health check and real exports.
 contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
+
+**1.3.0 (Nov 2026)**: lean, shared and correct output.
+- Each export writes `_audit.md`, comparing what the page showed with what was exported
+  (items, citations, formulas), and warns when something is missing.
+- New citation modes: "Source titles only" (no popup reading, one Sources line per source) and "No citations" (plain text). Both make large exports much faster.
+- Reports get a Sources section; quotes render as blockquotes; no more identical duplicate
+  files; the sources index links same-titled sources correctly.
+- Error reports have one format for every export (a cancelled chat export no longer fails).
+- The health check can really fail: it reads real citations and checks artifacts.
+- Narrower permissions and download trust: only Gemini Notebook's download hosts.
+- About 1,300 lines of dead code removed; one tested copy of each shared helper.
 
 **1.2.0 (Nov 2026)**: trustworthy and faster exports.
 - Every item is checked by title before it is saved, so a list that changes mid-export can't
