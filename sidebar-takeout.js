@@ -432,6 +432,7 @@ async function runFullTakeout() {
         c.exported = out.result.exported;
         c.failed = out.result.failed;
         c.zips = out.zips;
+        c.parts = out.parts || 0;
         c.errors.push(...out.errors);
         c.auditOk = out.auditOk;
         if (out.result.cancelled) {
@@ -454,16 +455,20 @@ async function runFullTakeout() {
     }
 
     // 3. Root files, also after a cancel
-    const summary = categories.map(({ name, folder: catFolder, status, selected, exported, failed, zips }) =>
-      ({ name, folder: catFolder, status, selected, exported, failed, zips }));
+    const summary = categories.map(({ name, folder: catFolder, status, selected, exported, failed, zips, parts }) =>
+      ({ name, folder: catFolder, status, selected, exported, failed, zips, parts }));
     const errors = [
       ...NLME.prefixExportErrors('Takeout', takeoutErrors),
       ...categories.flatMap(c => NLME.prefixExportErrors(c.name, c.errors))
     ];
     const cancelled = summary.some(c => c.status === 'partial' || c.status === 'skipped');
+    const errorsFile = errors.length ? 'errors.md' : null;
     const rootFiles = [{
       path: '_index.md',
-      data: NLME.buildRootIndex({ meta: shell.meta, categories: summary, errorsFile: errors.length ? 'errors.md' : null }) + timingSummary()
+      data: NLME.buildRootIndex({ meta: shell.meta, categories: summary, errorsFile }) + timingSummary()
+    }, {
+      path: '_index.html',
+      data: NLME.buildRootIndexHtml({ meta: shell.meta, categories: summary, errorsFile })
     }];
     if (errors.length) {
       rootFiles.push({
@@ -483,7 +488,7 @@ async function runFullTakeout() {
           meta: shell.meta,
           kind: 'takeout',
           partial: cancelled,
-          files: [],
+          files: rootFiles.slice(), // _index.md, _index.html, errors.md (not itself)
           counts: Object.fromEntries(summary.map(c => [c.folder, c.exported])),
           errorCount: errors.length
         }),

@@ -46,7 +46,7 @@ Flashcards and quizzes are listed but can't be exported yet, because Gemini Note
 - **One-click Full Takeout** (📦) of the whole notebook, with a progress overlay and **Cancel**
 - Batch export with ZIP packaging (the text is really compressed) and **Cancel**
 - Large exports split into several ZIPs (configurable batch size)
-- A uniform layout: every ZIP has `_index.md` and `manifest.json`, every Markdown file starts
+- A uniform layout: every ZIP has `_index.md`, `_index.html` and `manifest.json`, every Markdown file starts
   with YAML front matter
 - Files named after the notebook (`New-Physics-notes-2026-11-02T15-13-06.zip`)
 - Built-in **health check** (🩺) that tells you when a Gemini Notebook update has broken
@@ -161,6 +161,7 @@ New-Physics-takeout-index-2026-11-02T15-13-06.zip
 ```
 New-Physics/
   _index.md            what was exported, per category, with status and the ZIP list
+  _index.html          the same, to open in a browser, linking each category's _index.html
   manifest.json        the same as data
   errors.md            every category's errors and notes (only when there are any)
   sources/  notes/  chat/  artifacts/
@@ -236,6 +237,8 @@ The chat export uses the note version settings.
 Every export follows one layout, whatever you export:
 
 - `_index.md`: what is in the export, linked, with statistics.
+- `_index.html`: the same as a web page. Open it in a browser for a clickable list of every file
+  (one self-contained page: no scripts, works offline, light and dark). Not for the single-file chat download.
 - `manifest.json`: the same as data: notebook, exporter version, a `partial` flag, counts,
   and every file with its size and kind. A takeout can be audited without opening every file.
 - `errors.md`: only when something failed or was cancelled.

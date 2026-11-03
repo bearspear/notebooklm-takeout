@@ -964,6 +964,91 @@
     return md;
   }
 
+  // _index.html: the browsable twin of _index.md. A self-contained page
+  // (inline CSS, no scripts or external resources, light and dark) with a
+  // relative, encoded link to every file in the package.
+  const INDEX_HTML_CSS = `
+:root { color-scheme: light dark; --bg: #fff; --fg: #1f2328; --muted: #656d76; --link: #0969da; --line: #d0d7de; }
+@media (prefers-color-scheme: dark) { :root { --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --link: #58a6ff; --line: #30363d; } }
+body { font: 16px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); max-width: 56rem; margin: 0 auto; padding: 1rem 1.25rem 3rem; }
+a { color: var(--link); }
+h1 { margin-bottom: .25rem; }
+h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid var(--line); padding-bottom: .25rem; }
+.meta, .variant, footer { color: var(--muted); font-size: .9rem; }
+.top { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; padding: 0; list-style: none; }
+ul.files { padding-left: 1.25rem; }
+table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); }
+footer { margin-top: 3rem; }
+`;
+
+  function indexHtmlShell({ meta, heading, body }) {
+    const notebook = meta.notebook_url
+      ? `<a href="${escapeHtml(meta.notebook_url)}">${escapeHtml(meta.notebook)}</a>`
+      : escapeHtml(meta.notebook);
+    const when = [meta.exporter, meta.exported].filter(Boolean).map(escapeHtml).join(' · ');
+    return '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
+      `<title>${escapeHtml(heading)}</title>\n<style>${INDEX_HTML_CSS}</style>\n</head>\n<body>\n` +
+      `<h1>${escapeHtml(heading)}</h1>\n<p class="meta">Notebook: ${notebook}${when ? `<br>${when}` : ''}</p>\n` +
+      body + '</body>\n</html>\n';
+  }
+
+  function indexHtmlLinks(links) {
+    if (!links.length) return '';
+    return '<ul class="top">' +
+      links.map(l => `<li><a href="${encodePath(l.href)}">${escapeHtml(l.label)}</a></li>`).join('') +
+      '</ul>\n';
+  }
+
+  function buildIndexHtml({ meta, heading, files = [], links = [] } = {}) {
+    const linked = new Set(links.map(l => l.href));
+    const groups = new Map();
+    for (const f of files) {
+      if (!f || f.path === '_index.html' || f.path === 'manifest.json' || linked.has(f.path)) continue;
+      const parts = String(f.path).split('/');
+      const group = parts.length > 1 ? parts[0] : 'Files';
+      if (!groups.has(group)) groups.set(group, []);
+      groups.get(group).push(f);
+    }
+    let body = indexHtmlLinks(links);
+    for (const [group, list] of groups) {
+      body += `<h2>${escapeHtml(group)}</h2>\n<ul class="files">\n`;
+      for (const f of list) {
+        const label = f.title || String(f.path).split('/').pop();
+        body += `<li><a href="${encodePath(f.path)}">${escapeHtml(label)}</a>` +
+          (f.variant ? ` <span class="variant">${escapeHtml(f.variant)}</span>` : '') + '</li>\n';
+      }
+      body += '</ul>\n';
+    }
+    body += '<footer><a href="manifest.json">manifest.json</a></footer>\n';
+    return indexHtmlShell({ meta, heading, body });
+  }
+
+  // Root _index.html of a Full Takeout. A category written in several
+  // batches (c.parts > 1) links each part-N/ folder.
+  function buildRootIndexHtml({ meta, categories = [], errorsFile = null } = {}) {
+    let body = indexHtmlLinks([
+      { href: '_index.md', label: 'Markdown index' },
+      ...(errorsFile ? [{ href: errorsFile, label: 'Errors' }] : [])
+    ]);
+    body += '<table>\n<thead><tr><th>Category</th><th>Exported</th><th>Failed</th><th>Status</th><th>Folder</th></tr></thead>\n<tbody>\n';
+    for (const c of categories) {
+      let folder = '—';
+      // Nothing written (empty, skipped, scan failed): no folder to link
+      if (c.exported > 0 || (c.zips || []).length > 0) {
+        const dir = encodePath(c.folder);
+        folder = c.parts > 1
+          ? Array.from({ length: c.parts }, (_, i) => `<a href="${dir}/part-${i + 1}/_index.html">part-${i + 1}</a>`).join(' · ')
+          : `<a href="${dir}/_index.html">${escapeHtml(c.folder)}/</a>`;
+      }
+      body += `<tr><td>${escapeHtml(c.name)}</td><td>${c.exported} of ${c.selected}</td><td>${c.failed}</td>` +
+        `<td>${escapeHtml(TAKEOUT_STATUS_WORDS[c.status] || c.status)}</td><td>${folder}</td></tr>\n`;
+    }
+    body += '</tbody>\n</table>\n<footer><a href="manifest.json">manifest.json</a></footer>\n';
+    return indexHtmlShell({ meta, heading: `Takeout — ${meta.notebook}`, body });
+  }
+
   // The one toast after a Full Takeout: "Takeout: sources 12/12, notes 4/10
   // partial, chat skipped, artifacts none". Warning when any category failed
   // items, has errors, was cut short or skipped, or lost content (audit);
@@ -1000,6 +1085,8 @@
 
   const NLME = {
     buildRootIndex,
+    buildIndexHtml,
+    buildRootIndexHtml,
     summarizeTakeoutOutcome,
     frontMatter,
     uniqueStems,

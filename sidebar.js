@@ -2719,10 +2719,11 @@ async function exportNotesAsMarkdown(selectedNotes) {
 
 // One batch of a category's files to its ZIP (name pushed to `zips`) or, with
 // target.folder, into that Downloads folder; every path gets `prefix`
-async function saveCategoryBatch(shell, files, info, { prefix = '', zipKind, folder = null, zips }) {
+async function saveCategoryBatch(shell, files, info, { prefix = '', zipKind, folder = null, zips, written = null }) {
   const placed = prefix ? files.map(f => ({ ...f, path: prefix + f.path })) : files;
   if (folder) {
     await saveFiles(placed, { folder });
+    if (written) { written.count++; written.multi = info.totalBatches > 1; }
     return;
   }
   const zipName = NLME.zipName({
@@ -2735,6 +2736,7 @@ async function saveCategoryBatch(shell, files, info, { prefix = '', zipKind, fol
   });
   await saveFiles(placed, { zipName });
   zips.push(zipName);
+  if (written) { written.count++; written.multi = info.totalBatches > 1; }
 }
 
 // A takeout category written in several batches puts each batch in its own
@@ -2770,6 +2772,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
   };
   let packaged = 0; // notes written to ZIPs so far
   const zips = [];
+  const written = { count: 0, multi: false }; // batches saved: part-N/ folders for the takeout root index
 
   // Item counts go in last, once every written note is known
   const finalAudit = () => {
@@ -2812,7 +2815,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
         totalBatches: info.totalBatches,
         partial: info.partial
       });
-      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, zips });
+      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, zips, written });
       console.log(`[NotebookLM Takeout] Downloaded notes ZIP ${info.batchIndex}/${info.totalBatches}`);
 
       // CRITICAL: free each batch's memory before the next one
@@ -2837,7 +2840,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
     }
   });
 
-  return { result, zips, errors: result.errors, auditOk: NLME.auditExport(finalAudit()).ok };
+  return { result, zips, errors: result.errors, auditOk: NLME.auditExport(finalAudit()).ok, parts: pathPrefix && written.multi ? written.count : 0 };
 }
 
 /**
@@ -3324,6 +3327,19 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
   }
 
   files.push({ path: '_index.md', data: indexContent + timingSummary() });
+  files.push({
+    path: '_index.html',
+    data: NLME.buildIndexHtml({
+      meta,
+      heading: `Notes — ${meta.notebook}`,
+      files,
+      links: [
+        { href: '_index.md', label: 'Markdown index' },
+        ...(errors.length > 0 ? [{ href: 'errors.md', label: 'Errors' }] : []),
+        ...(auditText ? [{ href: '_audit.md', label: 'Audit' }] : [])
+      ]
+    })
+  });
 
   // manifest.json last: it lists every file above (not itself)
   files.push({
@@ -3554,6 +3570,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
   };
   let packaged = 0; // sources written to ZIPs so far
   const zips = [];
+  const written = { count: 0, multi: false }; // batches saved: part-N/ folders for the takeout root index
 
   // Item counts go in last, once every written source is known
   const finalAudit = () => {
@@ -3594,7 +3611,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
         totalBatches: info.totalBatches,
         partial: info.partial
       });
-      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, zips });
+      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, zips, written });
       console.log(`[NotebookLM Takeout] Downloaded sources ZIP ${info.batchIndex}/${info.totalBatches}`);
 
       // CRITICAL: free each batch's memory before the next one
@@ -3616,7 +3633,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
     }
   });
 
-  return { result, zips, errors: result.errors, auditOk: NLME.auditExport(finalAudit()).ok };
+  return { result, zips, errors: result.errors, auditOk: NLME.auditExport(finalAudit()).ok, parts: pathPrefix && written.multi ? written.count : 0 };
 }
 
 /**
@@ -3967,6 +3984,19 @@ function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batch
   }
 
   files.push({ path: '_index.md', data: indexContent + timingSummary() });
+  files.push({
+    path: '_index.html',
+    data: NLME.buildIndexHtml({
+      meta,
+      heading: `Sources — ${meta.notebook}`,
+      files,
+      links: [
+        { href: '_index.md', label: 'Markdown index' },
+        ...(errors.length > 0 ? [{ href: 'errors.md', label: 'Errors' }] : []),
+        ...(auditText ? [{ href: '_audit.md', label: 'Audit' }] : [])
+      ]
+    })
+  });
 
   // manifest.json last: it lists every file above (not itself)
   files.push({
@@ -4529,6 +4559,19 @@ function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, parti
   }
 
   files.push({ path: '_index.md', data: indexContent + timingSummary() });
+  files.push({
+    path: '_index.html',
+    data: NLME.buildIndexHtml({
+      meta,
+      heading: chatTitle,
+      files,
+      links: [
+        { href: '_index.md', label: 'Markdown index' },
+        ...(errors.length > 0 ? [{ href: 'errors.md', label: 'Errors' }] : []),
+        { href: '_audit.md', label: 'Audit' }
+      ]
+    })
+  });
 
   // manifest.json last: it lists every file above (not itself)
   files.push({
@@ -5356,6 +5399,18 @@ function artifactsRootFiles(files, exportedItems, { meta, info }) {
     index += '- [Export Errors](errors.md)\n\n';
   }
   root.push({ path: '_index.md', data: index + timingSummary() });
+  root.push({
+    path: '_index.html',
+    data: NLME.buildIndexHtml({
+      meta,
+      heading: `Artifacts — ${meta.notebook}`,
+      files: [...files, ...root],
+      links: [
+        { href: '_index.md', label: 'Markdown index' },
+        ...(errors.length > 0 ? [{ href: 'errors.md', label: 'Errors' }] : [])
+      ]
+    })
+  });
 
   const counts = {};
   for (const [typeFolder, { labels }] of folders) counts[typeFolder] = labels.length;

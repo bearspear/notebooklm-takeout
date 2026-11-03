@@ -723,6 +723,62 @@ test('buildRootIndex lists every category with its status and links errors', () 
   assert.match(md, /Unzip every ZIP into the same folder/);
 });
 
+test('buildIndexHtml groups files by folder and encodes links', () => {
+  const meta = { notebook: 'New Math', notebook_url: '', notebook_id: '', exporter: 'NotebookLM Takeout 1.4.0', exported: 'T' };
+  const html = NLME.buildIndexHtml({ meta, heading: 'Notes — New Math', files: [
+    { path: 'notes/A b.md', title: 'A <script>b', variant: 'base' },
+    { path: 'notes/A b-code-blocks.md', title: 'A b', variant: 'code-blocks' },
+    { path: 'mind-maps/[MINDMAP]_M#1.svg' },
+    { path: 'combined-notes.md', title: 'Combined' },
+    { path: 'manifest.json' },
+    { path: '_index.html' }
+  ] });
+  assert.ok(html.startsWith('<!doctype html>'));
+  assert.match(html, /<meta charset="utf-8">/);
+  assert.match(html, /<title>Notes — New Math<\/title>/);
+  assert.match(html, /href="notes\/A%20b\.md"/);
+  assert.match(html, /href="mind-maps\/%5BMINDMAP%5D_M%231\.svg"/);
+  assert.match(html, /<h2>notes<\/h2>/);
+  assert.match(html, /<h2>mind-maps<\/h2>/);
+  assert.match(html, /<h2>Files<\/h2>/);
+  assert.doesNotMatch(html, /href="_index\.html"/);
+  assert.match(html, /href="manifest\.json"/); // footer link only
+  assert.equal(html.split('href="manifest.json"').length, 2);
+  assert.match(html, /A &lt;script&gt;b/);
+  assert.doesNotMatch(html, /<script/);
+  assert.doesNotMatch(html, /https?:\/\/[^"' ]*\.(css|js)/);
+});
+
+test('buildIndexHtml links the notebook and extra links', () => {
+  const meta = { notebook: 'New Math', notebook_url: 'https://notebook.google.com/notebook/x', notebook_id: 'x', exporter: 'E', exported: 'T' };
+  const html = NLME.buildIndexHtml({ meta, heading: 'Notes — New Math', files: [{ path: 'a.md' }], links: [{ href: 'errors.md', label: 'Errors' }, { href: '_index.md', label: 'Markdown index' }] });
+  assert.match(html, /<a href="https:\/\/notebook\.google\.com\/notebook\/x"/);
+  assert.match(html, /href="errors\.md"[^>]*>Errors</);
+  assert.match(html, /href="_index\.md"/);
+});
+
+test('buildRootIndexHtml links each category\'s index', () => {
+  const meta = { notebook: 'New Math', notebook_url: '', notebook_id: '', exporter: 'E', exported: 'T' };
+  const html = NLME.buildRootIndexHtml({ meta, errorsFile: 'errors.md', categories: [
+    { name: 'Sources', folder: 'sources', status: 'done', selected: 12, exported: 12, failed: 0, zips: ['a.zip'] },
+    { name: 'Notes', folder: 'notes', status: 'partial', selected: 10, exported: 4, failed: 0, zips: ['b.zip'], parts: 2 },
+    { name: 'Chat', folder: 'chat', status: 'skipped', selected: 17, exported: 0, failed: 0, zips: [] },
+    { name: 'Artifacts', folder: 'artifacts', status: 'empty', selected: 0, exported: 0, failed: 0, zips: [] }
+  ] });
+  assert.ok(html.startsWith('<!doctype html>'));
+  assert.match(html, /href="sources\/_index\.html"/);
+  assert.match(html, /href="notes\/part-1\/_index\.html"/);
+  assert.match(html, /href="notes\/part-2\/_index\.html"/);
+  assert.match(html, /partial \(cancelled\)/);
+  assert.match(html, /none in notebook/);
+  assert.doesNotMatch(html, /artifacts\/_index\.html/);
+  assert.doesNotMatch(html, /chat\/_index\.html/); // skipped: nothing written
+  assert.match(html, /<td>—<\/td>/);
+  assert.match(html, /href="errors\.md"/);
+  assert.match(html, /href="manifest\.json"/);
+  assert.match(html, /href="_index\.md"/);
+});
+
 test('prefixExportErrors puts the category in front of every error and keeps its type', () => {
   const errors = NLME.prefixExportErrors('Notes', [
     '[Algebra] Failed to extract: timeout',

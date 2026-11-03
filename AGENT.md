@@ -1011,7 +1011,10 @@ extension stopped the job. One export runs at a time (`runExclusive`).
 
 ### Layout of every export
 
-- Root files: `_index.md`, `manifest.json` (written last, lists every other file with its
+- Root files: `_index.md`, `_index.html` (browsable twin: `NLME.buildIndexHtml`, or
+  `NLME.buildRootIndexHtml` for the Full Takeout root; self-contained, relative encoded links, no
+  scripts; written before the manifest so it is listed; not for the single-file chat download),
+  `manifest.json` (written last, lists every other file with its
   byte size; `NLME.buildManifest`), `errors.md` (only with errors, `NLME.buildErrorReport`),
   `_audit.md` (notes, sources, chat). The old plain-text README and error files are retired.
 - Type folders: `sources/`, `notes/`, `mind-maps/`; artifacts `audio/ video/ slides/
