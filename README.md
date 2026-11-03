@@ -145,7 +145,10 @@ The quoted passage from the source…
      each ZIP in memory, so a big notebook is split into parts of about 500 MB:
      `{notebook}-artifacts-{timestamp}-part1.zip`, `-part2.zip`, and so on. Each part has its
      own type folders, `_index.md` and `manifest.json`. A part can pass 500 MB by one file, and a
-     single file over 500 MB gets a part of its own. Folder mode is not split (files go straight to disk).
+     single file over 500 MB gets a part of its own. Building a part briefly needs about twice its size in
+     memory, so a part can reach about 500 MB plus one large file and about twice that in memory. For notebooks
+     with multi-GB videos, ZIP off (a folder in Downloads) is still the lightest option.
+     Folder mode is not split (files go straight to disk).
    - Reports are always Markdown (with front matter), never raw HTML.
 3. Slide decks download as PDF or PowerPoint depending on **Settings → Slide deck format**.
 
@@ -155,7 +158,7 @@ The 📦 **Full Takeout** button in the panel header exports the whole notebook 
 sources, then notes, then chat, then artifacts. It scans each category first, so the progress
 shows what is coming; a category with nothing in it is reported as "none in notebook". It
 uses your Settings (versions, citation detail, slide format). Its own **ZIP** checkbox sits next
-to the button: ticked gives one ZIP per category, unticked a folder in Downloads. The choice is
+to the button: ticked gives one ZIP per category (artifacts may be split into parts of about 500 MB), unticked a folder in Downloads. The choice is
 remembered; until you change it, it follows the "Always use ZIP" setting. The Artifacts tab's
 **Zip** toggle no longer affects Full Takeout (it only applies to Download Selected). Chat follows
 ⚙️ **Citation detail** too, the same as the Chat tab (Full quotes, Source titles only or No
@@ -165,7 +168,7 @@ always get their `-with-images` versions (for items that have images), whatever 
 checkboxes in Settings say, so a takeout is complete without extra setup; the tabs still follow
 your checkboxes. The cost is bigger and slower takeouts for notebooks with many images.
 
-*With ZIP on* you get one ZIP per category plus an index ZIP:
+*With ZIP on* you get one ZIP per category (artifacts may be split into parts of about 500 MB) plus an index ZIP:
 
 ```
 New-Physics-takeout-sources-2026-11-02T15-13-06.zip
@@ -317,6 +320,13 @@ formula without LaTeX source will be rebuilt from its rendered form. `[FAIL]` on
 check means that export is likely broken. Please
 [open an issue](https://github.com/bearspear/notebooklm-takeout/issues) and paste the report.
 
+## Known limitations
+
+- Citation quotes from long, unpunctuated transcript sources, such as YouTube videos, are cut at
+  about 1,000 characters and can start or end mid-word. That is the window Gemini Notebook's
+  citation popover shows for such sources, and the exported quote matches the popover exactly.
+  Structured documents quote whole paragraphs.
+
 ## Troubleshooting
 
 | Problem | Try |
@@ -408,6 +418,10 @@ contract with Gemini Notebook, past drift and recipes.
   by default. The download button on a Notes row exports just that note.
 - Export results stay in a panel (what was saved, errors grouped by type) with
   "Retry N failed" for notes, sources and artifacts, also after a Full Takeout.
+- Full Takeout has its own ZIP checkbox next to 📦. The Artifacts tab's Zip tick now only affects
+  Download Selected.
+- The open list rescans when you switch to another notebook (another tab, or a notebook opened from
+  the home page). A stale chat scan is cleared.
 - Chat follows ⚙️ Citation detail (full quotes, source titles only, or no citations); its own
   checkbox is gone.
 - ZIP exports of artifacts are split into parts of about 500 MB (`-part1.zip`, `-part2.zip`; in a

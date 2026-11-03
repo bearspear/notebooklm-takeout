@@ -449,9 +449,11 @@ in every answer, so sources must never be keyed by number across answers.
    - **ZIP off**: each item is saved into `Downloads/<Notebook>/<type>/…` as it is fetched
      (`NLME.downloadFolderPath`), CDN media straight to disk through `DIRECT_DOWNLOAD_URL`
      (`perZip: 1`; no size limit). The root files are written after the last item.
-   - **ZIP on**: `fetchDownload` pulls every file into memory and one
-     `<Notebook>-artifacts-<ts>.zip` is built in the side panel. A whole notebook with
-     audio/video can exceed memory; use folder mode for full exports.
+   - **ZIP on**: `fetchDownload` pulls every file into memory and the ZIPs are built in the side
+     panel. They are split by size into parts of about 500 MB (`ARTIFACT_ZIP_MAX_BYTES`), named
+     `<Notebook>-artifacts-<ts>-partN.zip` (in a takeout: `artifacts/part-N/`), each part with its
+     own root files. A part can reach about 500 MB plus one large file, and building it briefly
+     needs about twice that in memory, so folder mode is still the lightest for multi-GB videos.
    - `fetchArtifactFiles(tabId, item, {stem, mode, meta, folder})` is the single
      per-method conversion (reports → Markdown with front matter, never raw HTML; tables;
      mind maps; media). `mode` is `single`, `zip` or `folder`.
@@ -1058,8 +1060,10 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined out
   warns, all failing fails the item. Tab downloads keep the single `settings.slidesFormat`.
 - **ZIP on** (`takeoutZipEnabled`: the header's `#takeout-zip-checkbox`, else
   `NLME.takeoutZipChoice(settings)`): one ZIP per category, `<Notebook>-takeout-<category>-<ts>[-PARTIAL]
-  [-partNofM].zip`, plus `<Notebook>-takeout-index-<ts>.zip`. Paths are prefixed
-  `<Notebook>/<category>/`, so unzipping everything into one folder gives one tree.
+  [-partNofM|-partN].zip`, plus `<Notebook>-takeout-index-<ts>.zip`. `-partNofM` is a batch-size
+  split (notes, sources, chat); `-partN` is the artifacts size split (parts of about 500 MB), which
+  unpacks to `artifacts/part-N/`. Paths are prefixed `<Notebook>/<category>/`, so unzipping
+  everything into one folder gives one tree.
 - **ZIP off**: `Downloads/<Notebook> takeout <ts>/<root>/…`: the same `<root>/` tree sits
   inside the timestamped folder, because every path (category files and root files) carries the
   `<root>/` prefix and `folder` is the Downloads subfolder; artifacts run in folder mode.
