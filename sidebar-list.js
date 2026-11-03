@@ -273,6 +273,7 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
       if (destroyed || touched) return;
     }
     if (saved) {
+      _listStates.set(stateKey(), saved); // a later redraw restores instantly instead of flashing the defaults
       applyState(saved);
     } else if (guessApplied) {
       resetToDefaults(); // the previous notebook's filter is on screen
