@@ -1,6 +1,7 @@
 // One DOM-free runner behind every export (notes, sources, chat, Studio
 // artifacts): batching, cancel/stop, error collection, and the guarantee that
-// the errors reach exactly one package.
+// the errors reach exactly one package. failedItems: the items whose
+// extractOne threw, in order (warnings do not count); the Retry button re-runs them.
 (function (root) {
   const NLME = root.NLME || require('./takeout-shared.js');
 
@@ -17,6 +18,7 @@
     const size = Math.min(perZip, items.length) || 1;
     const totalBatches = Math.ceil(items.length / size);
     const errors = [...seedErrors];
+    const failedItems = [];
     let attempted = 0, exported = 0;
     let cancelled = false, stopped = false;
     let errorsDelivered = false;
@@ -58,6 +60,7 @@
           results.push(await extractOne(item, ctx));
           exported++;
         } catch (err) {
+          failedItems.push(item);
           errors.push(`[${titleOf(item)}] ${(err && err.message) || err}`);
         }
         if (afterEach) {
@@ -76,7 +79,7 @@
       await deliver([], endingBatch, true, { errorsOnly: true });
     }
 
-    return { attempted, exported, failed: attempted - exported, cancelled, stopped, errors };
+    return { attempted, exported, failed: attempted - exported, cancelled, stopped, errors, failedItems };
   }
 
   NLME.runExportJob = runExportJob;

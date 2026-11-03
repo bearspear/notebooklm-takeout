@@ -164,22 +164,28 @@ async function saveFiles(files, { zipName, folder } = {}) {
 
 /**
  * The shared wrapper around every export: pre-flight, progress, cancel,
- * outcome toast, cleanup. Runs `run(shell)` once.
+ * outcome (results panel), cleanup. Runs `run(shell)` once.
  *
  * shell = {
  *   tab, projectName, timestamp, meta,
  *   isCancelled()              // true after Cancel (overlay or side panel)
  *   progress(text, fraction)   // fraction 0..1: side-panel bar + page overlay
- *   finish({ kind, selected, result, auditOk = true, stoppedMessage, errorNote })
- *                              // result: { exported, failed, cancelled };
- *                              // stoppedMessage replaces the outcome toast
- *                              // when the extension stopped the job itself
+ *   finish({ kind, selected, result, auditOk = true, stoppedMessage, errorNote, saved = [], retry = null })
+ *                              // Shows the outcome in the results panel
+ *                              // (showResults), not a toast.
+ *                              // result: { exported, failed, cancelled,
+ *                              // errors }; stoppedMessage replaces the
+ *                              // outcome line (level error) when the
+ *                              // extension stopped the job itself; the
+ *                              // errors are listed either way
  *                              // errorNote ('2 citation error(s), see
  *                              // errors.md'): errors on items that were
  *                              // still exported; appended in brackets and
  *                              // raises success to warning (not on cancel)
- *                              // One category's toast: runFullTakeout shows
- *                              // its combined toast itself instead
+ *                              // saved: ZIP names or the Downloads folder
+ *                              // retry: { count, run } for "Retry N failed"
+ *                              // runFullTakeout shows its combined toast
+ *                              // itself instead
  * }
  *
  * @param {{ label: string, healthType?: string, overlayMessage?: string }} options
@@ -197,6 +203,9 @@ async function withExportShell({ label, healthType, overlayMessage }, run) {
   const progressPanel = document.getElementById('download-progress');
   const progressFill = document.getElementById('progress-fill');
   const progressText = document.getElementById('progress-text');
+
+  // A new export replaces the last one's results
+  hideResults();
 
   try {
     [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -266,28 +275,13 @@ async function withExportShell({ label, healthType, overlayMessage }, run) {
           progress: percent
         }).catch(() => {}); // overlay is cosmetic; never abort the job
       },
-      finish({ kind, selected, result = {}, auditOk = true, stoppedMessage, errorNote } = {}) {
-        if (stoppedMessage) {
-          showToast(stoppedMessage, 'error');
-          return;
-        }
-        const outcome = NLME.summarizeExportOutcome({
-          kind,
-          selected,
-          exported: result.exported,
-          failed: result.failed,
-          cancelled: result.cancelled
-        });
-        let message = outcome.message;
-        let level = outcome.level;
-        // Each note on top of the outcome is at least a warning
-        const note = text => {
-          message += text;
-          if (level !== 'error') level = 'warning';
-        };
-        if (errorNote && !result.cancelled) note(` (${errorNote})`);
-        if (!auditOk) note(' — some content is missing, see _audit.md');
-        showToast(message, level);
+      finish({ kind, selected, result = {}, auditOk = true, stoppedMessage, errorNote, saved = [], retry = null } = {}) {
+        // The outcome stays in the results panel; a stopped job's message
+        // leads it, and the errors still follow
+        const outcome = stoppedMessage
+          ? { message: stoppedMessage, level: 'error' }
+          : NLME.composeOutcome({ kind, selected, result, auditOk, errorNote });
+        showResults({ message: outcome.message, level: outcome.level, saved, errors: result.errors || [], retry });
       }
     };
 

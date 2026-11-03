@@ -1084,7 +1084,7 @@ download (`triggerItemDownload`); it is not a system notification.
 ### List controller (`sidebar-list.js`)
 
 Script order is now `jszip`, `turndown`, `takeout-shared.js`, `takeout-job.js`,
-`sidebar-list.js`, `sidebar.js`, `sidebar-takeout.js`. `sidebar-list.js` is DOM only; its pure
+`sidebar-list.js`, `sidebar-results.js`, `sidebar.js`, `sidebar-takeout.js`. `sidebar-list.js` is DOM only; its pure
 logic is `NLME.listItemKeys / listView / pruneSelection / listSummary / listStateKey /
 restoreListState` in `takeout-shared.js` (unit tested).
 
@@ -1125,6 +1125,32 @@ onChange, canSelect }) -> { items, selectedItems(), selectedCount(), destroy() }
   and each item's key, index, disabled, details) and returns without touching the DOM when it is
   unchanged; it does not blank the list with "Scanning..." either. A real change redraws and
   restores the Zip choice, scroll position and, if the filter box had focus, its focus and caret.
+
+### Results panel and failed items (`sidebar-results.js`)
+
+Script order is now `jszip`, `turndown`, `takeout-shared.js`, `takeout-job.js`, `sidebar-list.js`,
+`sidebar-results.js`, `sidebar.js`, `sidebar-takeout.js`. Export outcomes no longer go to toasts:
+they stay in `#results-panel` (below `#download-progress`) until the next export starts or the
+user clicks Dismiss.
+
+- `NLME.runExportJob`'s result has `failedItems`: the items whose `extractOne` threw, in order.
+  Items that only called `ctx.warn` are not in it.
+- `NLME.composeOutcome({ kind, selected, result, auditOk, errorNote }) -> { message, level }`: the
+  outcome text, the errorNote in brackets (not on a cancelled run), the audit note, and
+  success raised to warning. `shell.finish` calls it.
+- `NLME.groupErrorsForPanel(errors, { perGroup = 20 })`: groups by `normalizeExportError(e).type`
+  (first-seen order); `{ heading, count, entries: [{ item, message }], more }`.
+- `showResults({ message, level, saved = [], errors = [], retry = null })` and `hideResults()`
+  (globals). `retry = { count, run }` renders "Retry N failed"; the button disables itself while
+  `run()` is pending and re-enables if the job was refused (`JOB_BUSY`). A started retry clears
+  the panel itself, because `withExportShell` calls `hideResults()` first.
+- `shell.finish({ ..., saved, retry })`: `saved` is the ZIP names (`zips` from the runner) or the
+  Downloads folder; `stoppedMessage` still replaces the outcome line (level error) and the errors
+  are listed anyway. `retryFor(failedItems, jobName, exportFn)` (sidebar.js) builds `retry` for
+  notes, sources and Download All (`downloadAllArtifacts(shell.tab.id, failed)`); chat passes none
+  (its messages do not fail as a whole; re-export the chat).
+- Toasts remain for short notices (job refused, no tab, cancelled at the health check, unexpected
+  failure), single-item exports and Full Takeout's combined toast (Task 5 moves that too).
 
 ## Known issues and latent bugs
 

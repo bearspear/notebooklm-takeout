@@ -1004,3 +1004,19 @@ test('restoreListState falls back to the tab default', () => {
   assert.deepEqual([...NLME.restoreListState(null, { keys: ['a', 'b'], defaultSelected: 'all' }).selected], ['a', 'b']);
   assert.deepEqual([...NLME.restoreListState({ sort: 1 }, { keys: ['a'], defaultSelected: 'none' }).selected], []);
 });
+
+test('groupErrorsForPanel groups by type and caps entries', () => {
+  const errs = ['[A] boom', { type: 'message_skipped', message: 'm1' }, '[B] bang', { type: 'message_skipped', message: 'm2' }];
+  const g = NLME.groupErrorsForPanel(errs, { perGroup: 1 });
+  assert.deepEqual(g.map(x => [x.heading, x.count, x.entries.length, x.more]), [['Error', 2, 1, 1], ['Message skipped', 2, 1, 1]]);
+  assert.deepEqual(g[0].entries[0], { item: 'A', message: 'boom' });
+});
+test('composeOutcome adds the error note and audit note as warnings', () => {
+  const o = NLME.composeOutcome({ kind: 'messages', selected: 3, result: { exported: 3, failed: 0, cancelled: false }, auditOk: false, errorNote: '2 citation error(s), see errors.md' });
+  assert.equal(o.level, 'warning');
+  assert.match(o.message, /\(2 citation error\(s\), see errors\.md\) — some content is missing, see _audit\.md$/);
+});
+test('composeOutcome leaves the error note off a cancelled run', () => {
+  const o = NLME.composeOutcome({ kind: 'notes', selected: 4, result: { exported: 2, failed: 0, cancelled: true }, errorNote: 'x' });
+  assert.doesNotMatch(o.message, /\(x\)/);
+});

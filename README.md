@@ -224,6 +224,14 @@ anything failed (a note in it records the cancellation), and the message says ho
 were exported (e.g. "Cancelled: exported 4 of 10 notes"). For a Full Takeout see
 [Full Takeout](#full-takeout).
 
+### Results and Retry
+
+When an export ends, its outcome stays in a results panel under the progress area until you
+start another export or click **Dismiss**: what was exported, the ZIP names (or the Downloads
+folder) it was saved to, and the errors grouped by kind (collapsed; the first 20 of each, the
+rest are in `errors.md`). If items failed, **Retry N failed** exports just those again.
+(Chat exports have no Retry: re-export the chat.)
+
 Only one export, scan or download runs at a time. While one runs, the panel's other buttons
 are disabled and a second click shows "… is still running".
 
@@ -350,6 +358,7 @@ Plain JavaScript Manifest V3 extension: no build step, no npm dependencies.
 ```
 manifest.json         Manifest V3
 sidebar.html/.js      Side panel UI and export orchestration (Markdown, formulas, per-category runners)
+sidebar-results.js    Results panel (outcome, saved files, errors, Retry)
 sidebar-takeout.js    File writer (ZIP/folder/single), export shell and Full Takeout
 takeout-job.js        The one export job runner: batching, cancel, errors (unit tested)
 styles.css            Side panel styles

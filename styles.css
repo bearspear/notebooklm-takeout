@@ -1650,3 +1650,67 @@ body.job-running #rescan-btn {
   pointer-events: none;
   opacity: 0.5;
 }
+
+/* ========== RESULTS PANEL ========== */
+.results-panel {
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+  border: 1px solid #e8eaed;
+  font-size: 13px;
+}
+
+.results-message {
+  margin: 0 0 8px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.results-success { color: #137333; }
+.results-warning { color: #b06000; }
+.results-error { color: #c5221f; }
+.results-info { color: #5f6368; }
+
+.results-saved {
+  margin-bottom: 8px;
+  color: #3c4043;
+}
+
+.results-saved ul,
+.results-group ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.results-saved li,
+.results-group li {
+  overflow-wrap: anywhere;
+}
+
+.results-group {
+  margin-bottom: 6px;
+  color: #3c4043;
+}
+
+.results-group summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.results-more {
+  margin: 4px 0 0 18px;
+  color: #5f6368;
+  font-style: italic;
+}
+
+.results-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.results-actions .btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

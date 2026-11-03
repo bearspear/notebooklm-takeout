@@ -2554,6 +2554,17 @@ async function runExclusive(name, fn) {
   }
 }
 
+// The results panel's "Retry N failed": re-runs `exportFn` on the items that
+// failed, under the job lock (a busy lock only shows its toast; the panel
+// stays). null when nothing failed.
+function retryFor(failedItems, jobName, exportFn) {
+  if (!failedItems || failedItems.length === 0) return null;
+  return {
+    count: failedItems.length,
+    run: () => runExclusive(jobName, () => exportFn(failedItems))
+  };
+}
+
 // Buttons that follow a list's selection (disabled at K = 0): re-derive them from the
 // controllers, whatever just enabled or disabled them (a job ending, a redraw)
 function refreshListButtons() {
@@ -2768,7 +2779,7 @@ async function exportNotesAsMarkdown(selectedNotes) {
   console.log('[NotebookLM Takeout] Starting export for notes:', selectedNotes.length);
 
   await withExportShell({ label: 'notes', healthType: 'notes', overlayMessage: 'Preparing to export notes...' }, async shell => {
-    const { result, auditOk } = await runNotesJob(shell, selectedNotes);
+    const { result, zips, auditOk } = await runNotesJob(shell, selectedNotes);
 
     shell.finish({
       kind: 'notes',
@@ -2777,7 +2788,9 @@ async function exportNotesAsMarkdown(selectedNotes) {
       auditOk,
       stoppedMessage: result.stopped
         ? `Stopped after ${result.exported} of ${selectedNotes.length} notes: citations could not be read (Gemini Notebook may have changed). Run the health check 🩺; details in errors.md.`
-        : undefined
+        : undefined,
+      saved: zips,
+      retry: retryFor(result.failedItems, 'Notes export', failed => exportNotesAsMarkdown(failed))
     });
   });
 }
@@ -3573,13 +3586,15 @@ async function exportSources(selectedSources) {
   console.log(`[NotebookLM Takeout] Exporting ${selectedSources.length} sources...`);
 
   await withExportShell({ label: 'sources', healthType: 'sources', overlayMessage: 'Preparing to export sources...' }, async shell => {
-    const { result, auditOk } = await runSourcesJob(shell, selectedSources);
+    const { result, zips, auditOk } = await runSourcesJob(shell, selectedSources);
 
     shell.finish({
       kind: 'sources',
       selected: selectedSources.length,
       result,
-      auditOk
+      auditOk,
+      saved: zips,
+      retry: retryFor(result.failedItems, 'Sources export', failed => exportSources(failed))
     });
   });
 }
@@ -4209,7 +4224,7 @@ async function exportChat(chatData, extractFullCitations = false) {
   console.log('[NotebookLM Takeout] Starting chat export...');
 
   await withExportShell({ label: 'chat', overlayMessage: 'Preparing to export chat...' }, async shell => {
-    const { result, auditOk } = await runChatJob(shell, chatData, { extractFullCitations });
+    const { result, zips, auditOk } = await runChatJob(shell, chatData, { extractFullCitations });
 
     shell.finish({
       kind: 'messages',
@@ -4217,7 +4232,10 @@ async function exportChat(chatData, extractFullCitations = false) {
       result,
       auditOk,
       // Citation problems leave every message exported, so name the errors
-      errorNote: result.errors.length > 0 ? `${result.errors.length} citation error(s), see errors.md` : undefined
+      errorNote: result.errors.length > 0 ? `${result.errors.length} citation error(s), see errors.md` : undefined,
+      saved: zips
+      // No retry: a chat's messages never fail as a whole (citation problems
+      // keep the message); re-export the chat instead
     });
   });
 }
@@ -5288,15 +5306,17 @@ async function downloadAllArtifacts(tabId, items) {
 
   try {
     await withExportShell({ label: 'artifacts', overlayMessage: 'Preparing to download artifacts...' }, async shell => {
-      const { result, savedOutside } = await runArtifactsJob(shell, items, {
-        folder: zipEnabled ? null : (shell.projectName || 'NotebookLM')
-      });
+      const folder = zipEnabled ? null : (shell.projectName || 'NotebookLM');
+      const { result, zips, savedOutside } = await runArtifactsJob(shell, items, { folder });
 
       shell.finish({
         kind: 'artifacts',
         selected: items.length,
         result,
-        errorNote: savedOutside > 0 ? `${savedOutside} saved separately to Downloads, see errors.md` : undefined
+        errorNote: savedOutside > 0 ? `${savedOutside} saved separately to Downloads, see errors.md` : undefined,
+        // ZIP mode: the ZIP names; folder mode: the folder, once it holds a file
+        saved: folder ? (result.exported > 0 || result.errors.length > 0 ? [folder] : []) : zips,
+        retry: retryFor(result.failedItems, 'Download All', failed => downloadAllArtifacts(shell.tab.id, failed))
       });
     });
   } finally {

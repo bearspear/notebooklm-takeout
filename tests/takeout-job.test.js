@@ -145,3 +145,12 @@ test('runExportJob delivers seedErrors with the last batch when every item succe
   assert.deepEqual(result.errors, ['2 messages skipped']);
   assert.deepEqual(seedErrors, ['2 messages skipped'], 'the caller array is not mutated');
 });
+
+test('runExportJob returns the items that threw as failedItems', async () => {
+  const items = [{ title: 'a' }, { title: 'b' }, { title: 'c' }];
+  const r = await NLME.runExportJob({
+    kind: 'notes', items, isCancelled: () => false, packageBatch: async () => {},
+    extractOne: async (item, ctx) => { if (item.title === 'b') throw new Error('x'); if (item.title === 'c') ctx.warn('w'); return item; }
+  });
+  assert.deepEqual(r.failedItems, [items[1]]);
+});

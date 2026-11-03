@@ -319,6 +319,48 @@
     return { level: 'success', message: `Exported ${exported} of ${selected} ${kind}`, partial: false };
   }
 
+  // The end-of-export message and level: the outcome text, the errorNote in
+  // brackets (not on a cancelled run), then the audit note. Each note on top
+  // of the outcome is at least a warning.
+  function composeOutcome({ kind, selected, result = {}, auditOk = true, errorNote } = {}) {
+    const outcome = summarizeExportOutcome({
+      kind,
+      selected,
+      exported: result.exported,
+      failed: result.failed,
+      cancelled: result.cancelled
+    });
+    let message = outcome.message;
+    let level = outcome.level;
+    const note = text => {
+      message += text;
+      if (level !== 'error') level = 'warning';
+    };
+    if (errorNote && !result.cancelled) note(` (${errorNote})`);
+    if (!auditOk) note(' \u2014 some content is missing, see _audit.md');
+    return { message, level };
+  }
+
+  // The results panel's error list: groups by error type in first-seen
+  // order, at most perGroup entries each; `more` entries are in errors.md.
+  function groupErrorsForPanel(errors = [], { perGroup = 20 } = {}) {
+    const groups = new Map();
+    for (const raw of errors || []) {
+      const e = normalizeExportError(raw);
+      if (!groups.has(e.type)) groups.set(e.type, []);
+      groups.get(e.type).push({ item: e.item, message: e.message });
+    }
+    return [...groups].map(([type, list]) => {
+      const words = type.replace(/_/g, ' ');
+      return {
+        heading: words.charAt(0).toUpperCase() + words.slice(1),
+        count: list.length,
+        entries: list.slice(0, perGroup),
+        more: Math.max(0, list.length - perGroup)
+      };
+    });
+  }
+
   // Gemini Notebook's own download links (More → Download opens one via
   // window.open). Hostname-based, so lookalike query strings don't match.
   function isNotebookDownloadUrl(url) {
@@ -1299,6 +1341,8 @@ footer { margin-top: 3rem; }
     isNotebookDownloadUrl,
     createInterceptArm,
     summarizeExportOutcome,
+    composeOutcome,
+    groupErrorsForPanel,
     createJobLock,
     createPhaseTimer,
     formatTimingSummary,
