@@ -1201,8 +1201,8 @@ user clicks Dismiss.
   far; final on the last package). The sources `errors.md` summary is `{ Selected, Exported, Failed }`
   (`buildSourcesFiles(..., { stats })`).
 - Chat `errors.md` / `_index.md` "Total Messages" is the number of messages in that package (a partial
-  run lists the exported ones). `NLME.extensionFor` ends with the URL path's own extension
-  (`/^\.[a-z0-9]{2,5}$/i`, lower-cased) after the filename, MIME and artifact-type guesses.
+  run lists the exported ones). `NLME.extensionFor` tries the URL filename param, then the URL path's own extension
+  (`/^\.[a-z0-9]{2,5}$/i`, lower-cased), before the MIME and artifact-type guesses.
   `NLME.uniqueStems` compares names as NFC, lower-cased.
 
 ## Known issues and latent bugs

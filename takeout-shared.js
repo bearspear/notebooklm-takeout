@@ -1023,19 +1023,19 @@
   };
 
   // File extension for a downloaded artifact: the real file name in the URL
-  // wins, then the MIME type, then what the artifact type usually is, then any
-  // extension on the URL's path.
+  // wins, then any extension on the URL's path, then the MIME type, then what
+  // the artifact type usually is.
   // `format` ('pdf'|'pptx') is the Slides format that was asked for: the
   // last-resort guess, so a PDF and a PowerPoint of one deck never share a name.
   function extensionFor({ url = '', mime = '', type = '', format = null } = {}) {
     const baseMime = String(mime || '').split(';')[0].trim().toLowerCase();
     const typeGuess = type === 'Slides' && format === 'pptx' ? '.pptx' : TYPE_EXTENSIONS[type];
-    return extensionFromDownloadUrl(url) || MIME_EXTENSIONS[baseMime] || typeGuess || extensionFromUrlPath(url);
+    return extensionFromDownloadUrl(url) || extensionFromUrlPath(url) || MIME_EXTENSIONS[baseMime] || typeGuess || '';
   }
 
   // The extension of the URL's path (".jpeg" for https://x/y/photo.JPEG?w=1),
-  // lower-cased, '' when the last segment has none. extensionFor's last resort:
-  // a real extension no list knows keeps itself.
+  // lower-cased, '' when the last segment has none. A real extension, known to
+  // a list or not, beats the MIME and type guesses.
   function extensionFromUrlPath(url) {
     let u;
     try { u = new URL(url); } catch { return ''; }
