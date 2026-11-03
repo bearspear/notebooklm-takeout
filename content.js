@@ -3248,7 +3248,8 @@
   // Dismiss the dialogs a delete opened itself (not in `existing`, the snapshot
   // taken before the delete click). Used only when that delete timed out, so a
   // confirm dialog is not left open. Each dialog's own backdrop is clicked; a
-  // dialog without one gets Escape. Dialogs that existed before are never touched.
+  // dialog without one gets Escape only if it is the last overlay pane (never a
+  // snack bar or tooltip). Dialogs that existed before are never touched.
   function closeNewDialogs(existing) {
     const isOld = el => [...existing].some(old => old === el || old.contains(el));
     const fresh = Array.from(document.querySelectorAll(DIALOG_SELECTOR))
@@ -3261,8 +3262,22 @@
       else noBackdrop.push(dlg);
     }
     backdrops.forEach(b => b.click());
+    // Escape reaches the topmost overlay with keydown subscribers (CDK listens on
+    // document.body), so it goes only to a fresh dialog that is the last pane;
+    // snack bars and tooltips never get it, they could make it close an older dialog.
+    const DIALOG_PARTS = 'mat-dialog-container, mat-mdc-dialog-container, [role="dialog"], [role="alertdialog"]';
+    const NOT_DIALOG = 'mat-snack-bar-container, mat-mdc-snack-bar-container, .mat-mdc-tooltip, mat-tooltip-component, [role="tooltip"]';
+    const escaped = new Set();
     for (const dlg of noBackdrop) {
       if (!dlg.isConnected) continue;
+      const pane = dlg.closest('.cdk-overlay-pane');
+      if (!pane || escaped.has(pane)) continue;
+      const isDialog = dlg.matches(DIALOG_PARTS) || !!dlg.querySelector(DIALOG_PARTS) || !!dlg.closest(DIALOG_PARTS);
+      if (!isDialog || pane.matches(NOT_DIALOG) || pane.querySelector(NOT_DIALOG)) continue;
+      const container = pane.closest('.cdk-overlay-container');
+      const panes = container ? container.querySelectorAll('.cdk-overlay-pane') : [];
+      if (panes.length === 0 || panes[panes.length - 1] !== pane) continue;
+      escaped.add(pane);
       dlg.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
     }
   }

@@ -1451,8 +1451,10 @@ not Citation detail 'none') or on `obsidianNames`.
   overlay host, or a backdrop child of the host); if none is found, only `.cdk-overlay-transparent-backdrop`.
   Without an argument it clicks every backdrop (no caller left). `deleteStudioItem` / `deleteSourceNote`
   snapshot `existingDialogs` before the delete click; on their timeout paths `closeNewDialogs(existingDialogs)`
-  dismisses only dialogs not in that snapshot (their own backdrop, else Escape), so a confirm dialog the
-  delete opened does not stay open and a dialog that existed before is never touched.
+  dismisses only dialogs not in that snapshot (their own backdrop; else Escape, sent only to a fresh
+  dialog whose `.cdk-overlay-pane` is the last pane in `.cdk-overlay-container`, never to a snack bar or
+  tooltip pane), so a confirm dialog the delete opened does not stay open and a dialog that existed before
+  is never touched.
 - **Delete Selected count.** `isStudioItemUntitled` is shared by the button label and the confirm in
   `handleStudioBulkDelete`; untitled Studio items are not counted (Sources-panel notes are).
 - **Folder-mode sizes.** `downloadUrlTo` returns the download id; `downloadSizeWhenDone(id)` polls
