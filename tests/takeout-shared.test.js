@@ -713,9 +713,13 @@ test('artifactFolder and extensionFor', () => {
 test('extensionFor keeps a real URL path extension that no list knows, lower-cased', () => {
   assert.equal(NLME.extensionFor({ url: 'https://x/y/photo.JPEG' }), '.jpeg');
   assert.equal(NLME.extensionFor({ url: 'https://x/y/photo.JPEG?size=large' }), '.jpeg');
-  // A real URL extension beats the MIME and type guesses; the filename param beats the path
+  // A real URL extension beats the type guess; a known one also beats the MIME,
+  // an unlisted one (.php, .def) does not
   assert.equal(NLME.extensionFor({ url: 'https://x/y/photo.jpeg', type: 'Infographic' }), '.jpeg');
-  assert.equal(NLME.extensionFor({ url: 'https://x/y/photo.JPEG', mime: 'audio/mp4' }), '.jpeg');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/page.php', mime: 'image/png' }), '.png');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/page.php', type: 'Infographic' }), '.php');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/deck.pdf', mime: 'audio/mp4' }), '.pdf');
+  assert.equal(NLME.extensionFor({ url: 'https://x/y/photo.JPEG', mime: 'audio/mp4' }), '.m4a');
   assert.equal(NLME.extensionFor({ url: 'https://x/y/noext', type: 'Infographic' }), '.png');
   assert.equal(NLME.extensionFor({ url: 'https://x/y/a.pptx?filename=Deck.pdf' }), '.pdf');
   // No extension (or not one): today's result

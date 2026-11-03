@@ -5498,6 +5498,9 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
       if (info.isLast) {
         const all = saved.flatMap(r => r.files);
         await saveFiles(place(artifactsRootFiles(all, saved.map(r => r.item), { meta: shell.meta, info })), { folder });
+        // The root files are a package too: an errors-only run (every item
+        // failed) leaves errors.md and _index.md in the folder
+        written.count++;
       }
     },
     isCancelled: shell.isCancelled,

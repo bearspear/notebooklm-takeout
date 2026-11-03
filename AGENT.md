@@ -1188,7 +1188,7 @@ user clicks Dismiss.
   Full Takeout's Retry) re-runs on the tab the original export used (`shell.tab.id` / the takeout's tab).
 - `target.written` (every category runner, `CategoryTarget`): `{ zips: [], count: 0, multi: false,
   parts: 0 }` (`newWritten()`), filled by `saveCategoryBatch` as each package is saved (the artifacts
-  runner fills `zips` and `count` itself). `runFullTakeout` passes a fresh one per category and reads
+  runner fills `zips` and `count` itself, root files of a folder-mode run included). `runFullTakeout` passes a fresh one per category and reads
   it after the runner, also in `catch`, so a category that throws still lists the ZIPs and parts it
   wrote. Runners return `zips`, `parts` and `packages` (= `written.count`) from the same object.
   `count` includes an errors-only package.
@@ -1201,8 +1201,9 @@ user clicks Dismiss.
   far; final on the last package). The sources `errors.md` summary is `{ Selected, Exported, Failed }`
   (`buildSourcesFiles(..., { stats })`).
 - Chat `errors.md` / `_index.md` "Total Messages" is the number of messages in that package (a partial
-  run lists the exported ones). `NLME.extensionFor` tries the URL filename param, then the URL path's own extension
-  (`/^\.[a-z0-9]{2,5}$/i`, lower-cased), before the MIME and artifact-type guesses.
+  run lists the exported ones). `NLME.extensionFor` order: URL filename param, a known extension on
+  the URL path, MIME, any other URL path extension (`/^\.[a-z0-9]{2,5}$/i`, lower-cased), artifact-type
+  guess. A real `.jpeg` URL beats the type guess; a stray `.php` does not beat a correct MIME.
   `NLME.uniqueStems` compares names as NFC, lower-cased.
 
 ## Known issues and latent bugs
