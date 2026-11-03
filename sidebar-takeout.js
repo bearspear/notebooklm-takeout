@@ -68,9 +68,12 @@ async function fetchDownload(url, { tabId } = {}) {
   throw new Error(`Fetch failed: ${directReason}; page fetch: ${fallbackReason}`);
 }
 
-// Blob for a data entry (string, Blob or Uint8Array).
-function entryBlob(data) {
-  return data instanceof Blob ? data : new Blob([data]);
+// Blob for a data entry (string, Blob or Uint8Array). Strings and bytes get a
+// type from the path so Chrome keeps the suggested extension; a Blob (fetched
+// media) already carries its type.
+function entryBlob(entry) {
+  const data = entry.data;
+  return data instanceof Blob ? data : new Blob([data], { type: NLME.mimeForPath(entry.path) });
 }
 
 // Save one Blob to Downloads/<target> through chrome.downloads. Register the
@@ -138,7 +141,7 @@ async function saveFiles(files, { zipName, folder } = {}) {
     for (const entry of files) {
       const target = NLME.downloadFolderPath(folder, entry.path);
       if (entry.data !== undefined) {
-        await downloadBlobToFolderPath(entryBlob(entry.data), target);
+        await downloadBlobToFolderPath(entryBlob(entry), target);
       } else {
         await downloadUrlTo(entry, target);
       }
@@ -150,7 +153,7 @@ async function saveFiles(files, { zipName, folder } = {}) {
   let saved = 0;
   for (const entry of files) {
     if (entry.data !== undefined) {
-      await downloadBlob(entryBlob(entry.data), entry.path);
+      await downloadBlob(entryBlob(entry), entry.path);
     } else {
       await downloadUrlTo(entry, entry.path);
     }

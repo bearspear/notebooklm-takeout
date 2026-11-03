@@ -408,6 +408,22 @@
     return clean ? `${clean}/${filename}` : filename;
   }
 
+  // MIME type by file extension. Chrome sniffs an untyped blob download as
+  // text/plain and swaps the suggested extension for .txt, so saved blobs
+  // need a real type.
+  function mimeForPath(path) {
+    const m = /\.([^./\\]+)$/.exec(String(path || ''));
+    const types = {
+      md: 'text/markdown',
+      json: 'application/json',
+      csv: 'text/csv',
+      html: 'text/html',
+      svg: 'image/svg+xml',
+      txt: 'text/plain'
+    };
+    return (m && types[m[1].toLowerCase()]) || 'application/octet-stream';
+  }
+
   // Content is "ready" once its size stops changing: the last `checks`
   // samples are equal and at least `minLength`. Replaces fixed sleeps.
   function createStabilityTracker({ checks = 2, minLength = 1 } = {}) {
@@ -1034,7 +1050,8 @@
     isDownloadableType,
     CITATION_TOOLTIP_SELECTOR,
     isCitationExpander,
-    parseCitationIndex
+    parseCitationIndex,
+    mimeForPath
   };
 
   root.NLME = NLME;

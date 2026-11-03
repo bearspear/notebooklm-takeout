@@ -767,3 +767,14 @@ test('summarizeTakeoutOutcome gives one message for every category', () => {
   // An empty notebook is no failure
   assert.equal(NLME.summarizeTakeoutOutcome({ categories: [cat('Sources', 'empty', 0, 0)] }).level, 'info');
 });
+
+test('mimeForPath types files by extension', () => {
+  assert.equal(NLME.mimeForPath('notes/A.md'), 'text/markdown');
+  assert.equal(NLME.mimeForPath('manifest.json'), 'application/json');
+  assert.equal(NLME.mimeForPath('t/X.CSV'), 'text/csv');
+  assert.equal(NLME.mimeForPath('x.html'), 'text/html');
+  assert.equal(NLME.mimeForPath('m.svg'), 'image/svg+xml');
+  assert.equal(NLME.mimeForPath('r.txt'), 'text/plain');
+  assert.equal(NLME.mimeForPath('audio/a.m4a'), 'application/octet-stream');
+  assert.equal(NLME.mimeForPath('noext'), 'application/octet-stream');
+});
