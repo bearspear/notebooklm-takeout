@@ -166,13 +166,26 @@ New-Physics/
   sources/  notes/  chat/  artifacts/
 ```
 
-Each category folder holds that category's usual layout (its own `_index.md`,
-`manifest.json`, type folders). A category that needed several ZIPs (batch size under
+Each category folder is a self-contained export: it holds that category's normal ZIP layout,
+with its own `_index.md` and `manifest.json` (so the links inside stay valid). That nests one
+level deeper than you might expect:
+
+```
+New-Physics/sources/_index.md           New-Physics/notes/_index.md
+New-Physics/sources/sources/<stem>.md   New-Physics/notes/notes/<stem>.md
+New-Physics/sources/manifest.json       New-Physics/notes/combined-notes.md
+New-Physics/chat/chat.md                New-Physics/artifacts/audio/<stem>.m4a
+New-Physics/chat/_index.md              New-Physics/artifacts/reports/<stem>.md
+```
+
+A category that needed several ZIPs (batch size under
 Settings) is split into `part-1/`, `part-2/`, … subfolders and the ZIPs are named
 `…-takeout-notes-<ts>-part1of3.zip`, so the parts never overwrite each other.
 
-*With ZIP off* everything is saved straight into `Downloads/<Notebook> takeout <timestamp>/`
-with the same tree. Audio, video and other media go from Google's servers to disk without
+*With ZIP off* everything is saved into a folder `Downloads/<Notebook> takeout <timestamp>/`
+that contains the same `<Notebook>/` tree, so the files land at
+`Downloads/<Notebook> takeout <timestamp>/<Notebook>/sources/sources/…` (the `<Notebook>/`
+folder is the one the ZIPs also unpack into). Audio, video and other media go from Google's servers to disk without
 passing through memory, so this is the mode for large notebooks.
 
 A category's status in `_index.md` and in the final message is one of: complete, partial

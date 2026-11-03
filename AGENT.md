@@ -359,7 +359,7 @@ side panel.
      - If mindmap-viewer → `extractMindmapSVG`. Else if labs-tailwind → `extractTailwindNoteContent`
        (citation hover loop). Else raw HTML.
    - `NAVIGATE_BACK` after each note; 3s settle between iterations.
-3. Per batch, `createNotesZip` produces 1–4 markdown variants per note (mirroring the
+3. Per batch, `buildNotesFiles` produces 1–4 markdown variants per note (mirroring the
    source variants), naming files with `NLME.uniqueStems`, + mind map bundles (`mind-maps/`
    folder) for any legacy in-page mind map notes (`buildNotesFiles`).
 4. `convertToMarkdown` keeps NotebookLM's citation numbers, renumbers anchor occurrences
@@ -1043,7 +1043,14 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined toa
   `settings.autoZip`): one ZIP per category, `<Notebook>-takeout-<category>-<ts>[-PARTIAL]
   [-partNofM].zip`, plus `<Notebook>-takeout-index-<ts>.zip`. Paths are prefixed
   `<Notebook>/<category>/`, so unzipping everything into one folder gives one tree.
-- **ZIP off**: `Downloads/<Notebook> takeout <ts>/…`, same tree; artifacts run in folder mode.
+- **ZIP off**: `Downloads/<Notebook> takeout <ts>/<root>/…`: the same `<root>/` tree sits
+  inside the timestamped folder, because every path (category files and root files) carries the
+  `<root>/` prefix and `folder` is the Downloads subfolder; artifacts run in folder mode.
+- **Doubled category folder (intended for now):** each category folder is a self-contained
+  export, i.e. the normal builder layout under `<root>/<category>/`: `sources/sources/<stem>.md`,
+  `notes/notes/<stem>.md` (+ `combined-notes*.md`), `chat/chat.md`, `artifacts/<type>/…`, each with
+  its own `_index.md`, `manifest.json` (and `_audit.md` / `errors.md`), so `_index.md` links stay
+  valid. Do not flatten it without reworking those links.
 - **Statuses**: `done` (complete), `partial` (cancelled), `skipped` (cancelled earlier),
   `empty` (none in notebook), `stopped` (the job stopped itself), `failed` (scan or write
   error, or every item failed). A failing category does not stop the others.
