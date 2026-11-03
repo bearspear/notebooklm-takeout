@@ -810,7 +810,6 @@ function resumeJob(record) {
     }
 
     // Find the items again, category by category
-    showToast('Checking what is left\u2026', 'info');
     // The tab must still show the record's notebook right before each scan and
     // again after it (in-app navigation changes the URL before the page is drawn)
     const onNotebook = async () => {
@@ -822,46 +821,65 @@ function resumeJob(record) {
     const itemsByName = {};
     const missingByCategory = {};
     const extraErrors = [];
-    for (const { category, name, scan, regionOfType } of RESUME_CATEGORIES) {
-      const keys = NLME.jobResumeKeys(live, category);
-      if (keys.length === 0) continue;
-      if (chainCancelRequested) { showToast('Resume cancelled', 'info'); return; }
-      if (!(await onNotebook())) {
-        showToast('The tab left that notebook; resume stopped', 'warning');
-        return;
-      }
-      let items;
-      try {
-        items = await scan(tabId);
-      } catch (error) {
-        console.error(`[NotebookLM Takeout] Resume: ${name} scan failed:`, error);
-        extraErrors.push({ type: 'scan_failed', title: name, message: `Could not scan ${name.toLowerCase()} (${(error && error.message) || error}); its items stay in the list to resume` });
-        continue;
-      }
-      if (!(await onNotebook())) {
-        showToast('The tab left that notebook; resume stopped', 'warning');
-        return;
-      }
-      stampJobKeys(category, items); // over the full scan, before any subset is cut
-      // NLME.planResume: a scan that matches nothing (empty, still drawing, the wrong
-      // page) or lacks a whole region (Studio notes not drawn) cannot say a key is
-      // gone; those keys are `unknown`, reported and kept in the record
-      const { matched, missing, unknown } = NLME.planResume(keys, items, { ...JOB_KEY_ACCESSORS[category], regionOfType });
-      let runnable = matched;
-      if (category === 'artifacts') {
-        runnable = matched.filter(item => !item.disabled);
-        for (const item of matched.filter(item => item.disabled)) {
-          extraErrors.push({ type: 'not_ready', title: name, message: `${item.label} is not ready to download; it stays in the list to resume` });
+    // No export shell is active while the categories are scanned, so show the
+    // progress panel with its Cancel button here (requestCancel sets
+    // chainCancelRequested, checked before each scan and again after the last).
+    // The finally hides it on every path: return, throw or normal end. The
+    // export steps that follow show it again through their own shells.
+    const scanPanel = document.getElementById('download-progress');
+    const scanFill = document.getElementById('progress-fill');
+    const scanText = document.getElementById('progress-text');
+    const scanSteps = RESUME_CATEGORIES.filter(c => NLME.jobResumeKeys(live, c.category).length > 0).length;
+    let scanDone = 0;
+    scanPanel.style.display = 'block';
+    scanText.textContent = 'Checking what is left\u2026';
+    scanFill.style.width = '0%';
+    try {
+      for (const { category, name, scan, regionOfType } of RESUME_CATEGORIES) {
+        const keys = NLME.jobResumeKeys(live, category);
+        if (keys.length === 0) continue;
+        scanText.textContent = `Checking ${name.toLowerCase()}\u2026`;
+        scanFill.style.width = `${(scanDone++ / scanSteps) * 100}%`;
+        if (chainCancelRequested) { showToast('Resume cancelled', 'info'); return; }
+        if (!(await onNotebook())) {
+          showToast('The tab left that notebook; resume stopped', 'warning');
+          return;
+        }
+        let items;
+        try {
+          items = await scan(tabId);
+        } catch (error) {
+          console.error(`[NotebookLM Takeout] Resume: ${name} scan failed:`, error);
+          extraErrors.push({ type: 'scan_failed', title: name, message: `Could not scan ${name.toLowerCase()} (${(error && error.message) || error}); its items stay in the list to resume` });
+          continue;
+        }
+        if (!(await onNotebook())) {
+          showToast('The tab left that notebook; resume stopped', 'warning');
+          return;
+        }
+        stampJobKeys(category, items); // over the full scan, before any subset is cut
+        // NLME.planResume: a scan that matches nothing (empty, still drawing, the wrong
+        // page) or lacks a whole region (Studio notes not drawn) cannot say a key is
+        // gone; those keys are `unknown`, reported and kept in the record
+        const { matched, missing, unknown } = NLME.planResume(keys, items, { ...JOB_KEY_ACCESSORS[category], regionOfType });
+        let runnable = matched;
+        if (category === 'artifacts') {
+          runnable = matched.filter(item => !item.disabled);
+          for (const item of matched.filter(item => item.disabled)) {
+            extraErrors.push({ type: 'not_ready', title: name, message: `${item.label} is not ready to download; it stays in the list to resume` });
+          }
+        }
+        if (runnable.length) itemsByName[name] = runnable;
+        if (unknown.length) {
+          for (const key of unknown) extraErrors.push({ type: 'scan_failed', title: name, message: `${NLME.jobKeyTitle(key)} could not be checked (the ${name.toLowerCase()} list looks incomplete; the page may still be loading); it stays in the list to resume` });
+        }
+        if (missing.length) {
+          missingByCategory[category] = missing;
+          for (const key of missing) extraErrors.push({ type: 'not_found', title: name, message: `${NLME.jobKeyTitle(key)} is no longer in the notebook` });
         }
       }
-      if (runnable.length) itemsByName[name] = runnable;
-      if (unknown.length) {
-        for (const key of unknown) extraErrors.push({ type: 'scan_failed', title: name, message: `${NLME.jobKeyTitle(key)} could not be checked (the ${name.toLowerCase()} list looks incomplete; the page may still be loading); it stays in the list to resume` });
-      }
-      if (missing.length) {
-        missingByCategory[category] = missing;
-        for (const key of missing) extraErrors.push({ type: 'not_found', title: name, message: `${NLME.jobKeyTitle(key)} is no longer in the notebook` });
-      }
+    } finally {
+      scanPanel.style.display = 'none';
     }
     if (chainCancelRequested) { showToast('Resume cancelled', 'info'); return; }
     await clearMissingFromRecord(live, missingByCategory);
