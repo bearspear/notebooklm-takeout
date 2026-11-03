@@ -446,7 +446,7 @@
     } else if (message.type === 'DELETE_STUDIO_ITEM') {
       // Resolve by label plus combined index (row delete: the title at that index
       // must match the label, otherwise the delete is refused) or by label alone
-      // (bulk delete). There is no index-only fallback.
+      // (bulk delete). When a label is given there is no index-only fallback.
       deleteStudioItem(message.data || {})
         .then(result => sendResponse(result))
         .catch(error => sendResponse({ success: false, error: error.message || 'Delete failed' }));

@@ -1517,7 +1517,7 @@ footer { margin-top: 3rem; }
   // the heading each lands under in _index.html
   const INDEX_KIND_GROUPS = ['Notes', 'Sources', 'Mind maps', 'Combined'];
   const INDEX_KIND_HEADINGS = {
-    note: 'Notes', source: 'Sources', mindmap: 'Mind maps', 'mind-map': 'Mind maps',
+    note: 'Notes', source: 'Sources', 'source-urls': 'Sources', mindmap: 'Mind maps', 'mind-map': 'Mind maps',
     'combined-notes': 'Combined', combined: 'Combined'
   };
 

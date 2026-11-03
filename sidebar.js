@@ -4349,11 +4349,12 @@ function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batch
       youtubeContent += `${idx + 1}. ${item.title}\n`;
       youtubeContent += `   ${item.url}\n\n`;
     });
-    files.push({ path: `${itemDir}youtube-urls.txt`, data: youtubeContent, title: 'YouTube Source URLs (formatted)' });
+    files.push({ path: `${itemDir}youtube-urls.txt`, data: youtubeContent, title: 'YouTube Source URLs (formatted)', itemKind: 'source-urls' });
     files.push({
       path: `${itemDir}youtube-urls.raw.txt`,
       data: youtubeUrls.map(item => item.url).join('\n') + '\n',
-      title: 'YouTube Source URLs (raw list)'
+      title: 'YouTube Source URLs (raw list)',
+      itemKind: 'source-urls'
     });
   }
 

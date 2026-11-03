@@ -947,6 +947,19 @@ test('buildIndexHtml groups flattened files by itemKind', () => {
   assert.match(NLME.buildIndexHtml({ meta, heading: 'T', files: [{ path: 'm.svg', itemKind: 'mind-map' }] }), /<h2>Mind maps<\/h2>/);
 });
 
+test('buildIndexHtml groups source-urls files with the sources', () => {
+  const meta = { notebook: 'NB', notebook_url: '', notebook_id: '', exporter: 'E', exported: 'T' };
+  const html = NLME.buildIndexHtml({ meta, heading: 'Sources', files: [
+    { path: 'sources/S.md', itemKind: 'source' },
+    { path: 'sources/youtube-urls.txt', itemKind: 'source-urls' },
+    { path: 'sources/youtube-urls.raw.txt', itemKind: 'source-urls' }
+  ] });
+  assert.equal((html.match(/<h2>/g) || []).length, 1);
+  assert.match(html, /<h2>Sources<\/h2>/);
+  assert.doesNotMatch(html, /<h2>sources<\/h2>/);
+  assert.match(html, /youtube-urls\.raw\.txt/);
+});
+
 test('buildIndexHtml reads sensibly for a tab export under notes/ and sources/', () => {
   const meta = { notebook: 'NB', notebook_url: '', notebook_id: '', exporter: 'E', exported: 'T' };
   const html = NLME.buildIndexHtml({ meta, heading: 'Notes', files: [

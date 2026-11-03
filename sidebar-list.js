@@ -35,6 +35,9 @@ async function pruneListStatesOnce(currentId) {
   } catch (_) { /* storage unavailable: old states stay */ }
 }
 
+// A restored state older than this gets its `at` refreshed
+const LIST_STATE_REFRESH_MS = 24 * 60 * 60 * 1000;
+
 function createListController({ tab, container, items, titleOf, typeOf, defaultSelected = 'none', rowHtml, onChange, canSelect }) {
   if (container._listController) container._listController.destroy();
 
@@ -320,6 +323,9 @@ function createListController({ tab, container, items, titleOf, typeOf, defaultS
     if (saved) {
       _listStates.set(stateKey(), saved); // a later redraw restores instantly instead of flashing the defaults
       applyState(saved);
+      // A notebook that is reopened often never ages out: refresh `at` through the
+      // throttled save, and only once the stored one is a day old (not on every redraw)
+      if (!(Date.now() - (Number(saved.at) || 0) < LIST_STATE_REFRESH_MS)) persist();
     } else if (guessApplied) {
       resetToDefaults(); // the previous notebook's filter is on screen
     }
