@@ -895,28 +895,110 @@ footer {
   display: block;
 }
 
-/* Note Items */
-.note-scan-item {
+/* List toolbar (filter / chips / sort / select visible), see sidebar-list.js */
+.list-row[hidden],
+.list-chips[hidden],
+.list-empty[hidden] {
+  display: none;
+}
+
+.list-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fff;
+  padding: 8px 0;
+  margin-bottom: 4px;
+  border-bottom: 1px solid #e8eaed;
+}
+
+.list-search {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid #dadce0;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.list-search:focus,
+.list-sort:focus {
+  outline: 2px solid #1a73e8;
+  outline-offset: 1px;
+}
+
+.list-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.chip {
+  padding: 3px 10px;
+  border: 1px solid #dadce0;
+  border-radius: 12px;
+  background: #fff;
+  color: #3c4043;
+  font-size: 12px;
   cursor: pointer;
-  transition: all 0.15s ease;
 }
 
-.note-scan-item:hover {
-  background: #e8f0fe !important;
+.chip:hover {
+  background: #f1f3f4;
 }
 
-.note-scan-item.selected {
-  background: #d2e3fc !important;
-  border-left: 3px solid #1a73e8;
-  padding-left: 9px;
+.chip[aria-pressed="true"] {
+  background: #d2e3fc;
+  border-color: #1a73e8;
+  color: #174ea6;
 }
 
-.note-scan-item.selected .scan-item-icon svg {
-  fill: #1558d6;
+.chip:focus-visible {
+  outline: 2px solid #1a73e8;
+  outline-offset: 1px;
 }
 
-.note-scan-item .scan-item-icon {
-  margin-right: 8px;
+.list-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.list-select-visible-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: #5f6368;
+}
+
+.list-sort {
+  padding: 3px 6px;
+  border: 1px solid #dadce0;
+  border-radius: 6px;
+  font-size: 12px;
+  background: #fff;
+}
+
+.list-summary {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #5f6368;
+}
+
+.list-row {
+  cursor: pointer;
+}
+
+.list-row .row-check {
+  flex-shrink: 0;
+}
+
+.list-row .scan-item-icon {
+  margin-right: 0;
 }
 
 /* Select All */

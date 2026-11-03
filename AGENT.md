@@ -1079,6 +1079,44 @@ The `notifications` permission was removed in 1.4.0: nothing used `chrome.notifi
 `settings.showNotifications` stays and only gates the success toast of a single artifact
 download (`triggerItemDownload`); it is not a system notification.
 
+## Milestone 3b contracts (v1.5.0)
+
+### List controller (`sidebar-list.js`)
+
+Script order is now `jszip`, `turndown`, `takeout-shared.js`, `takeout-job.js`,
+`sidebar-list.js`, `sidebar.js`, `sidebar-takeout.js`. `sidebar-list.js` is DOM only; its pure
+logic is `NLME.listItemKeys / listView / pruneSelection / listSummary / listStateKey /
+restoreListState` in `takeout-shared.js` (unit tested).
+
+`createListController({ tab, container, items, titleOf, typeOf, defaultSelected, rowHtml,
+onChange, canSelect }) -> { items, selectedItems(), selectedCount(), destroy() }`
+
+- `tab` is `'artifacts'|'notes'|'sources'|'studio'`. `container` is the results element and the
+  controller owns its contents (put action buttons outside it). A second controller on the same
+  container destroys the first.
+- Toolbar: search box, type chips (only with 2+ types), sort select, "Select all visible"
+  checkbox (indeterminate when partial), summary line. Rows are
+  `<div class="list-row scan-item" data-key data-index>` with a leading `.row-check`, then
+  `rowHtml(item, index)` (escape page-derived strings there). Hidden rows get `hidden` (CSS
+  must keep `.list-row[hidden]` at `display: none`); row nodes are reordered to match the sort.
+- A click on a row anywhere except a button, input, select, link or label toggles its checkbox.
+  Row action buttons need no `stopPropagation`.
+- Rows hidden by the filter are deselected (`NLME.pruneSelection`), so `selectedItems()` (visible
+  order) never contains a hidden item. `canSelect(item)` false gives a disabled checkbox, a
+  `disabled` row and exclusion from "Select all visible".
+- `onChange(controller)` runs on construction and after every filter or selection change. The
+  controller is passed in because the return value does not exist yet during construction.
+- `data-key` is set through the DOM, not innerHTML: keys contain a NUL, which the HTML parser
+  would replace. Look rows up by `data-index`.
+- State: restored through `NLME.restoreListState`; kept in the module-level `_listStates` Map
+  (instant redraws) and in `chrome.storage.local["nlme.list.<notebookId>.<tab>"]` as
+  `{ query, types, sort, selected: [keys] }`, saved 300 ms after the last change (and on
+  `destroy()`). `notebookId` comes from the active tab's URL; when empty nothing is stored.
+  Stored state is applied after the async read only if the user has not touched the list yet.
+- The Notes tab (`renderNotesList`) is the reference port: `defaultSelected: 'none'`, a
+  `.notes-list` container beside the `.export-controls`, and the row export button calls
+  `handleNoteRowExport` -> `exportSingleNote` (loose `.md` files, no ZIP) under `runExclusive`.
+
 ## Known issues and latent bugs
 
 These are deliberate non-fixes or known limitations. Don't "fix" them without checking the

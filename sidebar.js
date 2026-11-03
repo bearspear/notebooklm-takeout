@@ -1409,10 +1409,32 @@ async function scanNotesPage() {
   }
 }
 
-// Render notes list with checkboxes
+// The Notes tab's list controller (sidebar-list.js); replaced on every redraw
+let _notesListController = null;
+
+// Single-note export from a row button: loose .md files, no ZIP
+async function handleNoteRowExport(note) {
+  // JOB_BUSY: runExclusive has already shown the "still running" toast
+  await runExclusive('Note export', async () => {
+    try {
+      await exportSingleNote(note);
+      showToast(`Exported "${note.title}"`, 'success');
+    } catch (error) {
+      console.error('[NotebookLM Takeout] Note export failed:', error);
+      showToast(`✗ Failed to export ${note.title}: ${error.message || error}`, 'error');
+    }
+  });
+}
+
+// Render notes list with filter toolbar and checkboxes
 function renderNotesList(notes) {
   const notesResults = document.getElementById('notes-results');
   const noteCount = document.getElementById('note-count');
+
+  if (_notesListController) {
+    _notesListController.destroy();
+    _notesListController = null;
+  }
 
   if (notes.length === 0) {
     notesResults.innerHTML = '<p class="empty-message">No notes found. Add source materials to your notebook.</p>';
@@ -1423,28 +1445,31 @@ function renderNotesList(notes) {
   noteCount.textContent = notes.length;
 
   notesResults.innerHTML = `
-    <div class="select-all-container">
-      <label>
-        <input type="checkbox" id="select-all-notes">
-        <span>Select All (${notes.length})</span>
-      </label>
+    <div class="notes-list"></div>
+    <div class="export-controls">
+      <button id="export-notes-btn" class="btn btn-primary">
+        Export Selected Notes
+      </button>
     </div>
-    ${notes.map((note, idx) => {
-      // Choose icon based on note type
-      const isMindmap = note.type === 'Mindmap';
+  `;
+  const listEl = notesResults.querySelector('.notes-list');
+  const exportBtn = document.getElementById('export-notes-btn');
 
-      let iconColor = '#1a73e8'; // Default: blue for notes
-      if (isMindmap) iconColor = '#ea4335'; // Red for mindmaps
+  const rowHtml = (note, idx) => {
+    // Choose icon based on note type
+    const isMindmap = note.type === 'Mindmap';
 
-      let iconPath;
-      if (isMindmap) {
-        iconPath = 'M14 2l6 6v12c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h8zm-1 2H6v16h12V9h-5V4zM12 11c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm-5 4h2.5c-.3-.6-.5-1.3-.5-2s.2-1.4.5-2H7v4zm8.5 0H18v-4h-2.5c.3.6.5 1.3.5 2s-.2 1.4-.5 2z';
-      } else {
-        iconPath = 'M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z';
-      }
+    let iconColor = '#1a73e8'; // Default: blue for notes
+    if (isMindmap) iconColor = '#ea4335'; // Red for mindmaps
 
-      return `
-      <div class="scan-item note-scan-item" data-index="${idx}">
+    let iconPath;
+    if (isMindmap) {
+      iconPath = 'M14 2l6 6v12c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h8zm-1 2H6v16h12V9h-5V4zM12 11c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm-5 4h2.5c-.3-.6-.5-1.3-.5-2s.2-1.4.5-2H7v4zm8.5 0H18v-4h-2.5c.3.6.5 1.3.5 2s-.2 1.4-.5 2z';
+    } else {
+      iconPath = 'M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z';
+    }
+
+    return `
         <div class="scan-item-icon">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="${iconColor}">
             <path d="${iconPath}"/>
@@ -1459,79 +1484,35 @@ function renderNotesList(notes) {
             <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
           </svg>
         </button>
-      </div>
       `;
-    }).join('')}
-    <div class="export-controls">
-      <button id="export-notes-btn" class="btn btn-primary">
-        Export Selected Notes
-      </button>
-    </div>
-  `;
+  };
 
-  // Setup Select All functionality
-  const selectAllCheckbox = document.getElementById('select-all-notes');
-  const noteItems = document.querySelectorAll('.note-scan-item');
-
-  selectAllCheckbox.addEventListener('change', (e) => {
-    noteItems.forEach(item => {
-      if (e.target.checked) {
-        item.classList.add('selected');
-      } else {
-        item.classList.remove('selected');
-      }
-    });
-    updateSelectAllLabel();
-  });
-
-  // Make note items selectable by clicking
-  noteItems.forEach(item => {
-    item.addEventListener('click', (e) => {
-      // Don't toggle if clicking the download button
-      if (e.target.closest('.note-download-btn')) {
-        return;
-      }
-
-      item.classList.toggle('selected');
-      updateSelectAllLabel();
-    });
-  });
-
-  function updateSelectAllLabel() {
-    const selectedCount = document.querySelectorAll('.note-scan-item.selected').length;
-    const label = selectAllCheckbox.nextElementSibling;
-
-    // Update checkbox state
-    if (selectedCount === 0) {
-      selectAllCheckbox.checked = false;
-      selectAllCheckbox.indeterminate = false;
-    } else if (selectedCount === notes.length) {
-      selectAllCheckbox.checked = true;
-      selectAllCheckbox.indeterminate = false;
-    } else {
-      selectAllCheckbox.checked = false;
-      selectAllCheckbox.indeterminate = true;
+  _notesListController = createListController({
+    tab: 'notes',
+    container: listEl,
+    items: notes,
+    titleOf: note => note.title,
+    typeOf: note => note.type,
+    defaultSelected: 'none',
+    rowHtml,
+    onChange: controller => {
+      const n = controller.selectedCount();
+      exportBtn.textContent = n > 0 ? `Export Selected Notes (${n})` : 'Export Selected Notes';
     }
+  });
 
-    label.textContent = selectedCount > 0
-      ? `Selected (${selectedCount}/${notes.length})`
-      : `Select All (${notes.length})`;
-  }
-
-  // Setup individual download buttons
-  document.querySelectorAll('.note-download-btn').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const idx = parseInt(btn.dataset.index);
-      const note = notes[idx];
-      await runExclusive('Notes export', () => exportNotesAsMarkdown([note]));
-    });
+  // Row export buttons (the list controller ignores clicks on buttons, so they never toggle the row)
+  listEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('.note-download-btn');
+    if (!btn) return;
+    e.stopPropagation();
+    const note = notes[parseInt(btn.dataset.index, 10)];
+    if (note) handleNoteRowExport(note);
   });
 
   // Setup export button
-  document.getElementById('export-notes-btn').addEventListener('click', async () => {
-    const selectedItems = Array.from(document.querySelectorAll('.note-scan-item.selected'));
-    const selected = selectedItems.map(item => notes[parseInt(item.dataset.index)]);
+  exportBtn.addEventListener('click', async () => {
+    const selected = _notesListController.selectedItems();
 
     if (selected.length === 0) {
       showToast('Please select at least one note', 'error');
