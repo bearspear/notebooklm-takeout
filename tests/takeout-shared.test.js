@@ -779,6 +779,15 @@ test('buildRootIndexHtml links each category\'s index', () => {
   assert.match(html, /href="_index\.md"/);
 });
 
+test('buildRootIndexHtml links part-1 when a multi-batch category wrote only its first batch', () => {
+  const meta = { notebook: 'New Math', notebook_url: '', notebook_id: '', exporter: 'E', exported: 'T' };
+  const html = NLME.buildRootIndexHtml({ meta, categories: [
+    { name: 'Notes', folder: 'notes', status: 'partial', selected: 60, exported: 20, failed: 0, zips: ['b.zip'], parts: 1 }
+  ] });
+  assert.match(html, /href="notes\/part-1\/_index\.html"/);
+  assert.doesNotMatch(html, /href="notes\/_index\.html"/);
+});
+
 test('prefixExportErrors puts the category in front of every error and keeps its type', () => {
   const errors = NLME.prefixExportErrors('Notes', [
     '[Algebra] Failed to extract: timeout',

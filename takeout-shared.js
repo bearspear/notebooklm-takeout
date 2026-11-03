@@ -1026,7 +1026,7 @@ footer { margin-top: 3rem; }
   }
 
   // Root _index.html of a Full Takeout. A category written in several
-  // batches (c.parts > 1) links each part-N/ folder.
+  // batches (c.parts >= 1; 0 = no part-N/ folders) links each part-N/ folder.
   function buildRootIndexHtml({ meta, categories = [], errorsFile = null } = {}) {
     let body = indexHtmlLinks([
       { href: '_index.md', label: 'Markdown index' },
@@ -1038,7 +1038,7 @@ footer { margin-top: 3rem; }
       // Nothing written (empty, skipped, scan failed): no folder to link
       if (c.exported > 0 || (c.zips || []).length > 0) {
         const dir = encodePath(c.folder);
-        folder = c.parts > 1
+        folder = c.parts >= 1
           ? Array.from({ length: c.parts }, (_, i) => `<a href="${dir}/part-${i + 1}/_index.html">part-${i + 1}</a>`).join(' · ')
           : `<a href="${dir}/_index.html">${escapeHtml(c.folder)}/</a>`;
       }
