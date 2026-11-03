@@ -123,3 +123,25 @@ test('runExportJob errors-only call after a skipped batch uses the ending batch 
     [calls[1].results, calls[1].batchIndex, calls[1].totalBatches, calls[1].isLast, calls[1].errorsOnly, calls[1].errors],
     [[], 3, 3, true, true, ['[N1] boom', '[N2] boom', '[N5] boom']]);
 });
+
+test('runExportJob puts seedErrors ahead of item errors', async () => {
+  const calls = [];
+  await NLME.runExportJob({ kind: 'messages', items: [{ title: 'Q1' }], seedErrors: ['2 messages skipped'],
+    extractOne: async () => { throw new Error('x'); }, packageBatch: async (r, info) => calls.push(info.errors), isCancelled: () => false });
+  assert.deepEqual(calls[0], ['2 messages skipped', '[Q1] x']);
+});
+
+test('runExportJob delivers seedErrors with the last batch when every item succeeds', async () => {
+  const calls = [];
+  const seedErrors = ['2 messages skipped'];
+  const result = await NLME.runExportJob({ kind: 'messages', items: [{ title: 'Q1' }, { title: 'Q2' }], perZip: 1, seedErrors,
+    extractOne: async item => item.title,
+    packageBatch: async (r, info) => calls.push({ r, errors: info.errors, isLast: info.isLast, errorsOnly: info.errorsOnly }),
+    isCancelled: () => false });
+  assert.deepEqual(calls, [
+    { r: ['Q1'], errors: [], isLast: false, errorsOnly: false },
+    { r: ['Q2'], errors: ['2 messages skipped'], isLast: true, errorsOnly: false }
+  ]);
+  assert.deepEqual(result.errors, ['2 messages skipped']);
+  assert.deepEqual(seedErrors, ['2 messages skipped'], 'the caller array is not mutated');
+});

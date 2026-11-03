@@ -4134,7 +4134,7 @@ function renderChatSummary(chatData) {
   const pairsInDom = chatStatsInfo.pairsInDom ?? chatData.messagePairs.length;
   html += `<div class="summary-stat"><strong>${chatData.messagePairs.length} of ${pairsInDom}</strong> messages</div>`;
   if (chatData.messagePairs.length < pairsInDom || chatStatsInfo.collapsedRemaining > 0) {
-    html += `<div class="summary-stat warning">${pairsInDom - chatData.messagePairs.length} message(s) could not be read; ${chatStatsInfo.collapsedRemaining || 0} citation group(s) still collapsed. They are listed in errors.txt after export.</div>`;
+    html += `<div class="summary-stat warning">${pairsInDom - chatData.messagePairs.length} message(s) could not be read; ${chatStatsInfo.collapsedRemaining || 0} citation group(s) still collapsed. They are listed in errors.md after export.</div>`;
   }
   html += `<div class="summary-stat"><strong>${chatData.notebookTitle}</strong></div>`;
 
@@ -4175,9 +4175,8 @@ function renderChatSummary(chatData) {
   });
 }
 
-/**
- * Export chat as markdown file
- */
+// Chat export (Milestone 3a): the shared export shell around the shared job
+// runner. One package: a single Markdown file, or a ZIP from buildChatFiles.
 async function exportChat(chatData, extractFullCitations = false) {
   startExportTiming();
   {
@@ -4187,449 +4186,397 @@ async function exportChat(chatData, extractFullCitations = false) {
   exportTimer.merge(lastChatScanTiming);
   console.log('[NotebookLM Takeout] Starting chat export...');
 
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  await withExportShell({ label: 'chat', overlayMessage: 'Preparing to export chat...' }, async shell => {
+    const messagePairs = chatData.messagePairs;
+    // Scan completeness (Milestone 2, Resilience #2): known before the job
+    // starts, so they lead errors.md
+    const seedErrors = (chatData.stats?.skipped || [])
+      .map(skippedMessage => ({ type: 'message_skipped', message: skippedMessage }));
+    if (chatData.stats?.collapsedRemaining > 0) {
+      seedErrors.push({ type: 'collapsed_citations', message: `${chatData.stats.collapsedRemaining} citation group(s) were still collapsed after the scan; their citations are missing` });
+    }
+    let auditDoc = null;
 
-  // Show overlay on the page
-  await chrome.tabs.sendMessage(tab.id, {
-    type: 'SHOW_EXPORT_OVERLAY',
-    message: 'Preparing to export chat...'
+    console.log('[NotebookLM Takeout] Processing messages and extracting citations...');
+    const result = await NLME.runExportJob({
+      kind: 'messages',
+      items: messagePairs,
+      perZip: Infinity,
+      seedErrors,
+      extractOne: (pair, ctx) => extractChatPair(shell, pair, ctx, { extractFullCitations, total: messagePairs.length }),
+      packageBatch: async (messages, info) => {
+        console.log(`[NotebookLM Takeout] Processing complete: ${messages.length} messages`);
+        shell.progress('Creating export...', 1);
+        auditDoc = buildChatAuditDoc(chatData, messages, !!extractFullCitations);
+        const { files, single } = buildChatFiles(messages, {
+          meta: shell.meta,
+          chatData,
+          errors: info.errors,
+          auditDoc,
+          partial: info.partial
+        });
+        if (single) {
+          // Today's download name for the single file
+          await saveFiles([{ ...single, path: `${sanitizeFilename(shell.projectName)}-chat-${shell.timestamp}.md` }]);
+        } else {
+          await saveFiles(files, {
+            zipName: NLME.zipName({
+              notebook: shell.projectName,
+              kind: 'chat',
+              timestamp: shell.timestamp,
+              partial: info.partial
+            })
+          });
+        }
+      },
+      isCancelled: shell.isCancelled,
+      onProgress: ({ done, total }) => {
+        shell.progress(`Processing message ${done + 1}/${total}`, (done + 1) / total);
+        console.log(`[NotebookLM Takeout] Message ${done + 1}: Processing...`);
+      }
+    });
+
+    const auditOk = auditDoc ? auditDoc.ok : true;
+    if (!result.cancelled && result.errors.length > 0) {
+      // Citation problems leave every message exported, so the shell's toast
+      // would read as a clean success; name the errors
+      const outcome = NLME.summarizeExportOutcome({
+        kind: 'messages', selected: messagePairs.length, exported: result.exported, failed: result.failed
+      });
+      showToast(`${outcome.message} (${result.errors.length} citation error(s), see errors.md)${auditOk ? '' : ' — some content is missing, see _audit.md'}`,
+        outcome.level === 'error' ? 'error' : 'warning');
+    } else {
+      shell.finish({ kind: 'messages', selected: messagePairs.length, result, auditOk });
+    }
+  });
+}
+
+/**
+ * Extract one message pair for the job runner: the citation markers in the
+ * answer, and (full-citation mode) each source's quote via
+ * EXTRACT_MESSAGE_CITATIONS. Never throws: citation and processing errors go
+ * to ctx.warn as { message, messageIndex, userQuestion, type[, stack] } and
+ * the message is kept (without citations when processing failed).
+ *
+ * @param {object} shell withExportShell's shell (tab, progress)
+ * @param {{userMessage: string, aiResponseHTML: string, date?: string, domIndex?: number}} pair
+ * @param {{index: number, warn: Function}} ctx
+ * @param {{ extractFullCitations?: boolean, total: number }} options
+ *   total: message pairs in the job (progress text)
+ * @returns {Promise<object>} ProcessedMessage: { date, userMessage,
+ *   aiResponseHTML, sources: [{ sourceIndex, text, quote }], fullCitations,
+ *   stats: { hasCitations, citationsFound, successfulExtractions, failedExtractions } }
+ */
+async function extractChatPair(shell, pair, ctx, { extractFullCitations = false, total }) {
+  const n = ctx.index + 1;
+  const stats = { hasCitations: false, citationsFound: 0, successfulExtractions: 0, failedExtractions: 0 };
+  const message = sources => ({
+    date: pair.date,
+    userMessage: pair.userMessage,
+    aiResponseHTML: pair.aiResponseHTML,
+    sources,
+    fullCitations: !!extractFullCitations,
+    stats
+  });
+  const warn = (type, msg, extra = {}) => ctx.warn({
+    message: msg,
+    messageIndex: n,
+    userQuestion: (pair.userMessage || '').substring(0, 100),
+    type,
+    ...extra
   });
 
-  // Show progress panel in sidebar
-  const progressPanel = document.getElementById('download-progress');
-  const progressFill = document.getElementById('progress-fill');
-  const progressText = document.getElementById('progress-text');
-
-  progressPanel.style.display = 'block';
-  progressText.textContent = 'Exporting chat...';
-  progressFill.style.width = '0%';
-
-  let cancelled = false;
-  let cancelNoted = false;
-  let processedCount = 0;
-  // One truthful end-of-export toast (cancel no longer overwritten by success)
-  const showChatOutcome = (errorCount, auditOk = true) => {
-    const outcome = NLME.summarizeExportOutcome({
-      kind: 'messages',
-      selected: chatData.messagePairs.length,
-      exported: processedCount,
-      failed: 0,
-      cancelled
-    });
-    let extra = !cancelled && errorCount > 0 ? ` (${errorCount} citation error(s), see errors.txt)` : '';
-    if (!auditOk) extra += ' — some content is missing, see _audit.md';
-    showToast(outcome.message + extra, extra ? 'warning' : outcome.level);
-  };
-
-  // Listen for cancellation
-  const cancelListener = (message) => {
-    if (message.type === 'CANCEL_EXPORT') {
-      cancelled = true;
-    }
-  };
-  chrome.runtime.onMessage.addListener(cancelListener);
-
   try {
-    const messagePairs = chatData.messagePairs;
-    const processedMessages = [];
-    const allErrors = [];
-    // Scan completeness (Milestone 2, Resilience #2)
-    for (const skippedMessage of (chatData.stats?.skipped || [])) {
-      allErrors.push({ type: 'message_skipped', message: skippedMessage });
-    }
-    if (chatData.stats?.collapsedRemaining > 0) {
-      allErrors.push({ type: 'collapsed_citations', message: `${chatData.stats.collapsedRemaining} citation group(s) were still collapsed after the scan; their citations are missing` });
-    }
+    // Extract citation buttons from HTML
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = pair.aiResponseHTML;
+    const citationButtons = tempDiv.querySelectorAll('button.citation-marker');
 
-    // Track statistics for detailed error reporting
-    const stats = {
-      totalMessages: messagePairs.length,
-      messagesWithCitations: 0,
-      totalCitationsFound: 0,
-      totalCitationsExtracted: 0,
-      successfulExtractions: 0,
-      failedExtractions: 0,
-      extractFullCitations: extractFullCitations
-    };
+    console.log(`[NotebookLM Takeout] Message ${n}: Found ${citationButtons.length} citation buttons`);
 
-    // Process each message and extract per-message citations
-    console.log('[NotebookLM Takeout] Processing messages and extracting citations...');
+    // Build sources map for this message
+    const messageSources = new Map(); // sourceIndex -> {text, quote}
 
-    for (let i = 0; i < messagePairs.length; i++) {
-      if (cancelled) {
-        console.log('[NotebookLM Takeout] Export cancelled by user');
-        if (!cancelNoted) {
-          cancelNoted = true;
-          allErrors.push(NLME.cancellationNote({ kind: 'messages', done: processedCount, total: chatData.messagePairs.length }));
+    if (citationButtons.length > 0) {
+      stats.hasCitations = true;
+      // Count numbered citations only, not the expand/collapse group buttons
+      stats.citationsFound = Array.from(citationButtons)
+        .filter(b => NLME.parseCitationIndex(b.querySelector('span')?.textContent)).length;
+      citationButtons.forEach((button) => {
+        const span = button.querySelector('span');
+        const sourceIndex = span?.textContent?.trim();
+        const ariaLabel = span?.getAttribute('aria-label');
+
+        // Skip invalid source indices
+        if (!sourceIndex ||
+            sourceIndex === '...' ||
+            messageSources.has(sourceIndex) ||
+            sourceIndex.includes('<') ||
+            sourceIndex.includes('>') ||
+            !/^[0-9]+$/.test(sourceIndex)) {
+          if (sourceIndex && sourceIndex !== '...') {
+            console.warn(`[NotebookLM Takeout] Message ${n}: Skipping invalid sourceIndex "${sourceIndex}"`);
+          }
+          return;
         }
-        break;
-      }
 
-      const pair = messagePairs[i];
-      processedCount++;
-      const progress = ((i + 1) / messagePairs.length) * 100;
+        // Parse aria-label to extract source title
+        let sourceTitle = `Source ${sourceIndex}`;
+        if (ariaLabel && ariaLabel.includes(':')) {
+          const parts = ariaLabel.split(':');
+          if (parts.length >= 2) {
+            sourceTitle = parts.slice(1).join(':').trim();
+          }
+        }
 
-      // Update progress
-      progressFill.style.width = `${progress}%`;
-      progressText.textContent = `Processing message ${i + 1}/${messagePairs.length}`;
+        messageSources.set(sourceIndex, {
+          text: sourceTitle,
+          quote: ''
+        });
 
-      chrome.tabs.sendMessage(tab.id, {
-        type: 'UPDATE_EXPORT_OVERLAY',
-        message: `Processing message ${i + 1}/${messagePairs.length}`,
-        progress: progress
-      }).catch(() => {}); // overlay is cosmetic; never abort the job
+        console.log(`[NotebookLM Takeout] Message ${n}, source ${sourceIndex}: "${sourceTitle}"`);
+      });
+    }
 
-      console.log(`[NotebookLM Takeout] Message ${i + 1}: Processing...`);
+    // Extract full citation details if enabled
+    if (extractFullCitations && messageSources.size > 0) {
+      console.log(`[NotebookLM Takeout] Message ${n}: Extracting full citation details for ${messageSources.size} sources...`);
+      shell.progress(`Message ${n}/${total}: Extracting ${messageSources.size} quotes (this may take a minute)...`, n / total);
 
       try {
-        // Extract citation buttons from HTML
-        const tempDiv = document.createElement('div');
-        tempDiv.innerHTML = pair.aiResponseHTML;
-        const citationButtons = tempDiv.querySelectorAll('button.citation-marker');
+        // Get source indices to extract
+        const sourceIndices = Array.from(messageSources.keys());
+        console.log(`[NotebookLM Takeout] Message ${n}: Extracting sourceIndices:`, sourceIndices);
 
-        console.log(`[NotebookLM Takeout] Message ${i + 1}: Found ${citationButtons.length} citation buttons`);
+        // Call content script to extract citations by temporarily inserting HTML
+        exportTimer?.start('chat.citations');
+        const fullCitationData = await chrome.tabs.sendMessage(shell.tab.id, {
+          type: 'EXTRACT_MESSAGE_CITATIONS',
+          data: {
+            messageIndex: pair.domIndex ?? ctx.index,
+            messageHTML: pair.aiResponseHTML,
+            sourceIndices: sourceIndices,
+            includeCitationImages: !!settings.exportNoteWithImages
+          }
+        });
 
-        // Build sources map for this message
-        const messageSources = new Map(); // sourceIndex -> {text, quote}
+        console.log(`[NotebookLM Takeout] Message ${n}: Received citation data:`, fullCitationData);
+        exportTimer?.end('chat.citations');
+        mergeTiming(fullCitationData);
 
-        if (citationButtons.length > 0) {
-          stats.messagesWithCitations++;
-          // Count numbered citations only, not the expand/collapse group buttons
-          stats.totalCitationsFound += Array.from(citationButtons)
-            .filter(b => NLME.parseCitationIndex(b.querySelector('span')?.textContent)).length;
-          citationButtons.forEach((button) => {
-            const span = button.querySelector('span');
-            const sourceIndex = span?.textContent?.trim();
-            const ariaLabel = span?.getAttribute('aria-label');
-
-            // Skip invalid source indices
-            if (!sourceIndex ||
-                sourceIndex === '...' ||
-                messageSources.has(sourceIndex) ||
-                sourceIndex.includes('<') ||
-                sourceIndex.includes('>') ||
-                !/^[0-9]+$/.test(sourceIndex)) {
-              if (sourceIndex && sourceIndex !== '...') {
-                console.warn(`[NotebookLM Takeout] Message ${i + 1}: Skipping invalid sourceIndex "${sourceIndex}"`);
-              }
-              return;
+        // Merge quotes into messageSources
+        if (fullCitationData && fullCitationData.sourcesByIndex) {
+          messageSources.forEach((source, sourceIndex) => {
+            const fullData = fullCitationData.sourcesByIndex[sourceIndex];
+            if (fullData) {
+              source.text = fullData.text || source.text;
+              source.quote = fullData.quote || '';
+              stats.successfulExtractions++;
+              console.log(`[NotebookLM Takeout] Message ${n}, source ${sourceIndex}: Updated with quote (${source.quote.length} chars)`);
+            } else {
+              stats.failedExtractions++;
             }
-
-            // Parse aria-label to extract source title
-            let sourceTitle = `Source ${sourceIndex}`;
-            if (ariaLabel && ariaLabel.includes(':')) {
-              const parts = ariaLabel.split(':');
-              if (parts.length >= 2) {
-                sourceTitle = parts.slice(1).join(':').trim();
-              }
-            }
-
-            messageSources.set(sourceIndex, {
-              text: sourceTitle,
-              quote: ''
-            });
-
-            console.log(`[NotebookLM Takeout] Message ${i + 1}, source ${sourceIndex}: "${sourceTitle}"`);
           });
         }
 
-        // Extract full citation details if enabled
-        if (extractFullCitations && messageSources.size > 0) {
-          console.log(`[NotebookLM Takeout] Message ${i + 1}: Extracting full citation details for ${messageSources.size} sources...`);
-
-          // Update progress to show we're extracting quotes
-          const extractProgress = ((i + 1) / messagePairs.length) * 100;
-          progressFill.style.width = `${extractProgress}%`;
-          progressText.textContent = `Message ${i + 1}/${messagePairs.length}: Extracting ${messageSources.size} quotes...`;
-
-          chrome.tabs.sendMessage(tab.id, {
-            type: 'UPDATE_EXPORT_OVERLAY',
-            message: `Message ${i + 1}/${messagePairs.length}: Extracting ${messageSources.size} quotes (this may take a minute)...`,
-            progress: extractProgress
-          }).catch(() => {}); // overlay is cosmetic; never abort the job
-
-          try {
-            // Get source indices to extract
-            const sourceIndices = Array.from(messageSources.keys());
-            console.log(`[NotebookLM Takeout] Message ${i + 1}: Extracting sourceIndices:`, sourceIndices);
-
-            // Call content script to extract citations by temporarily inserting HTML
-            exportTimer?.start('chat.citations');
-            const fullCitationData = await chrome.tabs.sendMessage(tab.id, {
-              type: 'EXTRACT_MESSAGE_CITATIONS',
-              data: {
-                messageIndex: pair.domIndex ?? i,
-                messageHTML: pair.aiResponseHTML,
-                sourceIndices: sourceIndices,
-                includeCitationImages: !!settings.exportNoteWithImages
-              }
-            });
-
-            console.log(`[NotebookLM Takeout] Message ${i + 1}: Received citation data:`, fullCitationData);
-            exportTimer?.end('chat.citations');
-            mergeTiming(fullCitationData);
-
-            // Merge quotes into messageSources
-            if (fullCitationData && fullCitationData.sourcesByIndex) {
-              messageSources.forEach((source, sourceIndex) => {
-                const fullData = fullCitationData.sourcesByIndex[sourceIndex];
-                if (fullData) {
-                  source.text = fullData.text || source.text;
-                  source.quote = fullData.quote || '';
-                  stats.successfulExtractions++;
-                  console.log(`[NotebookLM Takeout] Message ${i + 1}, source ${sourceIndex}: Updated with quote (${source.quote.length} chars)`);
-                } else {
-                  stats.failedExtractions++;
-                }
-              });
-            }
-
-            // Track any errors
-            if (fullCitationData && fullCitationData.errors && fullCitationData.errors.length > 0) {
-              stats.failedExtractions += fullCitationData.errors.length;
-              fullCitationData.errors.forEach(err => {
-                allErrors.push({
-                  message: err,
-                  messageIndex: i + 1,
-                  userQuestion: pair.userMessage.substring(0, 100),
-                  type: 'citation_extraction'
-                });
-              });
-            }
-          } catch (error) {
-            console.error(`[NotebookLM Takeout] Message ${i + 1}: Error extracting full citations:`, error);
-            stats.failedExtractions += messageSources.size;
-            allErrors.push({
-              message: `Failed to extract full citations: ${error.message}`,
-              messageIndex: i + 1,
-              userQuestion: pair.userMessage.substring(0, 100),
-              type: 'extraction_error',
-              stack: error.stack
-            });
-          }
+        // Track any errors
+        if (fullCitationData && fullCitationData.errors && fullCitationData.errors.length > 0) {
+          stats.failedExtractions += fullCitationData.errors.length;
+          fullCitationData.errors.forEach(err => warn('citation_extraction', err));
         }
-
-        // Convert sources map to array, sorted by sourceIndex
-        const sourcesArray = Array.from(messageSources.entries())
-          .sort((a, b) => {
-            const aNum = parseInt(a[0]) || 0;
-            const bNum = parseInt(b[0]) || 0;
-            return aNum - bNum;
-          })
-          .map(([sourceIndex, source]) => ({
-            sourceIndex: sourceIndex,
-            text: source.text,
-            quote: source.quote
-          }));
-
-        stats.totalCitationsExtracted += sourcesArray.length;
-
-        // Store processed message WITH its sources
-        processedMessages.push({
-          date: pair.date,
-          userMessage: pair.userMessage,
-          aiResponseHTML: pair.aiResponseHTML,
-          sources: sourcesArray // Include sources for this message
-        });
-
       } catch (error) {
-        console.error(`[NotebookLM Takeout] Error processing message ${i + 1}:`, error);
-        allErrors.push({
-          message: error.message,
-          messageIndex: i + 1,
-          userQuestion: pair.userMessage.substring(0, 100),
-          type: 'message_processing_error',
-          stack: error.stack
-        });
-
-        // Include message without citations
-        processedMessages.push({
-          date: pair.date,
-          userMessage: pair.userMessage,
-          aiResponseHTML: pair.aiResponseHTML,
-          sources: []
-        });
+        console.error(`[NotebookLM Takeout] Message ${n}: Error extracting full citations:`, error);
+        stats.failedExtractions += messageSources.size;
+        warn('extraction_error', `Failed to extract full citations: ${error.message}`, { stack: error.stack });
       }
-
-      // No pacing sleep between messages (Milestone 1): citations are read
-      // from the page, not fetched
     }
 
-    console.log(`[NotebookLM Takeout] Processing complete: ${processedMessages.length} messages`);
+    // Sources sorted by sourceIndex
+    const sourcesArray = Array.from(messageSources.entries())
+      .sort((a, b) => (parseInt(a[0]) || 0) - (parseInt(b[0]) || 0))
+      .map(([sourceIndex, source]) => ({
+        sourceIndex: sourceIndex,
+        text: source.text,
+        quote: source.quote
+      }));
 
-    // Generate all permutations based on settings (cumulative approach)
-    const timestamp = NLME.exportTimestamp();
-    const baseFilename = `${sanitizeFilename(chatData.notebookTitle)}-chat-${timestamp}`;
+    // No pacing sleep between messages (Milestone 1): citations are read
+    // from the page, not fetched
+    return message(sourcesArray);
+  } catch (error) {
+    console.error(`[NotebookLM Takeout] Error processing message ${n}:`, error);
+    warn('message_processing_error', error.message, { stack: error.stack });
+    // Keep the message, without citations
+    return message([]);
+  }
+}
 
-    // Versions (NLME.noteVariants): base always; code blocks only when some
-    // answer has quotes; with-images only when the Markdown has images
-    const chatAudit = newAudit();
-    chatAudit.expected.items = chatData.stats?.pairsInDom ?? chatData.messagePairs.length;
-    chatAudit.written.items = processedMessages.length;
-    const chatHtml = chatData.messagePairs.map(p => p.aiResponseHTML || '').join('\n');
-    // Citations per answer: numbers restart in every answer
-    chatData.messagePairs.forEach((pair, i) => {
-      const processed = processedMessages[i];
-      addCitationCoverage(chatAudit, pair.aiResponseHTML, processed ? processed.sources : [], !!extractFullCitations);
-    });
-    const baseMarkdown = convertCounted(chatAudit, chatHtml, () => convertChatToMarkdown(
-      chatData.notebookTitle,
-      chatData.notebookSummary,
-      processedMessages,
-      false
-    ));
-    const chatAuditDoc = auditMarkdown('Chat Export', chatAudit);
-    const chatHasQuotes = processedMessages.some(m => (m.sources || []).some(src => src.quote && src.quote.trim()));
-    const chatHasImages = /!\[/.test(baseMarkdown);
-    const CHAT_VERSION_INFO = {
-      '': { title: 'Base (markdown, no images)', description: 'Citations rendered as markdown, images stripped' },
-      '-code-blocks': { title: 'Code blocks (no images)', description: 'Citation quotes in code blocks, images stripped' },
-      '-with-images': { title: 'With images (markdown)', description: 'Citations rendered as markdown, with base64 images' }
-    };
-    const versions = NLME.noteVariants(settings, { hasQuotes: chatHasQuotes, hasImages: chatHasImages }).map(v => {
-      const markdown = v.codeBlocks
-        ? convertChatToMarkdown(chatData.notebookTitle, chatData.notebookSummary, processedMessages, true)
-        : baseMarkdown;
-      return {
-        filename: `${baseFilename}${v.suffix}.md`,
-        content: v.images ? markdown : stripImagesFromMarkdown(markdown),
-        ...CHAT_VERSION_INFO[v.suffix]
-      };
-    });
+/**
+ * The chat audit: messages, citations (numbers restart in every answer) and
+ * formulas the page showed vs what the base Markdown holds. Message pairs
+ * past the exported ones count as missing.
+ *
+ * @param {object} chatData the scan (messagePairs, stats, notebookTitle, notebookSummary)
+ * @param {object[]} messages ProcessedMessage[] from extractChatPair, in pair order
+ * @param {boolean} needQuotes full-citation mode: a citation needs its quote
+ * @returns {{ ok: boolean, text: string }} the _audit.md document
+ */
+function buildChatAuditDoc(chatData, messages, needQuotes) {
+  const audit = newAudit();
+  audit.expected.items = chatData.stats?.pairsInDom ?? chatData.messagePairs.length;
+  audit.written.items = messages.length;
+  chatData.messagePairs.forEach((pair, i) => {
+    addCitationCoverage(audit, pair.aiResponseHTML, messages[i] ? messages[i].sources : [], needQuotes);
+  });
+  const chatHtml = chatData.messagePairs.map(p => p.aiResponseHTML || '').join('\n');
+  convertCounted(audit, chatHtml, () => convertChatToMarkdown(
+    chatData.notebookTitle, chatData.notebookSummary, messages, false));
+  return auditMarkdown('Chat Export', audit);
+}
 
-    // Determine if we need ZIP (for multiple files OR errors)
-    const shouldZip = versions.length > 1 || allErrors.length > 0 || !chatAuditDoc.ok;
+const CHAT_VERSION_INFO = {
+  '': { title: 'Base (markdown, no images)', description: 'Citations rendered as markdown, images stripped' },
+  '-code-blocks': { title: 'Code blocks (no images)', description: 'Citation quotes in code blocks, images stripped' },
+  '-with-images': { title: 'With images (markdown)', description: 'Citations rendered as markdown, with base64 images' }
+};
 
-    if (shouldZip) {
-      // Create ZIP with all versions + errors.txt
-      const zip = new JSZip();
-      const indexFiles = [];
+/**
+ * Files for the chat export: chat.md plus chat-code-blocks.md /
+ * chat-with-images.md when those versions apply (NLME.noteVariants), each
+ * with front matter. One clean version → `single` (one Markdown download).
+ * Otherwise (several versions, errors, failed audit, or forceZip) a ZIP's
+ * files: the versions, errors.md, _audit.md, _index.md and manifest.json
+ * (last).
+ *
+ * @param {object[]} messages ProcessedMessage[] from extractChatPair (may be
+ *   empty for an errors-only package: then no chat files)
+ * @param {{ meta: object, chatData: object, errors?: Array,
+ *   auditDoc: {ok: boolean, text: string}, partial?: boolean, forceZip?: boolean }} options
+ *   forceZip: always return ZIP files (Full Takeout)
+ * @returns {{ files: Array<{path: string, data: string, title?: string, variant?: string, itemKind?: string}>,
+ *   single: object|null }} single is also files[0] when set
+ */
+function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, partial = false, forceZip = false }) {
+  const chatTitle = `Chat — ${meta.notebook}`;
+  const frontMatter = variant => NLME.frontMatter({
+    title: chatTitle,
+    notebook: meta.notebook,
+    notebook_url: meta.notebook_url,
+    notebook_id: meta.notebook_id,
+    exporter: meta.exporter,
+    exported: meta.exported,
+    kind: 'chat',
+    variant,
+    messages: messages.length
+  });
 
-      // Add all versions to ZIP
-      versions.forEach(version => {
-        zip.file(version.filename, version.content);
-        indexFiles.push({
-          path: version.filename,
-          title: version.title,
-          description: version.description
-        });
+  // Versions (NLME.noteVariants): base always; code blocks only when some
+  // answer has quotes; with-images only when the Markdown has images
+  const versionFiles = [];
+  if (messages.length > 0) {
+    const toMarkdown = codeBlocks => convertChatToMarkdown(chatData.notebookTitle, chatData.notebookSummary, messages, codeBlocks);
+    const baseMarkdown = toMarkdown(false);
+    const hasQuotes = messages.some(m => (m.sources || []).some(src => src.quote && src.quote.trim()));
+    const hasImages = /!\[/.test(baseMarkdown);
+    for (const v of NLME.noteVariants(settings, { hasQuotes, hasImages })) {
+      const markdown = v.codeBlocks ? toMarkdown(true) : baseMarkdown;
+      const variant = variantName(v.suffix);
+      versionFiles.push({
+        path: `chat${v.suffix}.md`,
+        data: frontMatter(variant) + (v.images ? markdown : stripImagesFromMarkdown(markdown)),
+        title: CHAT_VERSION_INFO[v.suffix].title,
+        description: CHAT_VERSION_INFO[v.suffix].description,
+        variant,
+        itemKind: 'chat'
       });
+    }
+  }
 
-      // Shared report (handles string and object errors, e.g. the cancel note)
-      const chatStats = {
-        'Chat': chatData.notebookTitle,
-        'Total Messages': stats.totalMessages,
-        'Messages with Citations': stats.messagesWithCitations,
-        'Total Citations Found': stats.totalCitationsFound,
-        'Unique Citations Extracted': stats.totalCitationsExtracted
-      };
-      if (stats.extractFullCitations) {
-        chatStats['Successful Extractions'] = stats.successfulExtractions;
-        chatStats['Failed Extractions'] = stats.failedExtractions;
-      }
-      const errorsContent = NLME.buildErrorReport({
+  // One clean version: a single Markdown file, no ZIP
+  if (!forceZip && versionFiles.length === 1 && errors.length === 0 && auditDoc.ok) {
+    const single = versionFiles[0];
+    return { files: [single], single };
+  }
+
+  const files = [...versionFiles];
+
+  // Run-wide counts for errors.md and _index.md
+  const totals = { withCitations: 0, citationsFound: 0, citationsExtracted: 0, successful: 0, failed: 0 };
+  for (const m of messages) {
+    if (m.stats.hasCitations) totals.withCitations++;
+    totals.citationsFound += m.stats.citationsFound;
+    totals.citationsExtracted += m.sources.length;
+    totals.successful += m.stats.successfulExtractions;
+    totals.failed += m.stats.failedExtractions;
+  }
+  const totalMessages = chatData.messagePairs.length;
+
+  // errors.md only when something went wrong (no "Errors: 0" files)
+  if (errors.length > 0) {
+    const stats = {
+      'Chat': chatData.notebookTitle,
+      'Total Messages': totalMessages,
+      'Messages with Citations': totals.withCitations,
+      'Total Citations Found': totals.citationsFound,
+      'Unique Citations Extracted': totals.citationsExtracted
+    };
+    if (messages.some(m => m.fullCitations)) {
+      stats['Successful Extractions'] = totals.successful;
+      stats['Failed Extractions'] = totals.failed;
+    }
+    files.push({
+      path: 'errors.md',
+      data: NLME.buildErrorReport({
         title: 'Chat Export',
         generatedAt: new Date().toLocaleString(),
-        errors: allErrors,
-        stats: chatStats
-      });
-
-      zip.file('_audit.md', chatAuditDoc.text);
-
-      // Only when something went wrong (no "Total Errors: 0" files)
-      if (allErrors.length > 0) {
-        zip.file('errors.txt', errorsContent);
-        indexFiles.push({ path: 'errors.txt', title: 'Export Error Report' });
-      }
-
-      // Generate _index.md with links to all files
-      let indexContent = '# NotebookLM Chat Export - File Index\n\n';
-      indexContent += `Chat: ${chatData.notebookTitle}\n`;
-      indexContent += `Generated: ${new Date().toLocaleString()}\n\n`;
-      indexContent += `Total Messages: ${stats.totalMessages}\n`;
-      indexContent += `Messages with Citations: ${stats.messagesWithCitations}\n`;
-      indexContent += `Total Files: ${indexFiles.length}\n\n`;
-      indexContent += '---\n\n';
-
-      indexContent += '## Chat Export Versions\n\n';
-      indexContent += `This export includes ${versions.length} version(s) of the chat:\n\n`;
-
-      // List all chat versions
-      indexFiles.forEach(file => {
-        if (file.path !== 'errors.txt' && file.path !== '_index.md') {
-          indexContent += `- **[${file.title}](${encodeURI(file.path)})**\n`;
-          if (file.description) {
-            indexContent += `  - ${file.description}\n`;
-          }
-        }
-      });
-
-      indexContent += '\n';
-
-      if (allErrors.length > 0) {
-        indexContent += '---\n\n';
-        indexContent += '## Error Report\n\n';
-        const errorFile = indexFiles.find(f => f.path === 'errors.txt');
-        if (errorFile) {
-          indexContent += `- [${errorFile.title}](${encodeURI(errorFile.path)}) - ${allErrors.length} error(s) encountered during export\n\n`;
-        }
-      }
-
-      zip.file('_index.md', indexContent + timingSummary());
-
-      const blob = await generateZipTimed(zip);
-      const url = URL.createObjectURL(blob);
-      try {
-        const zipFilename = `${sanitizeFilename(chatData.notebookTitle)}-chat-${timestamp}${cancelled ? '-PARTIAL' : ''}.zip`;
-
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = zipFilename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-
-        showChatOutcome(allErrors.length, chatAuditDoc.ok);
-      } finally {
-        URL.revokeObjectURL(url);
-      }
-
-    } else {
-      // Single markdown file (only base version, no errors)
-      const blob = new Blob([versions[0].content], { type: 'text/markdown' });
-      const url = URL.createObjectURL(blob);
-      try {
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = versions[0].filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-
-        showChatOutcome(0);
-      } finally {
-        URL.revokeObjectURL(url);
-      }
-    }
-
-  } catch (error) {
-    console.error('[NotebookLM Takeout] Export failed:', error);
-    showToast(`Export failed: ${error.message}`, 'error');
-
-  } finally {
-    // Remove cancellation listener
-    chrome.runtime.onMessage.removeListener(cancelListener);
-
-    // Hide page overlay
-    try {
-      await chrome.tabs.sendMessage(tab.id, { type: 'HIDE_EXPORT_OVERLAY' });
-    } catch (error) {
-      console.error('[NotebookLM Takeout] Failed to hide overlay:', error);
-    }
-
-    // Hide sidebar progress panel
-    progressPanel.style.display = 'none';
+        errors,
+        stats
+      })
+    });
   }
+
+  files.push({ path: '_audit.md', data: auditDoc.text });
+
+  // _index.md with links to every version and the error report
+  let indexContent = `# ${chatTitle}\n\n`;
+  indexContent += `Generated: ${new Date().toLocaleString()}\n\n`;
+  indexContent += `Total Messages: ${totalMessages}\n`;
+  indexContent += `Messages with Citations: ${totals.withCitations}\n`;
+  indexContent += `Total Files: ${versionFiles.length + (errors.length > 0 ? 1 : 0)}\n\n`;
+  indexContent += '---\n\n';
+
+  if (versionFiles.length > 0) {
+    indexContent += '## Chat Export Versions\n\n';
+    indexContent += `This export includes ${versionFiles.length} version(s) of the chat:\n\n`;
+    for (const file of versionFiles) {
+      indexContent += `- **[${file.title}](${encodeURI(file.path)})**\n`;
+      indexContent += `  - ${file.description}\n`;
+    }
+    indexContent += '\n';
+  }
+
+  if (errors.length > 0) {
+    indexContent += '---\n\n';
+    indexContent += '## Error Report\n\n';
+    indexContent += `- [Export Error Report](errors.md) - ${errors.length} error(s) encountered during export\n\n`;
+  }
+
+  files.push({ path: '_index.md', data: indexContent + timingSummary() });
+
+  // manifest.json last: it lists every file above (not itself)
+  files.push({
+    path: 'manifest.json',
+    data: JSON.stringify(NLME.buildManifest({
+      meta,
+      kind: 'chat',
+      partial,
+      files,
+      counts: { messages: messages.length },
+      errorCount: errors.length
+    }), null, 2)
+  });
+
+  return { files, single: null };
 }
 
 /**

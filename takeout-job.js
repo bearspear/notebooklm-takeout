@@ -8,12 +8,15 @@
     const {
       kind, items, extractOne, afterEach, packageBatch, isCancelled, onProgress,
       perZip = Infinity,
+      // Errors known before the first item (e.g. chat messages that could
+      // not be read); they lead the error list
+      seedErrors = [],
       titleOf = item => item.title ?? item.label ?? ''
     } = opts;
 
     const size = Math.min(perZip, items.length) || 1;
     const totalBatches = Math.ceil(items.length / size);
-    const errors = [];
+    const errors = [...seedErrors];
     let attempted = 0, exported = 0;
     let cancelled = false, stopped = false;
     let errorsDelivered = false;
