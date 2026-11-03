@@ -142,17 +142,19 @@
    *   commit() once the package holding those items is saved, so a record never
    *   claims an item that is not on disk yet. discard() drops the staged ones when
    *   a runner threw before saving them (a recorder shared by several runners).
-   * - Writes are throttled to one per intervalMs; the rest wait for the next
-   *   change or finish().
+   * - Writes are throttled to one per intervalMs; a held-back change gets one
+   *   trailing write when the interval ends (setTimer / clearTimer are injectable),
+   *   or earlier at finish(), which clears that timer first.
    * - finish({ clean }): clean and finished removes the record, but only when the
    *   stored id is still this job's; otherwise a final write of the held-back state.
    */
-  function createJobRecorder({ storage, record, now = Date.now, intervalMs = 1000, log = console.warn }) {
+  function createJobRecorder({ storage, record, now = Date.now, intervalMs = 1000, log = console.warn, setTimer = setTimeout, clearTimer = clearTimeout }) {
     const key = NLME.jobRecordKey(record.notebookId);
     let current = record;
     let staged = [];
     let dirty = false;
     let lastWrite = -Infinity;
+    let timer = null;
     let queue = Promise.resolve();
 
     const enqueue = op => {
@@ -161,7 +163,11 @@
       });
       return queue;
     };
+    const stopTimer = () => {
+      if (timer !== null) { clearTimer(timer); timer = null; }
+    };
     const write = () => {
+      stopTimer();
       dirty = false;
       lastWrite = now();
       const snapshot = current;
@@ -169,7 +175,14 @@
     };
     const changed = () => {
       dirty = true;
-      if (now() - lastWrite >= intervalMs) write();
+      const wait = intervalMs - (now() - lastWrite);
+      if (wait <= 0) { write(); return; }
+      // Held back: one trailing write for the rest of the interval, so the last
+      // changes of a quiet stretch reach storage without waiting for the next one
+      if (timer === null) {
+        timer = setTimer(() => { timer = null; if (dirty) write(); }, wait);
+        if (timer && typeof timer.unref === 'function') timer.unref();
+      }
     };
 
     return {
@@ -193,6 +206,7 @@
         changed();
       },
       async finish({ clean = false } = {}) {
+        stopTimer(); // before the id-guarded removal: a removed record must not come back
         if (clean && NLME.jobRecordFinished(current)) {
           dirty = false;
           await enqueue(async () => {
