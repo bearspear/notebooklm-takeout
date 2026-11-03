@@ -246,9 +246,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
       // An unsplit export keeps the single run-wide audit.
       const runAudit = finalAudit();
       const totalNow = info.exported + info.failed;
-      const partAudit = NLME.diffAudit(runAudit, lastPartAudit);
-      partAudit.expected.items = totalNow - lastPartAttempted;
-      partAudit.written.items = notes.length;
+      const partAudit = NLME.partAudit(runAudit, lastPartAudit, { attempted: totalNow - lastPartAttempted, written: notes.length });
       lastPartAudit = JSON.parse(JSON.stringify(runAudit));
       lastPartAttempted = totalNow;
       const auditText = info.multi

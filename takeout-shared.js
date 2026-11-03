@@ -852,6 +852,16 @@
     return sub(current, before);
   }
 
+  // The audit of one part of a split export: the run-wide audit minus the
+  // snapshot from the previous part, with this part's own item counts
+  // (items attempted, items written) instead of the run-wide ones.
+  function partAudit(current, before, { attempted, written }) {
+    const part = diffAudit(current, before);
+    part.expected.items = attempted;
+    part.written.items = written;
+    return part;
+  }
+
   // Studio icons the extension cannot classify (new artifact types appear
   // this way first); notes' icons count as known
   function unknownStudioIcons(iconTexts) {
@@ -1977,6 +1987,7 @@ footer { margin-top: 3rem; }
     unknownStudioIcons,
     auditExport,
     diffAudit,
+    partAudit,
     buildSourcesIndex,
     citationTitleFromAriaLabel,
     fenceFor,

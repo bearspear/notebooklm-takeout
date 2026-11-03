@@ -597,6 +597,19 @@ test('diffAudit returns what one part added to the run-wide audit', () => {
   assert.deepEqual(NLME.diffAudit(now, undefined), now);
 });
 
+test('partAudit gives one part its own item counts and keeps the rest of the diff', () => {
+  const before = { expected: { items: 3, formulas: 1 }, written: { items: 3, formulas: 1 }, cacheHits: 0, cachedItems: 0 };
+  const now = { expected: { items: 10, formulas: 3 }, written: { items: 7, formulas: 3 }, cacheHits: 0, cachedItems: 0 };
+  // Part 2 attempted 3 sources (one failed) and wrote 2
+  const part = NLME.partAudit(now, before, { attempted: 3, written: 2 });
+  assert.deepEqual(part.expected, { items: 3, formulas: 2 });
+  assert.deepEqual(part.written, { items: 2, formulas: 2 });
+  // The run-wide audit is not modified
+  assert.equal(now.expected.items, 10);
+  // First part: no snapshot
+  assert.equal(NLME.partAudit(now, undefined, { attempted: 4, written: 4 }).expected.items, 4);
+});
+
 test('unknownStudioIcons lists only unmapped icons', () => {
   assert.deepEqual(NLME.unknownStudioIcons(['tablet', 'copy', 'new_shape', 'article', 'new_shape', '']), ['new_shape']);
 });

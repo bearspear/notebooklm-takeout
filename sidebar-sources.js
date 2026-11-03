@@ -263,6 +263,10 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
     declined: false // user declined the DOM warning: stops like a Cancel
   };
   let packaged = 0; // sources written to ZIPs so far
+  // Snapshot of the run-wide audit when the previous part was packaged, and
+  // the items attempted by then: a part's audit is the difference
+  let lastPartAudit = newAudit();
+  let lastPartAttempted = 0;
 
   // Item counts go in last, once every written source is known
   const finalAudit = () => {
@@ -293,9 +297,18 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
     packageBatch: async (sources, info) => {
       packaged += sources.length;
       shell.progress(`Creating ZIP ${info.batchIndex}/${info.totalBatches}...`, 1);
-      // _audit.md goes into the last ZIP the run writes (an errors-only ZIP
-      // too, so a run where every source failed still explains its toast)
-      const auditText = info.isLast ? auditMarkdown('Sources Export', finalAudit()).text : null;
+      // Every part gets an _audit.md for its own sources (what was added since
+      // the previous part); the last part (an errors-only ZIP too: the outcome
+      // toast may point at it) adds the run-wide totals as a second section.
+      // An unsplit export keeps the single run-wide audit.
+      const runAudit = finalAudit();
+      const totalNow = info.exported + info.failed;
+      const partAudit = NLME.partAudit(runAudit, lastPartAudit, { attempted: totalNow - lastPartAttempted, written: sources.length });
+      lastPartAudit = JSON.parse(JSON.stringify(runAudit));
+      lastPartAttempted = totalNow;
+      const auditText = info.multi
+        ? auditMarkdown(`Sources Export (part ${info.batchIndex} of ${info.totalBatches})`, partAudit, { runTotals: info.isLast ? runAudit : null }).text
+        : auditMarkdown('Sources Export', runAudit).text;
       const files = buildSourcesFiles(sources, {
         meta: shell.meta,
         errors: info.errors,
