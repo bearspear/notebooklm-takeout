@@ -435,6 +435,20 @@ contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
 
+**1.6.0 (Nov 2026)**: faster re-exports, resume, and a complete Generated tab.
+- Re-exports reuse citation quotes read before (⚙️ "Reuse citation quotes from earlier exports", with a
+  Clear button); only new or edited notes and answers are hovered again. `_audit.md` says how many came
+  from the cache. Adds the `unlimitedStorage` permission so the cache can hold large notebooks.
+- An export that was cancelled, stopped or cut off can be resumed: a banner offers "Resume (N left)",
+  rescans, and exports only what is left; items removed from the notebook are reported, never swapped.
+  Cancel between two retry or resume steps now stops the rest.
+- The Generated tab can delete notes in the Sources panel. Deletes refuse when the item changed since the
+  scan, close any open page menu first, and only click the item's own menu entry.
+- Long transcript quotes cut by Gemini Notebook's ~1,000-character window are marked with "…"; chat in
+  "Source titles only" mode groups its sources like notes; single mind maps download as `[mind-map]_Title`.
+- Split notes exports get an `_audit.md` per part; takeout indexes group files under Notes, Sources and
+  Mind maps; old per-notebook list settings are cleaned up; lists ignore clicks while an export runs.
+
 **1.5.0 (Nov 2026)**: find, retry, finish.
 - Every list (Artifacts, Notes, Sources, Generated) has a filter box, type chips, sorting and
   "Select all visible", with "N of M shown · K selected". Each notebook remembers its choices.

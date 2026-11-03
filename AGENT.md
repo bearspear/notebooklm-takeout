@@ -7,10 +7,10 @@ the table of contents to jump.
 - Repo root: `/Users/mbehringer/Downloads/notebooklm-exporter`
 - Remote: `git@github.com-personal:bearspear/notebooklm-takeout.git`
 - Manifest: V3 Chrome extension, no build step
-- Latest meaningful work: Milestone 3b "Find, retry, finish" (v1.5.0): filter, sort and select
-  on every list, retry failed exports, the export results panel. Milestone 3a "One-click
-  Takeout" (v1.4.0): Full Takeout, one layout for every ZIP, front matter, ZIPs built in the
-  side panel. Milestone 2 (v1.3.0) was "Lean, shared and correct output"; Milestone 1
+- Latest meaningful work: Milestone 3c "Faster re-exports, resume" (v1.6.0): a citation quote
+  cache for re-exports, resuming a cancelled or cut-off export, deleting notes from the
+  Generated tab, a complete Generated tab. Milestone 3b (v1.5.0) added list filter, sort and
+  retry; Milestone 3a (v1.4.0) was Full Takeout. Milestone 2 (v1.3.0) was "Lean, shared and correct output"; Milestone 1
   (v1.2.0) was PR #3
 - Branch: `main`
 
@@ -1526,6 +1526,6 @@ node --test tests/
 
 ---
 
-**Last refreshed**: 2026-11-03 (Milestone 3b, v1.5.0). After significant drift events or pipeline rewrites, update
+**Last refreshed**: 2026-11-03 (Milestone 3c, v1.6.0). After significant drift events or pipeline rewrites, update
 this file. It is the single document an agent should read before doing anything in this
 repo.
