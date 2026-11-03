@@ -2532,10 +2532,12 @@ async function runExclusive(name, fn) {
   }
   document.body.classList.add('job-running');
   // Disable (not just dim) the tab controls so keyboard activation is
-  // blocked too; restore exactly the ones this job disabled
-  const disabledByJob = Array.from(document.querySelectorAll('.tab-content button, .tab-content input'))
-    .filter(el => !el.disabled && el.id !== 'cancel-download-btn');
-  disabledByJob.forEach(el => { el.disabled = true; });
+  // blocked too. Mark them: a scan may replace a control with a clone (the
+  // chat Export button), and the clone must be re-enabled too, so restore
+  // by the mark, not by the original element.
+  Array.from(document.querySelectorAll('.tab-content button, .tab-content input'))
+    .filter(el => !el.disabled && el.id !== 'cancel-download-btn')
+    .forEach(el => { el.disabled = true; el.setAttribute('data-job-disabled', ''); });
   try {
     // Remember the job's tab: Cancel must reach it even after a tab switch
     try {
@@ -2549,7 +2551,10 @@ async function runExclusive(name, fn) {
     jobLock.release(name);
     jobTabId = null;
     document.body.classList.remove('job-running');
-    disabledByJob.forEach(el => { if (el.isConnected) el.disabled = false; });
+    document.querySelectorAll('[data-job-disabled]').forEach(el => {
+      el.disabled = false;
+      el.removeAttribute('data-job-disabled');
+    });
   }
 }
 
