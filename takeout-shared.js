@@ -1018,12 +1018,15 @@
 
   // How a fresh (non-update) export of `kind` meets the notebook's stored record
   // (the key is per notebook). 'update': the stored record is usable, of another
-  // kind and still has items, so it must not be replaced; the export only marks
+  // kind and still has items, so it must not be replaced (a Full Takeout always
+  // creates its own); the export only marks
   // the keys that record holds. 'create': it replaces the record (same kind,
   // finished, or nothing usable stored).
   function jobRecordMode(stored, kind) {
     const arrays = group => !!group && typeof group === 'object' && !Array.isArray(group) && Object.values(group).every(Array.isArray);
     if (!stored || typeof stored !== 'object' || !arrays(stored.remaining) || !arrays(stored.failed)) return 'create';
+    // A Full Takeout re-exports everything, so it supersedes any pending record
+    if (kind === 'takeout') return 'create';
     return stored.kind !== kind && jobRemainingCount(stored) > 0 ? 'update' : 'create';
   }
 

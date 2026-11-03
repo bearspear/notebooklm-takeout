@@ -686,6 +686,10 @@ test('jobRecordMode keeps a pending record of another kind', () => {
   assert.equal(NLME.jobRecordMode(failedOnly, 'sources'), 'update');
   const finished = NLME.markJobItems(NLME.markJobItems(pending, 'notes', ['a'], { now: 2 }), 'notes', ['b'], { now: 3 });
   assert.equal(NLME.jobRecordMode(finished, 'sources'), 'create');
+  // A Full Takeout supersedes partial tab-export records
+  const notesPending = NLME.newJobRecord({ id: 'n-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1 });
+  assert.equal(NLME.jobRecordMode(notesPending, 'takeout'), 'create');
+  assert.equal(NLME.jobRecordMode(notesPending, 'sources'), 'update');
   assert.equal(NLME.jobRecordMode(undefined, 'sources'), 'create');
   assert.equal(NLME.jobRecordMode(null, 'sources'), 'create');
   assert.equal(NLME.jobRecordMode('junk', 'sources'), 'create');
