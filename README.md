@@ -504,6 +504,9 @@ python3 -I tools/validate_export.py NEW.zip --baseline OLD.zip --allow '\$[^$\n]
   export statistics, file sizes that only changed because a date got shorter). Differences only in
   front matter are listed separately; `--allow REGEX` accepts known changes.
 - Each export gets PASS, WARN or FAIL; the exit code is 1 when anything fails or differs.
+- **With Claude Code:** `tools/validate-notebooklm-export/` is a skill that runs the checker and explains
+  its findings. Link it once with `ln -s "$PWD/tools/validate-notebooklm-export" ~/.claude/skills/`,
+  then ask "validate my latest exports".
 **[AGENT.md](AGENT.md)** is the engineering guide: architecture, message protocol, the DOM
 contract with Gemini Notebook, past drift and recipes.
 

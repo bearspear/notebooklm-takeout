@@ -1678,6 +1678,10 @@ fields, new front matter, renamed files), update `tools/validate_export.py` and 
 (`tools/test_validate_export.py`, synthetic fixtures only — never commit real notebook content)
 in the same change.
 
+The Claude Code skill that drives the checker is `tools/validate-notebooklm-export/SKILL.md` (its
+table explains every finding code, so update it when codes change). To use it everywhere, link it
+into your skills folder: `ln -s "$PWD/tools/validate-notebooklm-export" ~/.claude/skills/`.
+
 ## Conventions in this codebase
 
 - **No build step.** Plain ES2020+ JS. Don't introduce TypeScript or bundlers without
