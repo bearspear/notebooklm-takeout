@@ -956,9 +956,11 @@ function resetChatPanel() {
 
 // True when tab shows a different notebook than the panel last scanned (and
 // records it). Synchronous, so overlapping tab events cannot both see a change.
-// Not while a job runs: the id stays as it was, so the next event still sees it.
+// Not while a job runs: the id stays as it was and the check is queued for the
+// end of the job (runPendingNotebookCheck).
+let pendingNotebookCheck = false;
 function notebookSwitchedTo(tab) {
-  if (jobLock.current()) return false;
+  if (jobLock.current()) { pendingNotebookCheck = true; return false; }
   const id = isNotebookUrl(tab?.url) ? NLME.notebookIdFromUrl(tab.url) : '';
   if (!id || id === lastPanelNotebookId) return false;
   lastPanelNotebookId = id;
@@ -967,14 +969,30 @@ function notebookSwitchedTo(tab) {
 
 // After a tab switch or navigation: a different notebook rescans the open panel
 // tab and clears the chat; the same notebook only refreshes Artifacts (the Notes
-// and Sources scans are slow).
-async function refreshForTab(tab) {
+// and Sources scans are slow), unless sameNotebookScan is false.
+// settleMs: in-app (history API) navigation reports the new URL before the page
+// has drawn the new notebook, and the content-script scans read the DOM as it
+// is (no waits), so wait, then rescan only if the tab still shows that notebook.
+async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}) {
   if (notebookSwitchedTo(tab)) {
     resetChatPanel();
+    if (settleMs) {
+      await new Promise(resolve => setTimeout(resolve, settleMs));
+      const [now] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!now || now.id !== tab.id || NLME.notebookIdFromUrl(now.url) !== lastPanelNotebookId) return;
+    }
     await rescanOpenPanelTab();
-  } else if (!jobLock.current()) {
+  } else if (sameNotebookScan && !jobLock.current()) {
     await scanPage();
   }
+}
+
+// The check a job made us skip: run once when the job ends.
+async function runPendingNotebookCheck() {
+  if (!pendingNotebookCheck) return;
+  pendingNotebookCheck = false;
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  await refreshForTab(tab, { sameNotebookScan: false });
 }
 
 async function handleTabChange(activeInfo) {
@@ -992,6 +1010,10 @@ async function handleTabUpdate(tabId, changeInfo, tab) {
     if (changeInfo.status === 'complete') {
       await checkStatus();
       await refreshForTab(tab);
+    } else if (changeInfo.url) {
+      // In-app navigation (history API): a URL change with no 'complete'
+      await checkStatus();
+      await refreshForTab(tab, { settleMs: 1500, sameNotebookScan: false });
     }
   }
 }
@@ -2615,6 +2637,8 @@ async function runExclusive(name, fn) {
     });
     // Blanket re-enabling above would leave K = 0 buttons enabled
     refreshListButtons();
+    // A tab switch or navigation to another notebook during the job was skipped
+    runPendingNotebookCheck().catch(e => console.warn('[NotebookLM Takeout] Notebook check failed:', e));
   }
 }
 

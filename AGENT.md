@@ -1162,7 +1162,10 @@ onChange, canSelect }) -> { items, selectedItems(), selectedCount(), destroy() }
   `NLME.notebookIdFromUrl(tab.url)` with the module-level `lastPanelNotebookId`. A different notebook
   clears the Chat summary (`resetChatPanel`) and runs `rescanOpenPanelTab()` (scan for the open panel
   tab: Artifacts, Notes, Sources, Studio; Chat has no auto-scan). The same notebook only runs `scanPage`;
-  a non-notebook tab is not a change; nothing runs while `jobLock` is held.
+  a non-notebook tab is not a change. In-app (history API) navigation arrives as `changeInfo.url`
+  without `complete`: same check, after a 1.5 s settle (the content-script scans read the DOM with no
+  waits). While `jobLock` is held nothing runs; `pendingNotebookCheck` queues one check that
+  `runExclusive`'s finally runs after the job.
 
 ### Results panel and failed items (`sidebar-results.js`)
 
