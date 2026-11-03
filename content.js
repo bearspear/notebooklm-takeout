@@ -3209,8 +3209,40 @@
     return new Set(document.querySelectorAll(DIALOG_SELECTOR));
   }
 
-  function closeMenuBackdrops() {
-    document.querySelectorAll('.cdk-overlay-backdrop').forEach(b => b.click());
+  // The backdrops that belong to the overlay holding `panel`. CDK builds
+  //   .cdk-overlay-container > [.cdk-overlay-backdrop] + host
+  //   host (.cdk-overlay-connected-position-bounding-box or .cdk-global-overlay-wrapper)
+  //     > .cdk-overlay-pane > panel
+  // so the backdrop is the host's previous sibling, or (some CDK versions, global
+  // overlays) a child of the host next to the pane. Only those two places are
+  // looked at: another overlay's backdrop is never reached from here.
+  function overlayBackdropsOf(panel) {
+    const pane = panel && panel.closest ? panel.closest('.cdk-overlay-pane') : null;
+    const host = pane && pane.parentElement;
+    if (!host) return [];
+    const found = [];
+    const isBackdrop = el => !!el && el.classList.contains('cdk-overlay-backdrop');
+    if (isBackdrop(host.previousElementSibling)) found.push(host.previousElementSibling);
+    for (const child of host.children) {
+      if (isBackdrop(child)) found.push(child);
+    }
+    return found;
+  }
+
+  // Click the backdrop(s) of the menu overlay(s) around `panels` (menu panel elements
+  // the caller has bound: a clicked trigger's aria-controls panel, or the open menu
+  // panels). Without `panels` no menu is bound and every backdrop is clicked (the
+  // old behavior). A bound menu whose overlay cannot be found falls back to the
+  // transparent backdrops only, which menus use; a dialog's dark backdrop is never
+  // clicked on a menu's behalf.
+  function closeMenuBackdrops(panels) {
+    if (panels === undefined) {
+      document.querySelectorAll('.cdk-overlay-backdrop').forEach(b => b.click());
+      return;
+    }
+    let backdrops = [...new Set(panels.filter(Boolean).flatMap(overlayBackdropsOf))];
+    if (backdrops.length === 0) backdrops = [...document.querySelectorAll('.cdk-overlay-transparent-backdrop')];
+    backdrops.forEach(b => b.click());
   }
 
   // Close every open menu panel; false if one is still open after ~1 s.
@@ -3218,7 +3250,7 @@
     const deadline = Date.now() + 1000;
     while (document.querySelector('.mat-mdc-menu-panel')) {
       if (Date.now() > deadline) return false;
-      closeMenuBackdrops();
+      closeMenuBackdrops(Array.from(document.querySelectorAll('.mat-mdc-menu-panel')));
       await new Promise(r => setTimeout(r, 100));
     }
     return true;
@@ -3231,7 +3263,8 @@
     const deadline = Date.now() + 2000;
     while (trigger.getAttribute('aria-expanded') !== 'true') {
       if (Date.now() > deadline) {
-        closeMenuBackdrops();
+        const controlled = trigger.getAttribute('aria-controls');
+        closeMenuBackdrops([controlled ? document.getElementById(controlled) : null]);
         throw new Error('More menu did not open');
       }
       await new Promise(r => setTimeout(r, 50));
@@ -3241,7 +3274,7 @@
     const panelId = trigger.getAttribute('aria-controls');
     const panel = panelId ? document.getElementById(panelId) : null;
     if (!panel || !panel.classList.contains('mat-mdc-menu-panel')) {
-      closeMenuBackdrops();
+      closeMenuBackdrops([panel]);
       throw new Error('More menu could not be identified');
     }
     return panel;
@@ -3312,7 +3345,7 @@
     const deleteItem = Array.from(panel.querySelectorAll('.mat-mdc-menu-item, [role="menuitem"]'))
       .find(el => (el.textContent || '').toLowerCase().includes('delete')) || null;
     if (!deleteItem) {
-      closeMenuBackdrops();
+      closeMenuBackdrops([panel]);
       throw new Error('Delete menu item not found');
     }
     const existingDialogs = snapshotDialogPanes();
@@ -3345,7 +3378,7 @@
       await new Promise(r => setTimeout(r, 100));
     }
 
-    closeMenuBackdrops();
+    closeMenuBackdrops([panel]);
     throw new Error(confirmed
       ? 'Item did not disappear after clicking confirm'
       : 'Delete did not take effect (no dialog, no removal)');
@@ -3379,7 +3412,6 @@
       return { success: false, error: STALE };
     }
 
-    const closeMenu = closeMenuBackdrops;
     const guardOk = () => container.isConnected && isNoteSourceContainer(container) &&
       getSourceContainerTitle(container) === title;
 
@@ -3414,7 +3446,7 @@
         return text.includes('remove note') && !text.includes('source');
       }) || null;
     if (!deleteItem) {
-      closeMenu();
+      closeMenuBackdrops([panel]);
       return { success: false, error: 'Remove note menu item not found' };
     }
     const existingDialogs = snapshotDialogPanes();
@@ -3436,7 +3468,7 @@
       await new Promise(r => setTimeout(r, 100));
     }
 
-    closeMenu();
+    closeMenuBackdrops([panel]);
     return {
       success: false,
       error: confirmed
