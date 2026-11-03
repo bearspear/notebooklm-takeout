@@ -932,9 +932,11 @@
   // CommonMark footnotes and Obsidian require. No quote: just the title; no
   // title: just the quote.
   function footnoteDefinition(label, title, quote) {
-    const head = String(title == null ? '' : title).replace(/\s+/g, ' ').trim();
+    const head = String(title == null ? '' : title).replace(/\s+/g, ' ').trim().replace(/\*/g, '\\*');
+    // Continuation lines lose their own leading whitespace, so a quote line
+    // never turns into an indented code block inside the definition
     const body = String(quote == null ? '' : quote).replace(/\r\n?/g, '\n').trim()
-      .split('\n').map((line, i) => (i === 0 || !line.trim() ? line.trimEnd() : `    ${line}`)).join('\n');
+      .split('\n').map((line, i) => (i === 0 || !line.trim() ? line.trimEnd() : `    ${line.trim()}`)).join('\n');
     const lead = `[^${label}]:`;
     if (head && body) return `${lead} **${head}** \u2014 ${body}`;
     if (head) return `${lead} **${head}**`;

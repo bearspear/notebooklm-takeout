@@ -1811,3 +1811,8 @@ test('groupedSourcesMarkdown is unchanged without footnotes', () => {
   assert.equal(NLME.groupedSourcesMarkdown(entries, 'x-'),
     '<a id="x-src-1"></a><a id="x-src-2"></a>\n**[[1]](#x-cite-ref-1-1) [[2]](#x-cite-ref-2-1)** A\n\n');
 });
+
+test('footnoteDefinition escapes * in the title and trims continuation indentation', () => {
+  assert.equal(NLME.footnoteDefinition('1', 'A*B*', 'q'), '[^1]: **A\\*B\\*** — q');
+  assert.equal(NLME.footnoteDefinition('1', 'T', 'first\n      deep\n\tTab'), '[^1]: **T** — first\n    deep\n    Tab');
+});

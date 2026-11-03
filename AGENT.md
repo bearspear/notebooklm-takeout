@@ -1366,7 +1366,7 @@ same list `ensureContentScriptLoaded` re-injects, checked by `tests/structure.te
 |---|---|
 | `createTurndownService(options)` | the one Turndown configuration (atx headings, `*` bullets, `_` emphasis, fenced code) |
 | `convertKatexNodeToLatex(node)` | KaTeX DOM → `$…$` / `$$…$$` (`data-math` / annotation first, then the layout walker) |
-| `createConverter({ variant, citations, anchorPrefix, getMessageIndex, footnoteLabel, log })` | `convertToMarkdown` (notes, sources, reports; `variant: 'note'`) and `convertChatToMarkdown` (`variant: 'chat'`). Returns `{ turndownService, convert(html), citedNumbers() }` |
+| `createConverter({ variant, citations, anchorPrefix, getMessageIndex, footnoteLabel, log })` | `convertToMarkdown` (notes, sources, reports; `variant: 'note'`) and `convertChatToMarkdown` (`variant: 'chat'`). Returns `{ turndownService, convert(html), citedNumbers(messageIndex?) }` |
 | `htmlToMarkdownPlain(element)` | `content.js`: citation quotes, source guides, the notebook summary |
 
 - **One rule set.** reportHeadings, blockquotes, stripAngularComponents, listsWithWrappers, tables,
@@ -1409,8 +1409,14 @@ not Citation detail 'none') or on `obsidianNames`.
   derives it from `noteId` (set only for `combined-notes*.md`, so per-note files get plain labels and
   the combined file `2-1`, from the same function); `convertChatToMarkdown` always uses
   `combined: true` with the message index (`chat.md` is one file, numbers restart per answer). Chat
-  gets its placeholders from `converter.citedNumbers(messageIndex)`, and no per-answer
-  "Sources:" label (renderers gather definitions at the end of the file).
+  gets its placeholders from `converter.citedNumbers(messageIndex)`. Neither notes (no
+  `---` + `## Sources`) nor chat (no per-answer "Sources:") write a heading: renderers gather
+  definitions at the end of the file, so the definitions just follow the body after a blank line.
+- **Marker sentinels.** In footnote mode the rule emits `U+E000[^LABEL]U+E001`; `convert()` joins
+  adjacent sentinel-wrapped markers, escapes a body line that starts with a marker and a colon
+  (`[^1]\:`, else it reads as a definition) and then strips the sentinels, so text that merely looks
+  like a marker (code spans, fences) is never rewritten. Definition titles escape `*`; quote
+  continuation lines lose their own leading whitespace (no accidental indented code block).
 - **`NLME.obsidianSafeName(name)`.** Strips `[ ] # ^ | \ : * ? " < >` (runs become one space).
   `NLME.fileStem(name, { obsidian })` is `sanitizeFilename` after it; `uniqueStems(titles, suffixes,
   reserved, { obsidian })` and `artifactStems(items, { obsidian })` use it, so `A#B` / `A B` /
@@ -1419,7 +1425,7 @@ not Citation detail 'none') or on `obsidianNames`.
   downloads (`exportSingleNote`, `downloadArtifact`, `singleArtifactPackage({ obsidian })`) and the
   background's captured downloads (`START_INTERCEPT_DOWNLOAD` carries `obsidian`). Index, HTML index
   and manifest take their paths from the same file entries, so their links follow the new names.
-  ZIP names (`NLME.zipName`) are not changed. Any new name builder must use these helpers.
+  The Full Takeout root folder (ZIP root and, in folder mode, the `<name> takeout <ts>` folder) goes through it too. ZIP names (`NLME.zipName`) are not changed. Any new name builder must use these helpers.
 
 ## Known issues and latent bugs
 

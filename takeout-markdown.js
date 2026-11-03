@@ -375,6 +375,10 @@
     const isChat = variant === 'chat';
     const dropCitations = citations === 'none';
     const footnotes = citations === 'footnotes';
+    // Our own footnote markers carry private-use sentinels until convert() has
+    // post-processed the output, so the joining and escaping below can never
+    // touch text that merely looks like a marker (code spans, fenced code)
+    const footnoteMarker = label => `\uE000[^${label}]\uE001`;
     const labelOf = typeof footnoteLabel === 'function' ? footnoteLabel : (n => String(n));
     const info = typeof log === 'function' ? log : () => {};
     const turndownService = createTurndownService();
@@ -537,22 +541,22 @@
         if (currentElement) {
           // Find all structural elements that might contain footnotes
           const structuralElements = currentElement.querySelectorAll('labs-tailwind-structural-element-view-v2');
-          const footnotes = [];
+          const refLines = [];
 
           // Look for elements with footnote pattern [number] at start
           structuralElements.forEach(el => {
             const text = el.textContent.trim();
             // Match footnotes like "[1] Some text" or "[86] Some text"
             if (/^\[\d+\]/.test(text)) {
-              footnotes.push(text);
+              refLines.push(text);
             }
           });
 
           // Add footnotes if found
-          if (footnotes.length > 0 && !dropCitations) {
+          if (refLines.length > 0 && !dropCitations) {
             markdown += '\n**References:**\n\n';
-            footnotes.forEach(footnote => {
-              markdown += footnote + '\n\n';
+            refLines.forEach(refLine => {
+              markdown += refLine + '\n\n';
             });
           }
         }
@@ -621,7 +625,7 @@
         const occurrenceCount = citationOccurrences.get(key) + 1;
         citationOccurrences.set(key, occurrenceCount);
 
-        if (footnotes) return `[^${labelOf(sourceIndex)}]`;
+        if (footnotes) return footnoteMarker(labelOf(sourceIndex));
 
         // Return citation with message-specific anchor and link to source
         return `<sup><a id="msg-${messageIndex}-cite-ref-${sourceIndex}-${occurrenceCount}" href="#msg-${messageIndex}-src-${sourceIndex}">[${sourceIndex}]</a></sup>`;
@@ -692,7 +696,7 @@
         citationOccurrences.set(displayNumber, occurrenceCount);
 
         if (footnotes) {
-          const marker = `[^${labelOf(displayNumber)}]`;
+          const marker = footnoteMarker(labelOf(displayNumber));
           info('Citation', `  - generated: ${marker}`);
           return marker;
         }
@@ -704,15 +708,21 @@
       }
     });
 
-    // Footnote markers that follow each other (with the commas the page puts
-    // between them) are joined by one space, as the <sup> markers are
-    const joinFootnotes = footnotes
-      ? (text => text.replace(/(\[\^[^\]\s]+\])\s*,?\s*(?=\[\^)/g, '$1 '))
+    // Footnote mode, after Turndown: markers that follow each other (with
+    // the commas the page puts between them) are joined by one space, as the
+    // <sup> markers are; a body line that starts with a marker and a colon
+    // would read as a footnote definition, so its colon is escaped; then the
+    // sentinels go. Only sentinel-wrapped markers are touched.
+    const finishFootnotes = footnotes
+      ? (text => text
+        .replace(/(\uE000\[\^[^\]\s]+\]\uE001)\s*,?\s*(?=\uE000)/g, '$1 ')
+        .replace(/^\uE000(\[\^[^\]\s]+\])\uE001:/gm, '$1\\:')
+        .replace(/[\uE000\uE001]/g, ''))
       : (text => text);
 
     return {
       turndownService,
-      convert: (html) => joinFootnotes(turndownService.turndown(html)),
+      convert: (html) => finishFootnotes(turndownService.turndown(html)),
       citedNumbers: (messageIndex) => {
         if (isChat && messageIndex !== undefined) {
           const prefix = `${messageIndex}:`;

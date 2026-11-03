@@ -998,7 +998,8 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
     // Footnotes: one definition per number (a [^label] marker needs its own
     // definition, so titles-only sources are not grouped). The quote stays
     // inline, continuation lines indented by the formatter.
-    markdown += '\n\n---\n\n## Sources\n\n';
+    // (no "Sources" heading: renderers gather definitions at the end of the file)
+    markdown += '\n\n';
     markdown += NLME.footnoteDefinitions(entries, labelOf, {
       quoteOf: entry => (entry.missing || !entry.quote ? '' : (settings.cleanOCRArtifacts ? cleanOCRArtifacts(entry.quote) : entry.quote))
     });
