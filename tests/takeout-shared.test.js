@@ -1344,3 +1344,22 @@ test('markJobItem tolerates a category the record does not have', () => {
   assert.deepEqual(next.failed.sources, ['z']);
   assert.deepEqual(next.remaining.notes, ['a']);
 });
+
+test('markJobItems marks only keys the record holds', () => {
+  const r = NLME.newJobRecord({ id: 'takeout-1', kind: 'takeout', label: 'Full Takeout', notebookId: 'nb', keysByCategory: { sources: ['s1', 's2'], notes: ['n1'] }, now: 1 });
+  const failedOnce = NLME.markJobItems(r, 'sources', ['s1', 'zzz'], { failed: true, now: 2 });
+  assert.deepEqual(failedOnce.remaining.sources, ['s2']);
+  assert.deepEqual(failedOnce.failed.sources, ['s1']); // 'zzz' is not in the record: ignored
+  assert.deepEqual(failedOnce.remaining.notes, ['n1']); // other categories untouched
+  const cleared = NLME.markJobItems(failedOnce, 'sources', ['s1', 's2'], { now: 3 });
+  assert.deepEqual(cleared.failed.sources, []);
+  assert.equal(NLME.jobRemainingCount(cleared), 1);
+  assert.equal(cleared.updatedAt, 3);
+});
+
+test('markJobItems returns the same record when nothing matches', () => {
+  const r = NLME.newJobRecord({ id: 'n-1', kind: 'notes', label: 'Notes', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1 });
+  assert.equal(NLME.markJobItems(r, 'notes', ['x'], { now: 2 }), r);
+  assert.equal(NLME.markJobItems(r, 'sources', ['a'], { now: 2 }), r);
+  assert.equal(NLME.markJobItems(r, 'notes', [], { now: 2 }), r);
+});

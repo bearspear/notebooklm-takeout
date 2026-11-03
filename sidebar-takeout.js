@@ -378,7 +378,8 @@ function takeoutZipEnabled() {
  * (or the folder) and the combined errors, and offers "Retry N failed" for the
  * Sources, Notes and Artifacts items that failed (never chat). A retry is an
  * ordinary tab export of those items (own ZIPs or folders) on the tab the takeout
- * ran on; it does not rewrite the takeout or its index.
+ * ran on; it does not rewrite the takeout or its index. It marks its items on the
+ * takeout's job record (updateRecord) without replacing it.
  */
 async function runFullTakeout() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -410,13 +411,21 @@ async function runFullTakeout() {
     const categories = [
       {
         name: 'Sources', folder: 'sources',
-        scan: async () => (await scanSourcesData(tabId)).sources,
+        scan: async () => {
+          const sources = (await scanSourcesData(tabId)).sources;
+          stampJobKeys('sources', sources);
+          return sources;
+        },
         // itemDir '': the category folder is already sources/ (notes/), no second one inside it
         run: (catShell, items, target) => runSourcesJob(catShell, items, { ...target, variantSettings, itemDir: '' })
       },
       {
         name: 'Notes', folder: 'notes',
-        scan: () => scanNotesData(tabId),
+        scan: async () => {
+          const notes = await scanNotesData(tabId);
+          stampJobKeys('notes', notes);
+          return notes;
+        },
         run: (catShell, items, target) => runNotesJob(catShell, items, { ...target, variantSettings, itemDir: '' })
       },
       {
@@ -435,7 +444,13 @@ async function runFullTakeout() {
       },
       {
         name: 'Artifacts', folder: 'artifacts',
-        scan: async () => (await scanArtifactsData(tabId)).filter(item => !item.disabled),
+        // Keys over the whole list, disabled items included (the Generated tab's
+        // list), then only the enabled items are exported and recorded
+        scan: async () => {
+          const all = await scanArtifactsData(tabId);
+          stampJobKeys('artifacts', all);
+          return all.filter(item => !item.disabled);
+        },
         run: (catShell, items, target) => runArtifactsJob(catShell, items, { ...target, bothSlideFormats: true })
       }
     ].map(c => ({ ...c, status: null, selected: 0, exported: 0, failed: 0, zips: [], parts: 0, packages: 0, errors: [], auditOk: true, items: null, failedItems: [] }));
@@ -616,9 +631,9 @@ async function runFullTakeout() {
 // ordinary tab export of the failed items on the takeout's tab, and returns
 // its outcome (see withExportShell) so the chain can combine them.
 const TAKEOUT_RETRY_STEPS = [
-  { name: 'Sources', run: (items, tabId) => exportSources(items, { tabId }) },
-  { name: 'Notes', run: (items, tabId) => exportNotesAsMarkdown(items, { tabId }) },
-  { name: 'Artifacts', run: (items, tabId) => downloadAllArtifacts(tabId, items) }
+  { name: 'Sources', run: (items, tabId) => exportSources(items, { tabId, updateRecord: true }) },
+  { name: 'Notes', run: (items, tabId) => exportNotesAsMarkdown(items, { tabId, updateRecord: true }) },
+  { name: 'Artifacts', run: (items, tabId) => downloadAllArtifacts(tabId, items, { updateRecord: true }) }
 ];
 
 // Show a takeout-level results panel with "Retry N failed" for `failed`

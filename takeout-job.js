@@ -178,12 +178,15 @@
       commit() {
         if (!staged.length) return;
         const t = now();
-        for (const [category, itemKey] of staged) current = NLME.markJobItem(current, category, itemKey, { now: t });
+        const before = current;
+        for (const [category, itemKey] of staged) current = NLME.markJobItems(current, category, [itemKey], { now: t });
         staged = [];
-        changed();
+        if (current !== before) changed();
       },
       fail(category, itemKey) {
-        current = NLME.markJobItem(current, category, itemKey, { failed: true, now: now() });
+        const next = NLME.markJobItems(current, category, [itemKey], { failed: true, now: now() });
+        if (next === current) return;
+        current = next;
         changed();
       },
       async finish({ clean = false } = {}) {

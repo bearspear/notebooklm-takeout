@@ -2931,6 +2931,16 @@ function jobItemKeys(category, items) {
   return NLME.listItemKeys(items, JOB_KEY_ACCESSORS[category]);
 }
 
+// Stamp each item with its key in the whole `items` list (non-enumerable; what
+// createListController does for the tab lists). Full Takeout stamps its scans, so
+// a retry of a subset, or of an enabled-only list, keeps the tab's "#n" keys.
+function stampJobKeys(category, items) {
+  const keys = NLME.listItemKeys(items, JOB_KEY_ACCESSORS[category]);
+  items.forEach((item, i) => {
+    try { Object.defineProperty(item, '_listKey', { value: keys[i], configurable: true, writable: true }); } catch (_) { /* the record computes its own */ }
+  });
+}
+
 /**
  * Start recording an export. Returns null (nothing is recorded) when the tab has
  * no notebook id or there is nothing to do; else a tracker the runners call:
@@ -2941,8 +2951,12 @@ function jobItemKeys(category, items) {
  * @param {'notes'|'sources'|'artifacts'|'takeout'} kind
  * @param {string} label
  * @param {{ [category: string]: object[] }} itemsByCategory the items to export, by category
+ * @param {{ update?: boolean }} [options] update: a retry or resume. It never
+ *   creates or replaces a record: it loads the notebook's existing one (none:
+ *   returns null) and marks its items done or failed on it, only for keys the
+ *   record holds, and writes nothing until one changes.
  */
-async function startJobRecord(shell, kind, label, itemsByCategory) {
+async function startJobRecord(shell, kind, label, itemsByCategory, { update = false } = {}) {
   try {
     const notebookId = NLME.notebookIdFromUrl(shell.tab && shell.tab.url);
     if (!notebookId) return null;
@@ -2953,11 +2967,19 @@ async function startJobRecord(shell, kind, label, itemsByCategory) {
       items.forEach((item, i) => keyOf.set(item, keys[i]));
       keysByCategory[category] = keys;
     }
-    const now = Date.now();
-    const record = NLME.newJobRecord({ id: `${kind}-${now}`, kind, label, notebookId, keysByCategory, now });
-    if (NLME.jobRecordFinished(record)) return null;
+    let record;
+    if (update) {
+      const storageKey = NLME.jobRecordKey(notebookId);
+      const stored = (await chrome.storage.local.get(storageKey))[storageKey];
+      if (!stored || !stored.remaining || !stored.failed) return null;
+      record = stored;
+    } else {
+      const now = Date.now();
+      record = NLME.newJobRecord({ id: `${kind}-${now}`, kind, label, notebookId, keysByCategory, now });
+      if (NLME.jobRecordFinished(record)) return null;
+    }
     const recorder = NLME.createJobRecorder({ storage: chrome.storage.local, record });
-    await recorder.start();
+    if (!update) await recorder.start();
     return {
       done: (category, item) => { if (keyOf.has(item)) recorder.done(category, keyOf.get(item)); },
       fail: (category, item) => { if (keyOf.has(item)) recorder.fail(category, keyOf.get(item)); },
@@ -2972,8 +2994,10 @@ async function startJobRecord(shell, kind, label, itemsByCategory) {
 
 // A tab export's record around its runner: `run(tracker)` returns the runner's
 // { result }. Clean = not cancelled or stopped; a throw leaves the record.
-async function withJobRecord(shell, kind, label, category, items, run) {
-  const tracker = await startJobRecord(shell, kind, label, { [category]: items });
+// update (options.updateRecord of the exports, set by every retry and by resume):
+// see startJobRecord.
+async function withJobRecord(shell, kind, label, category, items, run, { update = false } = {}) {
+  const tracker = await startJobRecord(shell, kind, label, { [category]: items }, { update });
   let out;
   try {
     out = await run(tracker);
@@ -2990,13 +3014,13 @@ async function withJobRecord(shell, kind, label, category, items, run) {
 // options.tabId: the tab the notes were scanned on (a retry); default the active tab.
 // Returns withExportShell's outcome ({ result, message, level, saved, errors } or
 // { declined } / { aborted }); the Full Takeout retry chain reads it.
-async function exportNotesAsMarkdown(selectedNotes, { tabId } = {}) {
+async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = false } = {}) {
   startExportTiming();
   console.log('[NotebookLM Takeout] Starting export for notes:', selectedNotes.length);
 
   return withExportShell({ label: 'notes', healthType: 'notes', overlayMessage: 'Preparing to export notes...', tabId }, async shell => {
     const { result, zips, auditOk } = await withJobRecord(shell, 'notes', 'Notes', 'notes', selectedNotes,
-      tracker => runNotesJob(shell, selectedNotes, { tracker }));
+      tracker => runNotesJob(shell, selectedNotes, { tracker }), { update: updateRecord });
 
     return shell.finish({
       kind: 'notes',
@@ -3007,7 +3031,7 @@ async function exportNotesAsMarkdown(selectedNotes, { tabId } = {}) {
         ? `Stopped after ${result.exported} of ${selectedNotes.length} notes: citations could not be read (Gemini Notebook may have changed). Run the health check 🩺; details in errors.md.`
         : undefined,
       saved: zips,
-      retry: retryFor(result.failedItems, 'Notes export', failed => exportNotesAsMarkdown(failed, { tabId: shell.tab.id }))
+      retry: retryFor(result.failedItems, 'Notes export', failed => exportNotesAsMarkdown(failed, { tabId: shell.tab.id, updateRecord: true }))
     });
   });
 }
@@ -3843,13 +3867,13 @@ function renderSourcesList(sources, skippedNotes = 0) {
 // buildSourcesFiles.
 // options.tabId: the tab the sources were scanned on (a retry); default the active tab.
 // Returns withExportShell's outcome, like exportNotesAsMarkdown.
-async function exportSources(selectedSources, { tabId } = {}) {
+async function exportSources(selectedSources, { tabId, updateRecord = false } = {}) {
   startExportTiming();
   console.log(`[NotebookLM Takeout] Exporting ${selectedSources.length} sources...`);
 
   return withExportShell({ label: 'sources', healthType: 'sources', overlayMessage: 'Preparing to export sources...', tabId }, async shell => {
     const { result, zips, auditOk } = await withJobRecord(shell, 'sources', 'Sources', 'sources', selectedSources,
-      tracker => runSourcesJob(shell, selectedSources, { tracker }));
+      tracker => runSourcesJob(shell, selectedSources, { tracker }), { update: updateRecord });
 
     return shell.finish({
       kind: 'sources',
@@ -3857,7 +3881,7 @@ async function exportSources(selectedSources, { tabId } = {}) {
       result,
       auditOk,
       saved: zips,
-      retry: retryFor(result.failedItems, 'Sources export', failed => exportSources(failed, { tabId: shell.tab.id }))
+      retry: retryFor(result.failedItems, 'Sources export', failed => exportSources(failed, { tabId: shell.tab.id, updateRecord: true }))
     });
   });
 }
@@ -5679,7 +5703,7 @@ const ARTIFACT_ZIP_MAX_BYTES = 500 * 1024 * 1024;
 // <Notebook>-artifacts-<ts>.zip, or -partN.zip parts past the size cap; ZIP off: Downloads/<Notebook>/, one item
 // per call. Either way: <type folder>/<stem>.<ext>, _index.md, errors.md,
 // manifest.json. Returns withExportShell's outcome, like exportNotesAsMarkdown.
-async function downloadAllArtifacts(tabId, items) {
+async function downloadAllArtifacts(tabId, items, { updateRecord = false } = {}) {
   await preflightWarn(tabId, 'artifacts');
   const zipEnabled = document.getElementById('zip-checkbox')?.checked || false;
   const downloadBtn = document.getElementById('download-all-btn');
@@ -5690,7 +5714,7 @@ async function downloadAllArtifacts(tabId, items) {
     return await withExportShell({ label: 'artifacts', overlayMessage: 'Preparing to download artifacts...', tabId }, async shell => {
       const folder = zipEnabled ? null : (shell.projectName || 'NotebookLM');
       const { result, zips, savedOutside } = await withJobRecord(shell, 'artifacts', 'Artifacts', 'artifacts', items,
-        tracker => runArtifactsJob(shell, items, { folder, tracker }));
+        tracker => runArtifactsJob(shell, items, { folder, tracker }), { update: updateRecord });
 
       return shell.finish({
         kind: 'artifacts',
@@ -5699,7 +5723,7 @@ async function downloadAllArtifacts(tabId, items) {
         errorNote: savedOutside > 0 ? `${savedOutside} saved separately to Downloads, see errors.md` : undefined,
         // ZIP mode: the ZIP names; folder mode: the folder, once it holds a file
         saved: folder ? (result.exported > 0 || result.errors.length > 0 ? [folder] : []) : zips,
-        retry: retryFor(result.failedItems, 'Download All', failed => downloadAllArtifacts(shell.tab.id, failed))
+        retry: retryFor(result.failedItems, 'Download All', failed => downloadAllArtifacts(shell.tab.id, failed, { updateRecord: true }))
       });
     });
   } finally {

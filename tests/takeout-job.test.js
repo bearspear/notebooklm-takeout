@@ -371,3 +371,20 @@ test('recorder never throws when storage fails', async () => {
   await rec.finish({ clean: true });
   await rec.finish({ clean: false });
 });
+
+test('recorder on an existing record marks known keys only and writes nothing for unknown ones', async () => {
+  const storage = fakeStorage(); const clock = { t: 0 };
+  const stored = NLME.newJobRecord({ id: 'takeout-1', kind: 'takeout', label: 'Full Takeout', notebookId: 'nb', keysByCategory: { sources: ['s1'], notes: ['n1'] }, now: 0 });
+  storage.data['nlme.job.nb'] = stored;
+  const rec = NLME.createJobRecorder({ storage, record: stored, now: () => clock.t, log: () => {} });
+  rec.fail('sources', 'other'); // not in the record
+  rec.done('notes', 'other'); rec.commit();
+  await rec.finish({ clean: true });
+  assert.equal(storage.log.length, 0);
+  rec.done('sources', 's1'); rec.commit();
+  await rec.finish({ clean: true });
+  assert.deepEqual(storage.data['nlme.job.nb'].remaining, { sources: [], notes: ['n1'] }); // not finished: kept
+  rec.done('notes', 'n1'); rec.commit();
+  await rec.finish({ clean: true });
+  assert.equal('nlme.job.nb' in storage.data, false);
+});

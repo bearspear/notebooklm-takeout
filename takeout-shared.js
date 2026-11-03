@@ -939,6 +939,16 @@
     };
   }
 
+  // markJobItem for several keys of one category, ignoring keys the record does
+  // not hold (a retry or resume marks only what the record knows). Returns the
+  // same record when nothing matched.
+  function markJobItems(record, category, keys, { failed = false, now } = {}) {
+    const holds = key => ((record.remaining && record.remaining[category]) || []).includes(key)
+      || ((record.failed && record.failed[category]) || []).includes(key);
+    const known = (keys || []).filter(holds);
+    return known.reduce((rec, key) => markJobItem(rec, category, key, { failed, now }), record);
+  }
+
   function jobRemainingCount(record) {
     const count = group => Object.values(group || {}).reduce((sum, keys) => sum + keys.length, 0);
     return count(record.remaining) + count(record.failed);
@@ -1585,6 +1595,7 @@ footer { margin-top: 3rem; }
     jobRecordKey,
     newJobRecord,
     markJobItem,
+    markJobItems,
     jobRemainingCount,
     jobRecordFinished,
     listView,
