@@ -684,7 +684,7 @@ Icon textContent → kind:
 | Inner `mat-icon` `unfold_less` / aria "Hide additional citations" | Open group: never click. Both states are excluded from citations by `NLME.isCitationExpander` |
 | `NLME.CITATION_TOOLTIP_SELECTOR` | Hover tooltip: `.cdk-overlay-pane.citation-tooltip-panel` > `nb-popover-container` > `div.popover-card[aria-label="Citation Details"]` (Nov 2026); legacy `xap-inline-dialog-container[role="dialog"]` |
 | `.citation-tooltip-header` | Source title in tooltip |
-| `.citation-tooltip-title` | `span` in the header holding the title (Nov 2026). Required for an image citation (`NLME.isImageCitation`) |
+| `.citation-tooltip-title` | `span` in the header holding the title, read from real popovers (Nov 2026). Required for an image citation (`NLME.isImageCitation`) |
 | `.citation-tooltip-text` | Quote: `div.paragraph` children or `labs-tailwind-structural-element-view-v2` wrappers (both seen) |
 | `.citation-tooltip-footer` | "View source" button |
 | `.mat-mdc-menu-panel` / `.cdk-overlay-pane` | Open menu / popup overlay |
@@ -746,12 +746,14 @@ chat-wide and per-message chat extraction all call it):
 A popover with no quote after the last attempt is an image citation only with all of these
 (`NLME.isImageCitation`): `.citation-tooltip-title` has text, `.citation-tooltip-text` has no text, and
 there is image evidence: an `img` in the panel, a title ending in an image extension, or a title
-this page already found to be an image source during a sources export (`knownImageSources`). It
+this page already found to be an image source during a sources export in the same notebook
+(`knownImageSources`, keyed by `NLME.notebookIdFromUrl`). It
 then carries `NLME.IMAGE_CITATION_NOTE` as its quote plus `noQuote: true`, with no error. Everything
 else, a fully empty popover included, stays `Tooltip content did not load`. The retries run first,
 so a slow popover is not misread. The note counts for the citation audit, is never cached
-(`NLME.citationSourcesComplete`) and is not a read quote for the health check. A popover for an
-image source has not been reached live, so its shape is unproven (Nov 2026).
+(`NLME.citationSourcesComplete`) and is not a read quote for the health check. The selectors above
+were read from real popovers on text sources (Nov 2026); only the popover of a PNG source has not
+been reached, so that one's shape is unproven.
 
 Markdown keeps NotebookLM's citation numbers; `NLME.buildCitationEntries` builds the
 Sources section from extracted sources plus a placeholder for markers that failed, and

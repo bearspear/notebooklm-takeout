@@ -1588,7 +1588,7 @@
             title,
             quoteText: tooltip.querySelector('.citation-tooltip-text')?.textContent?.trim() || '',
             hasImage: !!tooltip.querySelector('img'),
-            knownImageTitles: knownImageSources
+            knownImageTitles: imageSourcesHere()
           });
           leave();
           if (imageCitation) {
@@ -1898,9 +1898,21 @@
     return await readOpenStudioNote(noteTitle, viewersBefore);
   }
 
-  // Titles this page has found to be image sources: evidence for a citation
-  // with no quote, as a Full Takeout exports sources before notes and chat
-  const knownImageSources = new Set();
+  // Titles found to be image sources, per notebook id: evidence for a citation
+  // with no quote, as a Full Takeout exports sources before notes and chat. The
+  // page outlives a move to another notebook, where a title means something else.
+  const knownImageSources = new Map();
+
+  function rememberImageSource(title) {
+    const notebookId = NLME.notebookIdFromUrl(location.href);
+    if (!notebookId) return;
+    if (!knownImageSources.has(notebookId)) knownImageSources.set(notebookId, new Set());
+    knownImageSources.get(notebookId).add(title);
+  }
+
+  function imageSourcesHere() {
+    return knownImageSources.get(NLME.notebookIdFromUrl(location.href)) || new Set();
+  }
 
   // Content ready: the source BODY text (not the viewer shell, which settles
   // before the text arrives) is at least 50 chars and unchanged over four 50 ms
@@ -2133,7 +2145,7 @@
 
       // The guide wait gave slow text more time: text now means a text source
       const imageUrls = await recheckImageSource(sourceViewer, body.imageUrls);
-      if (imageUrls.length > 0) knownImageSources.add(sourceTitle);
+      if (imageUrls.length > 0) rememberImageSource(sourceTitle);
 
       // Try to find content container within source-viewer
       let contentElement = null;

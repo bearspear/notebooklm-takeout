@@ -194,11 +194,14 @@ test('extractSourceContent uses the wait, keeps the error, and reports the image
   assert.match(code, /await waitForSourceBody\(sourceViewer\)/);
   assert.match(code, /if \(body\.error\) return \{ error: body\.error \}/);
   assert.match(code, /await recheckImageSource\(sourceViewer, body\.imageUrls\)/);
-  assert.match(code, /if \(imageUrls\.length > 0\) knownImageSources\.add\(sourceTitle\)/);
+  assert.match(code, /if \(imageUrls\.length > 0\) rememberImageSource\(sourceTitle\)/);
   assert.match(code, /\bimageUrls\b[^\n]*\n\s*\};\n/);
 });
 
 // ========== content.js: a citation popover with no text ==========
+
+const NOTEBOOK_A = 'https://notebooklm.google.com/notebook/aaaaaaaa-1111';
+const NOTEBOOK_B = 'https://notebooklm.google.com/notebook/bbbbbbbb-2222';
 
 function citationPage({ popovers, knownImageTitles = [] }) {
   const page = { hovers: 0, open: null, tracked: [] };
@@ -233,13 +236,17 @@ function citationPage({ popovers, knownImageTitles = [] }) {
     setTimeout, clearTimeout,
     sleep: async () => {},
     waitForElement: async () => page.open,
-    knownImageSources: new Set(knownImageTitles),
+    location: { href: NOTEBOOK_A },
     DOMHealthTracker: { track: (...args) => page.tracked.push(args) },
     htmlToMarkdownWithImages: async element => element.textContent
   };
   vm.createContext(sandbox);
+  vm.runInContext('var knownImageSources = new Map();', sandbox);
+  vm.runInContext(nestedFn('content.js', 'rememberImageSource'), sandbox);
+  vm.runInContext(nestedFn('content.js', 'imageSourcesHere'), sandbox);
   vm.runInContext(nestedFn('content.js', 'extractSingleCitationWithRetryInner'), sandbox);
-  return { page, read: retries => sandbox.extractSingleCitationWithRetryInner(button, '3', false, retries) };
+  knownImageTitles.forEach(title => sandbox.rememberImageSource(title));
+  return { page, sandbox, read: retries => sandbox.extractSingleCitationWithRetryInner(button, '3', false, retries) };
 }
 
 test('a title ending .png and no text gives the title and the note, with no error', async () => {
@@ -263,6 +270,23 @@ test('an img in the popover and no text gives the note', async () => {
 test('a title found to be an image source gives the note', async () => {
   const result = await citationPage({ popovers: [{ title: 'Holiday snaps' }], knownImageTitles: ['Holiday snaps'] }).read(2);
   assert.equal(result.data.quote, NLME.IMAGE_CITATION_NOTE);
+});
+
+test('an image title known in one notebook is no evidence in another', async () => {
+  const { sandbox, read } = citationPage({ popovers: [{ title: 'Holiday snaps' }], knownImageTitles: ['Holiday snaps'] });
+  sandbox.location.href = NOTEBOOK_B;
+  const elsewhere = await read(2);
+  assert.equal(elsewhere.success, false);
+  assert.match(elsewhere.error, /Tooltip content did not load/);
+  sandbox.location.href = NOTEBOOK_A;
+  assert.equal((await read(2)).data.quote, NLME.IMAGE_CITATION_NOTE);
+});
+
+test('a page with no notebook id remembers nothing', async () => {
+  const { sandbox, read } = citationPage({ popovers: [{ title: 'Holiday snaps' }] });
+  sandbox.location.href = 'https://notebooklm.google.com/';
+  sandbox.rememberImageSource('Holiday snaps');
+  assert.equal((await read(2)).success, false);
 });
 
 test('a fully empty popover stays an error', async () => {
