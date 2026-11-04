@@ -16,8 +16,8 @@ test('clampColumns shrinks the right pane first, then the left, so chat keeps 36
   // space 1000 - 360 = 640 for the sides
   assert.deepEqual(app.clampColumns(1048, { l: 500, r: 500 }), { l: 420, r: 220 });
   assert.deepEqual(app.clampColumns(1048, { l: 600, r: 300 }), { l: 420, r: 220 });
-  // too narrow for everything: sides sit at 220 and chat is what is left
-  assert.deepEqual(app.clampColumns(800, { l: 500, r: 500 }), { l: 220, r: 220 });
+  // the stacked layout starts below 851px, so 850 is the narrowest grid: 802 - 360 leaves 442 for the sides
+  assert.deepEqual(app.clampColumns(850, { l: 500, r: 500 }), { l: 222, r: 220 });
 });
 
 test('a collapsed pane is a 44px rail and gives its room to the others', () => {
@@ -51,4 +51,16 @@ test('parseCols round-trips and rejects bad input', () => {
   const empty = { l: null, r: null, lc: false, rc: false };
   for (const bad of [null, '', 'nope', '[1]', '"x"', '{"l":"9","r":-5,"lc":1,"rc":"yes"}']) assert.deepEqual(app.parseCols(bad), empty);
   assert.deepEqual(app.parseCols('{"l":99999,"r":219}'), { l: 4000, r: null, lc: false, rc: false });
+});
+
+test('chat keeps 360 at every width above the 850px stacked breakpoint with both sides open', () => {
+  for (let total = 850; total <= 2400; total++) {
+    for (const [l, r] of [[340, 400], [220, 220], [900, 900], [4000, 4000], [0, 0], [1200, 220]]) {
+      const w = app.clampColumns(total, { l, r });
+      assert.ok(w.l >= 220 && w.r >= 220, `${total} ${l} ${r}`);
+      assert.ok(total - 48 - w.l - w.r >= 360, `${total} ${l} ${r}`);
+    }
+  }
+  const edge = app.clampColumns(850, { l: 340, r: 400 });
+  assert.equal(850 - 48 - edge.l - edge.r, 360);
 });

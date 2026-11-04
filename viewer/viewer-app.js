@@ -234,11 +234,12 @@ if (typeof document !== 'undefined') (function () {
       h.setAttribute('aria-valuemax', String(dragColumn(total, { l: w.l, r: w.r, lc: cols.lc, rc: cols.rc }, side, COL.max)));
     });
   }
-  function setWidth(side, px) {
+  function setWidth(side, px, keep) {
     var total = $('main').clientWidth, st = colState(), w = clampColumns(total, st);
     st.l = w.l; st.r = w.r;
     cols[side] = Math.round(dragColumn(total, st, side, px));
-    saveCols(); applyCols();
+    if (!keep) saveCols();
+    applyCols();
   }
   function reveal(side, px) {   // opening something: reopen a collapsed pane, widen it unless the user chose a width
     auto[side] = px;
@@ -253,9 +254,9 @@ if (typeof document !== 'undefined') (function () {
     h.addEventListener('pointermove', function (e) {
       if (!h.classList.contains('drag')) return;
       var box = $('main').getBoundingClientRect();
-      setWidth(side, side === 'l' ? e.clientX - box.left - 12 : box.right - 12 - e.clientX);
+      setWidth(side, side === 'l' ? e.clientX - box.left - 12 : box.right - 12 - e.clientX, true);
     });
-    function end() { h.classList.remove('drag'); $('shield').hidden = true; }
+    function end() { if (h.classList.contains('drag')) saveCols(); h.classList.remove('drag'); $('shield').hidden = true; }
     h.addEventListener('pointerup', end); h.addEventListener('pointercancel', end); h.addEventListener('lostpointercapture', end);
     h.addEventListener('dblclick', function () { cols[side] = null; auto[side] = null; saveCols(); applyCols(); });
     h.addEventListener('keydown', function (e) {
