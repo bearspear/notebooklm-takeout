@@ -218,6 +218,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
 
   console.log(`[NotebookLM Takeout] Will create ${Math.ceil(selectedNotes.length / perZip)} ZIP(s) for ${selectedNotes.length} notes (${perZip} per ZIP)`);
 
+  beginImageSession(shell.tab.id, () => shell.isCancelled() || state.declined);
   const result = await NLME.runExportJob({
     kind: 'notes',
     items: selectedNotes,
@@ -276,6 +277,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
         note.svgContent = null;
         note.treeData = null;
       });
+      imageSession?.endBatch();
       // Give GC time to work between batches
       if (!info.isLast) await new Promise(resolve => setTimeout(resolve, 1000));
     },
@@ -287,7 +289,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
         (done + 1) / total);
       console.log(`[NotebookLM Takeout] Processing note ${done + 1}/${total}:`, item.title, 'index:', item.index);
     }
-  });
+  }).finally(endImageSession);
 
   return { result, zips: written.zips, errors: result.errors, auditOk: NLME.auditExport(finalAudit()).ok, parts: written.parts, packages: written.count };
 }
@@ -444,26 +446,42 @@ async function exportSingleNote(note) {
   });
   const needsImages = !!settings.exportNoteWithImages;
 
+  // One note, no job of its own to collect errors: say failures here
+  beginImageSession(tab.id, () => false);
   let noteData;
+  let imageEmbeds = null;
   try {
-    noteData = await chrome.tabs.sendMessage(tab.id, {
-      type: NLME.MSG.EXTRACT_NOTE,
-      data: {
-        noteIndex: note.index,
-        noteTitle: note.title,
-        sourceIndex: note.sourceIndex,
-        includeCitationImages: needsImages,
-        citationDetail: settings.citationDetail,
-        reuseCitations: settings.reuseCitations !== false
-      }
-    });
-  } finally {
-    // Always close the note viewer so the next action has a clean page.
-    try { await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.NAVIGATE_BACK }); } catch (_) { /* noop */ }
-  }
+    try {
+      noteData = await chrome.tabs.sendMessage(tab.id, {
+        type: NLME.MSG.EXTRACT_NOTE,
+        data: {
+          noteIndex: note.index,
+          noteTitle: note.title,
+          sourceIndex: note.sourceIndex,
+          includeCitationImages: needsImages,
+          citationDetail: settings.citationDetail,
+          reuseCitations: settings.reuseCitations !== false
+        }
+      });
+    } finally {
+      // Always close the note viewer so the next action has a clean page.
+      try { await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.NAVIGATE_BACK }); } catch (_) { /* noop */ }
+    }
 
-  if (!noteData || noteData.error) {
-    throw new Error(noteData?.error || 'Failed to extract note');
+    if (!noteData || noteData.error) {
+      throw new Error(noteData?.error || 'Failed to extract note');
+    }
+
+    if (needsImages && !noteData.isMindmap) {
+      imageEmbeds = await embedAndReportImages(
+        convertToMarkdown(noteData.html, noteData.sources, note.title, false, true, null, true, settings.citationDetail === 'none', settings.citationStyle),
+        note.title, noteData.imageFailures, failure => {
+          console.warn(`[NotebookLM Takeout] "${note.title}": ${failure.message}`, failure.url);
+          showToast(`${note.title}: ${failure.message}`, 'warning');
+        });
+    }
+  } finally {
+    endImageSession();
   }
 
   const obsidian = !!settings.obsidianNames;
@@ -474,16 +492,6 @@ async function exportSingleNote(note) {
     await saveFiles(files);
     return { success: true, filesWritten: files.length };
   }
-
-  // One note, no job: nothing collects errors, so say it here
-  const imageEmbeds = needsImages
-    ? await embedAndReportImages(
-      convertToMarkdown(noteData.html, noteData.sources, note.title, false, true, null, true, settings.citationDetail === 'none', settings.citationStyle),
-      note.title, noteData.imageFailures, failure => {
-        console.warn(`[NotebookLM Takeout] "${note.title}": ${failure.message}`, failure.url);
-        showToast(`${note.title}: ${failure.message}`, 'warning');
-      })
-    : null;
 
   // Regular note — produce enabled markdown versions, each as its own .md file.
   const versions = getEnabledNoteVersions({

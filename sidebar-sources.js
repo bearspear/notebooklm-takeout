@@ -65,7 +65,7 @@ async function embedImagesInMarkdown(markdown, sourceTitle) {
 
     try {
       console.log(`[NotebookLM Takeout] Downloading image: ${imageUrl.substring(0, 100)}...`);
-      const dataUri = embeds.get(imageUrl) ?? await downloadImageAsBase64(imageUrl);
+      const dataUri = embeds.get(imageUrl) ?? await fetchJobImage(imageUrl);
       embeds.set(imageUrl, dataUri);
 
       // Replace the URL with the data URI
@@ -75,8 +75,9 @@ async function embedImagesInMarkdown(markdown, sourceTitle) {
       successCount++;
       console.log(`[NotebookLM Takeout] Successfully embedded image (${(dataUri.length / 1024).toFixed(1)} KB)`);
     } catch (error) {
+      if (error.cancelled) break;
       console.error(`[NotebookLM Takeout] Failed to embed image:`, error);
-      failures.push({ item: sourceTitle, url: imageUrl, reason: error.message });
+      failures.push({ item: sourceTitle, url: imageUrl, reason: error.message, skipped: !!error.skipped });
     }
   }
 
@@ -99,12 +100,13 @@ async function embedImagesInMarkdown(markdown, sourceTitle) {
  * @param {string} item its name in errors.md
  * @param {Array<{url: string, reason: string}>} [earlierFailures]
  * @param {Function} warn receives each summary
+ * @param {Function} [jobWarn] receives the job-wide summary of skipped images
  * @returns {Promise<Map<string, string>>} url -> data URI for NLME.applyImageEmbeds
  */
-async function embedAndReportImages(markdown, item, earlierFailures, warn) {
+async function embedAndReportImages(markdown, item, earlierFailures, warn, jobWarn = warn) {
   const { embeds, failures } = await embedImagesInMarkdown(markdown, item);
   const stillFailed = (earlierFailures || []).filter(failure => !embeds.has(failure.url));
-  reportImageFailures([...stillFailed, ...failures], item, warn);
+  reportImageFailures([...stillFailed, ...failures], item, warn, jobWarn);
   return embeds;
 }
 
@@ -297,6 +299,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
 
   console.log(`[NotebookLM Takeout] Will create ${Math.ceil(selectedSources.length / perZip)} ZIP(s) for ${selectedSources.length} sources (${perZip} per ZIP)`);
 
+  beginImageSession(shell.tab.id, () => shell.isCancelled() || state.declined);
   const result = await NLME.runExportJob({
     kind: 'sources',
     items: selectedSources,
@@ -351,6 +354,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
         source.versions = { base: null, plusMeta: null, withImages: null, plusMetaWithImages: null };
         source.summary = null;
       });
+      imageSession?.endBatch();
       // Give GC time to work between batches
       if (!info.isLast) await new Promise(resolve => setTimeout(resolve, 1000));
     },
@@ -362,7 +366,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
         (done + 1) / total);
       console.log(`[NotebookLM Takeout] Extracting source: "${item.title}"`);
     }
-  });
+  }).finally(endImageSession);
 
   return { result, zips: written.zips, errors: result.errors, auditOk: NLME.auditExport(finalAudit()).ok, parts: written.parts, packages: written.count };
 }

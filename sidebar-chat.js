@@ -201,6 +201,7 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
   let auditDoc = null;
 
   console.log('[NotebookLM Takeout] Processing messages and extracting citations...');
+  beginImageSession(shell.tab.id, shell.isCancelled);
   const result = await NLME.runExportJob({
     kind: 'messages',
     items: messagePairs,
@@ -234,7 +235,7 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
       shell.progress(`Processing message ${done + 1}/${total}`, (done + 1) / total);
       console.log(`[NotebookLM Takeout] Message ${done + 1}: Processing...`);
     }
-  });
+  }).finally(endImageSession);
 
   return { result, zips: written.zips, errors: result.errors, auditOk: auditDoc ? auditDoc.ok : true, parts: written.parts, packages: written.count };
 }
@@ -277,10 +278,10 @@ async function extractChatPair(shell, pair, ctx, options) {
   });
   try {
     const markdown = convertChatToMarkdown('', '', [processed], false, citationMode === 'none', citationMode === 'titles', settings.citationStyle);
-    processed.imageEmbeds = await embedAndReportImages(markdown, question, imageFailures, warn);
+    processed.imageEmbeds = await embedAndReportImages(markdown, question, imageFailures, warn, ctx.warn);
   } catch (error) {
     console.error(`[NotebookLM Takeout] Message ${ctx.index + 1}: Error embedding images:`, error);
-    reportImageFailures(imageFailures, question, warn);
+    reportImageFailures(imageFailures, question, warn, ctx.warn);
     ctx.warn({ message: `Failed to embed images: ${error.message}`, messageIndex: ctx.index + 1, userQuestion: question, type: 'image_embedding_error' });
   }
   return processed;

@@ -29,21 +29,25 @@ function base64ToBlob(base64, mime) {
  * with the page's credentials (FETCH_FILE).
  *
  * @param {string} url
- * @param {{ tabId?: number, isAllowed?: Function, blobProblem?: Function }} [options]
+ * @param {{ tabId?: number, isAllowed?: Function, blobProblem?: Function, fallbackAfter?: Function }} [options]
  *   tabId: tab whose content script serves the fallback; defaults to the
  *   running export shell's tab, then the active tab
  *   isAllowed: replaces the host check
  *   blobProblem: blob => a reason to refuse it, or null. A refused blob counts
  *   as a failed attempt: refused direct, the fallback still runs.
+ *   fallbackAfter: status => false to skip the fallback after that direct status
  * @returns {Promise<Blob>}
- * @throws {Error} 'Fetch failed: <reason>' when both attempts fail
+ * @throws {Error} 'Fetch failed: <reason>' when both attempts fail, with
+ *   .status and .retryAfter from the last response that had a status
  */
-async function fetchDownload(url, { tabId, isAllowed = NLME.isAllowedDownloadUrl, blobProblem = () => null } = {}) {
+async function fetchDownload(url, { tabId, isAllowed = NLME.isAllowedDownloadUrl, blobProblem = () => null, fallbackAfter = () => true } = {}) {
   if (!isAllowed(url)) {
     throw new Error('Fetch failed: not a Gemini Notebook download URL');
   }
 
   let directReason;
+  let status;
+  let retryAfter;
   try {
     const response = await fetch(url, { credentials: 'include' });
     if (response.ok) {
@@ -52,10 +56,15 @@ async function fetchDownload(url, { tabId, isAllowed = NLME.isAllowedDownloadUrl
       if (!directReason) return blob;
     } else {
       directReason = `HTTP ${response.status}`;
+      status = response.status;
+      retryAfter = response.headers?.get('Retry-After') ?? null;
     }
   } catch (error) {
     directReason = error.message || String(error);
   }
+
+  const failed = reason => Object.assign(new Error(`Fetch failed: ${directReason}; page fetch: ${reason}`), { status, retryAfter });
+  if (status !== undefined && !fallbackAfter(status)) throw failed('not tried');
 
   // Fallback: the content script fetches with the page's credentials
   let fallbackReason;
@@ -73,11 +82,15 @@ async function fetchDownload(url, { tabId, isAllowed = NLME.isAllowedDownloadUrl
       if (!fallbackReason) return blob;
     } else {
       fallbackReason = (result && result.error) || 'no data';
+      if (result && result.status !== undefined) {
+        status = result.status;
+        retryAfter = result.retryAfter ?? null;
+      }
     }
   } catch (error) {
     fallbackReason = error.message || String(error);
   }
-  throw new Error(`Fetch failed: ${directReason}; page fetch: ${fallbackReason}`);
+  throw failed(fallbackReason);
 }
 
 // Blob for a data entry (string, Blob or Uint8Array). Strings and bytes get a

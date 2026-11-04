@@ -159,13 +159,13 @@ document.addEventListener('DOMContentLoaded', () => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === NLME.MSG.DOWNLOAD_IMAGE_AS_BASE64) {
     // Handle image download request from content script
-    downloadImageAsBase64(message.url, { tabId: sender.tab?.id })
+    fetchJobImage(message.url, { tabId: sender.tab?.id })
       .then(dataUri => {
         sendResponse({ success: true, dataUri });
       })
       .catch(error => {
         console.error('[NotebookLM Takeout] Failed to download image:', error);
-        sendResponse({ success: false, error: error.message });
+        sendResponse({ success: false, error: error.message, skipped: !!error.skipped, cancelled: !!error.cancelled });
       });
     return true; // Keep channel open for async response
   }
@@ -1285,7 +1285,9 @@ async function downloadImageAsBase64(url, { tabId } = {}) {
   const blob = await fetchDownload(url, {
     tabId,
     isAllowed: NLME.isAllowedImageUrl,
-    blobProblem: NLME.imageBlobProblem
+    blobProblem: NLME.imageBlobProblem,
+    // A limited host gets no second request: the job's session waits and retries
+    fallbackAfter: status => !NLME.isRateLimitedStatus(status)
   });
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1301,9 +1303,43 @@ async function downloadImageAsBase64(url, { tabId } = {}) {
  * @param {Array<{url: string, reason: string}>} [failures]
  * @param {string} item the note, source or message they belong to
  * @param {Function} warn receives each NLME.summarizeImageFailures entry
+ * @param {Function} [jobWarn] receives the job-wide summary of skipped images
  */
-function reportImageFailures(failures, item, warn) {
-  NLME.summarizeImageFailures((failures || []).map(f => ({ ...f, item }))).forEach(warn);
+function reportImageFailures(failures, item, warn, jobWarn = warn) {
+  const failed = (failures || []).filter(f => !f.skipped && !f.cancelled);
+  NLME.summarizeImageFailures(failed.map(f => ({ ...f, item }))).forEach(warn);
+  imageSession?.reportSkipped(jobWarn);
+}
+
+// Image downloads of the running job. One job runs at a time (job lock); the
+// sources pass and the page's citation images share it.
+let imageSession = null;
+
+/**
+ * @param {number} tabId tab that serves the page fetch fallback
+ * @param {Function} isCancelled
+ * @param {Function} [sleep] waits that end early on Cancel, by default
+ */
+function beginImageSession(tabId, isCancelled, sleep = null) {
+  const cancellableSleep = async ms => {
+    const end = Date.now() + ms;
+    while (Date.now() < end && !isCancelled()) {
+      await new Promise(resolve => setTimeout(resolve, Math.min(200, end - Date.now())));
+    }
+  };
+  imageSession = NLME.createImageSession({
+    download: url => downloadImageAsBase64(url, { tabId }),
+    sleep: sleep || cancellableSleep,
+    isCancelled
+  });
+}
+
+function endImageSession() {
+  imageSession = null;
+}
+
+function fetchJobImage(url, options) {
+  return imageSession ? imageSession.get(url) : downloadImageAsBase64(url, options);
 }
 
 /**

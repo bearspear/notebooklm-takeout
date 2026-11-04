@@ -64,6 +64,10 @@ function sidePanel({ fetchImpl, pageResult = { success: false, error: 'HTTP 403'
   vm.createContext(sandbox);
   vm.runInContext(read('sidebar-takeout.js'), sandbox);
   vm.runInContext(topLevelFn('sidebar-core.js', 'downloadImageAsBase64'), sandbox);
+  sandbox.imageSession = null;
+  for (const fn of ['beginImageSession', 'endImageSession', 'fetchJobImage']) {
+    vm.runInContext(topLevelFn('sidebar-core.js', fn), sandbox);
+  }
   return { sandbox, log };
 }
 
@@ -189,6 +193,7 @@ function sourcesPanel(fetchImpl) {
   const panel = sidePanel({ fetchImpl });
   vm.runInContext(topLevelFn('sidebar-sources.js', 'embedImagesInMarkdown'), panel.sandbox);
   vm.runInContext(topLevelFn('sidebar-sources.js', 'buildSourceData'), panel.sandbox);
+  vm.runInContext(topLevelFn('sidebar-sources.js', 'embedAndReportImages'), panel.sandbox);
   vm.runInContext(topLevelFn('sidebar-core.js', 'reportImageFailures'), panel.sandbox);
   Object.assign(panel.sandbox, {
     settings: {},
@@ -323,9 +328,9 @@ test('a chat message hands its image failures to the job, not as citation errors
 });
 
 // content.js's image conversion, on a stand-in element
-function contentScript({ sidebarResponse, fetchImpl } = {}) {
+function contentScript({ sidebarResponse, fetchImpl, isExportCancelled = () => false } = {}) {
   const sandbox = {
-    NLME, URL, Blob, FileReader: FakeFileReader, console: { log() {}, warn() {}, error() {} },
+    NLME, isExportCancelled, URL, Blob, FileReader: FakeFileReader, console: { log() {}, warn() {}, error() {} },
     NLMEMarkdown: { htmlToMarkdownPlain: element => element.images.map(i => i.src).join(' ') },
     fetch: async url => fetchImpl(url),
     chrome: { runtime: { sendMessage: async () => (typeof sidebarResponse === 'function' ? sidebarResponse() : sidebarResponse) } }
@@ -354,7 +359,9 @@ test('content script reports a side panel failure and keeps the link', async () 
   const failures = [];
   const md = await sandbox.htmlToMarkdownWithImages(fakeElement(REMOTE), true, failures);
   assert.equal(md, REMOTE);
-  assert.deepEqual(JSON.parse(JSON.stringify(failures)), [{ url: REMOTE, reason: 'Fetch failed: HTTP 403' }]);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].url, REMOTE);
+  assert.equal(failures[0].reason, 'Fetch failed: HTTP 403');
 });
 
 test('content script reports a closed side panel and a rejected message', async () => {
@@ -626,4 +633,319 @@ test('a chat message whose citations failed outright still gets its body images'
 test('with image versions on, chat and notes never read the citation cache', () => {
   assert.match(read('sidebar-chat.js'), /const cacheOn = settings\.reuseCitations !== false && !variantSettings\.exportNoteWithImages;/);
   assert.match(read('content.js'), /const cacheUsable = reuseCitations && !includeCitationImages && buttonsByIndex\.size > 0;/);
+});
+
+// ---- Task 7b: safeguards ----
+
+// A session around a scripted download. script(url, callNumber) returns a data
+// URI or throws; sleeps are recorded, never waited.
+function imageSession({ script, isCancelled, now } = {}) {
+  const calls = [];
+  const sleeps = [];
+  const session = NLME.createImageSession({
+    download: async url => { calls.push(url); return script(url, calls.length); },
+    sleep: async ms => { sleeps.push(ms); },
+    isCancelled,
+    now
+  });
+  return { session, calls, sleeps };
+}
+const http = (status, retryAfter = null) => Object.assign(new Error(`Fetch failed: HTTP ${status}`), { status, retryAfter });
+const fails = (promise, pattern = /./) => assert.rejects(promise, pattern);
+
+test('retryAfterMs reads seconds and dates, and ignores anything else', () => {
+  const now = Date.parse('2026-11-04T12:00:00Z');
+  assert.equal(NLME.retryAfterMs('7', now), 7000);
+  assert.equal(NLME.retryAfterMs('0', now), 0);
+  assert.equal(NLME.retryAfterMs('Wed, 04 Nov 2026 12:00:05 GMT', now), 5000);
+  assert.equal(NLME.retryAfterMs('Wed, 04 Nov 2026 11:00:00 GMT', now), 0);
+  for (const none of [null, undefined, '', 'soon', '-3']) assert.equal(NLME.retryAfterMs(none, now), null);
+});
+
+test('a 429 retries after 2 s, and a success ends it', async () => {
+  const { session, calls, sleeps } = imageSession({ script: (u, n) => { if (n === 1) throw http(429); return 'data:image/png;base64,A'; } });
+  assert.equal(await session.get('u'), 'data:image/png;base64,A');
+  assert.equal(calls.length, 2);
+  assert.deepEqual(sleeps, [2000]);
+});
+
+test('a 503 retries twice, 2 s then 4 s, then fails with its reason', async () => {
+  const { session, calls, sleeps } = imageSession({ script: () => { throw http(503); } });
+  await fails(session.get('u'), /HTTP 503/);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(sleeps, [2000, 4000]);
+});
+
+test('Retry-After replaces the backoff', async () => {
+  const { session, sleeps } = imageSession({ script: (u, n) => { if (n < 3) throw http(429, n === 1 ? '7' : '1'); return 'x'; } });
+  await session.get('u');
+  assert.deepEqual(sleeps, [7000, 1000]);
+});
+
+test('a Retry-After too long to wait fails the image without asking again early', async () => {
+  const { session, calls, sleeps } = imageSession({ script: () => { throw http(429, '3600'); } });
+  await fails(session.get('u'));
+  assert.equal(calls.length, 1);
+  assert.deepEqual(sleeps, []);
+});
+
+test('other failures do not retry', async () => {
+  for (const error of [http(404), http(403), http(500), new Error('Failed to fetch')]) {
+    const { session, calls, sleeps } = imageSession({ script: () => { throw error; } });
+    await fails(session.get('u'));
+    assert.equal(calls.length, 1);
+    assert.deepEqual(sleeps, []);
+  }
+});
+
+test('no delay between successful downloads', async () => {
+  const { session, sleeps } = imageSession({ script: url => `data:${url}` });
+  for (const url of ['a', 'b', 'c']) await session.get(url);
+  assert.deepEqual(sleeps, []);
+});
+
+const limitedSleeps = n => Array.from({ length: n }, () => [2000, 4000]).flat();
+
+test('5 limited images pause 30 s once; limiting on means the rest are skipped, in one summary', async () => {
+  const { session, calls, sleeps } = imageSession({ script: () => { throw http(429); } });
+  for (const url of ['1', '2', '3', '4']) await fails(session.get(url));
+  assert.deepEqual(sleeps, limitedSleeps(4));
+  await fails(session.get('5'));
+  assert.deepEqual(sleeps, [...limitedSleeps(5), 30000]);
+  await fails(session.get('6')); // still limited after the pause: last request of the job
+  assert.equal(calls.length, 18);
+  assert.deepEqual(sleeps, [...limitedSleeps(5), 30000, 2000, 4000]);
+
+  const warned = [];
+  await assert.rejects(session.get('7'), error => error.skipped === true);
+  await assert.rejects(session.get('8'), error => error.skipped === true);
+  await assert.rejects(session.get('8'), error => error.skipped === true);
+  assert.equal(calls.length, 18);
+  session.reportSkipped(e => warned.push(e));
+  session.reportSkipped(e => warned.push(e));
+  assert.equal(warned.length, 1);
+  assert.equal(warned[0].type, 'image_download_failed');
+  assert.match(warned[0].message, /2 images were skipped because Google limited requests/);
+
+  // The same object sits in the job's errors, so a later skip still counts
+  await fails(session.get('9'));
+  assert.match(warned[0].message, /3 images/);
+  assert.equal(warned[0].count, 3);
+});
+
+test('nothing skipped, nothing reported', () => {
+  const { session } = imageSession({ script: () => 'x' });
+  const warned = [];
+  session.reportSkipped(e => warned.push(e));
+  assert.deepEqual(warned, []);
+});
+
+test('a success after the pause carries on, and the pause is not taken twice', async () => {
+  let limited = true;
+  const { session, sleeps } = imageSession({ script: () => { if (limited) throw http(429); return 'x'; } });
+  for (const url of ['1', '2', '3', '4', '5']) await fails(session.get(url));
+  limited = false;
+  assert.equal(await session.get('6'), 'x');
+  limited = true;
+  for (const url of ['7', '8', '9', '10', '11']) await fails(session.get(url));
+  assert.equal(sleeps.filter(ms => ms === 30000).length, 1);
+  await assert.rejects(session.get('12'), error => error.skipped === true);
+});
+
+test('limited images must be consecutive: a 404 between them restarts the count', async () => {
+  const { session, sleeps } = imageSession({ script: url => { throw url === 'x' ? http(404) : http(429); } });
+  for (const url of ['1', '2', '3', '4', 'x', '5', '6', '7', '8']) await fails(session.get(url));
+  assert.equal(sleeps.includes(30000), false);
+});
+
+test('one session asks for a url once, a failed one too, until the batch ends', async () => {
+  const { session, calls } = imageSession({ script: url => { if (url === 'bad') throw http(404); return `data:${url}`; } });
+  assert.equal(await session.get('a'), 'data:a');
+  assert.equal(await session.get('a'), 'data:a');
+  await fails(session.get('bad'), /HTTP 404/);
+  await fails(session.get('bad'), /HTTP 404/);
+  assert.deepEqual(calls, ['a', 'bad']);
+  session.endBatch();
+  await session.get('a');
+  assert.deepEqual(calls, ['a', 'bad', 'a']);
+});
+
+test('cancel stops before the next request and during a backoff, and is not remembered', async () => {
+  let cancelled = false;
+  const { session, calls } = imageSession({
+    script: (u, n) => { if (n === 1) { cancelled = true; throw http(429); } return 'x'; },
+    isCancelled: () => cancelled
+  });
+  await assert.rejects(session.get('a'), error => error.cancelled === true);
+  assert.equal(calls.length, 1);
+  await assert.rejects(session.get('b'), error => error.cancelled === true);
+  assert.equal(calls.length, 1);
+  cancelled = false;
+  assert.equal(await session.get('a'), 'x');
+});
+
+test('fetchDownload carries status and Retry-After, and an image stops at a limit', async () => {
+  const limited = async () => ({ ok: false, status: 429, headers: { get: name => (name === 'Retry-After' ? '9' : null) } });
+  const { sandbox, log } = sidePanel({ fetchImpl: limited });
+  await assert.rejects(sandbox.downloadImageAsBase64('https://lh3.googleusercontent.com/notebooklm/a'), error => {
+    assert.equal(error.status, 429);
+    assert.equal(error.retryAfter, '9');
+    return true;
+  });
+  assert.equal(log.pageFetches.length, 0, 'a limited image must not spend a second request through the page');
+});
+
+test('a page fetch that is limited is seen too', async () => {
+  const { sandbox } = sidePanel({
+    fetchImpl: async () => { throw new TypeError('Failed to fetch'); },
+    pageResult: { success: false, error: 'HTTP 503', status: 503, retryAfter: '4' }
+  });
+  await assert.rejects(sandbox.downloadImageAsBase64('https://lh3.googleusercontent.com/notebooklm/a'), error => {
+    assert.equal(error.status, 503);
+    assert.equal(error.retryAfter, '4');
+    return true;
+  });
+});
+
+test('an artifact download still falls back after a 429', async () => {
+  const { sandbox, log } = sidePanel({ fetchImpl: async () => ({ ok: false, status: 429, headers: { get: () => null } }), pageResult: pageImage });
+  await sandbox.fetchDownload('https://lh3.googleusercontent.com/notebooklm/report');
+  assert.equal(log.pageFetches.length, 1);
+});
+
+test('the content script passes status and Retry-After back from its fetch', async () => {
+  const sandbox = {
+    console: { log() {}, warn() {}, error() {} },
+    fetch: async () => ({ ok: false, status: 429, headers: { get: name => (name === 'Retry-After' ? '3' : null) } })
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(nestedFn('content.js', 'fetchFileWithCredentials'), sandbox);
+  const result = await sandbox.fetchFileWithCredentials('https://x/y');
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), { success: false, error: 'HTTP 429', status: 429, retryAfter: '3' });
+});
+
+test('citation images convert one at a time', async () => {
+  let active = 0;
+  let peak = 0;
+  const seen = [];
+  const sandbox = contentScript({
+    sidebarResponse: async () => {
+      peak = Math.max(peak, ++active);
+      await new Promise(resolve => setTimeout(resolve, 1));
+      active--;
+      seen.push(1);
+      return { success: true, dataUri: 'data:image/png;base64,AA' };
+    }
+  });
+  await sandbox.htmlToMarkdownWithImages(fakeElement(`${REMOTE}/1`, `${REMOTE}/2`, `${REMOTE}/3`), true, []);
+  assert.equal(seen.length, 3);
+  assert.equal(peak, 1);
+});
+
+test('cancel stops the citation images and keeps the converted ones', async () => {
+  let cancelled = false;
+  const sandbox = contentScript({
+    sidebarResponse: () => { cancelled = true; return { success: true, dataUri: 'data:image/png;base64,AA' }; },
+    isExportCancelled: () => cancelled
+  });
+  const failures = [];
+  const md = await sandbox.htmlToMarkdownWithImages(fakeElement(`${REMOTE}/1`, `${REMOTE}/2`), true, failures);
+  assert.equal(md, `data:image/png;base64,AA ${REMOTE}/2`);
+  assert.deepEqual(failures, []);
+});
+
+test('the content script keeps the side panel\'s skipped and cancelled marks', async () => {
+  for (const mark of ['skipped', 'cancelled']) {
+    const sandbox = contentScript({ sidebarResponse: { success: false, error: 'x', [mark]: true } });
+    const failures = [];
+    await sandbox.htmlToMarkdownWithImages(fakeElement(REMOTE), true, failures);
+    assert.equal(failures[0][mark], true);
+  }
+});
+
+test('reportImageFailures leaves skipped and cancelled images to the job summary', () => {
+  const { sandbox } = sourcesPanel(async () => imageResponse());
+  const warned = [];
+  sandbox.reportImageFailures(
+    [{ url: 'a', reason: 'x', skipped: true }, { url: 'b', reason: 'x', cancelled: true }, { url: 'c', reason: 'HTTP 404' }],
+    'Venus', e => warned.push(e)
+  );
+  assert.equal(warned.length, 1);
+  assert.equal(warned[0].count, 1);
+  assert.match(warned[0].message, /HTTP 404/);
+});
+
+test('a skipped image in a job stays a link and reaches errors once', async () => {
+  const limited = async () => ({ ok: false, status: 429, headers: { get: name => (name === 'Retry-After' ? '0' : null) } });
+  const { sandbox, log } = sourcesPanel(limited);
+  sandbox.beginImageSession(5, () => false, async () => {});
+  const urls = Array.from({ length: 9 }, (_, i) => `https://lh3.googleusercontent.com/notebooklm/${i}`);
+  const md = urls.map(url => `![](${url})`).join('\n');
+  const warned = [];
+  const out = await sandbox.embedAndReportImages(md, 'Venus', [], e => warned.push(e));
+  sandbox.endImageSession();
+  assert.equal(out.size, 0);
+  assert.equal(log.fetches.length, 6 * 3);
+  const summaries = warned.filter(e => /skipped because Google limited/.test(e.message));
+  assert.equal(summaries.length, 1);
+  assert.equal(summaries[0].count, 3);
+  assert.equal(warned.filter(e => e.source === 'Venus').length, 1);
+  assert.equal(warned.find(e => e.source === 'Venus').count, 6);
+});
+
+test('cancel stops the embed pass and keeps what is done', async () => {
+  let cancelled = false;
+  const { sandbox, log } = sourcesPanel(async () => { cancelled = true; return imageResponse(); });
+  sandbox.beginImageSession(5, () => cancelled);
+  const first = 'https://lh3.googleusercontent.com/notebooklm/1';
+  const second = 'https://lh3.googleusercontent.com/notebooklm/2';
+  const out = await sandbox.embedImagesInMarkdown(`![](${first}) ![](${second})`, 'Venus');
+  sandbox.endImageSession();
+  assert.equal(log.fetches.length, 1);
+  assert.equal(out.imagesEmbedded, 1);
+  assert.match(out.markdown, /^!\[\]\(data:image/);
+  assert.ok(out.markdown.includes(second));
+  assert.deepEqual(out.failures.length, 0);
+});
+
+test('a source with both image variants downloads each image once', async () => {
+  const { sandbox, log } = sourcesPanel(async () => imageResponse());
+  sandbox.beginImageSession(5, () => false);
+  const url = 'https://lh3.googleusercontent.com/notebooklm/1';
+  sandbox.convertToMarkdown = () => `![](${url})`;
+  const built = await sandbox.buildSourceData(
+    { title: 'Venus', index: 0 }, { html: 'x', guideMarkdown: 'G', keyTopics: ['t'] },
+    { warn() {} }, {}, true, { exportSourceWithImages: true, exportSourcePlusMetaWithImages: true }
+  );
+  sandbox.endImageSession();
+  assert.equal(log.fetches.length, 1);
+  assert.match(built.versions.withImages, /data:image/);
+  assert.match(built.versions.plusMetaWithImages, /data:image/);
+});
+
+test('the side panel answers a page image request through the job session', async () => {
+  const { sandbox, log } = sidePanel({ fetchImpl: async () => imageResponse() });
+  sandbox.beginImageSession(5, () => false);
+  const url = 'https://lh3.googleusercontent.com/notebooklm/1';
+  await sandbox.fetchJobImage(url, { tabId: 9 });
+  await sandbox.fetchJobImage(url, { tabId: 9 });
+  sandbox.endImageSession();
+  assert.equal(log.fetches.length, 1);
+  await sandbox.fetchJobImage(url, { tabId: 9 });
+  assert.equal(log.fetches.length, 2);
+  assert.match(read('sidebar-core.js'), /fetchJobImage\(message\.url, \{ tabId: sender\.tab\?\.id \}\)/);
+});
+
+test('every job opens a session, closes it, and frees it with each batch', () => {
+  for (const [file, fn] of [['sidebar-notes.js', 'runNotesJob'], ['sidebar-sources.js', 'runSourcesJob'], ['sidebar-chat.js', 'runChatJob']]) {
+    const body = topLevelFn(file, fn);
+    assert.match(body, /beginImageSession\(shell\.tab\.id,/, fn);
+    assert.match(body, /\.finally\(endImageSession\)/, fn);
+  }
+  for (const [file, fn] of [['sidebar-notes.js', 'runNotesJob'], ['sidebar-sources.js', 'runSourcesJob']]) {
+    assert.match(topLevelFn(file, fn), /imageSession\?\.endBatch\(\)/, fn);
+  }
+  const single = topLevelFn('sidebar-notes.js', 'exportSingleNote');
+  assert.match(single, /beginImageSession\(tab\.id, \(\) => false\)/);
+  assert.match(single, /endImageSession\(\)/);
 });

@@ -556,7 +556,7 @@
 
       if (!response.ok) {
         console.error('[NotebookLM Takeout] Fetch failed:', response.status);
-        return { success: false, error: `HTTP ${response.status}` };
+        return { success: false, error: `HTTP ${response.status}`, status: response.status, retryAfter: response.headers.get('Retry-After') };
       }
 
       const blob = await response.blob();
@@ -2200,8 +2200,8 @@
   /**
    * Convert image URL to base64 data URL
    * @param {string} url - Image URL to convert
-   * @returns {Promise<{dataUri?: string, reason?: string}>} the data URL, or
-   *   why there is none. Never throws: the caller reports the reason.
+   * @returns {Promise<{dataUri?: string, reason?: string, skipped?: boolean, cancelled?: boolean}>}
+   *   the data URL, or why there is none. Never throws: the caller reports it.
    */
   async function imageToBase64(url) {
     try {
@@ -2220,7 +2220,7 @@
         }
         const reason = (response && response.error) || 'no response from the side panel';
         console.warn('[NotebookLM Takeout] Sidebar failed to download image:', reason);
-        return { reason };
+        return { reason, skipped: !!response?.skipped, cancelled: !!response?.cancelled };
       }
 
       // Regular fetch for any other host
@@ -2258,8 +2258,8 @@
    * Convert HTML element to markdown with optional base64 image embedding
    * @param {Element} element - HTML element to convert
    * @param {boolean} includeImages - Whether to embed images as base64
-   * @param {Array} [imageFailures] - Receives { url, reason } for each image
-   *   that stays a link
+   * @param {Array} [imageFailures] - Receives { url, reason, skipped, cancelled }
+   *   for each image that stays a link
    * @returns {Promise<string>} Markdown string
    */
   async function htmlToMarkdownWithImages(element, includeImages = false, imageFailures = []) {
@@ -2271,22 +2271,18 @@
       if (images.length > 0) {
         console.log(`[NotebookLM Takeout] Found ${images.length} images in citation, converting to base64...`);
 
-        // Convert all images to base64
-        const conversions = [];
-        images.forEach(img => {
+        // One at a time: every image is a request to Google
+        for (const img of images) {
+          if (isExportCancelled()) break;
           const originalSrc = img.src;
-          const conversion = imageToBase64(originalSrc).then(({ dataUri, reason }) => {
-            if (dataUri) {
-              img.setAttribute('src', dataUri);
-              img.setAttribute('data-original-src', originalSrc);
-            } else {
-              imageFailures.push({ url: originalSrc, reason });
-            }
-          });
-          conversions.push(conversion);
-        });
-
-        await Promise.all(conversions);
+          const { dataUri, reason, skipped, cancelled } = await imageToBase64(originalSrc);
+          if (dataUri) {
+            img.setAttribute('src', dataUri);
+            img.setAttribute('data-original-src', originalSrc);
+          } else {
+            imageFailures.push({ url: originalSrc, reason, skipped, cancelled });
+          }
+        }
         console.log(`[NotebookLM Takeout] Processed ${images.length} images`);
       }
     }
