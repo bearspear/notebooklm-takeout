@@ -191,7 +191,7 @@ async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = fals
  *   zips/parts/packages: what target.written holds (see newWritten)
  *   result: runExportJob's result
  */
-async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'notes', folder = null, variantSettings = settings, itemDir = 'notes/', written = newWritten(), tracker = null } = {}) {
+async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'notes', folder = null, variantSettings = settings, itemDir = 'notes/', written = newWritten(), tracker = null, capture = null } = {}) {
   const perZip = settings.notesPerZip;
   // Shared by every extractNoteItem call: audit counters, early-stop
   // counters, and the DOM-warning decision
@@ -262,7 +262,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
         variantSettings,
         itemDir
       });
-      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, written });
+      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, written, capture });
       console.log(`[NotebookLM Takeout] Downloaded notes ZIP ${info.batchIndex}/${info.totalBatches}`);
       if (tracker) tracker.commit(); // these notes are on disk now
 

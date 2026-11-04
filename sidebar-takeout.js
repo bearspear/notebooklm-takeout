@@ -124,6 +124,33 @@ async function downloadSizeWhenDone(downloadId, { timeoutMs = 120000, intervalMs
   }
 }
 
+// Where a URL download really landed: its path with the name Chrome gave it,
+// once Chrome has settled that. Falls back to the planned path; never rejects.
+async function landedUrlPath(path, downloadId, { timeoutMs = 3000, intervalMs = 100 } = {}) {
+  if (downloadId == null) return path;
+  try {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const [item] = await chrome.downloads.search({ id: downloadId });
+      if (!item || item.filename || item.state === 'interrupted') return NLMEViewer.landedPath(path, item && item.filename);
+      if (Date.now() >= deadline) return path;
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
+    }
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Could not read a download name:', error);
+    return path;
+  }
+}
+
+// Tell the capture about a saved file. Its trouble is never the save's.
+function reportSaved(capture, path, data) {
+  try {
+    capture(path, typeof data === 'string' ? data : null);
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Could not capture a file for the viewer:', error);
+  }
+}
+
 /**
  * Write files: one ZIP, a Downloads subfolder, or single downloads.
  *
@@ -138,14 +165,18 @@ async function downloadSizeWhenDone(downloadId, { timeoutMs = 120000, intervalMs
  *   downloadBlob, url via the background (DIRECT_DOWNLOAD_URL streams large
  *   media to disk and fixes the extension from the real download).
  *
+ * capture (Full Takeout only): called with (path, text|null) for each entry once
+ * it is saved, with the path it landed on; text for string data, else null. In ZIP
+ * mode that is after the ZIP is saved, so a failed ZIP captures nothing.
+ *
  * @param {Array<{path: string, data?: string|Blob|Uint8Array, url?: string}>} files
- * @param {{ zipName?: string, folder?: string }} [options]
+ * @param {{ zipName?: string, folder?: string, capture?: ((path: string, text: string|null) => void)|null }} [options]
  * @returns {Promise<{ saved: number, zipped: boolean, sizes?: Array<Promise<number|null>|undefined> }>}
  *   sizes (folder mode): per entry, in order, a promise of the downloaded file's
  *   size for url entries (downloadSizeWhenDone; resolves null when unknown),
  *   undefined for data entries. Not awaited here: downloads finish on their own.
  */
-async function saveFiles(files, { zipName, folder } = {}) {
+async function saveFiles(files, { zipName, folder, capture = null } = {}) {
   if (zipName) {
     const zip = new JSZip();
     for (const entry of files) {
@@ -159,6 +190,7 @@ async function saveFiles(files, { zipName, folder } = {}) {
     }
     const blob = await generateZipTimed(zip);
     await downloadBlob(blob, zipName);
+    if (capture) for (const entry of files) reportSaved(capture, entry.path, entry.data);
     return { saved: files.length, zipped: true };
   }
 
@@ -170,8 +202,11 @@ async function saveFiles(files, { zipName, folder } = {}) {
       if (entry.data !== undefined) {
         await downloadBlobToFolderPath(entryBlob(entry), target);
         sizes.push(undefined);
+        if (capture) reportSaved(capture, entry.path, entry.data);
       } else {
-        sizes.push(downloadSizeWhenDone(await downloadUrlTo(entry, target)));
+        const downloadId = await downloadUrlTo(entry, target);
+        sizes.push(downloadSizeWhenDone(downloadId));
+        if (capture) reportSaved(capture, await landedUrlPath(entry.path, downloadId), null);
       }
       saved++;
     }
@@ -182,8 +217,10 @@ async function saveFiles(files, { zipName, folder } = {}) {
   for (const entry of files) {
     if (entry.data !== undefined) {
       await downloadBlob(entryBlob(entry), entry.path);
+      if (capture) reportSaved(capture, entry.path, entry.data);
     } else {
-      await downloadUrlTo(entry, entry.path);
+      const downloadId = await downloadUrlTo(entry, entry.path);
+      if (capture) reportSaved(capture, await landedUrlPath(entry.path, downloadId), null);
     }
     saved++;
   }
@@ -371,6 +408,18 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
 
 // ---- Full Takeout (Milestone 3a) ----
 
+// viewer.html for the files captured so far. The side panel reads its own packaged
+// files, which needs no permission. Links are relative to the takeout root.
+async function buildViewerHtml(files, meta) {
+  const [template, app, marked, katex, css] = await Promise.all(NLMEViewer.VIEWER_ASSETS.map(async asset => {
+    const response = await fetch(chrome.runtime.getURL(asset));
+    if (!response.ok) throw new Error(`${asset}: HTTP ${response.status}`);
+    return response.text();
+  }));
+  const data = NLMEViewer.buildViewerData(files, { notebook: meta.notebook, exported: meta.exported });
+  return NLMEViewer.assembleViewer({ template, css, marked, katex, app, data });
+}
+
 // The ZIP setting: the checkbox next to the Full Takeout button, else the saved
 // choice (takeoutZip, falling back to autoZip). The Artifacts tab's Zip tick
 // only affects Download Selected.
@@ -382,8 +431,8 @@ function takeoutZipEnabled() {
 /**
  * One-click Full Takeout: a notebook's sources, notes, chat and artifacts in
  * one run and one layout: <root>/{sources,notes,chat,artifacts}/ plus
- * <root>/_index.md, manifest.json and errors.md (root = sanitized notebook
- * name). A category written in several batches has part-N/ folders.
+ * <root>/_index.md, viewer.html, manifest.json and errors.md (root = sanitized
+ * notebook name). A category written in several batches has part-N/ folders.
  *
  * - ZIP on (takeoutZipEnabled): each category's batches go to
  *   <Notebook>-takeout-<category>-<ts>[-PARTIAL][-partNofM|-partN].zip, the root
@@ -400,6 +449,11 @@ function takeoutZipEnabled() {
  * category as 'partial' (its ZIP -PARTIAL), or (between categories) adds a
  * takeout-level note to errors.md, and marks every later one 'skipped'; the
  * root files are written anyway.
+ *
+ * viewer.html (offline viewer) is built from what the runners saved: a capture
+ * through the target notes each file as saveFiles writes it. A failed build is
+ * an errors.md line, never a failed takeout; a cancelled takeout gets a viewer
+ * of what exists.
  *
  * One combined results panel at the end (showResults): shell.finish reports a
  * single category's outcome, so the takeout does not use it. It lists the ZIPs
@@ -485,6 +539,9 @@ async function runFullTakeout() {
       }
     ].map(c => ({ ...c, status: null, selected: 0, exported: 0, failed: 0, zips: [], parts: 0, packages: 0, errors: [], auditOk: true, items: null, failedItems: [] }));
     const takeoutErrors = []; // not tied to one category
+    // Relative path -> text the viewer reads, null for the rest (NLMEViewer.captureEntry)
+    let viewerFiles = {};
+    const capture = (path, text) => NLMEViewer.captureEntry(viewerFiles, path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path, text);
     // Set once a cancellation is on record (scan, a runner's own note, or
     // between categories): every later category is skipped
     let stopRest = false;
@@ -541,7 +598,7 @@ async function runFullTakeout() {
       // so the index still links the parts already written
       const written = newWritten();
       try {
-        const out = await c.run(catShell, c.items, { pathPrefix: `${root}/${c.folder}/`, zipKind: `takeout-${c.folder}`, folder, written, tracker });
+        const out = await c.run(catShell, c.items, { pathPrefix: `${root}/${c.folder}/`, zipKind: `takeout-${c.folder}`, folder, written, tracker, capture });
         c.exported = out.result.exported;
         c.failed = out.result.failed;
         c.errors.push(...out.errors);
@@ -578,6 +635,17 @@ async function runFullTakeout() {
     if (tracker) await tracker.finish(!stopRest && !uncleanEnd);
 
     // 3. Root files, also after a cancel
+    let viewerHtml = null;
+    shell.progress('Building the offline viewer...', 1);
+    try {
+      viewerHtml = await buildViewerHtml(viewerFiles, shell.meta);
+    } catch (error) {
+      console.error('[NotebookLM Takeout] Full Takeout: viewer failed:', error);
+      takeoutErrors.push({ type: 'viewer', message: 'The offline viewer could not be built' });
+    }
+    viewerFiles = null; // the texts are in viewerHtml now
+    const viewerFile = viewerHtml === null ? null : 'viewer.html';
+
     const summary = categories.map(({ name, folder: catFolder, status, selected, exported, failed, zips, parts, packages }) =>
       ({ name, folder: catFolder, status, selected, exported, failed, zips, parts, packages }));
     const errors = [
@@ -588,11 +656,12 @@ async function runFullTakeout() {
     const errorsFile = errors.length ? 'errors.md' : null;
     const rootFiles = [{
       path: '_index.md',
-      data: NLME.buildRootIndex({ meta: shell.meta, categories: summary, errorsFile }) + timingSummary()
+      data: NLME.buildRootIndex({ meta: shell.meta, categories: summary, errorsFile, viewerFile }) + timingSummary()
     }, {
       path: '_index.html',
-      data: NLME.buildRootIndexHtml({ meta: shell.meta, categories: summary, errorsFile })
+      data: NLME.buildRootIndexHtml({ meta: shell.meta, categories: summary, errorsFile, viewerFile })
     }];
+    if (viewerFile) rootFiles.push({ path: viewerFile, data: viewerHtml });
     if (errors.length) {
       rootFiles.push({
         path: 'errors.md',
@@ -611,7 +680,7 @@ async function runFullTakeout() {
           meta: shell.meta,
           kind: 'takeout',
           partial: cancelled,
-          files: rootFiles.slice(), // _index.md, _index.html, errors.md (not itself)
+          files: rootFiles.slice(), // _index.md, _index.html, viewer.html, errors.md (not itself)
           counts: Object.fromEntries(summary.map(c => [c.folder, c.exported])),
           errorCount: errors.length
         }),

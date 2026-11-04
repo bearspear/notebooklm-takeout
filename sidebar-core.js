@@ -1459,12 +1459,15 @@ async function withJobRecord(shell, kind, label, category, items, run, { update 
  * category folder, not in a notes/ or sources/ folder inside it).
  *
  * @typedef {{ pathPrefix?: string, zipKind?: string, folder?: string|null,
- *   variantSettings?: object, itemDir?: string, written?: Written }} CategoryTarget
+ *   variantSettings?: object, itemDir?: string, written?: Written,
+ *   capture?: ((path: string, text: string|null) => void)|null }} CategoryTarget
  *   itemDir: folder (with trailing '/') of the note or source files inside the
  *   package; default 'notes/' / 'sources/'. mind-maps/ and the combined files
  *   keep their package-relative paths; sources' youtube-urls*.txt follow itemDir.
  *   written: filled as each package is saved (see newWritten), so a caller that
  *   gets a throw from the runner still knows what reached disk.
+ *   capture: told of each saved file (see saveFiles); Full Takeout's viewer.
+ *   Tab exports pass none.
  */
 
 // What a category runner has saved so far. A caller (Full Takeout) passes its
@@ -1479,7 +1482,7 @@ function newWritten() {
 
 // One batch of a category's files to its ZIP (name pushed to written.zips) or,
 // with target.folder, into that Downloads folder; every path gets `prefix`
-async function saveCategoryBatch(shell, files, info, { prefix = '', zipKind, folder = null, written }) {
+async function saveCategoryBatch(shell, files, info, { prefix = '', zipKind, folder = null, written, capture = null }) {
   const placed = prefix ? files.map(f => ({ ...f, path: prefix + f.path })) : files;
   const record = () => {
     written.count++;
@@ -1487,7 +1490,7 @@ async function saveCategoryBatch(shell, files, info, { prefix = '', zipKind, fol
     written.parts = prefix && written.multi ? written.count : 0;
   };
   if (folder) {
-    await saveFiles(placed, { folder });
+    await saveFiles(placed, { folder, capture });
     record();
     return;
   }
@@ -1501,7 +1504,7 @@ async function saveCategoryBatch(shell, files, info, { prefix = '', zipKind, fol
     // not (-partN); a single package has no suffix
     totalParts: info.multi ? info.totalBatches : 1
   });
-  await saveFiles(placed, { zipName });
+  await saveFiles(placed, { zipName, capture });
   written.zips.push(zipName);
   record();
 }

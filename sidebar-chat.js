@@ -188,7 +188,7 @@ async function exportChat(chatData) {
  * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, parts: number, packages: number }>}
  *   zips/parts/packages: what target.written holds (see newWritten)
  */
-async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip = false, pathPrefix = '', zipKind = 'chat', folder = null, variantSettings = settings, written = newWritten() } = {}) {
+async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip = false, pathPrefix = '', zipKind = 'chat', folder = null, variantSettings = settings, written = newWritten(), capture = null } = {}) {
   const messagePairs = chatData.messagePairs;
   // Scan completeness (Milestone 2, Resilience #2): known before the job
   // starts, so they lead errors.md
@@ -226,7 +226,7 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
         await saveFiles([{ ...single, path: `${NLME.fileStem(shell.projectName, { obsidian: !!settings.obsidianNames })}-chat-${shell.timestamp}.md` }]);
       } else {
         // One package: totalBatches is 1, so no -partNofM
-        await saveCategoryBatch(shell, files, info, { prefix: pathPrefix, zipKind, folder, written });
+        await saveCategoryBatch(shell, files, info, { prefix: pathPrefix, zipKind, folder, written, capture });
       }
     },
     isCancelled: shell.isCancelled,

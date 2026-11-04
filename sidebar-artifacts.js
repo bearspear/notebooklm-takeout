@@ -77,7 +77,8 @@ function reportFile(stem, response, title, meta) {
  *   meta: front matter metadata (computed from the tab when omitted);
  *   folder: Downloads subfolder for a captured button_click download;
  *   slidesFormat: Slides format for this call (default: the ⚙️ setting)
- * @returns {Promise<{ files: Array<{path: string, data?: string|Blob, url?: string}>, savedOutside: boolean }>}
+ * @returns {Promise<{ files: Array<{path: string, data?: string|Blob, url?: string}>, savedOutside: boolean, savedName?: string }>}
+ *   savedName: the captured download's name, with `folder` when given
  */
 async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', slidesFormat = settings.slidesFormat }) {
   const { index, type, label } = item;
@@ -147,7 +148,7 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
         }
         if (!result || !result.success) throw new Error('Download was not captured');
         logger.download(title, 'success', `Downloaded without tab: ${result.filename}`);
-        return { files: [], savedOutside: true };
+        return { files: [], savedOutside: true, savedName: result.filename };
       }
       default:
         throw new Error(`Unknown download method: ${response.method}`);
@@ -978,7 +979,7 @@ async function downloadAllArtifacts(tabId, items, { updateRecord = false } = {})
  * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, savedOutside: number, parts: number, packages: number }>}
  *   savedOutside: items Chrome saved itself (no capturable URL)
  */
-async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artifacts', folder = null, bothSlideFormats = false, written = newWritten(), tracker = null } = {}) {
+async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artifacts', folder = null, bothSlideFormats = false, written = newWritten(), tracker = null, capture = null } = {}) {
   const zipMode = !folder;
   const place = files => (pathPrefix ? files.map(f => ({ ...f, path: pathPrefix + f.path })) : files);
   const stems = NLME.artifactStems(items, { obsidian: !!settings.obsidianNames });
@@ -1017,6 +1018,10 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
           }), 3, item.label);
           fetched.files.push(...one.files);
           fetched.savedOutside = fetched.savedOutside || one.savedOutside;
+          // Saved by the background, so saveFiles never sees it. Folder mode: the top
+          // of the Downloads folder, beside the root. ZIP mode: plain Downloads, no
+          // path from the takeout to it, so the viewer cannot link it (errors.md does)
+          if (capture && one.savedName && !zipMode) reportSaved(capture, pathPrefix + NLMEViewer.outsidePath(typeFolder, one.savedName), null);
         } catch (error) {
           failures.push({ format, error });
         }
@@ -1037,7 +1042,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
       if (!zipMode) {
         // Saved here, not in packageBatch, so a failed save fails this
         // item (errors.md) instead of ending the whole job
-        const { sizes = [] } = await saveFiles(place(files), { folder });
+        const { sizes = [] } = await saveFiles(place(files), { folder, capture });
         written.count++;
         const entries = files.map(f => (f.data instanceof Blob ? { ...f, data: { byteLength: f.data.size } } : { ...f }));
         // A url entry's size is known once its download completes: fill `bytes`
@@ -1064,7 +1069,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
         }));
         // Memory: the Blobs live only in this call; the runner drops `results`
         // once it returns, and `written` keeps names and counts only
-        await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder: null, written });
+        await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder: null, written, capture });
         if (tracker) tracker.commit(); // this part's items are on disk now
         return;
       }
@@ -1084,7 +1089,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
           ]);
         }
         const all = saved.flatMap(r => r.files);
-        await saveFiles(place(artifactsRootFiles(all, saved.map(r => r.item), { meta: shell.meta, info })), { folder });
+        await saveFiles(place(artifactsRootFiles(all, saved.map(r => r.item), { meta: shell.meta, info })), { folder, capture });
         // The root files are a package too: an errors-only run (every item
         // failed) leaves errors.md and _index.md in the folder
         written.count++;

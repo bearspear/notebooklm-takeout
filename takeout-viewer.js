@@ -9,6 +9,10 @@
 //   escapeJson(data)                   JSON that is safe inside a <script> tag
 //   assembleViewer({template, css, marked, katex, app, data})  one self-contained HTML string
 //   VIEWER_ASSETS                      paths of the five viewer files
+//   keepsText(path)                    wantsText, plus the artifacts manifest (titles)
+//   captureEntry(store, relPath, data) store[relPath] = data for kept strings, else null
+//   landedPath(path, diskName)         path with the file name a download really got
+//   outsidePath(typeFolder, savedName) path inside artifacts/ of a file saved beside the takeout root
 (function (root) {
   'use strict';
 
@@ -33,8 +37,11 @@
     return name !== 'errors.md';
   }
 
-  // 'part-2/notes/a.md' and 'x/part-1/notes/a.md' -> 'notes/a.md'
+  // Takeout layout (batchPrefix): 'notes/part-2/a.md' -> 'notes/a.md'.
+  // Parts unpacked side by side: 'part-2/notes/a.md', 'x/part-1/notes/a.md' -> 'notes/a.md'
   function normalizePath(p) {
+    const inner = /^(sources|notes|chat|artifacts)\/part-\d+\/(.*)$/.exec(p);
+    if (inner) return `${inner[1]}/${inner[2]}`;
     const m = /(?:^|\/)part-\d+\/(.*)$/.exec(p);
     return m ? m[1] : p;
   }
@@ -290,6 +297,30 @@
       .replace(/\u2029/g, '\\u2029');
   }
 
+  function keepsText(path) {
+    return wantsText(path) || normalizePath(String(path)) === 'artifacts/manifest.json';
+  }
+
+  // One saved file for a Full Takeout's viewer. Everything is listed (media links);
+  // text stays only where the viewer reads it, so memory stays bounded.
+  function captureEntry(store, relPath, data) {
+    store[relPath] = typeof data === 'string' && keepsText(relPath) ? data : null;
+  }
+
+  // chrome.downloads may give a URL download another name than planned (real
+  // extension, ' (1)' on a clash). diskName: the download's absolute path; '' = unknown.
+  function landedPath(path, diskName) {
+    const name = String(diskName || '').split(/[\\/]/).pop();
+    return name ? path.slice(0, path.lastIndexOf('/') + 1) + name : path;
+  }
+
+  // Path, inside artifacts/, of a file the background saved into the top of the
+  // Downloads folder, one level above the takeout root. It stays under <type>/ so the
+  // item is listed under its type; the '..' segments make the link resolve from viewer.html.
+  function outsidePath(typeFolder, savedName) {
+    return `${typeFolder}/../../../${String(savedName).split(/[\\/]/).pop()}`;
+  }
+
   const VIEWER_ASSETS = [
     'viewer/viewer-template.html', 'viewer/viewer-app.js', 'viewer/marked.min.js',
     'viewer/katex.min.js', 'viewer/katex-inline.css'
@@ -309,7 +340,7 @@
     return String(template).replace(/\/\*(KATEX_CSS|DATA_JSON|MARKED_JS|KATEX_JS|APP_JS)\*\//g, (m, k) => values[k]());
   }
 
-  const api = { wantsText, buildViewerData, escapeJson, assembleViewer, VIEWER_ASSETS };
+  const api = { wantsText, keepsText, captureEntry, landedPath, outsidePath, buildViewerData, escapeJson, assembleViewer, VIEWER_ASSETS };
   root.NLMEViewer = Object.assign(root.NLMEViewer || {}, api);
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(globalThis);

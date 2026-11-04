@@ -28,8 +28,7 @@ const files = {};
     const r = rel ? rel + '/' + e.name : e.name;
     if (e.isDirectory()) walk(path.join(dir, e.name), r);
     else if (e.isFile()) {
-      const text = V.wantsText(r) || r === 'artifacts/manifest.json' || /(^|\/)part-\d+\/artifacts\/manifest\.json$/.test(r);
-      files[r] = text ? fs.readFileSync(path.join(dir, e.name), 'utf8') : null;
+      files[r] = V.keepsText(r) ? fs.readFileSync(path.join(dir, e.name), 'utf8') : null;
     }
   }
 })(root, '');

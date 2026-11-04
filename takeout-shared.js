@@ -1581,7 +1581,7 @@
   // _index.md at the root of a Full Takeout: one row per category (Sources,
   // Notes, Chat, Artifacts) with its counts, status and folder, the ZIPs each
   // category wrote, and a link to the combined errors.md.
-  function buildRootIndex({ meta, categories = [], errorsFile = null } = {}) {
+  function buildRootIndex({ meta, categories = [], errorsFile = null, viewerFile = null } = {}) {
     let md = frontMatter({
       title: `Takeout — ${meta.notebook}`,
       notebook: meta.notebook,
@@ -1592,6 +1592,7 @@
       kind: 'takeout'
     });
     md += `# Takeout — ${meta.notebook}\n\n`;
+    if (viewerFile) md += `Browse everything offline: [Open the viewer](${encodePath(viewerFile)})\n\n`;
     md += '| Category | Exported | Failed | Status | Folder |\n';
     md += '| --- | --- | --- | --- | --- |\n';
     for (const c of categories) {
@@ -1723,8 +1724,9 @@ footer { margin-top: 3rem; }
 
   // Root _index.html of a Full Takeout. A category written in several
   // batches (c.parts >= 1; 0 = no part-N/ folders) links each part-N/ folder.
-  function buildRootIndexHtml({ meta, categories = [], errorsFile = null } = {}) {
+  function buildRootIndexHtml({ meta, categories = [], errorsFile = null, viewerFile = null } = {}) {
     let body = indexHtmlLinks([
+      ...(viewerFile ? [{ href: viewerFile, label: 'Offline viewer' }] : []),
       { href: '_index.md', label: 'Markdown index' },
       ...(errorsFile ? [{ href: errorsFile, label: 'Errors' }] : [])
     ]);

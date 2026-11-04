@@ -252,7 +252,7 @@ async function exportSources(selectedSources, { tabId, updateRecord = false, rec
  * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, parts: number, packages: number }>}
  *   zips/parts/packages: what target.written holds (see newWritten)
  */
-async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind = 'sources', folder = null, variantSettings = settings, itemDir = 'sources/', written = newWritten(), tracker = null } = {}) {
+async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind = 'sources', folder = null, variantSettings = settings, itemDir = 'sources/', written = newWritten(), tracker = null, capture = null } = {}) {
   const perZip = settings.sourcesPerZip;
   // Shared by every extractSourceItem call: audit counters and the
   // DOM-warning decision
@@ -321,7 +321,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
         // errors.md summary, on the package that carries the errors (the last)
         stats: { Selected: selectedSources.length, Exported: info.exported, Failed: info.failed }
       });
-      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, written });
+      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, written, capture });
       console.log(`[NotebookLM Takeout] Downloaded sources ZIP ${info.batchIndex}/${info.totalBatches}`);
       if (tracker) tracker.commit(); // these sources are on disk now
 

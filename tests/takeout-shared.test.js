@@ -1971,3 +1971,29 @@ test('resetSettings returns fresh defaults and keeps only the Full Takeout ZIP c
   assert.deepEqual(NLME.resetSettings({}), { ...NLME.DEFAULT_SETTINGS });
   assert.deepEqual(NLME.resetSettings(undefined), { ...NLME.DEFAULT_SETTINGS });
 });
+
+// ---- viewer.html link in the root index ----
+const viewerIndexArgs = {
+  meta: { notebook: 'New Math', notebook_url: '', notebook_id: '', exporter: 'NotebookLM Takeout 1.8.0', exported: 'T' },
+  errorsFile: 'errors.md',
+  categories: [{ name: 'Notes', folder: 'notes', status: 'done', selected: 1, exported: 1, failed: 0, zips: [], parts: 0, packages: 1 }]
+};
+
+test('buildRootIndex links viewer.html when set', () => {
+  const md = NLME.buildRootIndex({ ...viewerIndexArgs, viewerFile: 'viewer.html' });
+  assert.match(md, /\[[^\]]*viewer[^\]]*\]\(viewer\.html\)/i);
+  assert.ok(md.indexOf('(viewer.html)') < md.indexOf('| Category |'), 'first, before the table');
+});
+
+test('buildRootIndexHtml links viewer.html when set', () => {
+  const html = NLME.buildRootIndexHtml({ ...viewerIndexArgs, viewerFile: 'viewer.html' });
+  assert.ok(html.includes('<a href="viewer.html">'));
+  assert.ok(html.indexOf('href="viewer.html"') < html.indexOf('href="_index.md"'), 'first of the links');
+});
+
+test('buildRootIndex and buildRootIndexHtml are unchanged when viewerFile is null', () => {
+  assert.equal(NLME.buildRootIndex({ ...viewerIndexArgs, viewerFile: null }), NLME.buildRootIndex(viewerIndexArgs));
+  assert.equal(NLME.buildRootIndexHtml({ ...viewerIndexArgs, viewerFile: null }), NLME.buildRootIndexHtml(viewerIndexArgs));
+  assert.doesNotMatch(NLME.buildRootIndex(viewerIndexArgs), /viewer/i);
+  assert.doesNotMatch(NLME.buildRootIndexHtml(viewerIndexArgs), /viewer/i);
+});
