@@ -12,8 +12,8 @@
   const SRC_RE = /<a id="([^"]*?src-(\d+))"><\/a>\s*\n\*\*\[\[\d+\]\]\([^)]*\)\*\*[ \t]*(.*)/g;
   const REF_RE = /<a id="[^"]*" href="#([^"]*src-\d+)">\[(\d+)\]<\/a>/g;
   const SUP_RE = /<sup>((?:\s*<a id="[^"]*" href="#[^"]*src-\d+">\[\d+\]<\/a>\s*,?)+)<\/sup>/g;
-  const FN_MARK_RE = /\[\^([^\]\s]+)\]/g;
-  const FN_DEF_RE = /^\[\^([^\]\s]+)\]:[ \t]?(.*)$/;
+  const FN_MARK_RE = /\[\^([\w.-]+)\]/g;
+  const FN_DEF_RE = /^\[\^([\w.-]+)\]:[ \t]?(.*)$/;
   const VARIANTS = ['-code-blocks', '-with-images', '-plus-meta'];
   const SKIP_VARIANTS = ['-code-blocks', '-with-images'];
 
@@ -135,15 +135,15 @@
     const out = [];
     for (const [raw, text] of Object.entries(files)) {
       const p = normalizePath(raw);
-      if (typeof text === 'string' && p.startsWith(section + '/') && p.endsWith('.md') && wantsText(p)) out.push([p, text]);
+      if (typeof text === 'string' && p.startsWith(section + '/') && p.endsWith('.md') && wantsText(p)) out.push([p, text, raw]);
     }
     return out.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   }
 
   function loadSources(files) {
     const byBase = new Map();
-    for (const [p, text] of sectionFiles(files, 'sources')) {
-      let base = p.slice(0, -3);
+    for (const [p, text, raw] of sectionFiles(files, 'sources')) {
+      let base = raw.slice(0, -3);
       let variant = '';
       for (const v of VARIANTS) if (base.endsWith(v)) { variant = v; base = base.slice(0, -v.length); }
       if (!byBase.has(base)) byBase.set(base, {});
@@ -169,7 +169,7 @@
       const [meta, raw] = front(text);
       const title = meta.title || baseName(p).slice(0, -3);
       const [body] = cites.convert(dropH1(raw.trimStart()));
-      const key = title + '\0' + body.length;
+      const key = title + '\0' + body;
       if (seen.has(key)) continue;
       seen.add(key);
       notes.push({ kind: 'note', title, md: body });
@@ -188,7 +188,7 @@
       const sm = /\*\*Notebook Summary\*\*\s*([\s\S]*)/.exec(head);
       if (sm && !summary) summary = (sm[1].trim() + '\n').split(/\n---\s*\n|\n\*\*Chat Export/)[0].trim();
       let date = '';
-      for (const part of (first ? body.slice(first.index) : '').split(/^## /m)) {
+      for (const part of (first ? body.slice(first.index) : '').split(/^(?=## (?:Q:|\d{4}-\d\d-\d\d))/m).map(x => x.replace(/^## /, ''))) {
         if (/^\d{4}-\d\d-\d\d/.test(part)) { date = part.split('\n')[0].trim(); continue; }
         if (!part.startsWith('Q:')) continue;
         const nl = part.indexOf('\n');
@@ -244,19 +244,25 @@
       if (VARIANT_STEM(stem)) continue;
       if (!kinds.has(m[1])) kinds.set(m[1], new Map());
       const groups = kinds.get(m[1]);
-      if (!groups.has(stem)) groups.set(stem, {});
-      groups.get(stem)[extOf(name)] = raw;
+      if (!groups.has(stem)) groups.set(stem, []);
+      // The same name in two parts must not overwrite: a clash starts another entry
+      const list = groups.get(stem);
+      const ext = extOf(name);
+      let g = list.find(x => !(ext in x));
+      if (!g) { g = {}; list.push(g); }
+      g[ext] = raw;
     }
     const out = [];
     for (const kind of [...kinds.keys()].sort()) {
       const groups = kinds.get(kind);
       for (const stem of [...groups.keys()].sort()) {
-        const g = groups.get(stem);
-        const a = { kind, title: titles[stem] || stem.replace(/-/g, ' '), files: {} };
-        for (const [ext, raw] of Object.entries(g)) a.files[ext] = encodePath(raw);
-        if (typeof files[g.md] === 'string') a.md = dropH1(front(files[g.md])[1].trimStart());
-        if (typeof files[g.csv] === 'string') a.rows = parseCsv(files[g.csv]);
-        out.push(a);
+        for (const g of groups.get(stem)) {
+          const a = { kind, title: titles[stem] || stem.replace(/-/g, ' '), files: {} };
+          for (const [ext, raw] of Object.entries(g)) a.files[ext] = encodePath(raw);
+          if (typeof files[g.md] === 'string') a.md = dropH1(front(files[g.md])[1].trimStart());
+          if (typeof files[g.csv] === 'string') a.rows = parseCsv(files[g.csv]);
+          out.push(a);
+        }
       }
     }
     return out;

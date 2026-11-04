@@ -119,3 +119,41 @@ test('wantsText skips image and code-block variants', () => {
   for (const p of ['a-with-images.md', 'a-code-blocks.md', 'notes/combined-notes.md', 'notes/combined-notes-2.md',
     '_index.md', 'sources/_index-2.md', '_audit.md', 'errors.md', 'a.pdf', 'manifest.json']) assert.equal(V.wantsText(p), false, p);
 });
+
+test('hostile footnote labels are not turned into chips or markup', () => {
+  const note = '# N\n\nHi [^<img src=x onerror=1>] and [^a"b].\n\n[^<img src=x onerror=1>]: **T** — q\n[^a"b]: **U**\n';
+  const d = V.buildViewerData({ 'notes/n.md': note }, manifestOpts);
+  assert.doesNotMatch(d.studio[0].md, /<button/);
+  assert.doesNotMatch(d.studio[0].md, /<img[^]*<\/button>/);
+});
+
+test('notes dedupe on full body: real duplicates collapse, same-length different notes stay', () => {
+  const d = V.buildViewerData({
+    'part-1/notes/a.md': '---\ntitle: "T"\n---\n# T\n\nsame body',
+    'part-2/notes/a.md': '---\ntitle: "T"\n---\n# T\n\nsame body',
+    'part-1/notes/b.md': '---\ntitle: "U"\n---\n# U\n\nabcd',
+    'part-2/notes/b.md': '---\ntitle: "U"\n---\n# U\n\nwxyz'
+  }, manifestOpts);
+  assert.deepEqual(d.studio.map(s => s.title + ':' + s.md).sort(), ['T:same body', 'U:abcd', 'U:wxyz']);
+});
+
+test('same-named sources and artifacts in two parts both survive', () => {
+  const d = V.buildViewerData({
+    'part-1/sources/s.md': '# S\n\none',
+    'part-2/sources/s.md': '# S\n\ntwo',
+    'part-1/artifacts/slides/x.pdf': null,
+    'part-2/artifacts/slides/x.pdf': null,
+    'part-2/artifacts/slides/x.md': '# X\n\nbody'
+  }, manifestOpts);
+  assert.deepEqual(d.sources.map(s => s.md).sort(), ['one', 'two']);
+  const links = d.studio.map(a => a.files.pdf).sort();
+  assert.deepEqual(links, ['part-1/artifacts/slides/x.pdf', 'part-2/artifacts/slides/x.pdf']);
+  assert.equal(d.studio.length, 2);
+});
+
+test('an h2 heading inside an answer stays in the answer', () => {
+  const chat = '## Q: Why?\n\n**A:** Intro\n\n## Details\n\nMore text\n\n---\n\n## Q: Next?\n\n**A:** ok\n';
+  const d = V.buildViewerData({ 'chat/chat.md': chat }, manifestOpts);
+  assert.equal(d.pairs.length, 2);
+  assert.match(d.pairs[0].a, /Intro\n\n## Details\n\nMore text$/);
+});
