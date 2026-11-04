@@ -30,10 +30,15 @@
   const FN_DEF_RE = /^\[\^([\w.-]+)\]:[ \t]?(.*)$/;
   const SKIP_VARIANTS = ['-code-blocks', '-with-images'];
   const WITH_IMAGES = '-with-images';
-  // An embedded image: alt, type, base64 (the alt may hold escaped brackets)
-  const EMBEDDED_IMAGE_RE = /!\[((?:\\.|[^\]\\\n])*)\]\(\s*data:(image\/[a-z0-9.+-]+)(?:;[^;,()\s]*)*;base64,([a-z0-9+/=_-]+)\s*\)/gi;
-  // Any Markdown image: the url is group 1
-  const ANY_IMAGE_RE = /!\[(?:\\.|[^\]\\\n])*\]\(([^)\s]*)\)/g;
+  // Alt text of a Markdown image: escaped brackets, line breaks, a backslash at the very end.
+  // It stops at the next '![', or text full of unclosed ones would take quadratic time.
+  const ALT = String.raw`(?:\\[\s\S]|!(?!\[)|[^\]\\!])*\\?`;
+  // After the url: an optional title in any of Markdown's three quotes
+  const TITLE = String.raw`(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?`;
+  // An embedded image: alt, type, base64
+  const EMBEDDED_IMAGE_RE = new RegExp(String.raw`!\[(${ALT})\]\(\s*<?data:(image\/[a-z0-9._+-]+)(?:;[^;,()\s]*)*;base64,([a-z0-9+/=_-]+)>?${TITLE}\s*\)`, 'gi');
+  // Any Markdown image: '![alt]' is group 1, the url group 2
+  const ANY_IMAGE_RE = new RegExp(String.raw`(!\[${ALT}\])\(\s*<?([^)\s>]*)>?${TITLE}\s*\)`, 'g');
   const IMAGE_PATH_RE = /^images\/[0-9a-f]{16}\.[a-z0-9]+$/;
   const IMAGE_EXT = { jpeg: 'jpg', jpg: 'jpg', png: 'png', gif: 'gif', webp: 'webp', avif: 'avif', bmp: 'bmp', 'svg+xml': 'svg', tiff: 'tif' };
 
@@ -73,23 +78,36 @@
   function extractImages(markdown, addImage) {
     if (!imagesSeen.has(addImage)) imagesSeen.set(addImage, new Set());
     const seen = imagesSeen.get(addImage);
-    return String(markdown).replace(EMBEDDED_IMAGE_RE, (match, alt, type, base64) => {
+    return emptyDataImages(String(markdown).replace(EMBEDDED_IMAGE_RE, (match, alt, type, base64) => {
       const mime = type.toLowerCase();
-      const path = `images/${contentHash(base64)}.${IMAGE_EXT[mime.slice('image/'.length)] || 'img'}`;
+      const subtype = mime.slice('image/'.length);
+      const path = `images/${contentHash(base64)}.${Object.hasOwn(IMAGE_EXT, subtype) ? IMAGE_EXT[subtype] : 'img'}`;
       if (!seen.has(path)) {
         seen.add(path);
         addImage(path, base64, mime);
       }
       return `![${alt}](${path})`;
-    });
+    }));
   }
 
-  // Empty the links of images that were not saved: the page shows the placeholder there
-  function dropUnsavedImages(files, savedImages) {
+  // The last word on "viewer.html holds no image data": whatever extractImages could not
+  // take, or a file it never saw, loses its data: URI. '(...)', then quoted, then bare.
+  function emptyDataImages(text) {
+    return text
+      .replace(/\(\s*<?data:image\/[^()]*\)/gi, '()')
+      .replace(/(["'])\s*data:image\/[\s\S]*?\1/gi, '$1$1')
+      .replace(/data:image\/[^\s"'<>)]*/gi, '');
+  }
+
+  // The text the viewer may use: no image data, and with savedImages (the page shows the
+  // placeholder there) no link to an image that was not saved
+  function viewerText(files, savedImages) {
     const out = {};
     for (const [path, text] of Object.entries(files)) {
-      out[path] = typeof text !== 'string' ? text : text.replace(ANY_IMAGE_RE, (match, url) =>
-        (IMAGE_PATH_RE.test(url) && !savedImages.has(url) ? `${match.slice(0, -url.length - 2)}()` : match));
+      if (typeof text !== 'string') { out[path] = text; continue; }
+      const clean = emptyDataImages(text);
+      out[path] = !savedImages ? clean : clean.replace(ANY_IMAGE_RE, (match, image, url) =>
+        (IMAGE_PATH_RE.test(url) && !savedImages.has(url) ? `${image}()` : match));
     }
     return out;
   }
@@ -141,7 +159,7 @@
   function citeRecord(t, quote) {
     const imgs = [];
     let lost = 0;
-    const q = quote.replace(ANY_IMAGE_RE, (match, url) => {
+    const q = quote.replace(ANY_IMAGE_RE, (match, image, url) => {
       if (!IMAGE_PATH_RE.test(url)) lost++;
       else if (!imgs.includes(url)) imgs.push(url);
       return '';
@@ -373,7 +391,7 @@
   }
 
   function buildViewerData(allFiles, { notebook = '', exported = '', mediaBase = '', savedImages = null } = {}) {
-    const files = savedImages ? dropUnsavedImages(allFiles, savedImages) : allFiles;
+    const files = viewerText(allFiles, savedImages);
     const cites = createCites();
     const { summary, pairs } = loadChat(files, cites);
     return {

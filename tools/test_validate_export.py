@@ -392,6 +392,18 @@ class ViewerTests(Base):
                 self.assertEqual([f.detail for f in r.findings if f.code == 'viewer-broken-link'], [self.IMG])
                 shutil.rmtree(os.path.join(self.tmp, 't'))
 
+    def test_viewer_image_links_are_checked_beside_any_category_folder(self):
+        for folder in ('sources', 'notes', 'chat'):
+            with self.subTest(folder=folder):
+                root = os.path.join(self.tmp, folder)
+                make_takeout(root, [{'kind': 'note', 'md': f'![a]({self.IMG})'}], artifacts=(f'{folder}/x.bin',))
+                [r] = self.check(root)
+                self.assertEqual([f.detail for f in r.findings if f.code == 'viewer-broken-link'], [self.IMG])
+
+    def test_viewer_media_links_still_need_artifacts(self):
+        r = self.run_viewer([{'kind': 'slides', 'files': {'pdf': 'artifacts/slides/Deck.pdf'}}], artifacts=('notes/x.bin',))
+        self.assertNotIn('viewer-broken-link', codes(r))
+
     def test_viewer_image_links_are_skipped_in_an_unmerged_zip(self):
         r = self.run_viewer([{'kind': 'note', 'md': f'![a]({self.IMG})'}], artifacts=())
         self.assertNotIn('viewer-broken-link', codes(r))

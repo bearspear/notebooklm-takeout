@@ -13,6 +13,35 @@ var LOADING_ATTRS = /^(src|srcset|poster|data|href|xlink:href)$/i;
 
 var NO_IMAGE = 'Image not available offline';
 var URL_TEXT = /[a-z][a-z0-9+.-]*:\/\/|(^|\s)(\/\/|www\.)/i;
+var NO_IMAGE_SPAN = '<span class="no-image">(?:Image|(\\d+) images) not available offline</span>';
+var NO_IMAGE_RUN = new RegExp(NO_IMAGE_SPAN + '(?:(?:\\s|<br>|</?p>)*' + NO_IMAGE_SPAN + ')+', 'g');
+
+function noImageHtml(count) {
+  return '<span class="no-image">' + (count > 1 ? count + ' images not available offline' : NO_IMAGE) + '</span>';
+}
+
+// Images side by side, or in paragraphs of their own, make one line. html: as innerHTML writes it.
+function collapseNoImage(html) {
+  return html.replace(NO_IMAGE_RUN, function (run) {
+    var count = 0;
+    run.replace(new RegExp(NO_IMAGE_SPAN, 'g'), function (span, n) { count += +n || 1; return span; });
+    return noImageHtml(count);
+  });
+}
+
+function noImageNode(doc, text) {
+  var span = doc.createElement('span');
+  span.className = 'no-image';
+  span.textContent = text;
+  return span;
+}
+
+// An archive image whose file is missing (error event target). True when it was replaced.
+function replaceFailedImage(img, doc) {
+  if (!img || img.tagName !== 'IMG' || !/^images\//.test(img.getAttribute('src') || '')) return false;
+  img.replaceWith(noImageNode(doc, NO_IMAGE));
+  return true;
+}
 
 // Relative path or an embedded image; anything with a scheme or // stays out.
 function isLocalUrl(v) {
@@ -40,11 +69,11 @@ function sanitizeHtml(html, parser) {
       // Failed downloads often have their URL as alt text: it is never shown
       var alt = n.getAttribute('alt');
       if (alt && URL_TEXT.test(alt)) { alt = ''; n.setAttribute('alt', ''); }
-      if (!n.getAttribute('src')) n.replaceWith(doc.createTextNode(alt || NO_IMAGE));
+      if (!n.getAttribute('src')) n.replaceWith(noImageNode(doc, alt || NO_IMAGE));
     }
     if (tag === 'a') { n.setAttribute('target', '_blank'); n.setAttribute('rel', 'noopener'); }
   });
-  return doc.body.innerHTML;
+  return collapseNoImage(doc.body.innerHTML);
 }
 
 function escHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
@@ -53,7 +82,7 @@ function escHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt
 function citeHtml(c, known) {
   return '<b>' + escHtml(c.t) + '</b><p>' + escHtml(c.q) + '</p>' +
     (c.imgs || []).map(function (src) { return '<img alt="" src="' + escHtml(src) + '">'; }).join('') +
-    (c.lost ? '<p>' + NO_IMAGE + '</p>' : '') +
+    (c.lost ? '<p>' + noImageHtml(c.lost) + '</p>' : '') +
     (known ? '<small>Click the number to open this source</small>' : '');
 }
 
@@ -88,7 +117,7 @@ function findQuote(text, quote) {
   return { at: from, length: to - from };
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml };
+if (typeof module === 'object' && module.exports) module.exports = { foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage };
 
 if (typeof document !== 'undefined') (function () {
   var D = JSON.parse(document.getElementById('data').textContent);
@@ -281,6 +310,18 @@ if (typeof document !== 'undefined') (function () {
     if (e.target.id === 'chatq') { clearTimeout(renderChat.d); var v = e.target.value; renderChat.d = setTimeout(function () { renderChat(v); }, 180); }
   });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { pop.hidden = true; if (opened !== null) studioList(); } });
+
+  // Error events do not bubble: this needs the capture phase. One pass per burst of failures,
+  // because writing innerHTML restarts the images still loading.
+  document.addEventListener('error', function (e) {
+    var box = e.target.closest && (e.target.closest('.md') || e.target.closest('#pop'));
+    if (!replaceFailedImage(e.target, document) || !box) return;
+    clearTimeout(box.noImageT);
+    box.noImageT = setTimeout(function () {
+      var html = box.innerHTML, collapsed = collapseNoImage(html);
+      if (collapsed !== html) box.innerHTML = collapsed;
+    }, 50);
+  }, true);
 
   document.title = D.notebook + ' archive';
   $('nb').textContent = D.notebook;

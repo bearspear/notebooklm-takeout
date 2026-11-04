@@ -215,6 +215,7 @@ function fakeParser() {
     let m, stack = [];
     const doc = {
       createTextNode: text => ({ text, isText: true }),
+      createElement: tag => ({ isText: true, get text() { return `<${tag} class="${this.className}">${this.textContent}</${tag}>`; } }),
       querySelectorAll(sel) {
         const names = sel === '*' ? null : sel.split(',');
         return nodes.filter(n => !n.gone && !n.isText && (!names || names.includes(n.tagName.toLowerCase())));
@@ -819,7 +820,7 @@ test('extractImages names a file from its content alone, with the extension of i
 
 test('extractImages leaves remote images and other text alone', () => {
   const { added, addImage } = collector();
-  const text = `![${REMOTE}](${REMOTE}) and ![x](pics/a.png) and [link](data:image/png;base64,AAAA)`;
+  const text = `![${REMOTE}](${REMOTE}) and ![x](pics/a.png)`;
   assert.equal(V.extractImages(text, addImage), text);
   assert.equal(added.length, 0);
 });
@@ -941,7 +942,8 @@ test('a citation image that was not saved counts as not available', () => {
 test('the citation popover shows images and never a link', () => {
   const html = app.citeHtml({ t: 'A<b', q: 'quote', imgs: ['images/cccccccccccccccc.jpg'], lost: 2 }, true);
   assert.match(html, /<img alt="" src="images\/cccccccccccccccc\.jpg">/);
-  assert.equal(html.match(/Image not available offline/g).length, 1);
+  assert.match(html, /<span class="no-image">2 images not available offline<\/span>/);
+  assert.match(app.citeHtml({ t: 'A', q: '', lost: 1 }, false), /<span class="no-image">Image not available offline<\/span>/);
   assert.match(html, /A&lt;b/);
   assert.match(html, /Click the number/);
   assert.doesNotMatch(app.citeHtml({ t: 'A', q: 'quote' }, false), /<img|not available|Click/);
@@ -1109,4 +1111,119 @@ test('folder mode: images saved before a failure keep their links', async () => 
   assert.ok(written['Book/viewer.html'].includes(imagePath('aaaa')));
   assert.ok(!written['Book/viewer.html'].includes(imagePath('bbbb')));
   assert.equal(log.panels[0].level, 'warning');
+});
+
+// ---- fix round 1 ----
+const PAYLOAD = b64('secret picture bytes');
+test('extractImages takes every Markdown form of an embedded image', () => {
+  const uri = `data:image/png;base64,${PAYLOAD}`;
+  for (const [form, alt] of [
+    [`![two\nlines](${uri})`, 'two\nlines'],
+    [`![ends in a slash\\](${uri})`, 'ends in a slash\\'],
+    [`![t](${uri} "a title")`, 't'],
+    [`![t](${uri} 'a title')`, 't'],
+    [`![t](${uri} (a title))`, 't'],
+    [`![t](<${uri}>)`, 't'],
+    [`![t]( ${uri} )`, 't']
+  ]) {
+    const { added, addImage } = collector();
+    const out = V.extractImages(form, addImage);
+    assert.equal(added.length, 1, form);
+    assert.equal(out, `![${alt}](${added[0].p})`);
+  }
+});
+
+const LEFTOVERS = [
+  `![wrapped](data:image/png;base64,${PAYLOAD.slice(0, 8)}\n${PAYLOAD.slice(8)})`,
+  `<img src="data:image/png;base64,${PAYLOAD}">`,
+  `<img alt="x" src='data:image/png;base64,${PAYLOAD}'>`,
+  `<img src=data:image/png;base64,${PAYLOAD}>`,
+  `[link](data:image/png;base64,${PAYLOAD})`,
+  `![ref][id]\n\n[id]: data:image/png;base64,${PAYLOAD}`,
+  `![t](DATA:IMAGE/PNG;BASE64,${PAYLOAD})`,
+  `![t](data:image/svg+xml,${PAYLOAD})`
+];
+
+test('extractImages empties what it cannot take, so no store holds image data', () => {
+  for (const form of LEFTOVERS) {
+    const out = V.extractImages(form, () => {});
+    assert.ok(!out.includes(PAYLOAD.slice(8)), out);
+    assert.doesNotMatch(out, /data:image/i, out);
+  }
+});
+
+test('viewer data holds no image data, from any file', () => {
+  for (const form of LEFTOVERS) {
+    const files = { 'notes/N.md': `${front2('N')}# N\n\n${form}`, 'sources/S.md': `${front2('S')}# S\n\n${form}`, 'chat/chat.md': `## Q: One?\n\n**A:** ${form}\n` };
+    const json = V.escapeJson(V.buildViewerData(files, manifestOpts));
+    assert.ok(!json.includes(PAYLOAD.slice(8)), form);
+    assert.doesNotMatch(json, /data:image/i, form);
+  }
+});
+
+test('an emptied <img src> falls to the placeholder', () => {
+  const md = V.buildViewerData({ 'notes/N.md': `# N\n\n<img src="data:image/png;base64,${PAYLOAD}">` }, manifestOpts).studio[0].md;
+  assert.match(clean(md), /Image not available offline/);
+});
+
+test('an odd image type never makes an odd file name', () => {
+  for (const type of ['constructor', 'toString', '__proto__', 'hasownproperty']) {
+    const { added, addImage } = collector();
+    V.extractImages(`![a](data:image/${type};base64,${PAYLOAD})`, addImage);
+    assert.equal(added.length, 1, type);
+    assert.match(added[0].p, /^images\/[0-9a-f]{16}\.img$/);
+  }
+});
+
+test('a title or a line break in the alt does not hide an image from the saved list or the quote', () => {
+  const lost = 'images/bbbbbbbbbbbbbbbb.jpg';
+  const files = { 'notes/N-with-images.md': `# N\n\n![two\nlines](${lost})\n\n![t](${lost} "title")` };
+  const md = V.buildViewerData(files, { savedImages: new Set() }).studio[0].md;
+  assert.ok(!md.includes(lost), md);
+  const chat = QUOTE_CHAT(`![${REMOTE}](${REMOTE} "title")`, 'text');
+  assert.equal(V.buildViewerData({ 'chat/chat-with-images.md': chat }, manifestOpts).cites[0].lost, 1);
+});
+
+const SPAN = t => `<span class="no-image">${t}</span>`;
+
+test('a placeholder is a muted span, and alt text is too', () => {
+  assert.ok(clean(`<img src="${REMOTE}">`).includes(SPAN('Image not available offline')));
+  assert.ok(clean('<img src="https://h.example/a.png" alt="A chart">').includes(SPAN('A chart')));
+  const css = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-template.html'), 'utf8');
+  assert.match(css, /\.no-image \{[^}]*color: var\(--muted\)/);
+});
+
+test('adjacent placeholders collapse into one, also across paragraphs', () => {
+  const one = SPAN('Image not available offline');
+  assert.equal(app.collapseNoImage(`${one} ${one}<br>${one}`), SPAN('3 images not available offline'));
+  assert.equal(app.collapseNoImage(`<p>${one}</p>\n<p>${one}</p>`), `<p>${SPAN('2 images not available offline')}</p>`);
+  assert.equal(app.collapseNoImage(`${SPAN('2 images not available offline')}\n${one}`), SPAN('3 images not available offline'));
+  assert.equal(app.collapseNoImage(`${one} text ${one}`), `${one} text ${one}`);
+  assert.equal(app.collapseNoImage(`${SPAN('A chart')} ${one}`), `${SPAN('A chart')} ${one}`);
+  assert.equal((clean(`<img src="${REMOTE}"> <img src="${REMOTE}">`).match(/not available/g) || []).length, 1);
+});
+
+test('a linked image whose file is missing becomes the placeholder', () => {
+  const doc = { createElement: () => ({}) };
+  const image = src => ({ tagName: 'IMG', getAttribute: () => src, replaced: null, replaceWith(n) { this.replaced = n; } });
+  const lost = image('images/0123456789abcdef.png');
+  assert.equal(app.replaceFailedImage(lost, doc), true);
+  assert.equal(lost.replaced.className, 'no-image');
+  assert.equal(lost.replaced.textContent, 'Image not available offline');
+  const other = image('artifacts/slides/a.png');
+  assert.equal(app.replaceFailedImage(other, doc), false);
+  assert.equal(other.replaced, null);
+  assert.equal(app.replaceFailedImage({ tagName: 'VIDEO', getAttribute: () => 'images/a.png' }, doc), false);
+  assert.equal(app.replaceFailedImage(null, doc), false);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8');
+  assert.match(src, /document\.addEventListener\('error', [\s\S]*?\}, true\);/, 'error events do not bubble: capture phase');
+});
+
+test('text full of unclosed image marks stays fast', () => {
+  const started = Date.now();
+  for (const mark of ['![a ', '(data:image/ ', '"data:image/ ']) {
+    V.extractImages(mark.repeat(200000), () => {});
+    V.buildViewerData({ 'notes/N.md': mark.repeat(200000) }, { savedImages: new Set() });
+  }
+  assert.ok(Date.now() - started < 2000, `${Date.now() - started} ms`);
 });

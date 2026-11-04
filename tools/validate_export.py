@@ -221,6 +221,7 @@ def _first_error(text):
 VIEWER_DATA_RE = re.compile(r'<script id="data" type="application/json">(.*?)</script>', re.S)
 # The builder's own names (NLMEViewer.extractImages), so a source that merely quotes
 # ![fig](images/fig1.png) is not taken for a link
+CATEGORY_DIRS = ('sources', 'notes', 'chat', 'artifacts')
 IMAGE_NAME = r'images/[0-9a-f]{16}\.[a-z0-9]+'
 VIEWER_IMAGE_RE = re.compile(r'(?<![\w/.-])' + IMAGE_NAME)
 IMAGE_FILE_RE = re.compile(r'(?:^|/)' + IMAGE_NAME + '$')
@@ -245,9 +246,10 @@ def check_viewer(report, root):
     parser (escapeJson only writes JSON escapes, so no other unescaping is needed). Links are
     URL-decoded and resolved from the takeout root; they may leave the root, because a folder-mode
     file saved by the browser sits beside it. Image links (images/<hash>.<ext>) sit anywhere in
-    the text and are resolved from the root the same way. Link checks run only when artifacts/ is present next
-    to viewer.html (a merged tree or a folder takeout): an unmerged category ZIP does not hold the
-    files the viewer links to, so there the links are skipped.
+    the text and are resolved from the root the same way. Media links are checked only when
+    artifacts/ is next to viewer.html, image links when any category folder is (a merged tree or a
+    folder takeout, which may have no artifacts): the index ZIP alone does not hold those files,
+    so there the links are skipped.
     """
     path = os.path.join(root, 'viewer.html')
     if not os.path.isfile(path):
@@ -267,15 +269,16 @@ def check_viewer(report, root):
     if not isinstance(studio, list):
         report.add('fail', 'viewer-invalid', 'viewer.html data has no "studio" list')
         return
-    if not os.path.isdir(os.path.join(root, 'artifacts')):
+    if os.path.isdir(os.path.join(root, 'artifacts')):
+        for item in studio:
+            files = item.get('files') if isinstance(item, dict) else None
+            if not isinstance(files, dict):
+                continue
+            for link in files.values():
+                if not isinstance(link, str) or not os.path.isfile(os.path.normpath(os.path.join(root, *unquote(link).split('/')))):
+                    report.add('fail', 'viewer-broken-link', str(link))
+    if not any(os.path.isdir(os.path.join(root, c)) for c in CATEGORY_DIRS):
         return
-    for item in studio:
-        files = item.get('files') if isinstance(item, dict) else None
-        if not isinstance(files, dict):
-            continue
-        for link in files.values():
-            if not isinstance(link, str) or not os.path.isfile(os.path.normpath(os.path.join(root, *unquote(link).split('/')))):
-                report.add('fail', 'viewer-broken-link', str(link))
     for link in sorted({hit for text in _strings(data) for hit in VIEWER_IMAGE_RE.findall(text)}):
         if not os.path.isfile(os.path.join(root, *link.split('/'))):
             report.add('fail', 'viewer-broken-link', link)
