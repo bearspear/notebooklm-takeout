@@ -132,3 +132,10 @@ test('every setting saveSettings writes has a shipped default, and the panel sta
   for (const k of keys) assert.ok(k in NLME.DEFAULT_SETTINGS, `${k} has no default in NLME.DEFAULT_SETTINGS`);
   assert.match(src, /let settings = NLME\.resetSettings\(\);/);
 });
+
+test('every VIEWER_ASSETS file exists', () => {
+  require('../takeout-viewer.js');
+  const assets = globalThis.NLMEViewer && globalThis.NLMEViewer.VIEWER_ASSETS;
+  assert.ok(Array.isArray(assets) && assets.length === 5, 'five viewer assets');
+  for (const f of assets) assert.ok(fs.existsSync(path.join(ROOT, f)), `${f} is missing`);
+});

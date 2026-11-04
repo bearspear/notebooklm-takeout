@@ -6,6 +6,8 @@
 //                                      (null = present, not read). Paths may sit
 //                                      under part-N/. Returns the viewer's data object.
 //   escapeJson(data)                   JSON that is safe inside a <script> tag
+//   assembleViewer({template, css, marked, katex, app, data})  one self-contained HTML string
+//   VIEWER_ASSETS                      paths of the five viewer files
 (function (root) {
   'use strict';
 
@@ -287,7 +289,26 @@
       .replace(/\u2029/g, '\\u2029');
   }
 
-  const api = { wantsText, buildViewerData, escapeJson };
+  const VIEWER_ASSETS = [
+    'viewer/viewer-template.html', 'viewer/viewer-app.js', 'viewer/marked.min.js',
+    'viewer/katex.min.js', 'viewer/katex-inline.css'
+  ];
+
+  // One pass with function replacers: '$&' or a placeholder inside a value stays literal.
+  // data: object (escaped here) or an already-escaped JSON string.
+  function assembleViewer({ template, css, marked, katex, app, data }) {
+    const script = code => String(code).replace(/<\/script/gi, '<\\/script');
+    const values = {
+      KATEX_CSS: () => String(css).replace(/<\/style/gi, '<\\/style'),
+      DATA_JSON: () => (typeof data === 'string' ? data : escapeJson(data)),
+      MARKED_JS: () => script(marked),
+      KATEX_JS: () => script(katex),
+      APP_JS: () => script(app)
+    };
+    return String(template).replace(/\/\*(KATEX_CSS|DATA_JSON|MARKED_JS|KATEX_JS|APP_JS)\*\//g, (m, k) => values[k]());
+  }
+
+  const api = { wantsText, buildViewerData, escapeJson, assembleViewer, VIEWER_ASSETS };
   root.NLMEViewer = Object.assign(root.NLMEViewer || {}, api);
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(globalThis);

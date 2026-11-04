@@ -170,3 +170,59 @@ test('artifact files merge only within their own directory, whatever the order',
   assert.equal(withMd.files.pdf, 'part-2/artifacts/slides/x.pdf');
   assert.equal(d.studio.find(a => !a.md).files.pdf, 'part-1/artifacts/slides/x.pdf');
 });
+
+// ---- viewer page ----
+const fs = require('node:fs');
+const path = require('node:path');
+const app = (() => { try { return require('../viewer/viewer-app.js'); } catch (e) { return {}; } })();
+
+test('assembleViewer keeps dollar patterns intact', () => {
+  const data = { notebook: "cost $& and $1 and $$ and $` and $'", n: '/*APP_JS*/' };
+  const html = V.assembleViewer({
+    template: '<style>/*KATEX_CSS*/</style><script id="data" type="application/json">/*DATA_JSON*/</script><script>/*MARKED_JS*/</script><script>/*KATEX_JS*/</script><script>/*APP_JS*/</script>',
+    css: 'a{}', marked: 'var m="$&";', katex: 'var k="$1";', app: 'var a=1;</script>', data
+  });
+  const json = /<script id="data"[^>]*>([\s\S]*?)<\/script>/.exec(html)[1];
+  assert.deepEqual(JSON.parse(json), data);
+  assert.ok(html.includes('var m="$&";') && html.includes('var k="$1";'));
+  assert.ok(!html.includes('var a=1;</script>'));
+});
+
+test('findQuote matches across line breaks and curly quotes', () => {
+  const text = 'Intro.\nHe said “it’s  fine”,\nand left.';
+  const hit = app.findQuote(text, 'He said "it\'s fine", and left.');
+  assert.ok(hit);
+  assert.equal(text.slice(hit.at, hit.at + hit.length), 'He said “it’s  fine”,\nand left');
+});
+
+test('findQuote falls back to the first 60 characters', () => {
+  const head = 'abcdefghij'.repeat(6);
+  const hit = app.findQuote('xx ' + head + ' end', head + ' but the rest differs completely');
+  assert.deepEqual(hit, { at: 3, length: 60 });
+});
+
+test('findQuote returns null for text that is absent', () => {
+  assert.equal(app.findQuote('some text', 'nothing like it'), null);
+  assert.equal(app.findQuote('some text', '  ...  '), null);
+});
+
+test('viewer app removes scripts and handlers', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8');
+  assert.equal(typeof app.sanitizeHtml, 'function');
+  // no DOM in Node, so check the rules in the source
+  for (const tag of ['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'form', 'base']) {
+    assert.match(src, new RegExp("DANGEROUS_TAGS = '[^']*\\b" + tag + "\\b"), tag);
+  }
+  assert.match(src, /\/\^on\/i\.test\(a\.name\)/);
+  assert.match(src, /javascript/);
+  // every markdown render passes through sanitize
+  assert.match(src, /var html = sanitize\(marked\.parse\(/);
+  assert.equal((src.match(/marked\.parse\(/g) || []).length, 1);
+});
+
+test('viewer page makes no remote requests', () => {
+  for (const f of ['viewer-template.html', 'viewer-app.js']) {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', f), 'utf8');
+    assert.ok(!/(src|href)="https?:|url\(https?:|@import|fetch\(|XMLHttpRequest/.test(src), f);
+  }
+});
