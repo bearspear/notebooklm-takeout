@@ -232,6 +232,8 @@ Images are files in `images/`, not data inside `viewer.html`, so the page stays 
 could not be downloaded shows "Image not available offline". Images in a citation quote show in the
 citation's popup.
 
+Drag the gaps between Sources, Chat and Studio to resize them (arrow keys move 24 px, double-click resets), or collapse Sources and Studio to a thin rail; the layout is remembered in the browser.
+
 With ZIP on, **unzip all the ZIPs into one folder** before you open it: the viewer is in the index
 ZIP and its media and image links point to files in the other ZIPs, so they only work side by side.
 Images have their own ZIP (`…-takeout-images-<ts>.zip`, split near 500 MB into `-part1of2`, …). Artifacts

@@ -145,7 +145,7 @@ notebooklm-exporter/
 ├── takeout-viewer.js (465) — NLMEViewer: DOM-free builder of the offline viewer's data and page
 │                             (sidebar + Node tests + tools/build_viewer.js)
 ├── viewer/                 — The offline viewer's packaged files, read by the side panel and inlined
-│                             into viewer.html: viewer-template.html (123), viewer-app.js (330),
+│                             into viewer.html: viewer-template.html (138), viewer-app.js (424),
 │                             marked.min.js (marked 12.0.2), katex.min.js (KaTeX 0.16.11),
 │                             katex-inline.css (fonts inlined)
 ├── tools/build_viewer.js (64) — Builds a viewer.html for an unzipped takeout folder (see Offline viewer)

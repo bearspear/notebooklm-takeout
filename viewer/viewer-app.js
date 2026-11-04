@@ -117,7 +117,37 @@ function findQuote(text, quote) {
   return { at: from, length: to - from };
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage };
+// Column layout. total is the width of the main grid: 12px padding on both sides and two 12px
+// gaps leave total - 48 for the three panes. cols: {l, r, lc, rc} (widths, collapsed flags).
+var COL = { side: 220, chat: 360, rail: 44, step: 24, frame: 48, max: 4000 };
+
+function clampColumns(total, cols) {
+  var l = cols.lc ? COL.rail : Math.max(COL.side, cols.l), r = cols.rc ? COL.rail : Math.max(COL.side, cols.r);
+  var over = l + r - (total - COL.frame - COL.chat);
+  if (over > 0 && !cols.rc) { var takeR = Math.min(over, r - COL.side); r -= takeR; over -= takeR; }
+  if (over > 0 && !cols.lc) l -= Math.min(over, l - COL.side);
+  return { l: l, r: r };
+}
+
+// The width a side pane may take while dragged: at least 220, and chat keeps 360.
+function dragColumn(total, cols, side, want) {
+  var other = side === 'l' ? (cols.rc ? COL.rail : cols.r) : (cols.lc ? COL.rail : cols.l);
+  return Math.max(COL.side, Math.min(want, total - COL.frame - COL.chat - other));
+}
+
+function serializeCols(s) {
+  var w = function (v) { return typeof v === 'number' && isFinite(v) && v >= COL.side ? Math.min(COL.max, Math.round(v)) : null; };
+  return JSON.stringify({ l: w(s.l), r: w(s.r), lc: s.lc === true, rc: s.rc === true });
+}
+
+function parseCols(text) {
+  var o = null;
+  try { o = JSON.parse(text); } catch (e) { /* no saved layout */ }
+  if (!o || typeof o !== 'object' || Array.isArray(o)) o = {};
+  return JSON.parse(serializeCols(o));
+}
+
+if (typeof module === 'object' && module.exports) module.exports = { clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage };
 
 if (typeof document !== 'undefined') (function () {
   var D = JSON.parse(document.getElementById('data').textContent);
@@ -176,24 +206,85 @@ if (typeof document !== 'undefined') (function () {
     return !!first;
   }
 
+  /* Columns: drag handles, collapse rails, saved layout */
+  var COLS_KEY = 'nlme-viewer-cols:' + D.notebook;
+  var cols = (function () { try { return parseCols(localStorage.getItem(COLS_KEY)); } catch (e) { return parseCols(null); } })();
+  var auto = { l: null, r: null };   // widths set by opening a source or artifact; the user's own width wins
+  function saveCols() { try { localStorage.setItem(COLS_KEY, serializeCols(cols)); } catch (e) { /* no storage: the layout stays for this visit */ } }
+  function colBtn(side) {
+    return '<button class="icon-btn col-btn" data-collapse="' + side + '" aria-label="Collapse ' + (side === 'l' ? 'Sources' : 'Studio') + '" title="Collapse">' +
+      icon('<rect x="4" y="4" width="16" height="16" rx="2"/><path d="' + (side === 'l' ? 'M9 4v16' : 'M15 4v16') + '"/>') + '</button>';
+  }
+  function colState() {
+    var narrow = innerWidth <= 1000;
+    return { l: cols.l || auto.l || (narrow ? 260 : 340), r: cols.r || auto.r || (narrow ? 300 : 400), lc: cols.lc, rc: cols.rc };
+  }
+  function applyCols() {
+    var total = $('main').clientWidth, w = clampColumns(total, colState()), root = document.documentElement;
+    root.style.setProperty('--l', w.l + 'px'); root.style.setProperty('--r', w.r + 'px');
+    ['left', 'right'].forEach(function (id, k) {
+      var side = k ? 'r' : 'l', collapsed = k ? cols.rc : cols.lc, pane = $(id), b = pane.querySelector('[data-collapse]'), name = k ? 'Studio' : 'Sources';
+      pane.classList.toggle('rail', collapsed);
+      if (b) { b.setAttribute('aria-label', (collapsed ? 'Open ' : 'Collapse ') + name); b.title = collapsed ? 'Open' : 'Collapse'; b.setAttribute('aria-expanded', String(!collapsed)); }
+      var h = $(k ? 'hr' : 'hl');
+      h.hidden = collapsed;
+      h.style.left = (k ? total - 24 - w.r : 12 + w.l) + 'px';
+      h.setAttribute('aria-valuenow', String(w[side]));
+      h.setAttribute('aria-valuemin', String(COL.side));
+      h.setAttribute('aria-valuemax', String(dragColumn(total, { l: w.l, r: w.r, lc: cols.lc, rc: cols.rc }, side, COL.max)));
+    });
+  }
+  function setWidth(side, px) {
+    var total = $('main').clientWidth, st = colState(), w = clampColumns(total, st);
+    st.l = w.l; st.r = w.r;
+    cols[side] = Math.round(dragColumn(total, st, side, px));
+    saveCols(); applyCols();
+  }
+  function reveal(side, px) {   // opening something: reopen a collapsed pane, widen it unless the user chose a width
+    auto[side] = px;
+    if (cols[side + 'c']) { cols[side + 'c'] = false; saveCols(); }
+  }
+  [['hl', 'l'], ['hr', 'r']].forEach(function (pair) {
+    var h = $(pair[0]), side = pair[1], sign = side === 'l' ? 1 : -1;
+    h.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0) return;
+      e.preventDefault(); h.setPointerCapture(e.pointerId); h.classList.add('drag'); $('shield').hidden = false;
+    });
+    h.addEventListener('pointermove', function (e) {
+      if (!h.classList.contains('drag')) return;
+      var box = $('main').getBoundingClientRect();
+      setWidth(side, side === 'l' ? e.clientX - box.left - 12 : box.right - 12 - e.clientX);
+    });
+    function end() { h.classList.remove('drag'); $('shield').hidden = true; }
+    h.addEventListener('pointerup', end); h.addEventListener('pointercancel', end); h.addEventListener('lostpointercapture', end);
+    h.addEventListener('dblclick', function () { cols[side] = null; auto[side] = null; saveCols(); applyCols(); });
+    h.addEventListener('keydown', function (e) {
+      var d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0; if (!d) return;
+      e.preventDefault(); setWidth(side, colState()[side] + d * sign * COL.step);
+    });
+  });
+  addEventListener('resize', applyCols);
+
   /* Sources pane */
   var srcQ = '';
   function sourcesList() {
-    document.documentElement.style.removeProperty('--l');
+    auto.l = null;
     var q = srcQ.toLowerCase(), hits = [];
     D.sources.forEach(function (s, i) { if (!q || s.title.toLowerCase().indexOf(q) > -1) hits.push(i); });
-    $('left').innerHTML = '<div class="p-head"><h2>Sources</h2></div><label class="search-block">' + icon('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>') +
+    $('left').innerHTML = '<div class="p-head"><h2>Sources</h2>' + colBtn('l') + '</div><label class="search-block">' + icon('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>') +
       '<input id="srcq" type="search" aria-label="Search sources" placeholder="Search sources" value="' + esc(srcQ) + '"></label><div class="group">' + hits.length + ' of ' + D.sources.length + '</div><div class="scroll">' +
       hits.map(function (i) {
         var s = D.sources[i];
         return '<button class="src" data-src="' + i + '">' + (s.url ? '<i class="yt"></i>' : icon('<path d="M7 3h7l4 4v14H7zM14 3v4h4"/>', 'var(--muted)')) + '<span>' + esc(s.title) + '</span></button>';
       }).join('') + '</div>';
+    applyCols();
   }
   function openSource(i, quote) {
     var s = D.sources[i];
-    document.documentElement.style.setProperty('--l', '36vw');
-    $('left').innerHTML = '<div class="p-head"><button class="icon-btn" id="srcback" aria-label="Back to sources">' + icon(BACK) + '</button><h2 style="flex:1">' + esc(s.title) + '</h2></div><div class="scroll"><div class="reader md" id="srcbody">' +
+    reveal('l', Math.round(innerWidth * 0.36));
+    $('left').innerHTML = '<div class="p-head"><button class="icon-btn" id="srcback" aria-label="Back to sources">' + icon(BACK) + '</button><h2 style="flex:1">' + esc(s.title) + '</h2>' + colBtn('l') + '</div><div class="scroll"><div class="reader md" id="srcbody">' +
       (isWebUrl(s.url) ? '<p><a class="ext" href="' + esc(s.url) + '" target="_blank" rel="noopener">Open original video</a></p>' : '') + md(s.md) + '</div></div>';
+    applyCols();
     if (quote) setTimeout(function () { markQuote($('srcbody'), quote); }, 200);
   }
 
@@ -228,7 +319,7 @@ if (typeof document !== 'undefined') (function () {
   var filter = '', opened = null;
   function studioList() {
     opened = null;
-    document.documentElement.style.removeProperty('--r');
+    auto.r = null;
     var counts = {}; D.studio.forEach(function (a) { counts[a.kind] = (counts[a.kind] || 0) + 1; });
     var tiles = KINDS.map(function (k) {
       var c = counts[k[0]] || 0;
@@ -238,7 +329,8 @@ if (typeof document !== 'undefined') (function () {
       var k = KIND[x[0].kind] || KIND.note, ext = x[0].files ? Object.keys(x[0].files).join(' · ') : 'Note';
       return '<button class="art" data-art="' + x[1] + '">' + icon(k[3], k[2]) + '<div><b>' + esc(x[0].title) + '</b><small>' + esc(ext) + '</small></div></button>';
     }).join('');
-    $('right').innerHTML = '<div class="p-head"><h2>Studio</h2></div><div class="tiles">' + tiles + '</div><div class="scroll">' + rows + '</div>';
+    $('right').innerHTML = '<div class="p-head"><h2>Studio</h2>' + colBtn('r') + '</div><div class="tiles">' + tiles + '</div><div class="scroll">' + rows + '</div>';
+    applyCols();
   }
   function dlLinks(a, skip) {
     if (!a.files) return '';
@@ -253,7 +345,7 @@ if (typeof document !== 'undefined') (function () {
   function openArt(i) {
     var a = D.studio[i], f = a.files || {}, body;
     opened = i;
-    document.documentElement.style.setProperty('--r', '40vw');
+    reveal('r', Math.round(innerWidth * 0.40));
     if (a.md != null) body = '<div class="scroll"><div class="reader md">' + md(a.md) + '</div></div>';
     else if (a.rows) body = '<div class="scroll"><div class="reader md">' + tableHtml(a.rows) + '</div></div>';
     else if (f.pdf) body = '<iframe class="frame" title="' + esc(a.title) + '" src="' + esc(f.pdf) + '"></iframe>';
@@ -263,7 +355,8 @@ if (typeof document !== 'undefined') (function () {
     else if (f.mp4 || f.webm) body = '<div class="player"><video controls preload="metadata" src="' + esc(f.mp4 || f.webm) + '"></video></div>';
     else if (f.png || f.jpg || f.jpeg || f.webp) body = '<div class="scroll"><img alt="' + esc(a.title) + '" src="' + esc(f.png || f.jpg || f.jpeg || f.webp) + '" style="width:100%"></div>';
     else body = '<div class="player"><p>This file type opens outside the viewer.</p></div>';
-    $('right').innerHTML = '<div class="p-head"><button class="icon-btn" id="artback" aria-label="Back to Studio">' + icon(BACK) + '</button><h2 style="flex:1">' + esc(a.title) + '</h2><button class="icon-btn" id="artclose" aria-label="Close">' + icon(CLOSE) + '</button></div>' + dlLinks(a) + body;
+    $('right').innerHTML = '<div class="p-head"><button class="icon-btn" id="artback" aria-label="Back to Studio">' + icon(BACK) + '</button><h2 style="flex:1">' + esc(a.title) + '</h2><button class="icon-btn" id="artclose" aria-label="Close">' + icon(CLOSE) + '</button>' + colBtn('r') + '</div>' + dlLinks(a) + body;
+    applyCols();
   }
 
   /* Citation popover */
@@ -296,6 +389,7 @@ if (typeof document !== 'undefined') (function () {
       var c = D.cites[+t.dataset.c], i = c && srcByTitle[norm(c.t)];
       if (i !== undefined) { pop.hidden = true; openSource(i, c.q); }
     } else if (t.dataset.src !== undefined) openSource(+t.dataset.src);
+    else if (t.dataset.collapse) { var cs = t.dataset.collapse + 'c'; cols[cs] = !cols[cs]; saveCols(); applyCols(); }
     else if (t.id === 'srcback') sourcesList();
     else if (t.dataset.art !== undefined) openArt(+t.dataset.art);
     else if (t.id === 'artback' || t.id === 'artclose') studioList();
