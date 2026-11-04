@@ -435,17 +435,62 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
 
 const VIEWER_FILE = 'viewer.html';
 const VIEWER_ERROR = { type: 'viewer', message: 'The offline viewer could not be built' };
+const IMAGES_ERROR = { type: 'viewer', message: 'Some images for the offline viewer could not be saved' };
 
 // viewer.html for the files captured so far. The side panel reads its own packaged
 // files, which needs no permission. Links are relative to the takeout root.
-async function buildViewerHtml(files, meta) {
+// savedImages: the images/ paths that exist; other image links are left out.
+async function buildViewerHtml(files, meta, savedImages = new Set()) {
   const [template, app, marked, katex, css] = await Promise.all(NLMEViewer.VIEWER_ASSETS.map(async asset => {
     const response = await fetch(chrome.runtime.getURL(asset));
     if (!response.ok) throw new Error(`${asset}: HTTP ${response.status}`);
     return response.text();
   }));
-  const data = NLMEViewer.buildViewerData(files, { notebook: meta.notebook, exported: meta.exported });
+  const data = NLMEViewer.buildViewerData(files, { notebook: meta.notebook, exported: meta.exported, savedImages });
   return NLMEViewer.assembleViewer({ template, css, marked, katex, app, data });
+}
+
+// Image files into ZIPs of about maxBytes (Blobs, as artifacts are; a ZIP may pass the
+// cap by one image).
+function imageZipBatches(entries, maxBytes) {
+  const batches = [];
+  let bytes = Infinity;
+  for (const entry of entries) {
+    if (bytes >= maxBytes) { batches.push([]); bytes = 0; }
+    batches[batches.length - 1].push(entry);
+    bytes += entry.data.size;
+  }
+  return batches;
+}
+
+/**
+ * Save a takeout's images: into the folder, or into ZIPs named by zipNameFor. Saved
+ * first of the root files, so the viewer links only what is really there. A save that
+ * fails is logged here and costs only its own images.
+ *
+ * @param {Map<string, Blob>} images images/ path -> bytes
+ * @param {{ root: string, folder: string|null, zipNameFor: (part: number, totalParts: number) => string }} target
+ * @returns {Promise<{ paths: Set<string>, zips: string[], failed: boolean }>} the images/ paths saved
+ */
+async function saveTakeoutImages(images, { root, folder, zipNameFor }) {
+  const paths = new Set();
+  const zips = [];
+  let failed = false;
+  const entries = [...images].map(([path, data]) => ({ path: `${root}/${path}`, data }));
+  const capture = path => paths.add(path.slice(root.length + 1));
+  const batches = folder ? [entries] : imageZipBatches(entries, ARTIFACT_ZIP_MAX_BYTES);
+  for (const [i, batch] of batches.entries()) {
+    if (!batch.length) continue;
+    try {
+      const zipName = folder ? null : zipNameFor(i + 1, batches.length);
+      await saveFiles(batch, folder ? { folder, capture } : { zipName, capture });
+      if (zipName) zips.push(zipName);
+    } catch (error) {
+      console.error('[NotebookLM Takeout] Full Takeout: images failed:', error);
+      failed = true;
+    }
+  }
+  return { paths, zips, failed };
 }
 
 // The ZIP setting: the checkbox next to the Full Takeout button, else the saved
@@ -499,13 +544,13 @@ function takeoutRootFiles({ meta, summary, errors, partial, viewerHtml }) {
 /**
  * One-click Full Takeout: a notebook's sources, notes, chat and artifacts in
  * one run and one layout: <root>/{sources,notes,chat,artifacts}/ plus
- * <root>/_index.md, viewer.html, manifest.json and errors.md (root = sanitized
+ * <root>/images/, _index.md, viewer.html, manifest.json and errors.md (root = sanitized
  * notebook name). A category written in several batches has part-N/ folders.
  *
  * - ZIP on (takeoutZipEnabled): each category's batches go to
- *   <Notebook>-takeout-<category>-<ts>[-PARTIAL][-partNofM|-partN].zip, the root
- *   files to <Notebook>-takeout-index-<ts>.zip; unzipped into one folder
- *   they form one tree.
+ *   <Notebook>-takeout-<category>-<ts>[-PARTIAL][-partNofM|-partN].zip, images to
+ *   <Notebook>-takeout-images-<ts>[-PARTIAL][-partNofM].zip, the root files to
+ *   <Notebook>-takeout-index-<ts>.zip; unzipped into one folder they form one tree.
  * - ZIP off: everything goes to Downloads/<Notebook> takeout <ts>/; artifacts
  *   run in folder mode (CDN media straight to disk).
  *
@@ -523,6 +568,12 @@ function takeoutRootFiles({ meta, summary, errors, partial, viewerHtml }) {
  * save is an errors.md line and a warning, never a failed takeout: the other root
  * files are written without naming the viewer. A cancelled takeout gets a viewer
  * of what exists.
+ *
+ * Images embedded in the -with-images files become files in images/, not data in
+ * viewer.html: the capture keeps them as Blobs, they are saved before the viewer is
+ * built, and the viewer links only those that were saved. Images that fail follow the
+ * same rule; the viewer shows a placeholder there. If the viewer fails after that,
+ * the images stay as plain files nothing links.
  *
  * One combined results panel at the end (showResults): shell.finish reports a
  * single category's outcome, so the takeout does not use it. It lists the ZIPs
@@ -610,7 +661,16 @@ async function runFullTakeout() {
     const takeoutErrors = []; // not tied to one category
     // Relative path -> text the viewer reads, null for the rest (NLMEViewer.captureEntry)
     let viewerFiles = {};
-    const capture = (path, text) => NLMEViewer.captureEntry(viewerFiles, path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path, text);
+    // images/ path -> Blob, from the -with-images files; saved with the root files
+    const images = new Map();
+    const addImage = (path, base64, mime) => {
+      try {
+        images.set(path, base64ToBlob(base64, mime));
+      } catch (error) {
+        console.warn('[NotebookLM Takeout] Could not read an embedded image:', error); // no file, so no link
+      }
+    };
+    const capture = (path, text) => NLMEViewer.captureEntry(viewerFiles, path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path, text, addImage);
     // Set once a cancellation is on record (scan, a runner's own note, or
     // between categories): every later category is skipped
     let stopRest = false;
@@ -704,23 +764,34 @@ async function runFullTakeout() {
     if (tracker) await tracker.finish(!stopRest && !uncleanEnd);
 
     // 3. Root files, also after a cancel
+    const summary = categories.map(({ name, folder: catFolder, status, selected, exported, failed, zips, parts, packages }) =>
+      ({ name, folder: catFolder, status, selected, exported, failed, zips, parts, packages }));
+    const cancelled = summary.some(c => c.status === 'partial' || c.status === 'skipped');
+
+    // Images before the viewer: it may only link what was saved
+    shell.progress('Saving images...', 1);
+    const savedImages = await saveTakeoutImages(images, {
+      root,
+      folder,
+      zipNameFor: (part, totalParts) => NLME.zipName({ notebook: shell.projectName, kind: 'takeout-images', timestamp: shell.timestamp, partial: cancelled, part, totalParts })
+    });
+    images.clear();
+    if (savedImages.failed) takeoutErrors.push(IMAGES_ERROR);
+
     let viewerHtml = null;
     shell.progress('Building the offline viewer...', 1);
     try {
-      viewerHtml = await buildViewerHtml(viewerFiles, shell.meta);
+      viewerHtml = await buildViewerHtml(viewerFiles, shell.meta, savedImages.paths);
     } catch (error) {
       console.error('[NotebookLM Takeout] Full Takeout: viewer failed:', error);
       takeoutErrors.push(VIEWER_ERROR);
     }
     viewerFiles = null; // the texts are in viewerHtml now
 
-    const summary = categories.map(({ name, folder: catFolder, status, selected, exported, failed, zips, parts, packages }) =>
-      ({ name, folder: catFolder, status, selected, exported, failed, zips, parts, packages }));
     const allErrors = () => [
       ...NLME.prefixExportErrors('Takeout', takeoutErrors),
       ...categories.flatMap(c => NLME.prefixExportErrors(c.name, c.errors))
     ];
-    const cancelled = summary.some(c => c.status === 'partial' || c.status === 'skipped');
     const rootFilesWith = html => takeoutRootFiles({ meta: shell.meta, summary, errors: allErrors(), partial: cancelled, viewerHtml: html });
 
     shell.progress('Writing the takeout index...', 1);
@@ -782,8 +853,12 @@ async function runFullTakeout() {
       message += ' — the offline viewer could not be built';
       if (level !== 'error') level = 'warning';
     }
+    if (takeoutErrors.includes(IMAGES_ERROR)) {
+      message += ' — some images could not be saved';
+      if (level !== 'error') level = 'warning';
+    }
     console.log('[NotebookLM Takeout] Full Takeout finished:', message);
-    const saved = folder ? [folder] : [...categories.flatMap(c => c.zips), ...(indexZip ? [indexZip] : [])];
+    const saved = folder ? [folder] : [...categories.flatMap(c => c.zips), ...savedImages.zips, ...(indexZip ? [indexZip] : [])];
 
     // Retry: Sources, Notes and Artifacts items that failed (chat is never retried)
     const failedOf = name => categories.find(c => c.name === name).failedItems;

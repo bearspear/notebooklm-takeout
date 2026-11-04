@@ -142,14 +142,14 @@ notebooklm-exporter/
 │                             sidebar, service worker (importScripts) and Node tests load it
 ├── takeout-job.js (228)    — NLME.runExportJob: the one DOM-free job runner (sidebar + Node tests)
 ├── takeout-markdown.js (1029) — NLMEMarkdown: the one Markdown converter + KaTeX (sidebar + page)
-├── takeout-viewer.js (349) — NLMEViewer: DOM-free builder of the offline viewer's data and page
+├── takeout-viewer.js (444) — NLMEViewer: DOM-free builder of the offline viewer's data and page
 │                             (sidebar + Node tests + tools/build_viewer.js)
 ├── viewer/                 — The offline viewer's packaged files, read by the side panel and inlined
-│                             into viewer.html: viewer-template.html (121), viewer-app.js (271),
+│                             into viewer.html: viewer-template.html (121), viewer-app.js (289),
 │                             marked.min.js (marked 12.0.2), katex.min.js (KaTeX 0.16.11),
 │                             katex-inline.css (fonts inlined)
-├── tools/build_viewer.js (54) — Builds a viewer.html for an unzipped takeout folder (see Offline viewer)
-├── tools/validate_export.py (571) — Export checker and baseline comparison (Python stdlib; see Testing)
+├── tools/build_viewer.js (64) — Builds a viewer.html for an unzipped takeout folder (see Offline viewer)
+├── tools/validate_export.py (605) — Export checker and baseline comparison (Python stdlib; see Testing)
 ├── tests/                  — node:test unit tests for takeout-shared.js, takeout-job.js, the
 │                             message protocol and the file structure (load order, unique names)
 ├── sidebar.html  ( 478)    — Side panel UI: tabs, controls, settings/health panels
@@ -160,7 +160,7 @@ notebooklm-exporter/
 │                           — one file per tab (scan, list, export job, build files)
 ├── sidebar-list.js (336)   — List toolbar: filter, type chips, sort, select all visible
 ├── sidebar-results.js (148) — Results panel and Resume banner
-├── sidebar-takeout.js (1046) — saveFiles, fetchDownload, withExportShell, runFullTakeout, resumeJob
+├── sidebar-takeout.js (1146) — saveFiles, fetchDownload, withExportShell, runFullTakeout, resumeJob
 ├── styles.css    (1791)    — Side panel styles
 ├── content.js    (4229)    — DOM scraping + extraction, runs on NotebookLM (HANDLERS table)
 ├── mindmap-extract.js (325) — Mind map SVG/tree extraction; content script and injected
@@ -221,7 +221,28 @@ U+2029 escaped); `tools/validate_export.py` parses it back with a plain JSON par
   for titles) and `path -> null` for everything else, so media are listed for links but never held in
   memory. Paths are relative to the takeout root and may sit under `part-N/`. A capture failure is
   logged and never fails a save.
-- **Links.** `buildViewerData(files, {notebook, exported, mediaBase})`: each artifact's files become
+- **Images are files, not data.** `viewer.html` holds no image data. `-with-images` files are captured
+  too (`wantsText`), and `captureEntry` runs `NLMEViewer.extractImages` on them at once: each
+  `![alt](data:image/...;base64,...)` becomes `![alt](images/<hash>.<ext>)` and `addImage(path, base64,
+  mime)` gets each distinct image once (the hash is `contentHash`, over the base64), so the store never
+  holds base64. Pass one `addImage` per takeout: it is what the dedupe is keyed on. The side panel turns
+  the bytes into Blobs in a Map until the end of the takeout. `buildViewerData` prefers the `-with-images`
+  text for sources, notes and chat (`sectionFiles`, same title only, so a note really called "X with
+  images" stays an item); a source keeps its plus-meta summary (`withSummary`).
+- **Saving images.** `saveTakeoutImages` (sidebar-takeout.js) runs first of the root files, because the
+  viewer may only link what was saved: images, then the viewer build with `savedImages`, then viewer.html,
+  then the other root files. Folder mode: `<root>/images/`. ZIP mode:
+  `<Notebook>-takeout-images-<ts>[-PARTIAL][-partNofM].zip`, split at `ARTIFACT_ZIP_MAX_BYTES`, listed in
+  the results panel. They are not in the root manifest. A failed save is logged, adds "Some images for the
+  offline viewer could not be saved" to errors.md, makes the outcome at least a warning and costs only
+  those images; `buildViewerData` empties their links (`![alt]()`). If the viewer fails after that, the
+  images stay as files nothing links.
+- **Failed images.** `sanitizeHtml` drops remote images. An `img` with no src shows its alt text, or "Image
+  not available offline"; a URL is never shown as alt text (failed images often have one).
+- **Citation images.** Quotes in `cites` stay plain text, for the popover and `findQuote`. `citeRecord`
+  takes images out of `q`: `imgs` lists the files, shown under the quote (`citeHtml`), `lost` counts those
+  not available.
+- **Links.** `buildViewerData(files, {notebook, exported, mediaBase, savedImages})`: each artifact's files become
   `studio[].files = {ext: mediaBase + encoded path}`. The extension uses `mediaBase = ''` (links relative
   to the takeout root, where viewer.html sits). `tools/build_viewer.js` sets it to the relative path from
   the output file to the root. Files merge into one artifact only within one directory.
@@ -235,17 +256,20 @@ U+2029 escaped); `tools/validate_export.py` parses it back with a plain JSON par
   artifacts, `one.savedName`) have no path from the takeout, so they get no viewer link there (errors.md
   names them). In folder mode they are listed as `artifacts/<type>/../../../<name>` (`outsidePath`;
   `landedPath` applies the name Chrome actually gave a URL download). In ZIP mode the category ZIPs must
-  be unzipped into one folder, or media links break: viewer.html is in the index ZIP and the media in the
-  category ZIPs.
+  be unzipped into one folder, or media and image links break: viewer.html is in the index ZIP, the media
+  in the category ZIPs and the images in the images ZIP.
 - **`node tools/build_viewer.js <takeout-root> <out.html> [--allow-downloads]`** rebuilds a viewer for an
-  unzipped takeout (also useful for takeouts from older versions). It refuses to write inside
-  `~/Downloads` unless `--allow-downloads` is given.
+  unzipped takeout (also useful for takeouts from older versions). Embedded images go to `images/` beside
+  the output file. It refuses to write inside `~/Downloads` unless `--allow-downloads` is given, images
+  included, and only reads the takeout.
 - **Checker.** `check_viewer` in tools/validate_export.py: `viewer-invalid` (FAIL) when the data block is
   missing, not JSON or has no `studio` list; `viewer-broken-link` (FAIL) when a URL-decoded
   `studio[].files` path does not resolve to a file from the root (it may leave the root, for the
-  `../../../` case above); `viewer-missing` (WARN) for a `kind: takeout` manifest from exporter 1.8.0 or
+  `../../../` case above), or an `images/<hash>.<ext>` reference anywhere in the data has no file; `viewer-missing` (WARN) for a `kind: takeout` manifest from exporter 1.8.0 or
   later with no viewer.html (versions compared numerically). Link checks run only when `artifacts/` sits
-  next to viewer.html (merged tree or folder takeout); an unmerged category ZIP is skipped.
+  next to viewer.html (merged tree or folder takeout); an unmerged category ZIP is skipped. Files in a
+  takeout's `images/` count as listed (no `unlisted-file`), and an images ZIP passes as kind `images` (it
+  has no manifest).
 
 ## Settings shape and storage
 

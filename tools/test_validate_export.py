@@ -366,6 +366,63 @@ class ViewerTests(Base):
         self.assertEqual(r.status, 'FAIL')
         self.assertEqual([f.detail for f in r.findings if f.code == 'viewer-broken-link'], ['artifacts/slides/Gone.pdf'])
 
+    IMG = 'images/0123456789abcdef.jpg'
+
+    def image_takeout(self, data, images=()):
+        root = make_takeout(os.path.join(self.tmp, 't'), [], raw=viewer_html(data))
+        for rel in images:
+            p = os.path.join(root, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, 'w', encoding='utf-8') as f:
+                f.write('x')
+        return root
+
+    def test_viewer_images_ok_and_not_unlisted(self):
+        data = {'notebook': 'Demo', 'studio': [{'kind': 'note', 'md': f'![a]({self.IMG})'}]}
+        [r] = self.check(self.image_takeout(data, [self.IMG]))
+        self.assertEqual(codes(r), [], [str(f) for f in r.findings])
+
+    def test_viewer_broken_image_link(self):
+        for data in ({'studio': [{'kind': 'note', 'md': f'x ![a]({self.IMG}) y'}]},
+                     {'studio': [], 'sources': [{'title': 'S', 'md': f'![]({self.IMG})'}]},
+                     {'studio': [], 'pairs': [{'q': 'Q', 'a': f'![]({self.IMG})'}]},
+                     {'studio': [], 'cites': [{'t': 'T', 'q': '', 'imgs': [self.IMG]}]}):
+            with self.subTest(data=data):
+                [r] = self.check(self.image_takeout(data))
+                self.assertEqual([f.detail for f in r.findings if f.code == 'viewer-broken-link'], [self.IMG])
+                shutil.rmtree(os.path.join(self.tmp, 't'))
+
+    def test_viewer_image_links_are_skipped_in_an_unmerged_zip(self):
+        r = self.run_viewer([{'kind': 'note', 'md': f'![a]({self.IMG})'}], artifacts=())
+        self.assertNotIn('viewer-broken-link', codes(r))
+
+    def test_viewer_text_that_only_looks_like_an_image_is_not_a_link(self):
+        r = self.run_viewer([{'kind': 'note', 'md': 'see ![fig](images/fig1.png)'}])
+        self.assertEqual(codes(r), [])
+
+    def test_images_outside_a_takeout_stay_unlisted(self):
+        root = make_export(os.path.join(self.tmp, 'n'))
+        p = os.path.join(root, 'images', '0123456789abcdef.jpg')
+        os.makedirs(os.path.dirname(p))
+        with open(p, 'w', encoding='utf-8') as f:
+            f.write('x')
+        [r] = self.check(root)
+        self.assertIn('unlisted-file', codes(r))
+
+    def test_images_zip_is_recognised(self):
+        p = os.path.join(self.tmp, 'Demo-takeout-images-T.zip')
+        with zipfile.ZipFile(p, 'w') as z:
+            z.writestr('Demo/' + self.IMG, 'x')
+        [r] = self.check(p)
+        self.assertEqual((r.status, r.kind), ('PASS', 'images'), [str(f) for f in r.findings])
+
+    def test_other_zip_without_manifest_still_fails(self):
+        p = os.path.join(self.tmp, 'Other.zip')
+        with zipfile.ZipFile(p, 'w') as z:
+            z.writestr('Demo/images/photo.jpg', 'x')
+        [r] = self.check(p)
+        self.assertEqual(codes(r), ['no-manifest'])
+
     def test_viewer_bad_data(self):
         for raw in ('<!doctype html><p>no data</p>',
                     '<script id="data" type="application/json">{not json</script>',

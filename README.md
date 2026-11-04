@@ -175,6 +175,7 @@ New-Physics-takeout-sources-2026-11-02T15-13-06.zip
 New-Physics-takeout-notes-2026-11-02T15-13-06.zip
 New-Physics-takeout-chat-2026-11-02T15-13-06.zip
 New-Physics-takeout-artifacts-2026-11-02T15-13-06.zip
+New-Physics-takeout-images-2026-11-02T15-13-06.zip
 New-Physics-takeout-index-2026-11-02T15-13-06.zip
 ```
 
@@ -188,6 +189,7 @@ New-Physics/
   manifest.json        the same as data
   errors.md            every category's errors and notes (only when there are any)
   sources/  notes/  chat/  artifacts/
+  images/              the images the viewer shows (only when there are any)
 ```
 
 Each category folder is a self-contained export: it holds that category's normal ZIP layout,
@@ -224,14 +226,20 @@ Every Full Takeout also writes `viewer.html` at the top of the tree. Open it in 
 internet needed) to read your sources, notes and chat, and to open slides, audio and other
 artifacts, with citations linked to their sources. `_index.md` and `_index.html` link to it.
 
+Images are files in `images/`, not data inside `viewer.html`, so the page stays small. An image that
+could not be downloaded shows "Image not available offline". Images in a citation quote show in the
+citation's popup.
+
 With ZIP on, **unzip all the ZIPs into one folder** before you open it: the viewer is in the index
-ZIP and its media links point to files in the other ZIPs, so they only work side by side. Artifacts
+ZIP and its media and image links point to files in the other ZIPs, so they only work side by side.
+Images have their own ZIP (`…-takeout-images-<ts>.zip`, split near 500 MB into `-part1of2`, …). Artifacts
 that Chrome saved straight into Downloads (outside the takeout) do not appear in the viewer in a ZIP
-takeout. With ZIP off the folder is already in one piece. If the viewer could not be built,
-the takeout is still complete and `errors.md` says so.
+takeout. With ZIP off the folder is already in one piece. If the viewer or its images could not be
+saved, the takeout is still complete and `errors.md` says so.
 
 For a takeout made with an older version, build a viewer for the unzipped folder with
-`node tools/build_viewer.js <takeout folder> <out.html>` (see Development).
+`node tools/build_viewer.js <takeout folder> <out.html>` (see Development). It writes `images/` beside
+the output file.
 
 A category's status in `_index.md` and in the final message is one of: complete, partial
 (cancelled), skipped (cancelled earlier), none in notebook, partial (stopped, see errors) when
@@ -534,6 +542,7 @@ contract with Gemini Notebook, past drift and recipes.
 **1.8.0 (Nov 2026)**: offline viewer.
 - Every Full Takeout writes `viewer.html`: browse sources, notes, chat and artifacts offline, with
   linked citations. Unzip the ZIPs into one folder for media links to work.
+- Images show in the viewer, from an `images/` folder (its own ZIP with ZIP on), also in citation popups.
 - `_index.md` and `_index.html` link to the viewer; the root `manifest.json` lists it.
 - `tools/build_viewer.js` builds a viewer for an unzipped takeout; the export checker reports
   `viewer-invalid`, `viewer-broken-link` and `viewer-missing`.

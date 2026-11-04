@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Usage: node tools/build_viewer.js <takeout-root> <out.html> [--allow-downloads]
-// Builds the offline viewer page for an unzipped Full Takeout folder.
+// Builds the offline viewer page for an unzipped Full Takeout folder. Images embedded in
+// its -with-images files are written to images/ beside <out.html>.
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
@@ -22,13 +23,22 @@ const downloads = path.join(os.homedir(), 'Downloads');
 const inside = (dir, p) => { const r = path.relative(dir, p); return r === '' || (!r.startsWith('..') && !path.isAbsolute(r)); };
 if (inside(downloads, out) && !allowDownloads) fail('Refusing to write inside ' + downloads + ' (pass --allow-downloads to override).');
 
+// Behind the Downloads guard: images/ sits beside out
+let imageCount = 0;
+function addImage(rel, base64) {
+  const target = path.join(path.dirname(out), rel);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, Buffer.from(base64, 'base64'));
+  imageCount++;
+}
+
 const files = {};
 (function walk(dir, rel) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const r = rel ? rel + '/' + e.name : e.name;
     if (e.isDirectory()) walk(path.join(dir, e.name), r);
     else if (e.isFile()) {
-      files[r] = V.keepsText(r) ? fs.readFileSync(path.join(dir, e.name), 'utf8') : null;
+      V.captureEntry(files, r, V.keepsText(r) ? fs.readFileSync(path.join(dir, e.name), 'utf8') : null, addImage);
     }
   }
 })(root, '');
@@ -51,4 +61,4 @@ const html = V.assembleViewer({ template, css, marked, katex, app, data });
 
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.writeFileSync(out, html);
-console.log(`${out}: ${data.sources.length} sources, ${data.studio.length} studio items, ${data.pairs.length} Q&A, ${data.pairs.reduce((n, p) => n + p.n, 0)} chat citations, ${data.cites.length} unique citation records`);
+console.log(`${out}: ${data.sources.length} sources, ${data.studio.length} studio items, ${data.pairs.length} Q&A, ${data.pairs.reduce((n, p) => n + p.n, 0)} chat citations, ${data.cites.length} unique citation records, ${imageCount} image files`);

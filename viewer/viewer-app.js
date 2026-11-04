@@ -11,6 +11,9 @@ var BAD_URL = /^[\s\u0000-\u001f]*(javascript|vbscript|data\s*:\s*text\/html)/i;
 var LOADING_TAGS = /^(img|video|audio|source|track|picture|image|use|svg|input|feimage)$/i;
 var LOADING_ATTRS = /^(src|srcset|poster|data|href|xlink:href)$/i;
 
+var NO_IMAGE = 'Image not available offline';
+var URL_TEXT = /[a-z][a-z0-9+.-]*:\/\/|(^|\s)(\/\/|www\.)/i;
+
 // Relative path or an embedded image; anything with a scheme or // stays out.
 function isLocalUrl(v) {
   var u = String(v).replace(/[\u0000-\u001f\s]+/g, '');
@@ -26,20 +29,32 @@ function sanitizeHtml(html, parser) {
   doc.querySelectorAll('*').forEach(function (n) {
     var tag = String(n.tagName).toLowerCase();
     if (SMIL_TAGS.test(tag)) { n.remove(); return; }
-    var loads = LOADING_TAGS.test(tag), dropped = false;
+    var loads = LOADING_TAGS.test(tag);
     Array.prototype.slice.call(n.attributes).forEach(function (a) {
       var name = a.name;
       if (/^(on|ping$|background$)/i.test(name) || (URL_ATTRS.test(name) && BAD_URL.test(String(a.value).replace(/[\u0000-\u001f\s]+/g, '')))) n.removeAttribute(name);
       else if (/^style$/i.test(name) && /url\s*\(|image-set|[@]import|expression|\\/i.test(a.value)) n.removeAttribute(name);
-      else if (loads && LOADING_ATTRS.test(name) && (/^srcset$/i.test(name) || !isLocalUrl(a.value))) { n.removeAttribute(name); dropped = true; }
+      else if (loads && LOADING_ATTRS.test(name) && (/^srcset$/i.test(name) || !isLocalUrl(a.value))) n.removeAttribute(name);
     });
-    if (tag === 'img' && dropped && !n.getAttribute('src')) {
+    if (tag === 'img') {
+      // Failed downloads often have their URL as alt text: it is never shown
       var alt = n.getAttribute('alt');
-      if (alt) n.replaceWith(doc.createTextNode(alt)); else n.remove();
+      if (alt && URL_TEXT.test(alt)) { alt = ''; n.setAttribute('alt', ''); }
+      if (!n.getAttribute('src')) n.replaceWith(doc.createTextNode(alt || NO_IMAGE));
     }
     if (tag === 'a') { n.setAttribute('target', '_blank'); n.setAttribute('rel', 'noopener'); }
   });
   return doc.body.innerHTML;
+}
+
+function escHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+// A citation popover. c.imgs are paths the builder made; known: its source is in this archive.
+function citeHtml(c, known) {
+  return '<b>' + escHtml(c.t) + '</b><p>' + escHtml(c.q) + '</p>' +
+    (c.imgs || []).map(function (src) { return '<img alt="" src="' + escHtml(src) + '">'; }).join('') +
+    (c.lost ? '<p>' + NO_IMAGE + '</p>' : '') +
+    (known ? '<small>Click the number to open this source</small>' : '');
 }
 
 function isWebUrl(v) { return /^https?:\/\//i.test(String(v).trim()); }
@@ -73,7 +88,7 @@ function findQuote(text, quote) {
   return { at: from, length: to - from };
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml };
+if (typeof module === 'object' && module.exports) module.exports = { foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml };
 
 if (typeof document !== 'undefined') (function () {
   var D = JSON.parse(document.getElementById('data').textContent);
@@ -91,7 +106,7 @@ if (typeof document !== 'undefined') (function () {
   var KIND = {}; KINDS.forEach(function (k) { KIND[k[0]] = k; });
   function icon(body, color) { return '<svg viewBox="0 0 24 24"' + (color ? ' style="color:' + color + '"' : '') + '>' + body + '</svg>'; }
   var CLOSE = '<path d="M6 6l12 12M18 6L6 18"/>', BACK = '<path d="M15 5l-7 7 7 7"/>', COPY = '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M5 16V5a1 1 0 0 1 1-1h10"/>';
-  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+  var esc = escHtml;
 
   // Exported text comes from third-party sources, so scripts and handlers never survive
   function sanitize(html) { return sanitizeHtml(html, new DOMParser()); }
@@ -227,13 +242,16 @@ if (typeof document !== 'undefined') (function () {
   function showPop(btn) {
     clearTimeout(hideT);
     var c = D.cites[+btn.dataset.c]; if (!c) return;
-    var known = srcByTitle[norm(c.t)] !== undefined;
-    pop.innerHTML = '<b>' + esc(c.t) + '</b><p>' + esc(c.q) + '</p>' + (known ? '<small>Click the number to open this source</small>' : '');
+    pop.innerHTML = citeHtml(c, srcByTitle[norm(c.t)] !== undefined);
     pop.hidden = false; pop.scrollTop = 0;
-    var r = btn.getBoundingClientRect(), pr = pop.getBoundingClientRect();
-    var x = Math.max(12, Math.min(innerWidth - pr.width - 12, r.left - 20));
-    var y = r.bottom + 6 + pr.height > innerHeight - 8 ? Math.max(8, r.top - pr.height - 6) : r.bottom + 6;
-    pop.style.left = x + 'px'; pop.style.top = y + 'px';
+    function place() {
+      var r = btn.getBoundingClientRect(), pr = pop.getBoundingClientRect();
+      var x = Math.max(12, Math.min(innerWidth - pr.width - 12, r.left - 20));
+      var y = r.bottom + 6 + pr.height > innerHeight - 8 ? Math.max(8, r.top - pr.height - 6) : r.bottom + 6;
+      pop.style.left = x + 'px'; pop.style.top = y + 'px';
+    }
+    place();
+    pop.querySelectorAll('img').forEach(function (img) { img.addEventListener('load', place); }); // images change its height
   }
   function hidePop() { hideT = setTimeout(function () { pop.hidden = true; }, 180); }
   document.addEventListener('mouseover', function (e) { var b = e.target.closest && e.target.closest('.cite'); if (b) showPop(b); });

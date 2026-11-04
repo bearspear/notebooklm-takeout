@@ -114,9 +114,9 @@ test('escapeJson leaves no </script> or <!--', () => {
   assert.deepEqual(JSON.parse(out), { a: '</script><!-- x', b: '\u2028' });
 });
 
-test('wantsText skips image and code-block variants', () => {
+test('wantsText skips code-block variants and files that are not items', () => {
   for (const p of ['chat/chat.md', 'sources/a-plus-meta.md', 'artifacts/t/x.csv', 'part-1/notes/n.md']) assert.equal(V.wantsText(p), true, p);
-  for (const p of ['a-with-images.md', 'a-code-blocks.md', 'notes/combined-notes.md', 'notes/combined-notes-2.md',
+  for (const p of ['a-code-blocks.md', 'notes/combined-notes.md', 'notes/combined-notes-2.md',
     '_index.md', 'sources/_index-2.md', '_audit.md', 'errors.md', 'a.pdf', 'manifest.json']) assert.equal(V.wantsText(p), false, p);
 });
 
@@ -353,7 +353,7 @@ test('takeout layout: notes, sources and artifacts in <category>/part-N/ reach t
   const d = V.buildViewerData({
     'notes/part-1/one.md': '# One\n\nfirst',
     'notes/part-2/two.md': '# Two\n\nsecond!',
-    'notes/part-2/one-with-images.md': 'skip',
+    'notes/part-1/one-with-images.md': 'skip',
     'notes/part-2/_index.md': 'skip',
     'sources/part-2/s.md': '# S\n\nbody',
     'artifacts/part-1/manifest.json': JSON.stringify({ files: [{ path: 'slides/deck.pdf', title: 'Pretty Deck' }] }),
@@ -383,10 +383,10 @@ test('captureEntry keeps text only for wanted strings', () => {
   assert.deepEqual(store, { 'notes/a.md': 'note', 'artifacts/data-tables/t.csv': 'a,b', 'chat/chat.md': 'chat' });
 });
 
-test('captureEntry never keeps -with-images, combined or index text', () => {
+test('captureEntry never keeps code-blocks, combined or index text', () => {
   const store = {};
   const huge = 'data:image/png;base64,AAAA';
-  const skipped = ['notes/a-with-images.md', 'sources/part-2/b-plus-meta-with-images.md', 'chat/chat-with-images.md',
+  const skipped = ['notes/a-code-blocks.md', 'notes/a-code-blocks-with-images.md', 'notes/combined-notes-with-images.md',
     'notes/combined-notes.md', 'notes/_index.md', 'notes/_audit.md', 'notes/errors.md', 'sources/youtube-urls.txt', 'artifacts/_index.html'];
   for (const p of skipped) V.captureEntry(store, p, huge);
   assert.deepEqual(Object.keys(store), skipped);
@@ -441,10 +441,10 @@ const vm = require('node:vm');
 const ROOT = path.join(__dirname, '..');
 
 function sidePanel({ fetchFile, downloadItem = () => [{ filename: '/d/x', state: 'complete' }] } = {}) {
-  const log = { zips: [], downloads: [], direct: [], zipped: {}, panels: [] };
-  class JSZip { file(p, d) { log.zipped[p] = d; } }
+  const log = { zips: [], downloads: [], direct: [], zipped: {}, compression: {}, panels: [] };
+  class JSZip { file(p, d, o) { log.zipped[p] = d; log.compression[p] = o && o.compression; } }
   const sandbox = {
-    NLME, NLMEViewer: V, JSZip, Blob, URL, console: { log() {}, warn() {}, error() {} },
+    NLME, NLMEViewer: V, JSZip, Blob, URL, atob, console: { log() {}, warn() {}, error() {} },
     // The 60 s blob-URL revoke must not hold the test process open
     setTimeout: (fn, ms) => { const t = setTimeout(fn, ms); if (ms >= 1000) t.unref(); return t; },
     generateZipTimed: async zip => zip,
@@ -582,7 +582,7 @@ test('buildViewerHtml throws when a packaged file cannot be read', async () => {
 
 // runFullTakeout itself, with the page, the shell and the runners stubbed. Each runner
 // saves through the real saveCategoryBatch, under the target it was handed.
-function takeoutPanel({ zip = true, fetchFile, cancelAfter = null, notesThrow = false } = {}) {
+function takeoutPanel({ zip = true, fetchFile, cancelAfter = null, notesThrow = false, noteImages = '# N\n\nnote body IMAGE-TEXT', chatImages = null, zipMaxBytes = 500 * 1024 * 1024 } = {}) {
   const readAsset = url => ({ ok: true, text: async () => fs.readFileSync(path.join(ROOT, url.replace('chrome-extension://id/', '')), 'utf8') });
   const { sandbox, log } = sidePanel({ fetchFile: fetchFile || readAsset, downloadItem: () => [{ filename: '/d/x.m4a', state: 'complete' }] });
   let cancelled = false;
@@ -594,8 +594,8 @@ function takeoutPanel({ zip = true, fetchFile, cancelAfter = null, notesThrow = 
     const prefix = name === 'notes' ? `${target.pathPrefix}part-2/` : target.pathPrefix;
     const files = {
       sources: [{ path: 'S.md', data: '# S\n\nsource body' }],
-      notes: [{ path: 'N.md', data: '# N\n\nnote body' }, { path: 'N-with-images.md', data: 'IMAGE-TEXT' }],
-      chat: [{ path: 'chat.md', data: '# Chat\n' }],
+      notes: [{ path: 'N.md', data: '# N\n\nnote body' }, { path: 'N-with-images.md', data: noteImages }],
+      chat: chatImages ? [{ path: 'chat.md', data: '# Chat\n' }, { path: 'chat-with-images.md', data: chatImages }] : [{ path: 'chat.md', data: '# Chat\n' }],
       artifacts: [{ path: 'audio/a.m4a', data: new Uint8Array(1) }, { path: 'manifest.json', data: '{"files":[{"path":"audio/a.m4a","title":"Pretty Audio"}]}' }]
     }[name];
     await sandbox.saveCategoryBatch(shell, files, info, { prefix, zipKind: target.zipKind, folder: target.folder, written: target.written, capture: target.capture });
@@ -603,7 +603,7 @@ function takeoutPanel({ zip = true, fetchFile, cancelAfter = null, notesThrow = 
     return { result: { exported: 1, failed: 0, cancelled: cancelAfter === name }, errors: [], auditOk: true };
   };
   Object.assign(sandbox, {
-    settings: { ...NLME.DEFAULT_SETTINGS }, exportTimer: { merge() {} }, lastChatScanTiming: null,
+    settings: { ...NLME.DEFAULT_SETTINGS }, exportTimer: { merge() {} }, lastChatScanTiming: null, ARTIFACT_ZIP_MAX_BYTES: zipMaxBytes,
     document: { getElementById: () => ({ checked: zip }) },
     isNotebookUrl: () => true, ensureContentScriptLoaded: async () => {}, startExportTiming() {}, stampJobKeys() {},
     showToast() {}, timingSummary: () => '', showResults: panel => log.panels.push(panel),
@@ -626,7 +626,7 @@ test('Full Takeout writes viewer.html with what was saved, lists it and links it
   const html = log.zipped['Book/viewer.html'];
   assert.equal(typeof html, 'string');
   for (const text of ['Book Title', 'EXPORTED-AT', 'source body', 'note body', 'Pretty Audio', 'artifacts/audio/a.m4a']) assert.ok(html.includes(text), text);
-  assert.ok(!html.includes('IMAGE-TEXT'), '-with-images text is never kept');
+  assert.ok(html.includes('IMAGE-TEXT'), 'the -with-images text wins');
   const manifest = JSON.parse(log.zipped['Book/manifest.json']);
   assert.ok(manifest.files.some(f => f.path === 'viewer.html' && f.bytes > 0));
   assert.match(log.zipped['Book/_index.md'], /\(viewer\.html\)/);
@@ -776,4 +776,337 @@ test('assembleViewer escapes <!-- in inlined scripts', () => {
   const out = V.assembleViewer({ template: '/*APP_JS*/', css: '', marked: '', katex: '', app: 'var s = "<!-- x </script>";', data: {} });
   assert.doesNotMatch(out, /<!--/);
   assert.match(out, /<\\!-- x <\\\/script>/);
+});
+
+// ---- images: files in the takeout, never data inside viewer.html ----
+const b64 = text => Buffer.from(text).toString('base64');
+const dataImage = (text, mime = 'image/png', alt = 'A chart') => `![${alt}](data:${mime};base64,${b64(text)})`;
+const collector = () => { const added = []; const addImage = (p, base64, mime) => added.push({ p, base64, mime }); return { added, addImage }; };
+const front2 = title => `---\ntitle: "${title}"\n---\n`;
+const REMOTE = 'https://lh3.googleusercontent.com/notebooklm/abc';
+
+test('extractImages turns an embedded image into a file link', () => {
+  const { added, addImage } = collector();
+  const out = V.extractImages(`before ${dataImage('one')} after`, addImage);
+  assert.equal(added.length, 1);
+  assert.match(added[0].p, /^images\/[0-9a-f]{16}\.png$/);
+  assert.equal(added[0].base64, b64('one'));
+  assert.equal(added[0].mime, 'image/png');
+  assert.equal(out, `before ![A chart](${added[0].p}) after`);
+});
+
+test('extractImages dedupes the same image across files and keeps different ones apart', () => {
+  const { added, addImage } = collector();
+  const a = V.extractImages(dataImage('same') + dataImage('same'), addImage);
+  const b = V.extractImages(dataImage('same') + dataImage('other'), addImage);
+  assert.equal(added.length, 2);
+  assert.notEqual(added[0].p, added[1].p);
+  assert.ok(a.includes(added[0].p) && b.includes(added[0].p) && b.includes(added[1].p));
+});
+
+test('extractImages names a file from its content alone, with the extension of its type', () => {
+  const first = collector(), second = collector();
+  V.extractImages(dataImage('x'), first.addImage);
+  V.extractImages(dataImage('x'), second.addImage);
+  assert.equal(first.added[0].p, second.added[0].p);
+  const ext = mime => { const c = collector(); V.extractImages(dataImage('x', mime), c.addImage); return c.added[0].p.split('.').pop(); };
+  assert.equal(ext('image/jpeg'), 'jpg');
+  assert.equal(ext('image/webp'), 'webp');
+  assert.equal(ext('image/svg+xml'), 'svg');
+  assert.equal(ext('IMAGE/PNG'), 'png');
+  assert.equal(ext('image/strange'), 'img');
+});
+
+test('extractImages leaves remote images and other text alone', () => {
+  const { added, addImage } = collector();
+  const text = `![${REMOTE}](${REMOTE}) and ![x](pics/a.png) and [link](data:image/png;base64,AAAA)`;
+  assert.equal(V.extractImages(text, addImage), text);
+  assert.equal(added.length, 0);
+});
+
+test('extractImages handles an alt text with brackets and a data URI with parameters', () => {
+  const { added, addImage } = collector();
+  const out = V.extractImages(`![fig \\[1\\]](data:image/png;name=a.png;base64,${b64('p')})`, addImage);
+  assert.equal(added.length, 1);
+  assert.equal(out, `![fig \\[1\\]](${added[0].p})`);
+});
+
+test('wantsText accepts -with-images files, not code-blocks ones', () => {
+  assert.equal(V.wantsText('notes/a-with-images.md'), true);
+  assert.equal(V.wantsText('sources/part-2/b-plus-meta-with-images.md'), true);
+  assert.equal(V.wantsText('chat/chat-with-images.md'), true);
+  assert.equal(V.wantsText('notes/a-code-blocks.md'), false);
+  assert.equal(V.wantsText('notes/a-code-blocks-with-images.md'), false);
+  assert.equal(V.wantsText('notes/combined-notes-with-images.md'), false);
+});
+
+test('captureEntry holds no base64: the image goes to addImage straight away', () => {
+  const store = {};
+  const { added, addImage } = collector();
+  V.captureEntry(store, 'notes/a-with-images.md', dataImage('pic'), addImage);
+  assert.equal(added.length, 1);
+  assert.equal(store['notes/a-with-images.md'], `![A chart](${added[0].p})`);
+  assert.doesNotMatch(JSON.stringify(store), /base64/);
+});
+
+test('captureEntry leaves a file that is not a -with-images file as it is', () => {
+  const store = {};
+  const { added, addImage } = collector();
+  V.captureEntry(store, 'notes/a.md', dataImage('pic'), addImage);
+  assert.equal(added.length, 0);
+  assert.equal(store['notes/a.md'], dataImage('pic'));
+});
+
+test('with-images text wins for notes, sources and chat, and nothing is listed twice', () => {
+  const d = V.buildViewerData({
+    'notes/part-2/N.md': `${front2('N')}# N\n\nbase note`,
+    'notes/part-2/N-with-images.md': `${front2('N')}# N\n\nimage note`,
+    'notes/Plain.md': `${front2('Plain')}# Plain\n\nplain note`,
+    'sources/S.md': `${front2('S')}# S\n\nbase source`,
+    'sources/S-with-images.md': `${front2('S')}# S\n\nimage source`,
+    'chat/chat.md': '## Q: One?\n\n**A:** base answer\n',
+    'chat/chat-with-images.md': '## Q: One?\n\n**A:** image answer\n'
+  }, manifestOpts);
+  assert.deepEqual(d.studio.map(s => [s.title, s.md]), [['N', 'image note'], ['Plain', 'plain note']]);
+  assert.deepEqual(d.sources.map(s => [s.title, s.md]), [['S', 'image source']]);
+  assert.deepEqual(d.pairs.map(p => p.a), ['image answer']);
+});
+
+test('a note really named like a variant keeps its own place', () => {
+  const d = V.buildViewerData({
+    'notes/N.md': `${front2('N')}# N\n\nfirst`,
+    'notes/N-with-images.md': `${front2('N with images')}# N with images\n\nsecond`,
+    'notes/Solo-with-images.md': `${front2('Solo')}# Solo\n\nthird`
+  }, manifestOpts);
+  assert.deepEqual(d.studio.map(s => s.md).sort(), ['first', 'second', 'third']);
+});
+
+test('a source keeps the summary of its plus-meta file and shows the images of its with-images file', () => {
+  const meta = `${front2('S')}# S\n\n## Summary\n\nthe summary\n\n## Content\n\nplain body`;
+  const pics = `${front2('S')}# S\n\n## Content\n\n![a](images/0123456789abcdef.png)\nbody`;
+  const d = V.buildViewerData({ 'sources/S.md': `${front2('S')}# S\n\n## Content\n\nplain body`, 'sources/S-plus-meta.md': meta, 'sources/S-with-images.md': pics }, manifestOpts);
+  assert.equal(d.sources.length, 1);
+  assert.equal(d.sources[0].md, '## Summary\n\nthe summary\n\n## Content\n\n![a](images/0123456789abcdef.png)\nbody');
+});
+
+test('a plus-meta-with-images file wins over everything for its source', () => {
+  const d = V.buildViewerData({
+    'sources/S.md': `${front2('S')}# S\n\nbase`,
+    'sources/S-plus-meta.md': `${front2('S')}# S\n\nmeta`,
+    'sources/S-with-images.md': `${front2('S')}# S\n\nimages`,
+    'sources/S-plus-meta-with-images.md': `${front2('S')}# S\n\nboth`
+  }, manifestOpts);
+  assert.deepEqual(d.sources.map(s => s.md), ['both']);
+});
+
+test('base64 never reaches the viewer data', () => {
+  const files = {};
+  const { added, addImage } = collector();
+  for (const [p, text] of [
+    ['notes/N.md', `${front2('N')}# N\n\nbase`],
+    ['notes/N-with-images.md', `${front2('N')}# N\n\n${dataImage('pic')}`],
+    ['sources/S-with-images.md', `${front2('S')}# S\n\n${dataImage('pic2')}`],
+    ['chat/chat-with-images.md', `## Q: One?\n\n**A:** ${dataImage('pic3')}\n`]
+  ]) V.captureEntry(files, p, text, addImage);
+  assert.equal(added.length, 3);
+  const json = V.escapeJson(V.buildViewerData(files, manifestOpts));
+  assert.doesNotMatch(json, /base64|data:image/);
+  for (const a of added) assert.ok(json.includes(a.p), a.p);
+});
+
+test('a link to an image that was not saved is emptied, and only then', () => {
+  const kept = 'images/aaaaaaaaaaaaaaaa.png', lost = 'images/bbbbbbbbbbbbbbbb.jpg';
+  const files = { 'notes/N-with-images.md': `${front2('N')}# N\n\n![one](${kept})\n\n![two](${lost})\n\n![mine](images/fig.png)` };
+  assert.equal(V.buildViewerData(files, { savedImages: new Set([kept]) }).studio[0].md, `![one](${kept})\n\n![two]()\n\n![mine](images/fig.png)`);
+  assert.ok(V.buildViewerData(files, {}).studio[0].md.includes(lost), 'no list: every link stays');
+});
+
+const QUOTE_CHAT = (a, b) => [
+  '## Q: One?', '', '**A:** Yes.' + `<sup>${link(1, 'src-1')} ${link(2, 'src-2')}</sup>`, '',
+  '**Sources:**', '', `<a id="src-1"></a>\n**[[1]](#ref-src-1)** Alpha\n> before\n>\n> ${a}\n>\n> after\n`, `<a id="src-2"></a>\n**[[2]](#ref-src-2)** Beta\n> ${b}\n`, '---', ''
+].join('\n');
+
+test('a citation quote holds text only: its images go to imgs, the ones not available are counted', () => {
+  const pic = 'images/cccccccccccccccc.jpg';
+  const d = V.buildViewerData({ 'chat/chat-with-images.md': QUOTE_CHAT(`![${REMOTE}](${pic})`, `![${REMOTE}](${REMOTE})`) }, manifestOpts);
+  assert.deepEqual(d.cites, [{ t: 'Alpha', q: 'before\n\nafter', imgs: [pic] }, { t: 'Beta', q: '', lost: 1 }]);
+});
+
+test('a citation image that was not saved counts as not available', () => {
+  const pic = 'images/cccccccccccccccc.jpg';
+  const d = V.buildViewerData({ 'chat/chat-with-images.md': QUOTE_CHAT(`![](${pic})`, 'text') }, { savedImages: new Set() });
+  assert.deepEqual(d.cites[0], { t: 'Alpha', q: 'before\n\nafter', lost: 1 });
+});
+
+test('the citation popover shows images and never a link', () => {
+  const html = app.citeHtml({ t: 'A<b', q: 'quote', imgs: ['images/cccccccccccccccc.jpg'], lost: 2 }, true);
+  assert.match(html, /<img alt="" src="images\/cccccccccccccccc\.jpg">/);
+  assert.equal(html.match(/Image not available offline/g).length, 1);
+  assert.match(html, /A&lt;b/);
+  assert.match(html, /Click the number/);
+  assert.doesNotMatch(app.citeHtml({ t: 'A', q: 'quote' }, false), /<img|not available|Click/);
+});
+
+test('images/ links survive sanitizeHtml', () => {
+  const out = clean('<img src="images/0123456789abcdef.png" alt="A chart">');
+  assert.match(out, /<img[^>]*src="images\/0123456789abcdef\.png"/);
+  assert.match(out, /alt="A chart"/);
+});
+
+test('a URL is never shown as alt text', () => {
+  const lost = clean(`<img src="${REMOTE}" alt="${REMOTE}">`);
+  assert.doesNotMatch(lost, /https|<img/, lost);
+  assert.match(lost, /Image not available offline/);
+  const kept = clean(`<img src="images/0123456789abcdef.png" alt="${REMOTE}">`);
+  assert.doesNotMatch(kept, /https/, kept);
+  assert.match(kept, /src="images\/0123456789abcdef\.png"/);
+  assert.match(clean('<img src="https://h.example/a.png" alt="see www.example.org/a">'), /Image not available offline/);
+});
+
+test('an image without a file falls to its alt text, else to the placeholder', () => {
+  const { marked } = require('../viewer/marked.min.js');
+  assert.match(clean(marked.parse('![]()')), /Image not available offline/);
+  assert.equal(clean(marked.parse('![A chart]()')).includes('<img'), false);
+  assert.match(clean(marked.parse('![A chart]()')), /A chart/);
+  assert.match(clean('<img src="https://h.example/a.png">'), /Image not available offline/);
+});
+
+test('build_viewer writes images/ beside out, and the page holds none of them', () => {
+  const root = makeTakeout();
+  fs.writeFileSync(path.join(root, 'notes/My Note Title-with-images.md'), `# My Note Title\n\n${dataImage('picture bytes')}`);
+  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'nlme-out-')), 'sub', 'v.html');
+  const r = spawnSync(process.execPath, [CLI, root, out], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /1 image files/);
+  const names = fs.readdirSync(path.join(path.dirname(out), 'images'));
+  assert.equal(names.length, 1);
+  assert.equal(fs.readFileSync(path.join(path.dirname(out), 'images', names[0]), 'utf8'), 'picture bytes');
+  const html = fs.readFileSync(out, 'utf8');
+  assert.ok(html.includes(`images/${names[0]}`));
+  assert.ok(!html.includes(b64('picture bytes')));
+  assert.equal(fs.existsSync(path.join(root, 'images')), false, 'the takeout is only read');
+});
+
+test('build_viewer writes no images inside ~/Downloads without the flag (fake HOME)', () => {
+  const root = makeTakeout();
+  fs.writeFileSync(path.join(root, 'notes/My Note Title-with-images.md'), `# My Note Title\n\n${dataImage('pic')}`);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'nlme-home-'));
+  const env = Object.assign({}, process.env, { HOME: home, USERPROFILE: home });
+  const dl = path.join(home, 'Downloads', 'sub', 'v.html');
+  assert.notEqual(spawnSync(process.execPath, [CLI, root, dl], { encoding: 'utf8', env }).status, 0);
+  assert.ok(!fs.existsSync(path.join(home, 'Downloads')));
+  assert.equal(spawnSync(process.execPath, [CLI, root, dl, '--allow-downloads'], { encoding: 'utf8', env }).status, 0);
+  assert.equal(fs.readdirSync(path.join(path.dirname(dl), 'images')).length, 1);
+});
+
+const imagePath = text => { const c = collector(); V.extractImages(dataImage(text), c.addImage); return c.added[0].p; };
+const imageNote = (...texts) => `# N\n\nnote body\n\n${texts.map(t => dataImage(t)).join('\n\n')}`;
+
+test('Full Takeout, ZIP on: images land in their own ZIP, stored, and the viewer links them', async () => {
+  const { sandbox, log } = takeoutPanel({ noteImages: imageNote('one', 'two') });
+  await sandbox.runFullTakeout();
+  const name = 'Book-takeout-images-T.zip';
+  assert.ok(log.zips.includes(name), log.zips.join());
+  const inZip = `Book/${imagePath('one')}`;
+  assert.ok(log.zipped[inZip] instanceof Blob);
+  assert.equal(log.zipped[inZip].type, 'image/png');
+  assert.equal(log.compression[inZip], 'STORE');
+  assert.equal(await log.zipped[inZip].text(), 'one');
+  assert.ok(log.zips.indexOf(name) < log.zips.indexOf('Book-takeout-index-T.zip'), 'images first: the viewer must know what was saved');
+  const html = log.zipped['Book/viewer.html'];
+  assert.ok(html.includes(imagePath('one')) && html.includes(imagePath('two')));
+  assert.ok(!html.includes(b64('one')));
+  assert.ok(log.panels[0].saved.includes(name));
+  assert.equal(log.zipped['Book/errors.md'], undefined);
+  assert.ok(!JSON.parse(log.zipped['Book/manifest.json']).files.some(f => f.path.startsWith('images/')));
+});
+
+test('Full Takeout, ZIP on: images split near the size cap', async () => {
+  const { sandbox, log } = takeoutPanel({ noteImages: imageNote('aaaa', 'bbbb', 'cccc'), zipMaxBytes: 8 });
+  await sandbox.runFullTakeout();
+  const names = [...log.panels[0].saved].filter(n => n.includes('takeout-images'));
+  assert.deepEqual(names, ['Book-takeout-images-T-part1of2.zip', 'Book-takeout-images-T-part2of2.zip']);
+  for (const t of ['aaaa', 'bbbb', 'cccc']) assert.ok(log.zipped[`Book/${imagePath(t)}`], t);
+});
+
+test('Full Takeout, ZIP on: a takeout without images has no images ZIP', async () => {
+  const { sandbox, log } = takeoutPanel();
+  await sandbox.runFullTakeout();
+  assert.ok(!log.zips.some(n => n.includes('takeout-images')));
+});
+
+test('Full Takeout, ZIP on: a cancelled takeout marks its images ZIP partial', async () => {
+  const { sandbox, log } = takeoutPanel({ noteImages: imageNote('one'), cancelAfter: 'notes' });
+  await sandbox.runFullTakeout();
+  assert.ok(log.zips.includes('Book-takeout-images-T-PARTIAL.zip'), log.zips.join());
+});
+
+test('Full Takeout, ZIP off: images go to <root>/images/, before viewer.html', async () => {
+  const { sandbox, log } = takeoutPanel({ zip: false, noteImages: imageNote('one') });
+  await sandbox.runFullTakeout();
+  const at = log.downloads.findIndex(p => p.endsWith(`/Book/${imagePath('one')}`));
+  assert.ok(at >= 0, log.downloads.join());
+  assert.ok(at < log.downloads.findIndex(p => p.endsWith('/Book/viewer.html')));
+  assert.ok(!log.zips.length);
+  assert.deepEqual([...log.panels[0].saved], ['Book takeout T']);
+});
+
+test('images in a citation quote of the chat are saved too', async () => {
+  const chat = QUOTE_CHAT(dataImage('quoted'), 'text');
+  const { sandbox, log } = takeoutPanel({ chatImages: chat });
+  await sandbox.runFullTakeout();
+  assert.ok(log.zipped[`Book/${imagePath('quoted')}`]);
+  assert.ok(log.zipped['Book/viewer.html'].includes(`"imgs":["${imagePath('quoted')}"]`));
+});
+
+test('an image that cannot be decoded costs that image only', async () => {
+  const { sandbox, log } = takeoutPanel({ noteImages: `# N\n\nnote body\n\n![bad](data:image/png;base64,A)\n\n${dataImage('good')}` });
+  await sandbox.runFullTakeout();
+  assert.ok(log.zipped[`Book/${imagePath('good')}`]);
+  assert.ok(log.zipped['Book/viewer.html'].includes('![bad]()'), 'its link is gone');
+  assert.ok(log.zipped['Book/viewer.html'].includes(imagePath('good')));
+});
+
+for (const zip of [true, false]) {
+  const mode = zip ? 'ZIP' : 'folder';
+
+  test(`images that cannot be saved cost nothing else, and the viewer links none (${mode} mode)`, async () => {
+    const { sandbox, log } = takeoutPanel({ zip, noteImages: imageNote('one') });
+    const { written } = failSavesOf(sandbox, `Book/${imagePath('one')}`);
+    await sandbox.runFullTakeout();
+    for (const f of ['_index.md', '_index.html', 'manifest.json', 'errors.md', 'viewer.html']) assert.equal(typeof written[`Book/${f}`], 'string', f);
+    assert.match(written['Book/errors.md'], /images for the offline viewer could not be saved/i);
+    assert.ok(!written['Book/viewer.html'].includes(imagePath('one')), 'the link is gone');
+    assert.ok(written['Book/viewer.html'].includes('![A chart]()'), 'the placeholder takes over');
+    assert.equal(log.panels.length, 1);
+    assert.equal(log.panels[0].level, 'warning');
+    assert.match(log.panels[0].message, /images could not be saved/);
+    assert.ok(log.panels[0].errors.some(e => e.type === 'viewer'));
+    assert.ok(!log.panels[0].saved.some(n => n.includes('takeout-images')));
+  });
+}
+
+test('ZIP mode: one images ZIP that fails leaves the other one and its links', async () => {
+  const { sandbox, log } = takeoutPanel({ noteImages: imageNote('aaaa', 'bbbb'), zipMaxBytes: 4 });
+  const { written } = failSavesOf(sandbox, `Book/${imagePath('aaaa')}`);
+  await sandbox.runFullTakeout();
+  const html = written['Book/viewer.html'];
+  assert.ok(!html.includes(imagePath('aaaa')));
+  assert.ok(html.includes(imagePath('bbbb')));
+  assert.deepEqual([...log.panels[0].saved].filter(n => n.includes('takeout-images')), ['Book-takeout-images-T-part2of2.zip']);
+  assert.equal(log.panels[0].level, 'warning');
+});
+
+test('folder mode: images saved before a failure keep their links', async () => {
+  const { sandbox, log } = takeoutPanel({ zip: false, noteImages: imageNote('aaaa', 'bbbb') });
+  sandbox.chrome.downloads.download = async o => {
+    if (o.filename.endsWith(imagePath('bbbb'))) throw new Error('disk full');
+    log.downloads.push(o.filename);
+    return 1;
+  };
+  const { written } = failSavesOf(sandbox, 'none');
+  await sandbox.runFullTakeout();
+  assert.ok(written['Book/viewer.html'].includes(imagePath('aaaa')));
+  assert.ok(!written['Book/viewer.html'].includes(imagePath('bbbb')));
+  assert.equal(log.panels[0].level, 'warning');
 });

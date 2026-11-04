@@ -118,6 +118,12 @@ def export_roots(top):
     return roots
 
 
+def is_images_package(top):
+    """A Full Takeout's images ZIP: only image files, under <root>/images/. It has no manifest."""
+    files = list(_walk_files(top))
+    return bool(files) and all(IMAGE_FILE_RE.search(rel) for rel in files)
+
+
 def _read(path):
     with open(path, encoding='utf-8', errors='replace') as f:
         return f.read()
@@ -213,15 +219,33 @@ def _first_error(text):
 
 
 VIEWER_DATA_RE = re.compile(r'<script id="data" type="application/json">(.*?)</script>', re.S)
+# The builder's own names (NLMEViewer.extractImages), so a source that merely quotes
+# ![fig](images/fig1.png) is not taken for a link
+IMAGE_NAME = r'images/[0-9a-f]{16}\.[a-z0-9]+'
+VIEWER_IMAGE_RE = re.compile(r'(?<![\w/.-])' + IMAGE_NAME)
+IMAGE_FILE_RE = re.compile(r'(?:^|/)' + IMAGE_NAME + '$')
+
+
+def _strings(value):
+    """Every string inside parsed JSON."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _strings(v)
 
 
 def check_viewer(report, root):
-    """viewer.html (Full Takeout, from 1.8.0): its data must parse and its media links must exist.
+    """viewer.html (Full Takeout, from 1.8.0): its data must parse and its media and image links must exist.
 
     The data is read the way the page reads it: the text of the script element goes to a JSON
     parser (escapeJson only writes JSON escapes, so no other unescaping is needed). Links are
     URL-decoded and resolved from the takeout root; they may leave the root, because a folder-mode
-    file saved by the browser sits beside it. Link checks run only when artifacts/ is present next
+    file saved by the browser sits beside it. Image links (images/<hash>.<ext>) sit anywhere in
+    the text and are resolved from the root the same way. Link checks run only when artifacts/ is present next
     to viewer.html (a merged tree or a folder takeout): an unmerged category ZIP does not hold the
     files the viewer links to, so there the links are skipped.
     """
@@ -252,6 +276,9 @@ def check_viewer(report, root):
         for link in files.values():
             if not isinstance(link, str) or not os.path.isfile(os.path.normpath(os.path.join(root, *unquote(link).split('/')))):
                 report.add('fail', 'viewer-broken-link', str(link))
+    for link in sorted({hit for text in _strings(data) for hit in VIEWER_IMAGE_RE.findall(text)}):
+        if not os.path.isfile(os.path.join(root, *link.split('/'))):
+            report.add('fail', 'viewer-broken-link', link)
 
 
 def check_export(root, label, nested_roots):
@@ -286,7 +313,9 @@ def check_export(root, label, nested_roots):
             report.add('fail', 'size-mismatch', f'{rel}: manifest {f["bytes"]}, file {os.path.getsize(full)}')
     skip = [r for r in nested_roots if r != root and r.startswith(root + os.sep)]
     for rel in sorted(set(_walk_files(root, skip)) - listed - {'manifest.json'}):
-        report.add('warn', 'unlisted-file', rel)
+        # A takeout's images/ has no manifest of its own: nothing lists those files
+        if not (report.kind == 'takeout' and rel.startswith('images/')):
+            report.add('warn', 'unlisted-file', rel)
 
     if m.get('partial') or (m.get('errorCount') or 0) > 0:
         errors = os.path.join(root, 'errors.md')
@@ -380,6 +409,11 @@ def validate_paths(paths, verbose=False):
             reports.append(r)
             continue
         roots = export_roots(top)
+        if not roots and is_images_package(top):
+            r = Report(label=name, kind='images')
+            r.add('info', 'images-package', 'the images of a Full Takeout: unzip it with the others')
+            reports.append(r)
+            continue
         if not roots:
             r = Report(label=name)
             r.add('fail', 'no-manifest', 'no manifest.json found: not a NotebookLM Takeout export')
