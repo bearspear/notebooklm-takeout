@@ -4,6 +4,7 @@
 
 var DANGEROUS_TAGS = 'script,style,iframe,object,embed,link,meta,form,base,frame,frameset,applet,noscript,template';
 var URL_ATTRS = /^(href|src|xlink:href|action|formaction|srcdoc|poster|data)$/i;
+var SMIL_TAGS = /^(animate|set|animatetransform|animatemotion)$/i;
 var BAD_URL = /^[\s\u0000-\u001f]*(javascript|vbscript|data\s*:\s*text\/html)/i;
 
 // Elements that load something on display. Their URLs must stay inside the archive.
@@ -23,10 +24,12 @@ function sanitizeHtml(html, parser) {
   var doc = parser.parseFromString(html, 'text/html');
   doc.querySelectorAll(DANGEROUS_TAGS).forEach(function (n) { n.remove(); });
   doc.querySelectorAll('*').forEach(function (n) {
-    var tag = String(n.tagName).toLowerCase(), loads = LOADING_TAGS.test(tag), dropped = false;
+    var tag = String(n.tagName).toLowerCase();
+    if (SMIL_TAGS.test(tag)) { n.remove(); return; }
+    var loads = LOADING_TAGS.test(tag), dropped = false;
     Array.prototype.slice.call(n.attributes).forEach(function (a) {
       var name = a.name;
-      if (/^on/i.test(name) || (URL_ATTRS.test(name) && BAD_URL.test(a.value))) n.removeAttribute(name);
+      if (/^(on|ping$|background$)/i.test(name) || (URL_ATTRS.test(name) && BAD_URL.test(String(a.value).replace(/[\u0000-\u001f\s]+/g, '')))) n.removeAttribute(name);
       else if (/^style$/i.test(name) && /url\s*\(|image-set|[@]import|expression|\\/i.test(a.value)) n.removeAttribute(name);
       else if (loads && LOADING_ATTRS.test(name) && (/^srcset$/i.test(name) || !isLocalUrl(a.value))) { n.removeAttribute(name); dropped = true; }
     });
@@ -34,7 +37,7 @@ function sanitizeHtml(html, parser) {
       var alt = n.getAttribute('alt');
       if (alt) n.replaceWith(doc.createTextNode(alt)); else n.remove();
     }
-    if (tag === 'a') { n.target = '_blank'; n.rel = 'noopener'; }
+    if (tag === 'a') { n.setAttribute('target', '_blank'); n.setAttribute('rel', 'noopener'); }
   });
   return doc.body.innerHTML;
 }

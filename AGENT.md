@@ -142,10 +142,10 @@ notebooklm-exporter/
 │                             sidebar, service worker (importScripts) and Node tests load it
 ├── takeout-job.js (228)    — NLME.runExportJob: the one DOM-free job runner (sidebar + Node tests)
 ├── takeout-markdown.js (1029) — NLMEMarkdown: the one Markdown converter + KaTeX (sidebar + page)
-├── takeout-viewer.js (346) — NLMEViewer: DOM-free builder of the offline viewer's data and page
+├── takeout-viewer.js (349) — NLMEViewer: DOM-free builder of the offline viewer's data and page
 │                             (sidebar + Node tests + tools/build_viewer.js)
 ├── viewer/                 — The offline viewer's packaged files, read by the side panel and inlined
-│                             into viewer.html: viewer-template.html (121), viewer-app.js (268),
+│                             into viewer.html: viewer-template.html (121), viewer-app.js (271),
 │                             marked.min.js (marked 12.0.2), katex.min.js (KaTeX 0.16.11),
 │                             katex-inline.css (fonts inlined)
 ├── tools/build_viewer.js (54) — Builds a viewer.html for an unzipped takeout folder (see Offline viewer)
@@ -1710,7 +1710,7 @@ Export checks that catch real bugs (scripted against the unzipped export):
 ### Syntax and unit tests
 
 ```bash
-for f in sidebar-*.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js; do node --check "$f"; done
+for f in sidebar-*.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js takeout-viewer.js viewer/viewer-app.js tools/build_viewer.js; do node --check "$f"; done
 node --test tests/
 python3 -I -m unittest discover -s tools
 ```

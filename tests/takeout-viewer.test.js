@@ -231,9 +231,10 @@ function fakeParser() {
         tagName: m[1].toUpperCase(), attributes: attrs,
         getAttribute(k) { const a = attrs.find(x => x.name === k); return a ? a.value : null; },
         removeAttribute(k) { const i = attrs.findIndex(x => x.name === k); if (i >= 0) attrs.splice(i, 1); },
+        setAttribute(k, v) { const a = attrs.find(x => x.name === k); if (a) a.value = v; else attrs.push({ name: k, value: v }); },
         remove() { el.gone = true; },
         replaceWith(t) { el.gone = true; nodes.splice(nodes.indexOf(el) + 1, 0, t); },
-        open() { return `<${el.tagName.toLowerCase()}${attrs.map(a => ` ${a.name}="${a.value}"`).join('')}${el.target ? ` target="${el.target}" rel="${el.rel}"` : ''}>`; }
+        open() { return `<${el.tagName.toLowerCase()}${attrs.map(a => ` ${a.name}="${a.value}"`).join('')}>`; }
       };
       nodes.push(el);
     }
@@ -727,4 +728,52 @@ test('folder mode: a saved viewer is still claimed, and nothing is saved twice',
   assert.equal(roots.flat().filter(p => p === 'Book/viewer.html').length, 1);
   assert.ok(JSON.parse(written['Book/manifest.json']).files.some(f => f.path === 'viewer.html' && f.bytes > 0));
   assert.match(written['Book/_index.md'], /\(viewer\.html\)/);
+});
+
+// ---- final review fixes ----
+test('grouped Titles-mode sources (several numbers on one line) become chips in a chat', () => {
+  const grouped = NLME.groupedSourcesMarkdown(
+    [{ number: 1, text: 'Alpha' }, { number: 2, text: 'Beta' }, { number: 3, text: 'Alpha' }], 'msg-0-');
+  const body = '**A:** Claim' + `<sup>${link(1, 'msg-0-src-1')} ${link(2, 'msg-0-src-2')}</sup>` + ' and' +
+    `<sup>${link(3, 'msg-0-src-3')}</sup>`;
+  const chat = `## Q: Grouped?\n\n${body}\n\n**Sources:**\n\n${grouped}---\n`;
+  const d = V.buildViewerData({ 'chat/chat.md': chat }, manifestOpts);
+  const a = d.pairs[0].a;
+  assert.equal((a.match(/<button class="cite"/g) || []).length, 3, a);
+  assert.doesNotMatch(a, /<a |Sources|src-/);
+  assert.deepEqual(d.cites, [{ t: 'Alpha', q: '' }, { t: 'Beta', q: '' }]);
+  assert.match(a, /data-c="0">1<\/button> <button class="cite" data-c="1">2<\/button>/);
+  assert.match(a, /data-c="0">3<\/button>/);
+});
+
+test('grouped Titles-mode sources become chips in a note', () => {
+  const grouped = NLME.groupedSourcesMarkdown(
+    [{ number: 1, text: 'Alpha' }, { number: 2, text: 'Alpha' }], '');
+  const note = `# Note\n\nClaim<sup>${link(1, 'src-1')} ${link(2, 'src-2')}</sup>.\n\n---\n\n## Sources\n\n${grouped}`;
+  const d = V.buildViewerData({ 'notes/n.md': `---\ntitle: "N"\n---\n${note}` }, manifestOpts);
+  const md = d.studio[0].md;
+  assert.match(md, /Claim<button class="cite" data-c="0">1<\/button> <button class="cite" data-c="0">2<\/button>\.$/);
+  assert.doesNotMatch(md, /<a |Sources|src-/);
+  assert.deepEqual(d.cites, [{ t: 'Alpha', q: '' }]);
+});
+
+test('sanitizeHtml checks control-character-split script URLs, SVG links, ping, SMIL and background', () => {
+  let out = clean('<a href="java\tscript:alert(1)">x</a><a href="jav\nascript:1">y</a>');
+  assert.doesNotMatch(out, /script:/i, out);
+  out = clean('<a ping="https://x" href="https://y">b</a>');
+  assert.doesNotMatch(out, /ping/, out);
+  assert.match(out, /href="https:\/\/y"/);
+  out = clean('<svg><animate attributeName="href" values="javascript:1"></animate><set to="x"></set><animateTransform></animateTransform><animateMotion></animateMotion></svg>');
+  assert.doesNotMatch(out, /<(animate|set)/i, out);
+  out = clean('<table background="https://h.example/b.png"><tr><td background="x.png">c</td></tr></table>');
+  assert.doesNotMatch(out, /background/, out);
+  // anchors get target and rel through setAttribute (the only way on SVG anchors)
+  out = clean('<svg><a href="https://y">l</a></svg>');
+  assert.match(out, /<a [^>]*href="https:\/\/y"[^>]*target="_blank"[^>]*rel="noopener"/, out);
+});
+
+test('assembleViewer escapes <!-- in inlined scripts', () => {
+  const out = V.assembleViewer({ template: '/*APP_JS*/', css: '', marked: '', katex: '', app: 'var s = "<!-- x </script>";', data: {} });
+  assert.doesNotMatch(out, /<!--/);
+  assert.match(out, /<\\!-- x <\\\/script>/);
 });

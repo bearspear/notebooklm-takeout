@@ -16,7 +16,9 @@
 (function (root) {
   'use strict';
 
-  const SRC_RE = /<a id="([^"]*?src-(\d+))"><\/a>\s*\n\*\*\[\[\d+\]\]\([^)]*\)\*\*[ \t]*(.*)/g;
+  // One Sources line: a run of anchors (grouped Titles mode has several), a run of [[n]](...) links, the title.
+  const SRC_RE = /((?:<a id="[^"]*?src-\d+"><\/a>)+)\s*\n\*\*(?:\[\[\d+\]\]\([^)]*\)[ \t]*)+\*\*[ \t]*(.*)/g;
+  const ANCHOR_RE = /<a id="([^"]*?src-\d+)"><\/a>/g;
   const REF_RE = /<a id="[^"]*" href="#([^"]*src-\d+)">\[(\d+)\]<\/a>/g;
   const SUP_RE = /<sup>((?:\s*<a id="[^"]*" href="#[^"]*src-\d+">\[\d+\]<\/a>\s*,?)+)<\/sup>/g;
   const FN_MARK_RE = /\[\^([\w.-]+)\]/g;
@@ -64,7 +66,7 @@
   const dropH1 = body => body.replace(/^\s*# .*\n/, '').trimStart();
 
   function cleanQuote(block) {
-    return block.trim().replace(/\n+---$/, '').split('\n').map(l => l.replace(/^> ?/, '')).filter(l => !l.startsWith('```')).join('\n').trim();
+    return block.trim().replace(/(^|\n+)---$/, '').split('\n').map(l => l.replace(/^> ?/, '')).filter(l => !l.startsWith('```')).join('\n').trim();
   }
 
   // Footnote definition: '[^L]: **Title** \u2014 quote' (see NLME.footnoteDefinition).
@@ -96,7 +98,8 @@
       const ids = {};
       marks.forEach((m, i) => {
         const end = i + 1 < marks.length ? marks[i + 1].index : md.length;
-        ids[m[1]] = add(m[3].trim(), cleanQuote(md.slice(m.index + m[0].length, end)));
+        const at = add(m[2].trim(), cleanQuote(md.slice(m.index + m[0].length, end)));
+        for (const a of m[1].matchAll(ANCHOR_RE)) ids[a[1]] = at;
       });
       let body = md.slice(0, marks[0].index).trimEnd().replace(TRAIL_RE, '').trimEnd();
       const chip = (s, id, n) => (ids[id] === undefined ? s : `<button class="cite" data-c="${ids[id]}">${n}</button>`);
@@ -329,7 +332,7 @@
   // One pass with function replacers: '$&' or a placeholder inside a value stays literal.
   // data: object (escaped here) or an already-escaped JSON string.
   function assembleViewer({ template, css, marked, katex, app, data }) {
-    const script = code => String(code).replace(/<\/script/gi, '<\\/script');
+    const script = code => String(code).replace(/<\/script/gi, '<\\/script').replace(/<!--/g, '<\\!--');
     const values = {
       KATEX_CSS: () => String(css).replace(/<\/style/gi, '<\\/style'),
       DATA_JSON: () => (typeof data === 'string' ? data : escapeJson(data)),

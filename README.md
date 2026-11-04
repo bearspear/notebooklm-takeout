@@ -226,7 +226,7 @@ artifacts, with citations linked to their sources. `_index.md` and `_index.html`
 
 With ZIP on, **unzip all the ZIPs into one folder** before you open it: the viewer is in the index
 ZIP and its media links point to files in the other ZIPs, so they only work side by side. Artifacts
-that Chrome saved straight into Downloads (outside the takeout) are listed but not linked in a ZIP
+that Chrome saved straight into Downloads (outside the takeout) do not appear in the viewer in a ZIP
 takeout. With ZIP off the folder is already in one piece. If the viewer could not be built,
 the takeout is still complete and `errors.md` says so.
 
@@ -494,7 +494,7 @@ tools/                validate_export.py: checks exports and compares them with 
 Check your changes:
 
 ```bash
-for f in sidebar-*.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js takeout-markdown.js; do node --check "$f"; done
+for f in sidebar-*.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js takeout-markdown.js takeout-viewer.js viewer/viewer-app.js tools/build_viewer.js; do node --check "$f"; done
 node --test tests/
 python3 -I -m unittest discover -s tools
 ```
