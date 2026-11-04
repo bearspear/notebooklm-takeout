@@ -1281,25 +1281,19 @@ function sanitizeFilename(filename) {
  * @param {string} url
  * @param {{ tabId?: number }} [options] tab that serves the fallback
  * @returns {Promise<string>} data:image/...;base64,...
- * @throws {Error} 'Fetch failed: <reason>' with both attempts' reasons
+ * @throws {Error} 'Fetch failed: <reason>' with the reason
  */
 async function downloadImageAsBase64(url, { tabId } = {}) {
   const options = {
     tabId,
     isAllowed: NLME.isAllowedImageUrl,
     blobProblem: NLME.imageBlobProblem,
-    // A limited host gets no second request: the job's session waits and retries
-    fallbackAfter: status => !NLME.isRateLimitedStatus(status)
+    // A limited host (429, 503) or a 403 gets no second request: the job's session waits and retries
+    fallbackAfter: status => status !== 403 && !NLME.isRateLimitedStatus(status)
   };
-  // authuser makes lh3 answer 403: ask without it, then the original once
-  const stripped = NLME.imageFetchUrl(url);
-  let blob;
-  try {
-    blob = await fetchDownload(stripped, options);
-  } catch (error) {
-    if (stripped === url || ![401, 403, 404].includes(error.status)) throw error;
-    blob = await fetchDownload(url, options);
-  }
+  // The url is requested without authuser (the form live run 4 verified), one attempt only.
+  // A 403 is retried by the embed pass with waits, not here.
+  const blob = await fetchDownload(NLME.imageFetchUrl(url), options);
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => resolve(reader.result);

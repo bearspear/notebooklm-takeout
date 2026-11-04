@@ -819,9 +819,10 @@
     }
   }
 
-  // The url to request for a notebook image: without authuser, which makes
-  // lh3 answer 403 although the same image loads in the page. Other hosts and
-  // unparsable values come back unchanged. Caches and reports keep the original.
+  // The url to request for a notebook image: without the authuser parameter (the
+  // request form live run 4 verified). Why lh3 answers some requests with 403 is not
+  // known; the embed pass retries those with waits. Other hosts and unparsable values
+  // come back unchanged. Caches and reports keep the original.
   function imageFetchUrl(url) {
     let u;
     try { u = new URL(url); } catch { return url; }

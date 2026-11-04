@@ -160,7 +160,7 @@ test('a non-OK response is a failure', async () => {
   const { sandbox } = sidePanel({ fetchImpl: async () => ({ ok: false, status: 403 }) });
   await assert.rejects(
     sandbox.downloadImageAsBase64('https://lh3.googleusercontent.com/notebooklm/a'),
-    /HTTP 403.*HTTP 403/
+    /HTTP 403/
   );
 });
 
@@ -1077,7 +1077,7 @@ test('an unexpected throw from the embed pass leaves the note with links, not a 
   assert.ok(warned.some(w => /boom/.test(typeof w === 'string' ? w : JSON.stringify(w))), 'the failure is reported');
 });
 
-// Task 12: authuser makes notebook image requests fail with 403
+// Task 12: image requests leave out authuser (the cause of lh3's occasional 403s is not known)
 const AU = 'https://lh3.googleusercontent.com/notebooklm/AB-c=w800-h600';
 
 test('imageFetchUrl drops authuser and keeps the rest', () => {
@@ -1096,13 +1096,12 @@ test('downloadImageAsBase64 fetches without authuser', async () => {
   assert.deepEqual(log.fetches.map(f => f.url), [AU]);
 });
 
-test('downloadImageAsBase64 tries the original url once after 403 on the stripped one', async () => {
+test('downloadImageAsBase64 makes one request on 403: no original url, no page fallback', async () => {
   const { sandbox, log } = sidePanel({
-    fetchImpl: async url => url.includes('authuser') ? imageResponse() : { ok: false, status: 403, headers: { get: () => null } }
+    fetchImpl: async () => ({ ok: false, status: 403, headers: { get: () => null } })
   });
-  const uri = await sandbox.downloadImageAsBase64(`${AU}?authuser=0`);
-  assert.match(uri, /^data:image\/png/);
-  assert.deepEqual(log.fetches.map(f => f.url), [AU, `${AU}?authuser=0`]);
+  await assert.rejects(sandbox.downloadImageAsBase64(`${AU}?authuser=0`), e => e.status === 403);
+  assert.deepEqual(log.fetches.map(f => f.url), [AU]);
 });
 
 test('downloadImageAsBase64 takes no extra attempt after 429', async () => {

@@ -468,8 +468,8 @@ citation cache; no install warning). Host access is limited to `notebook.google.
 `notebooklm.google.com` and the hosts Gemini Notebook serves downloads from
 (`contribution.usercontent.google.com`, `*.googleusercontent.com`, and
 `*.scf.usercontent.goog` for mind maps), plus `lh3.google.com`, where notebook image URLs
-redirect. Image requests leave out the `authuser` parameter (Google answers 403 to it) and retry the
-original link once if that fails with 401, 403 or 404. Downloads from any other host, or from other tabs, are never touched.
+redirect. Image requests are made without the `authuser` parameter. A 403 on an image during the
+citation hover is retried by the embed pass with waits; the cause of those 403s is not known. Downloads from any other host, or from other tabs, are never touched.
 
 ## Development
 
