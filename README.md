@@ -676,5 +676,5 @@ Built with [Turndown](https://github.com/mixmark-io/turndown) and
 [JSZip](https://stuk.github.io/jszip/). The offline viewer includes
 [marked](https://github.com/markedjs/marked) 12.0.2 (MIT licence, Copyright (c) 2011-2024,
 Christopher Jeffrey) and [KaTeX](https://katex.org) 0.16.11 (MIT licence, Copyright (c) 2013-2020
-Khan Academy and other contributors). The full notices are in `viewer/THIRD-PARTY-NOTICES.txt`. For
-the licensing of the fonts KaTeX ships, see the KaTeX project.
+Khan Academy and other contributors). KaTeX's code is MIT; its fonts are under the SIL Open Font
+License 1.1. The notices are in `viewer/THIRD-PARTY-NOTICES.txt`.
