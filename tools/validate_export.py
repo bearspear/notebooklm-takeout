@@ -118,6 +118,12 @@ def export_roots(top):
     return roots
 
 
+def is_images_package(top):
+    """A Full Takeout's images ZIP: only image files, under <root>/images/. It has no manifest."""
+    files = list(_walk_files(top))
+    return bool(files) and all(IMAGE_FILE_RE.search(rel) for rel in files)
+
+
 def _read(path):
     with open(path, encoding='utf-8', errors='replace') as f:
         return f.read()
@@ -177,13 +183,15 @@ def check_markdown(report, rel, text):
 
 def check_links(report, root, rel):
     text = _read(os.path.join(root, rel))
-    pattern = r'href="([^"]+)"' if rel.endswith('.html') else r'\]\(([^)\s]+)\)'
+    pattern = r'href="([^"]+)"' if rel.endswith('.html') else r'\]\(((?:[^()\s]|\([^()\s]*\))+)\)'
     base = os.path.dirname(os.path.join(root, rel))
     for target in re.findall(pattern, text):
         if target.startswith('#') or re.match(r'^[a-zA-Z][\w+.-]*:', target):
             continue
-        path = unquote(target.split('#', 1)[0])
-        if path and not os.path.exists(os.path.join(base, path)):
+        raw = target.split('#', 1)[0]
+        path = unquote(raw)
+        # a name may hold a literal %2C, so the link as written counts too
+        if path and not any(os.path.exists(os.path.join(base, p)) for p in (path, raw)):
             report.add('fail', 'broken-link', f'{rel} → {path}')
 
 
@@ -210,6 +218,72 @@ def _first_error(text):
         elif line.startswith('- ') and section and section != 'summary':
             return line[2:].strip()
     return 'see errors.md'
+
+
+VIEWER_DATA_RE = re.compile(r'<script id="data" type="application/json">(.*?)</script>', re.S)
+# The builder's own names (NLMEViewer.extractImages), so a source that merely quotes
+# ![fig](images/fig1.png) is not taken for a link
+CATEGORY_DIRS = ('sources', 'notes', 'chat', 'artifacts')
+IMAGE_NAME = r'images/[0-9a-f]{16}\.[a-z0-9]+'
+VIEWER_IMAGE_RE = re.compile(r'(?<![\w/.-])' + IMAGE_NAME)
+IMAGE_FILE_RE = re.compile(r'(?:^|/)' + IMAGE_NAME + '$')
+
+
+def _strings(value):
+    """Every string inside parsed JSON."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _strings(v)
+
+
+def check_viewer(report, root):
+    """viewer.html (Full Takeout, from 1.8.0): its data must parse and its media and image links must exist.
+
+    The data is read the way the page reads it: the text of the script element goes to a JSON
+    parser (escapeJson only writes JSON escapes, so no other unescaping is needed). Links are
+    URL-decoded and resolved from the takeout root; they may leave the root, because a folder-mode
+    file saved by the browser sits beside it. Image links (images/<hash>.<ext>) sit anywhere in
+    the text and are resolved from the root the same way. Media links are checked only when
+    artifacts/ is next to viewer.html, image links when any category folder is (a merged tree or a
+    folder takeout, which may have no artifacts): the index ZIP alone does not hold those files,
+    so there the links are skipped.
+    """
+    path = os.path.join(root, 'viewer.html')
+    if not os.path.isfile(path):
+        if report.kind == 'takeout' and _version_at_least(report.version, '1.8.0'):
+            report.add('warn', 'viewer-missing', 'no viewer.html (expected from 1.8.0; errors.md may say why)')
+        return
+    m = VIEWER_DATA_RE.search(_read(path))
+    if not m:
+        report.add('fail', 'viewer-invalid', 'viewer.html has no <script id="data" type="application/json"> block')
+        return
+    try:
+        data = json.loads(m.group(1))
+    except ValueError as e:
+        report.add('fail', 'viewer-invalid', f'viewer.html data is not valid JSON: {e}')
+        return
+    studio = data.get('studio') if isinstance(data, dict) else None
+    if not isinstance(studio, list):
+        report.add('fail', 'viewer-invalid', 'viewer.html data has no "studio" list')
+        return
+    if os.path.isdir(os.path.join(root, 'artifacts')):
+        for item in studio:
+            files = item.get('files') if isinstance(item, dict) else None
+            if not isinstance(files, dict):
+                continue
+            for link in files.values():
+                if not isinstance(link, str) or not os.path.isfile(os.path.normpath(os.path.join(root, *unquote(link).split('/')))):
+                    report.add('fail', 'viewer-broken-link', str(link))
+    if not any(os.path.isdir(os.path.join(root, c)) for c in CATEGORY_DIRS):
+        return
+    for link in sorted({hit for text in _strings(data) for hit in VIEWER_IMAGE_RE.findall(text)}):
+        if not os.path.isfile(os.path.join(root, *link.split('/'))):
+            report.add('fail', 'viewer-broken-link', link)
 
 
 def check_export(root, label, nested_roots):
@@ -244,7 +318,9 @@ def check_export(root, label, nested_roots):
             report.add('fail', 'size-mismatch', f'{rel}: manifest {f["bytes"]}, file {os.path.getsize(full)}')
     skip = [r for r in nested_roots if r != root and r.startswith(root + os.sep)]
     for rel in sorted(set(_walk_files(root, skip)) - listed - {'manifest.json'}):
-        report.add('warn', 'unlisted-file', rel)
+        # A takeout's images/ has no manifest of its own: nothing lists those files
+        if not (report.kind == 'takeout' and rel.startswith('images/')):
+            report.add('warn', 'unlisted-file', rel)
 
     if m.get('partial') or (m.get('errorCount') or 0) > 0:
         errors = os.path.join(root, 'errors.md')
@@ -263,6 +339,7 @@ def check_export(root, label, nested_roots):
         fm, _ = front_matter(_read(index))
         if fm is None and _version_at_least(report.version, '1.7.0'):
             report.add('fail', 'front-matter-missing', '_index.md has no front matter (expected from 1.7.0)')
+    check_viewer(report, root)
     for rel in ('_index.md', '_index.html'):
         if os.path.isfile(os.path.join(root, rel)):
             check_links(report, root, rel)
@@ -337,6 +414,11 @@ def validate_paths(paths, verbose=False):
             reports.append(r)
             continue
         roots = export_roots(top)
+        if not roots and is_images_package(top):
+            r = Report(label=name, kind='images')
+            r.add('info', 'images-package', 'the images of a Full Takeout: unzip it with the others')
+            reports.append(r)
+            continue
         if not roots:
             r = Report(label=name)
             r.add('fail', 'no-manifest', 'no manifest.json found: not a NotebookLM Takeout export')

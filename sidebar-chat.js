@@ -164,8 +164,8 @@ async function exportChat(chatData) {
       selected: chatData.messagePairs.length,
       result,
       auditOk,
-      // Citation problems leave every message exported, so name the errors
-      errorNote: result.errors.length > 0 ? `${result.errors.length} citation error(s), see errors.md` : undefined,
+      // Citation and image problems leave every message exported, so name the errors
+      errorNote: result.errors.length > 0 ? `${result.errors.length} error(s), see errors.md` : undefined,
       saved: zips
       // No retry: a chat's messages never fail as a whole (citation problems
       // keep the message); re-export the chat instead
@@ -188,7 +188,7 @@ async function exportChat(chatData) {
  * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, parts: number, packages: number }>}
  *   zips/parts/packages: what target.written holds (see newWritten)
  */
-async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip = false, pathPrefix = '', zipKind = 'chat', folder = null, variantSettings = settings, written = newWritten() } = {}) {
+async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip = false, pathPrefix = '', zipKind = 'chat', folder = null, variantSettings = settings, written = newWritten(), capture = null } = {}) {
   const messagePairs = chatData.messagePairs;
   // Scan completeness (Milestone 2, Resilience #2): known before the job
   // starts, so they lead errors.md
@@ -201,6 +201,7 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
   let auditDoc = null;
 
   console.log('[NotebookLM Takeout] Processing messages and extracting citations...');
+  beginImageSession(shell.tab.id, shell.isCancelled);
   const result = await NLME.runExportJob({
     kind: 'messages',
     items: messagePairs,
@@ -226,7 +227,7 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
         await saveFiles([{ ...single, path: `${NLME.fileStem(shell.projectName, { obsidian: !!settings.obsidianNames })}-chat-${shell.timestamp}.md` }]);
       } else {
         // One package: totalBatches is 1, so no -partNofM
-        await saveCategoryBatch(shell, files, info, { prefix: pathPrefix, zipKind, folder, written });
+        await saveCategoryBatch(shell, files, info, { prefix: pathPrefix, zipKind, folder, written, capture });
       }
     },
     isCancelled: shell.isCancelled,
@@ -234,7 +235,7 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
       shell.progress(`Processing message ${done + 1}/${total}`, (done + 1) / total);
       console.log(`[NotebookLM Takeout] Message ${done + 1}: Processing...`);
     }
-  });
+  }).finally(endImageSession);
 
   return { result, zips: written.zips, errors: result.errors, auditOk: auditDoc ? auditDoc.ok : true, parts: written.parts, packages: written.count };
 }
@@ -254,12 +255,45 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
  *   variantSettings: where the export* variant settings come from (default `settings`)
  * @returns {Promise<object>} ProcessedMessage: { date, userMessage,
  *   aiResponseHTML, sources: [{ sourceIndex, text, quote }], fullCitations,
- *   stats: { hasCitations, citationsFound, successfulExtractions, failedExtractions }, fromCache }
+ *   stats: { hasCitations, citationsFound, successfulExtractions, failedExtractions }, fromCache,
+ *   imageEmbeds: url -> data URI for chat-with-images (null with that version off) }
  */
-async function extractChatPair(shell, pair, ctx, { citationMode = 'quotes', total, variantSettings = settings }) {
+async function extractChatPair(shell, pair, ctx, options) {
+  const { citationMode = 'quotes', variantSettings = settings } = options;
+  const processed = await readChatPair(shell, pair, ctx, options);
+  processed.imageEmbeds = null;
+  const { imageFailures } = processed;
+  delete processed.imageFailures;
+  if (!variantSettings.exportNoteWithImages) return processed;
+
+  // After the citations, so every path gets it: 'none', 'titles', cached
+  // quotes, or a message whose citations failed. chat.md itself is built later.
+  const question = (pair.userMessage || '').substring(0, 100);
+  const warn = failure => ctx.warn({
+    message: failure.message,
+    messageIndex: ctx.index + 1,
+    userQuestion: question,
+    type: failure.type,
+    url: failure.url
+  });
+  try {
+    const markdown = convertChatToMarkdown('', '', [processed], false, citationMode === 'none', citationMode === 'titles', settings.citationStyle);
+    processed.imageEmbeds = await embedAndReportImages(markdown, question, imageFailures, warn, ctx.warn);
+  } catch (error) {
+    console.error(`[NotebookLM Takeout] Message ${ctx.index + 1}: Error embedding images:`, error);
+    reportImageFailures(imageFailures, question, warn, ctx.warn);
+    ctx.warn({ message: `Failed to embed images: ${error.message}`, messageIndex: ctx.index + 1, userQuestion: question, type: 'image_embedding_error' });
+  }
+  return processed;
+}
+
+// Read one message pair: citations and their quotes. Failed citation images
+// stay links and come back as imageFailures, for extractChatPair.
+async function readChatPair(shell, pair, ctx, { citationMode = 'quotes', total, variantSettings = settings }) {
   const n = ctx.index + 1;
   const stats = { hasCitations: false, citationsFound: 0, successfulExtractions: 0, failedExtractions: 0 };
   let fromCache = false; // citation quotes reused from the cache (Milestone 3c)
+  const imageFailures = [];
   const message = sources => ({
     date: pair.date,
     userMessage: pair.userMessage,
@@ -267,7 +301,8 @@ async function extractChatPair(shell, pair, ctx, { citationMode = 'quotes', tota
     sources,
     fullCitations: citationMode === 'quotes',
     stats,
-    fromCache
+    fromCache,
+    imageFailures
   });
   const warn = (type, msg, extra = {}) => ctx.warn({
     message: msg,
@@ -400,6 +435,7 @@ async function extractChatPair(shell, pair, ctx, { citationMode = 'quotes', tota
             stats.failedExtractions += fullCitationData.errors.length;
             fullCitationData.errors.forEach(err => warn('citation_extraction', err));
           }
+          imageFailures.push(...(fullCitationData?.imageFailures || []));
 
           // Store only a complete read: every source has a filename and a quote
           // and nothing was reported as failed (never a partial result)
@@ -520,12 +556,13 @@ function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, parti
     const baseMarkdown = toMarkdown(false);
     const hasQuotes = messages.some(m => (m.sources || []).some(src => src.quote && src.quote.trim()));
     const hasImages = /!\[/.test(baseMarkdown);
+    const imageEmbeds = new Map(messages.flatMap(m => [...(m.imageEmbeds || [])]));
     for (const v of NLME.noteVariants(variantSettings, { hasQuotes, hasImages })) {
       const markdown = v.codeBlocks ? toMarkdown(true) : baseMarkdown;
       const variant = variantName(v.suffix);
       versionFiles.push({
         path: `chat${v.suffix}.md`,
-        data: frontMatter(variant) + (v.images ? markdown : stripImagesFromMarkdown(markdown)),
+        data: frontMatter(variant) + (v.images ? NLME.applyImageEmbeds(markdown, imageEmbeds) : stripImagesFromMarkdown(markdown)),
         title: CHAT_VERSION_INFO[v.suffix].title,
         description: CHAT_VERSION_INFO[v.suffix].description,
         variant,

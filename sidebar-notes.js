@@ -191,7 +191,7 @@ async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = fals
  *   zips/parts/packages: what target.written holds (see newWritten)
  *   result: runExportJob's result
  */
-async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'notes', folder = null, variantSettings = settings, itemDir = 'notes/', written = newWritten(), tracker = null } = {}) {
+async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'notes', folder = null, variantSettings = settings, itemDir = 'notes/', written = newWritten(), tracker = null, capture = null } = {}) {
   const perZip = settings.notesPerZip;
   // Shared by every extractNoteItem call: audit counters, early-stop
   // counters, and the DOM-warning decision
@@ -218,6 +218,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
 
   console.log(`[NotebookLM Takeout] Will create ${Math.ceil(selectedNotes.length / perZip)} ZIP(s) for ${selectedNotes.length} notes (${perZip} per ZIP)`);
 
+  beginImageSession(shell.tab.id, () => shell.isCancelled() || state.declined);
   const result = await NLME.runExportJob({
     kind: 'notes',
     items: selectedNotes,
@@ -262,7 +263,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
         variantSettings,
         itemDir
       });
-      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, written });
+      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, written, capture });
       console.log(`[NotebookLM Takeout] Downloaded notes ZIP ${info.batchIndex}/${info.totalBatches}`);
       if (tracker) tracker.commit(); // these notes are on disk now
 
@@ -272,9 +273,11 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
         note.markdown = null;
         note.html = null;
         note.sources = null;
+        note.imageEmbeds = null;
         note.svgContent = null;
         note.treeData = null;
       });
+      imageSession?.endBatch();
       // Give GC time to work between batches
       if (!info.isLast) await new Promise(resolve => setTimeout(resolve, 1000));
     },
@@ -286,7 +289,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
         (done + 1) / total);
       console.log(`[NotebookLM Takeout] Processing note ${done + 1}/${total}:`, item.title, 'index:', item.index);
     }
-  });
+  }).finally(endImageSession);
 
   return { result, zips: written.zips, errors: result.errors, auditOk: NLME.auditExport(finalAudit()).ok, parts: written.parts, packages: written.count };
 }
@@ -345,6 +348,17 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
       if (settings.citationDetail !== 'none') {
         addCitationCoverage(state.audit, noteData.html, noteData.sources, settings.citationDetail === 'quotes', notePage);
       }
+      // The files are built from the HTML later: keep the downloads for -with-images
+      let imageEmbeds = null;
+      if (variantSettings.exportNoteWithImages) {
+        try {
+          imageEmbeds = await embedAndReportImages(markdown, note.title, noteData.imageFailures, ctx.warn);
+        } catch (error) {
+          // Images stay links; the note itself is fine
+          console.error(`[NotebookLM Takeout] [${note.title}] Error embedding images:`, error);
+          ctx.warn(`[${note.title}] Failed to embed images: ${error.message}`);
+        }
+      }
       if (notePage.citationNumbers.length > 0 && settings.citationDetail === 'quotes') {
         const fromCache = noteData.fromCache === true;
         tallyCitationCache(fromCache, state.audit);
@@ -367,7 +381,8 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
         markdown,
         // Raw data for combined-notes.md (which needs unique noteIds)
         html: noteData.html,
-        sources: noteData.sources
+        sources: noteData.sources,
+        imageEmbeds
       };
     }
   } catch (error) {
@@ -438,26 +453,42 @@ async function exportSingleNote(note) {
   });
   const needsImages = !!settings.exportNoteWithImages;
 
+  // One note, no job of its own to collect errors: say failures here
+  beginImageSession(tab.id, () => false);
   let noteData;
+  let imageEmbeds = null;
   try {
-    noteData = await chrome.tabs.sendMessage(tab.id, {
-      type: NLME.MSG.EXTRACT_NOTE,
-      data: {
-        noteIndex: note.index,
-        noteTitle: note.title,
-        sourceIndex: note.sourceIndex,
-        includeCitationImages: needsImages,
-        citationDetail: settings.citationDetail,
-        reuseCitations: settings.reuseCitations !== false
-      }
-    });
-  } finally {
-    // Always close the note viewer so the next action has a clean page.
-    try { await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.NAVIGATE_BACK }); } catch (_) { /* noop */ }
-  }
+    try {
+      noteData = await chrome.tabs.sendMessage(tab.id, {
+        type: NLME.MSG.EXTRACT_NOTE,
+        data: {
+          noteIndex: note.index,
+          noteTitle: note.title,
+          sourceIndex: note.sourceIndex,
+          includeCitationImages: needsImages,
+          citationDetail: settings.citationDetail,
+          reuseCitations: settings.reuseCitations !== false
+        }
+      });
+    } finally {
+      // Always close the note viewer so the next action has a clean page.
+      try { await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.NAVIGATE_BACK }); } catch (_) { /* noop */ }
+    }
 
-  if (!noteData || noteData.error) {
-    throw new Error(noteData?.error || 'Failed to extract note');
+    if (!noteData || noteData.error) {
+      throw new Error(noteData?.error || 'Failed to extract note');
+    }
+
+    if (needsImages && !noteData.isMindmap) {
+      imageEmbeds = await embedAndReportImages(
+        convertToMarkdown(noteData.html, noteData.sources, note.title, false, true, null, true, settings.citationDetail === 'none', settings.citationStyle),
+        note.title, noteData.imageFailures, failure => {
+          console.warn(`[NotebookLM Takeout] "${note.title}": ${failure.message}`, failure.url);
+          showToast(`${note.title}: ${failure.message}`, 'warning');
+        });
+    }
+  } finally {
+    endImageSession();
   }
 
   const obsidian = !!settings.obsidianNames;
@@ -486,9 +517,7 @@ async function exportSingleNote(note) {
       settings.citationDetail === 'none',
       settings.citationStyle
     );
-    if (version.stripImages) {
-      markdown = stripImagesFromMarkdown(markdown);
-    }
+    markdown = version.stripImages ? stripImagesFromMarkdown(markdown) : NLME.applyImageEmbeds(markdown, imageEmbeds);
     markdown = noteFrontMatter(meta, { title: note.title, variant: version.variant }) + markdown;
     const filename = `${NLME.prefixedStem('NOTE', note.title, { obsidian })}${version.fileSuffix}.md`;
     downloadBlob(new Blob([markdown], { type: 'text/markdown' }), filename);
@@ -564,10 +593,8 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
           settings.citationStyle
         );
 
-        // Strip images if needed
-        if (version.stripImages) {
-          markdown = stripImagesFromMarkdown(markdown);
-        }
+        // Strip images, or embed the ones extractNoteItem downloaded
+        markdown = version.stripImages ? stripImagesFromMarkdown(markdown) : NLME.applyImageEmbeds(markdown, note.imageEmbeds);
 
         const path = `${itemDir}${stems[idx]}${version.fileSuffix}.md`;
         files.push({
@@ -610,10 +637,8 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
           settings.citationStyle
         );
 
-        // Strip images if needed
-        if (version.stripImages) {
-          noteMarkdown = stripImagesFromMarkdown(noteMarkdown);
-        }
+        // Strip images, or embed the ones extractNoteItem downloaded
+        noteMarkdown = version.stripImages ? stripImagesFromMarkdown(noteMarkdown) : NLME.applyImageEmbeds(noteMarkdown, note.imageEmbeds);
 
         combinedMarkdown += noteMarkdown + '\n\n';
         if (idx < regularNotes.length - 1) {

@@ -117,6 +117,43 @@
     return [...byNumber.values()].sort((a, b) => (parseInt(a.number, 10) || 0) - (parseInt(b.number, 10) || 0));
   }
 
+  // An uploaded picture is a source with a Source guide and one notebook image
+  // but no text (Nov 2026): the Markdown of its body, and what stands in for a
+  // quote when a citation points at it.
+  const IMAGE_SOURCE_NOTE = 'This source is an image with no text.';
+  const IMAGE_CITATION_NOTE = 'This source is an image, so this citation has no quote text.';
+
+  const IMAGE_TITLE_RE = /\.(png|jpe?g|gif|webp|heic|bmp|tiff)$/i;
+
+  function isImageSourceUrl(url) {
+    try {
+      const u = new URL(url);
+      return u.protocol === 'https:' && u.hostname === 'lh3.googleusercontent.com' && u.pathname.startsWith('/notebooklm/');
+    } catch {
+      return false;
+    }
+  }
+
+  function imageSourceUrls(urls) {
+    return [...new Set((urls || []).filter(isImageSourceUrl))];
+  }
+
+  // Body of an image source. The links go through the normal embed pass, whose
+  // pattern ends a link at ")" and an alt text at "]".
+  function imageSourceMarkdown(title, urls) {
+    const alt = String(title || '').replace(/[[\]]/g, '').replace(/\s+/g, ' ').trim();
+    const links = urls.map(url => `![${alt}](${url.replace(/\(/g, '%28').replace(/\)/g, '%29')})`);
+    return [`*${IMAGE_SOURCE_NOTE}*`, ...links].join('\n\n');
+  }
+
+  // A popover with a title and no quote is an image citation only with positive
+  // evidence: an img in it, an image file name, or a title this export already
+  // found to be an image source. Anything else is a popover that did not load.
+  function isImageCitation({ title = '', quoteText = '', hasImage = false, knownImageTitles = [] } = {}) {
+    if (!title || quoteText) return false;
+    return hasImage || IMAGE_TITLE_RE.test(title) || [...knownImageTitles].some(known => titlesMatch(known, title));
+  }
+
   // Viewer close button in the Studio panel header, outside <studio-panel>.
   // Labels vary ("Close web page viewer", "Close report viewer", "Close table",
   // "Close note view"); "Collapse studio panel" must never match (Nov 2026).
@@ -153,12 +190,19 @@
   // Pick the More-menu item to download. Slide decks offer "Download PDF
   // Document (.pdf)" and "Download PowerPoint (.pptx)" (Nov 2026); other
   // types have a single "Download". -1 when the menu has no download item.
-  function pickDownloadMenuIndex(labels, preference) {
+  // Older decks list only the PDF item: with exact, a preference no item
+  // matches gives -1 instead of the first Download item, so a PPTX request
+  // never clicks PDF again (a second, identical PDF).
+  // The error a PPTX request raises when the deck's menu lists no PowerPoint item
+  const FORMAT_NOT_OFFERED = 'PowerPoint download not offered for this deck';
+
+  function pickDownloadMenuIndex(labels, preference, { exact = false } = {}) {
     const lower = (labels || []).map(l => (l || '').toLowerCase());
     const candidates = lower.map((l, i) => (l.includes('download') ? i : -1)).filter(i => i !== -1);
     if (candidates.length === 0) return -1;
     const wanted = preference === 'pptx' ? ['powerpoint', '.pptx'] : preference === 'pdf' ? ['pdf'] : [];
     const preferred = candidates.find(i => wanted.some(w => lower[i].includes(w)));
+    if (exact && preferred === undefined && wanted.length > 0) return -1;
     return preferred !== undefined ? preferred : candidates[0];
   }
 
@@ -762,6 +806,256 @@
       host === 'googleusercontent.com' || host.endsWith('.googleusercontent.com');
   }
 
+  // Hosts notebook images are fetched from with the user's sign-in. Image URLs
+  // on lh3.googleusercontent.com redirect to lh3.google.com. Separate from
+  // isAllowedDownloadUrl, which also decides which Chrome downloads to take over.
+  function isAllowedImageUrl(url) {
+    if (isAllowedDownloadUrl(url)) return true;
+    try {
+      const u = new URL(url);
+      return u.protocol === 'https:' && u.hostname === 'lh3.google.com';
+    } catch {
+      return false;
+    }
+  }
+
+  // The url to request for a notebook image: without the authuser parameter (the
+  // request form live run 4 verified). Why lh3 answers some requests with 403 is not
+  // known; the embed pass retries those with waits. Other hosts and unparsable values
+  // come back unchanged. Caches and reports keep the original.
+  function imageFetchUrl(url) {
+    let u;
+    try { u = new URL(url); } catch { return url; }
+    if (u.protocol !== 'https:' || !['lh3.googleusercontent.com', 'lh3.google.com'].includes(u.hostname)) return url;
+    if (u.hostname === 'lh3.googleusercontent.com' && !u.pathname.startsWith('/notebooklm/')) return url;
+    if (!u.searchParams.has('authuser')) return url;
+    u.searchParams.delete('authuser');
+    return u.toString();
+  }
+
+  // Why a fetched Blob must not be embedded as an image, or null when it can
+  // be. A signed-out request gets Google's sign-in page, with HTTP 200.
+  function imageBlobProblem(blob) {
+    const type = (blob && blob.type) || '';
+    if (!/^image\//i.test(type)) return `not an image (${type || 'no type'})`;
+    if (!blob.size) return 'empty image';
+    return null;
+  }
+
+  // One error per item for failed images, not one per image: a Venus-sized
+  // notebook has over a thousand. failures: [{ item, url, reason }]. An image
+  // that failed twice in one item (a citation repeated, a second variant)
+  // counts once.
+  function summarizeImageFailures(failures = []) {
+    const items = new Map();
+    for (const failure of failures || []) {
+      const item = String(failure.item || '');
+      if (!items.has(item)) items.set(item, { urls: new Set(), unnamed: 0, reasons: [] });
+      const entry = items.get(item);
+      if (failure.url) {
+        if (entry.urls.has(failure.url)) continue;
+        entry.urls.add(failure.url);
+      } else {
+        entry.unnamed++;
+      }
+      if (failure.reason && !entry.reasons.includes(failure.reason)) entry.reasons.push(failure.reason);
+    }
+    return [...items].map(([item, { urls, unnamed, reasons }]) => {
+      const count = urls.size + unnamed;
+      const others = reasons.length - 1;
+      const reason = (reasons[0] || 'unknown error') +
+        (others > 0 ? ` (and ${others} other reason${others === 1 ? '' : 's'})` : '');
+      const [first = ''] = urls;
+      return {
+        source: item,
+        type: 'image_download_failed',
+        count,
+        message: count === 1 ? `Failed to download image: ${reason}` : `Failed to download ${count} images: ${reason}`,
+        url: first.length > 100 ? `${first.slice(0, 100)}...` : first
+      };
+    });
+  }
+
+  // Put downloaded images into a variant's Markdown. embeds: Map of remote
+  // url -> data URI. Other images stay links; [text](url) links are left alone.
+  function applyImageEmbeds(markdown, embeds) {
+    if (!embeds || embeds.size === 0) return markdown;
+    return markdown.replace(/(!\[[^\]]*\]\()([^)]+)\)/g,
+      (match, open, url) => (embeds.has(url) ? `${open}${embeds.get(url)})` : match));
+  }
+
+  // A Retry-After header as milliseconds from now: seconds or an HTTP date.
+  // null for anything else; Date.parse alone would read "1.5" as a date.
+  function retryAfterMs(value, now = Date.now()) {
+    const text = String(value ?? '').trim();
+    if (/^\d+$/.test(text)) return Number(text) * 1000;
+    if (!/^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(text)) return null;
+    const at = Date.parse(text);
+    return Number.isNaN(at) ? null : Math.max(0, at - now);
+  }
+
+  const RATE_LIMIT_STATUSES = [429, 503];
+  const IMAGE_RETRY_DELAYS_MS = [2000, 4000];
+  const IMAGE_RETRY_AFTER_MAX_MS = 60000; // longer: give the image up, never stall the job
+  const IMAGE_LIMITED_STREAK = 5; // consecutive limited images before the pause
+  const IMAGE_LIMITED_PAUSE_MS = 30000;
+  const IMAGE_WAIT_BUDGET_MS = 5 * 60 * 1000; // all of a job's backoffs and its pause
+  // HTTP 403 on an image request: patient calls (the embed pass) retry after
+  // these waits, on a budget of their own. Hover downloads never wait on 403.
+  const IMAGE_FORBIDDEN_DELAYS_MS = [5000, 15000];
+  const IMAGE_FORBIDDEN_WAIT_BUDGET_MS = 10 * 60 * 1000;
+
+  function isRateLimitedStatus(status) {
+    return RATE_LIMIT_STATUSES.includes(status);
+  }
+
+  // One job's image downloads, in order: retries a rate limit, backs off when
+  // limiting goes on, and asks for a url once per batch (endBatch frees the
+  // results, so a job's memory follows its batches).
+  //
+  // download(url) resolves a data URI, or throws an error with .status and
+  // .retryAfter. sleep(ms) should end early on Cancel. get(url) rejects with
+  // the download's error, or one marked .skipped (limiting did not stop) or
+  // .cancelled. A job waits IMAGE_WAIT_BUDGET_MS at most: limited and fine
+  // images can alternate, which keeps the streak from ever reaching the pause.
+  // Skipped images get one job-wide summary (reportSkipped);
+  // it is one object, updated by later skips, because it sits in the job's
+  // errors by then.
+  function createImageSession({ download, sleep, isCancelled = () => false, now = Date.now } = {}) {
+    const results = new Map(); // imageFetchUrl(url) -> Promise of its data URI; failures are removed
+    const forbidden = new Map(); // key -> 403 error of a patient attempt that gave up, this batch
+    const patientKeys = new Set(); // keys whose in-flight request is patient
+    let forbiddenWaitedMs = 0;
+    const skipped = new Set();
+    const summary = { source: '', type: 'image_download_failed', count: 0, message: '' };
+    let summaryReported = false;
+    let streak = 0; // consecutive images that ended rate limited
+    let paused = false;
+    let skipping = false;
+    let waitedMs = 0;
+    let budgetSpent = false;
+
+    const marked = (mark, message) => Object.assign(new Error(message), { [mark]: true });
+    const stopIfCancelled = () => {
+      if (isCancelled()) throw marked('cancelled', 'Export cancelled');
+    };
+
+    // Wait if the budget allows. False, with skipping set, if it does not.
+    async function waitFromBudget(ms) {
+      const fits = waitedMs + ms <= IMAGE_WAIT_BUDGET_MS;
+      if (fits) {
+        waitedMs += ms;
+        await sleep(ms);
+      }
+      if (!fits || waitedMs >= IMAGE_WAIT_BUDGET_MS) {
+        skipping = true;
+        budgetSpent = true;
+      }
+      return fits;
+    }
+
+    async function afterLimitedImage() {
+      streak++;
+      if (streak < IMAGE_LIMITED_STREAK) return;
+      if (paused) {
+        skipping = true;
+      } else {
+        paused = true;
+        await waitFromBudget(IMAGE_LIMITED_PAUSE_MS);
+        stopIfCancelled();
+      }
+    }
+
+    async function fetchWithRetries(url, patient = false) {
+      let forbiddenAttempt = 0;
+      for (let attempt = 0; ; attempt++) {
+        stopIfCancelled();
+        let error;
+        try {
+          const dataUri = await download(url);
+          streak = 0;
+          return dataUri;
+        } catch (caught) {
+          error = caught;
+        }
+        if (error.status === 403) {
+          // Own attempt counter and budget; streak and skipping stay as they are.
+          const delay = IMAGE_FORBIDDEN_DELAYS_MS[forbiddenAttempt];
+          if (!patient || delay === undefined || forbiddenWaitedMs + delay > IMAGE_FORBIDDEN_WAIT_BUDGET_MS) throw error;
+          forbiddenWaitedMs += delay;
+          forbiddenAttempt++;
+          await sleep(delay);
+          attempt--; // a 403 wait is not a 429/503 attempt
+          continue;
+        }
+        if (!isRateLimitedStatus(error.status)) {
+          streak = 0;
+          throw error;
+        }
+        const wait = retryAfterMs(error.retryAfter, now()) ?? IMAGE_RETRY_DELAYS_MS[attempt];
+        if (attempt >= IMAGE_RETRY_DELAYS_MS.length || wait > IMAGE_RETRY_AFTER_MAX_MS) {
+          await afterLimitedImage();
+          throw error;
+        }
+        if (!(await waitFromBudget(wait))) {
+          await afterLimitedImage();
+          throw error;
+        }
+      }
+    }
+
+    function get(url, { patient = false } = {}) {
+        const key = imageFetchUrl(url); // authuser variants share one download
+        if (results.has(key)) {
+          const shared = results.get(key);
+          if (!patient || patientKeys.has(key)) return shared;
+          // Joined a non-patient request: if it ends 403, make our own patient attempt.
+          return shared.catch(error => {
+            if (error.status === 403 && !error.cancelled) return get(url, { patient: true });
+            throw error;
+          });
+        }
+        // A patient attempt already gave up on 403 in this batch: do not pay again.
+        if (patient && forbidden.has(key)) return Promise.reject(forbidden.get(key));
+        try {
+          stopIfCancelled();
+        } catch (error) {
+          return Promise.reject(error);
+        }
+        if (skipping) {
+          skipped.add(url);
+          summary.count = skipped.size;
+          summary.message = `${skipped.size} image${skipped.size === 1 ? ' was' : 's were'} skipped because Google limited requests` +
+            `${budgetSpent ? ' and the job reached its 5 minute wait limit' : ''}; they stay links`;
+          return Promise.reject(marked('skipped', 'Skipped: Google limited requests'));
+        }
+        const result = fetchWithRetries(url, patient);
+        results.set(key, result);
+        if (patient) patientKeys.add(key);
+        result.catch(error => {
+          if (results.get(key) !== result) return; // a later batch owns the key now
+          if (patient && error.status === 403) forbidden.set(key, error);
+          results.delete(key);
+          patientKeys.delete(key);
+        });
+        return result;
+    }
+
+    return {
+      get,
+      endBatch() {
+        results.clear();
+        patientKeys.clear();
+        forbidden.clear();
+      },
+      reportSkipped(warn) {
+        if (summary.count === 0 || summaryReported) return;
+        summaryReported = true;
+        warn(summary);
+      }
+    };
+  }
+
   // A download Gemini Notebook started: an allowed host, and (when Chrome
   // knows it) a notebook page as referrer. Downloads from other tabs, e.g.
   // Drive, are left alone.
@@ -903,9 +1197,12 @@
   }
 
   // Formulas in final Markdown ($$...$$ and $...$), each counted once,
-  // however many times the converter ran on nested lists or tables
+  // however many times the converter ran on nested lists or tables.
+  // A formula may touch words ($x$rad, a$b$). A price is a $ and a digit, so
+  // a span that opens on a digit must not close before a digit ($400 ... $500);
+  // other spans may ($T$2).
   function countMarkdownFormulas(markdown) {
-    const re = /\$\$[\s\S]+?\$\$|(?<![\\$\w])\$(?!\s)[^$\n]+?(?<!\s)\$(?![\w$])/g;
+    const re = /\$\$[\s\S]+?\$\$|(?<![\\$])\$(?:(?=\d)[^$\n]+?(?<!\s)\$(?![\d$])|(?![\s\d])[^$\n]+?(?<!\s)\$(?!\$))/g;
     return (String(markdown || '').match(re) || []).length;
   }
 
@@ -1581,7 +1878,7 @@
   // _index.md at the root of a Full Takeout: one row per category (Sources,
   // Notes, Chat, Artifacts) with its counts, status and folder, the ZIPs each
   // category wrote, and a link to the combined errors.md.
-  function buildRootIndex({ meta, categories = [], errorsFile = null } = {}) {
+  function buildRootIndex({ meta, categories = [], errorsFile = null, viewerFile = null } = {}) {
     let md = frontMatter({
       title: `Takeout — ${meta.notebook}`,
       notebook: meta.notebook,
@@ -1592,6 +1889,7 @@
       kind: 'takeout'
     });
     md += `# Takeout — ${meta.notebook}\n\n`;
+    if (viewerFile) md += `Browse everything offline: [Open the viewer](${encodePath(viewerFile)})\n\n`;
     md += '| Category | Exported | Failed | Status | Folder |\n';
     md += '| --- | --- | --- | --- | --- |\n';
     for (const c of categories) {
@@ -1723,8 +2021,9 @@ footer { margin-top: 3rem; }
 
   // Root _index.html of a Full Takeout. A category written in several
   // batches (c.parts >= 1; 0 = no part-N/ folders) links each part-N/ folder.
-  function buildRootIndexHtml({ meta, categories = [], errorsFile = null } = {}) {
+  function buildRootIndexHtml({ meta, categories = [], errorsFile = null, viewerFile = null } = {}) {
     let body = indexHtmlLinks([
+      ...(viewerFile ? [{ href: viewerFile, label: 'Offline viewer' }] : []),
       { href: '_index.md', label: 'Markdown index' },
       ...(errorsFile ? [{ href: errorsFile, label: 'Errors' }] : [])
     ]);
@@ -1925,6 +2224,56 @@ footer { margin-top: 3rem; }
       !versionLess(currentVersion, CITE_CACHE_CLEAR_BELOW);
   }
 
+  // Names for downloads the extension starts itself (folder mode). Chrome drops
+  // the `filename` given to chrome.downloads.download while an
+  // onDeterminingFilename listener exists, so the listener applies these. The
+  // name lives in memory and in storage.session (a service worker restart empties
+  // the Map) until its download consumes it; nothing expires it.
+  const DOWNLOAD_NAME_PREFIX = 'nlme.dlname.';
+  function createDownloadNamer(storage, extensionId) {
+    const names = new Map();
+    const keyOf = url => DOWNLOAD_NAME_PREFIX + url;
+    async function removeStored(urls) {
+      const keys = urls.filter(Boolean).map(keyOf);
+      if (!storage || !keys.length) return;
+      try { await storage.remove(keys); } catch (e) { console.warn('[NotebookLM Takeout] Download name cleanup failed:', e); }
+    }
+    // Resolves after the storage write; a failed write is logged and the Map entry stays
+    async function register(url, filename) {
+      names.set(url, filename);
+      try { await storage.set({ [keyOf(url)]: filename }); }
+      catch (e) { console.warn('[NotebookLM Takeout] Download name not stored:', e); }
+    }
+    // True when this download is handled here (suggest is called exactly once,
+    // possibly later); false leaves it to the caller's other branches
+    function handle(item, suggest) {
+      const urls = [item.url, item.finalUrl];
+      const hit = names.get(item.url) || names.get(item.finalUrl);
+      if (hit) {
+        urls.forEach(u => names.delete(u));
+        removeStored(urls);
+        suggest({ filename: hit, conflictAction: 'uniquify' });
+        return true;
+      }
+      if (!extensionId || item.byExtensionId !== extensionId || typeof item.url !== 'string' || !item.url.startsWith('blob:')) return false;
+      (async () => {
+        let name = null;
+        try {
+          const key = keyOf(item.url);
+          name = ((await storage.get(key)) || {})[key] || null;
+          if (name) await removeStored([item.url]);
+        } catch (e) {
+          console.warn('[NotebookLM Takeout] Download name lookup failed:', e);
+          name = null;
+        }
+        if (name) suggest({ filename: name, conflictAction: 'uniquify' });
+        else suggest();
+      })();
+      return true;
+    }
+    return { register, handle, names };
+  }
+
   async function citationCacheClear(storage) {
     if (!storage) return false;
     try {
@@ -1949,9 +2298,11 @@ footer { margin-top: 3rem; }
 
   // A result is cacheable only when every expected marker produced a source
   // with a filename and a non-empty quote (partial results are never stored).
+  // An image citation's note is not a read quote: it is read again next time.
   function citationSourcesComplete(sources, expectedCount) {
     return Array.isArray(sources) && expectedCount > 0 && sources.length === expectedCount &&
-      sources.every(s => s && typeof s.text === 'string' && s.text !== '' && typeof s.quote === 'string' && s.quote !== '');
+      sources.every(s => s && typeof s.text === 'string' && s.text !== '' && typeof s.quote === 'string' && s.quote !== '' &&
+        s.quote !== IMAGE_CITATION_NOTE);
   }
 
   // Header text of the Sources panel's "Notes" group, with its mat-icons already
@@ -2108,6 +2459,14 @@ footer { margin-top: 3rem; }
     sourceVariants,
     takeoutVariantSettings,
     isAllowedDownloadUrl,
+    isAllowedImageUrl,
+    imageFetchUrl,
+    imageBlobProblem,
+    summarizeImageFailures,
+    applyImageEmbeds,
+    retryAfterMs,
+    isRateLimitedStatus,
+    createImageSession,
     isNotebookDownload,
     NOTEBOOK_HOSTS,
     isNotebookUrl,
@@ -2145,11 +2504,18 @@ footer { margin-top: 3rem; }
     isCollapsedCitationGroup,
     renumberCitationAnchors,
     pickDownloadMenuIndex,
+    FORMAT_NOT_OFFERED,
     countFailedExtractions,
     ISSUES_URL,
     pickByIndexThenTitle,
     STUDIO_HEADER_CLOSE_SELECTOR,
     buildCitationEntries,
+    IMAGE_SOURCE_NOTE,
+    IMAGE_CITATION_NOTE,
+    isImageSourceUrl,
+    imageSourceUrls,
+    imageSourceMarkdown,
+    isImageCitation,
     ICON_TO_TYPE,
     NOTE_ICONS,
     resolveArtifactType,
@@ -2169,6 +2535,7 @@ footer { margin-top: 3rem; }
     citationCacheRead,
     citationCacheWrite,
     citationCacheClear,
+    createDownloadNamer,
     versionLess,
     shouldClearCitationCache,
     citationSourcesComplete,

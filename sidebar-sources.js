@@ -36,21 +36,25 @@ async function retryOperation(operation, maxRetries = 2, baseDelay = 1000, opera
 }
 
 /**
- * Scan markdown for Googleusercontent image URLs and replace with base64 data URIs
+ * Scan markdown for notebook image URLs and replace with base64 data URIs. A
+ * failed image stays a link and goes to `failures` as { item, url, reason }.
+ * `embeds` maps each downloaded url to its data URI, for Markdown that is built
+ * again later (NLME.applyImageEmbeds).
  */
 async function embedImagesInMarkdown(markdown, sourceTitle) {
   // Match markdown image syntax: ![alt](url)
-  const imageRegex = /!\[([^\]]*)\]\((https:\/\/lh3\.googleusercontent\.com\/[^\)]+)\)/g;
+  const imageRegex = /!\[([^\]]*)\]\((https:\/\/lh3\.google(?:usercontent)?\.com\/[^\)]+)\)/g;
 
   const matches = [...markdown.matchAll(imageRegex)];
 
   if (matches.length === 0) {
-    return { markdown, errors: [], imagesFound: 0, imagesEmbedded: 0 };
+    return { markdown, failures: [], embeds: new Map(), imagesFound: 0, imagesEmbedded: 0 };
   }
 
   console.log(`[NotebookLM Takeout] Found ${matches.length} images in "${sourceTitle}"`);
 
-  const errors = [];
+  const failures = [];
+  const embeds = new Map();
   let updatedMarkdown = markdown;
   let successCount = 0;
 
@@ -61,7 +65,8 @@ async function embedImagesInMarkdown(markdown, sourceTitle) {
 
     try {
       console.log(`[NotebookLM Takeout] Downloading image: ${imageUrl.substring(0, 100)}...`);
-      const dataUri = await downloadImageAsBase64(imageUrl);
+      const dataUri = embeds.get(imageUrl) ?? await fetchJobImage(imageUrl, { patient: true });
+      embeds.set(imageUrl, dataUri);
 
       // Replace the URL with the data URI
       const replacement = `![${altText}](${dataUri})`;
@@ -70,22 +75,39 @@ async function embedImagesInMarkdown(markdown, sourceTitle) {
       successCount++;
       console.log(`[NotebookLM Takeout] Successfully embedded image (${(dataUri.length / 1024).toFixed(1)} KB)`);
     } catch (error) {
+      if (error.cancelled) break;
       console.error(`[NotebookLM Takeout] Failed to embed image:`, error);
-      errors.push({
-        source: sourceTitle,
-        type: 'image_download_failed',
-        message: `Failed to download image: ${error.message}`,
-        url: imageUrl.substring(0, 100) + '...'
-      });
+      failures.push({ item: sourceTitle, url: imageUrl, reason: error.message, skipped: !!error.skipped });
     }
   }
 
   return {
     markdown: updatedMarkdown,
-    errors,
+    failures,
+    embeds,
     imagesFound: matches.length,
     imagesEmbedded: successCount
   };
+}
+
+/**
+ * The embed pass for a note or chat message, whose files are built later: one
+ * download per image, then one summary for the item. earlierFailures are
+ * citation images the page could not get; those stay links in the Markdown, so
+ * the pass tries them again and only a second failure counts.
+ *
+ * @param {string} markdown the item's Markdown, images as remote links
+ * @param {string} item its name in errors.md
+ * @param {Array<{url: string, reason: string}>} [earlierFailures]
+ * @param {Function} warn receives each summary
+ * @param {Function} [jobWarn] receives the job-wide summary of skipped images
+ * @returns {Promise<Map<string, string>>} url -> data URI for NLME.applyImageEmbeds
+ */
+async function embedAndReportImages(markdown, item, earlierFailures, warn, jobWarn = warn) {
+  const { embeds, failures } = await embedImagesInMarkdown(markdown, item);
+  const stillFailed = (earlierFailures || []).filter(failure => !embeds.has(failure.url));
+  reportImageFailures([...stillFailed, ...failures], item, warn, jobWarn);
+  return embeds;
 }
 
 /**
@@ -252,7 +274,7 @@ async function exportSources(selectedSources, { tabId, updateRecord = false, rec
  * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, parts: number, packages: number }>}
  *   zips/parts/packages: what target.written holds (see newWritten)
  */
-async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind = 'sources', folder = null, variantSettings = settings, itemDir = 'sources/', written = newWritten(), tracker = null } = {}) {
+async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind = 'sources', folder = null, variantSettings = settings, itemDir = 'sources/', written = newWritten(), tracker = null, capture = null } = {}) {
   const perZip = settings.sourcesPerZip;
   // Shared by every extractSourceItem call: audit counters and the
   // DOM-warning decision
@@ -277,6 +299,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
 
   console.log(`[NotebookLM Takeout] Will create ${Math.ceil(selectedSources.length / perZip)} ZIP(s) for ${selectedSources.length} sources (${perZip} per ZIP)`);
 
+  beginImageSession(shell.tab.id, () => shell.isCancelled() || state.declined);
   const result = await NLME.runExportJob({
     kind: 'sources',
     items: selectedSources,
@@ -321,7 +344,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
         // errors.md summary, on the package that carries the errors (the last)
         stats: { Selected: selectedSources.length, Exported: info.exported, Failed: info.failed }
       });
-      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, written });
+      await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, written, capture });
       console.log(`[NotebookLM Takeout] Downloaded sources ZIP ${info.batchIndex}/${info.totalBatches}`);
       if (tracker) tracker.commit(); // these sources are on disk now
 
@@ -331,6 +354,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
         source.versions = { base: null, plusMeta: null, withImages: null, plusMetaWithImages: null };
         source.summary = null;
       });
+      imageSession?.endBatch();
       // Give GC time to work between batches
       if (!info.isLast) await new Promise(resolve => setTimeout(resolve, 1000));
     },
@@ -342,7 +366,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
         (done + 1) / total);
       console.log(`[NotebookLM Takeout] Extracting source: "${item.title}"`);
     }
-  });
+  }).finally(endImageSession);
 
   return { result, zips: written.zips, errors: result.errors, auditOk: NLME.auditExport(finalAudit()).ok, parts: written.parts, packages: written.count };
 }
@@ -411,9 +435,13 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
     console.warn(`[NotebookLM Takeout] "${source.title}": Key topics are missing`);
   }
 
-  // Convert (and count formulas) once; every version shares the content
-  const content = convertCounted(audit, sourceData.html,
-    () => convertToMarkdown(sourceData.html, sourceData.sources || [], '', false, false, null, false));
+  // Convert (and count formulas) once; every version shares the content. An
+  // image source has no page HTML, only its image links (extractSourceContent)
+  const imageUrls = sourceData.imageUrls || [];
+  const content = imageUrls.length > 0
+    ? NLME.imageSourceMarkdown(source.title, imageUrls)
+    : convertCounted(audit, sourceData.html,
+      () => convertToMarkdown(sourceData.html, sourceData.sources || [], '', false, false, null, false));
 
   const buildMarkdown = includeMeta => {
     let md = `# ${source.title}\n\n`;
@@ -434,17 +462,20 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
   let plusMetaWithImages = null;
   let imagesFound = 0;
   let imagesEmbedded = 0;
+  const imageFailures = [];
   if (variantSettings.exportSourceWithImages || variantSettings.exportSourcePlusMetaWithImages) {
     try {
       const embedded = await embedImagesInMarkdown(baseMarkdown, source.title);
       imagesFound = embedded.imagesFound;
       imagesEmbedded = embedded.imagesEmbedded;
-      embedded.errors.forEach(err => ctx.warn(err));
+      imageFailures.push(...embedded.failures);
 
       if (imagesFound > 0) {
         withImages = embedded.markdown;
         if (plusMetaMarkdown) {
-          plusMetaWithImages = (await embedImagesInMarkdown(plusMetaMarkdown, source.title)).markdown;
+          const embeddedMeta = await embedImagesInMarkdown(plusMetaMarkdown, source.title);
+          plusMetaWithImages = embeddedMeta.markdown;
+          imageFailures.push(...embeddedMeta.failures);
         }
         console.log(`[NotebookLM Takeout] "${source.title}": ${imagesFound} images found, creating image versions`);
       } else {
@@ -456,7 +487,12 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
     }
   } else {
     console.log(`[NotebookLM Takeout] Skipping image downloads for "${source.title}" (no image versions enabled)`);
+    // The image is all this source has: the file would otherwise lose it silently
+    if (imageUrls.length > 0) {
+      ctx.warn({ source: source.title, type: 'image_source_not_saved', message: 'This source is an image: turn on a with-images version to save it' });
+    }
   }
+  reportImageFailures(imageFailures, source.title, ctx.warn);
 
   return {
     title: source.title,

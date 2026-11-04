@@ -132,3 +132,40 @@ test('every setting saveSettings writes has a shipped default, and the panel sta
   for (const k of keys) assert.ok(k in NLME.DEFAULT_SETTINGS, `${k} has no default in NLME.DEFAULT_SETTINGS`);
   assert.match(src, /let settings = NLME\.resetSettings\(\);/);
 });
+
+test('every VIEWER_ASSETS file exists', () => {
+  require('../takeout-viewer.js');
+  const assets = globalThis.NLMEViewer && globalThis.NLMEViewer.VIEWER_ASSETS;
+  assert.ok(Array.isArray(assets) && assets.length === 5, 'five viewer assets');
+  for (const f of assets) assert.ok(fs.existsSync(path.join(ROOT, f)), `${f} is missing`);
+});
+
+test('sidebar.html loads takeout-viewer.js right after takeout-job.js', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8');
+  const order = [...html.matchAll(/<script\s+src="([^"]+)"/g)].map(m => m[1]);
+  assert.equal(order.indexOf('takeout-viewer.js'), order.indexOf('takeout-job.js') + 1);
+});
+
+test('the runners hand the capture to every category save; tab-only saves pass none', () => {
+  const read = f => fs.readFileSync(path.join(ROOT, f), 'utf8');
+  for (const f of ['sidebar-sources.js', 'sidebar-notes.js', 'sidebar-chat.js', 'sidebar-artifacts.js']) {
+    for (const [call] of read(f).matchAll(/saveCategoryBatch\(.*\);/g)) assert.match(call, /\bcapture\b/, `${f}: ${call}`);
+  }
+  const artifacts = read('sidebar-artifacts.js');
+  const folderSaves = [...artifacts.matchAll(/saveFiles\(place\(.*\);/g)].map(m => m[0]);
+  assert.equal(folderSaves.length, 2);
+  for (const call of folderSaves) assert.match(call, /\bcapture\b/, call);
+  // Tab exports: the single chat file, one artifact, one note
+  assert.match(read('sidebar-chat.js'), /await saveFiles\(\[\{ \.\.\.single, path: [^\n]*\.md` \}\]\);/);
+  assert.match(artifacts, /saveFiles\(pkg\.entries, \{ zipName: pkg\.zipName \}\);\n\s*else await saveFiles\(files\);/);
+  const manifest = JSON.parse(read('manifest.json'));
+  assert.ok(!manifest.web_accessible_resources, 'the side panel fetches its own files; nothing is exposed to pages');
+});
+
+test('manifest grants lh3.google.com, where notebook image URLs redirect', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
+  assert.ok(manifest.host_permissions.includes('https://lh3.google.com/*'));
+  // The approval covers this host only
+  assert.equal(manifest.host_permissions.filter(h => /google\.com/.test(h) && !/usercontent/.test(h)).length, 3);
+  assert.equal(manifest.host_permissions.length, 6);
+});

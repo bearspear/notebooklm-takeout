@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "NotebookLM Takeout",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Export audio, slides, infographics, notes, and sources from NotebookLM",
   "permissions": [
     "storage",
@@ -16,6 +16,7 @@
     "https://notebooklm.google.com/*",
     "https://contribution.usercontent.google.com/*",
     "https://*.googleusercontent.com/*",
+    "https://lh3.google.com/*",
     "https://*.scf.usercontent.goog/*"
   ],
   "action": {

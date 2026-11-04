@@ -55,11 +55,7 @@ let nextRequestId = 1;
 // Chrome drops the `filename` given to chrome.downloads.download whenever an
 // onDeterminingFilename listener exists and doesn't suggest a name, so the
 // listener applies these (url -> filename). Milestone 1, Task 8b.
-const namedDownloads = new Map();
-function nameNextDownload(url, filename) {
-  namedDownloads.set(url, filename);
-  setTimeout(() => namedDownloads.delete(url), 60000);
-}
+const downloadNamer = NLME.createDownloadNamer(chrome.storage.session, chrome.runtime.id);
 
 // Track intercepted downloads by ID instead of global state
 const interceptedDownloads = new Map(); // downloadId -> {originalId, newId, filename, url}
@@ -146,9 +142,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
 
     case NLME.MSG.NAME_NEXT_DOWNLOAD:
-      nameNextDownload(message.url, message.filename);
-      sendResponse({ success: true });
-      break;
+      downloadNamer.register(message.url, message.filename).then(() => sendResponse({ success: true }));
+      return true;
 
     case NLME.MSG.DIRECT_DOWNLOAD_URL:
       // Direct download from intercepted URL (no tab opened)
@@ -358,13 +353,7 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
   const isFromNotebookLM = NLME.isNotebookDownload(downloadItem);
 
   // Extension-started downloads with a registered name (folder mode)
-  const namedFile = namedDownloads.get(downloadItem.url) || namedDownloads.get(downloadItem.finalUrl);
-  if (namedFile) {
-    namedDownloads.delete(downloadItem.url);
-    if (downloadItem.finalUrl) namedDownloads.delete(downloadItem.finalUrl);
-    suggest({ filename: namedFile, conflictAction: 'uniquify' });
-    return true;
-  }
+  if (downloadNamer.handle(downloadItem, suggest)) return true;
 
   // Check if this download has redownload info in the Map
   const redownloadInfo = redownloadRequests.get(downloadItem.id);

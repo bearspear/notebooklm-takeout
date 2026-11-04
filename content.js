@@ -391,7 +391,8 @@
           message.data.artifactType,
           message.data.skipMoreButton || false,
           message.data.artifactName || null,
-          message.data.downloadPreference || 'pdf'
+          message.data.downloadPreference || 'pdf',
+          message.data.requireFormat || false
         )
           .then(result => sendResponse(result))
           .catch(error => sendResponse({ success: false, error: error.message || 'Download failed' }));
@@ -556,7 +557,7 @@
 
       if (!response.ok) {
         console.error('[NotebookLM Takeout] Fetch failed:', response.status);
-        return { success: false, error: `HTTP ${response.status}` };
+        return { success: false, error: `HTTP ${response.status}`, status: response.status, retryAfter: response.headers.get('Retry-After') };
       }
 
       const blob = await response.blob();
@@ -1305,7 +1306,9 @@
       results.push(await extractSingleCitationWithRetry(button, index, false, 2));
     }
     const opened = results.filter(r => r.success);
-    const withQuote = opened.filter(r => (r.data.quote || '').trim().length > 0);
+    // A citation of an image source has a note, not a read quote
+    const quoted = opened.filter(r => !r.data.noQuote);
+    const withQuote = quoted.filter(r => (r.data.quote || '').trim().length > 0);
     const withTitle = opened.filter(r => (r.data.text || '').trim().length > 0);
 
     checks.push({
@@ -1319,9 +1322,10 @@
     checks.push({
       name: 'Citation quote text read',
       selector: '.citation-tooltip-text',
-      passed: opened.length > 0 && withQuote.length === opened.length,
+      passed: opened.length > 0 && withQuote.length === quoted.length,
       critical: true,
-      note: `${withQuote.length} of ${opened.length} quotes read`
+      note: `${withQuote.length} of ${quoted.length} quotes read` +
+        (quoted.length < opened.length ? `, ${opened.length - quoted.length} citation(s) with no text (image source)` : '')
     });
     checks.push({
       name: 'Citation source title read',
@@ -1578,7 +1582,24 @@
         if (!textEl) {
           lastError = 'Tooltip content did not load';
           console.warn(`[NotebookLM Takeout] Citation ${spanIndex}: Attempt ${attempt}/${maxRetries} - ${lastError}`);
+          // A citation of an image source has no quote to wait for. Decide that
+          // only on the last attempt: a slow popover keeps all its retries.
+          const title = tooltip.querySelector('.citation-tooltip-title')?.textContent?.trim() || '';
+          const imageCitation = attempt === maxRetries && NLME.isImageCitation({
+            title,
+            quoteText: tooltip.querySelector('.citation-tooltip-text')?.textContent?.trim() || '',
+            hasImage: !!tooltip.querySelector('img'),
+            knownImageTitles: imageSourcesHere()
+          });
           leave();
+          if (imageCitation) {
+            await ensureTooltipGone();
+            return {
+              success: true,
+              data: { text: title, quote: NLME.IMAGE_CITATION_NOTE, sourceIndex: spanIndex, noQuote: true },
+              imageFailures: []
+            };
+          }
           await waitForTooltipGone();
           continue;
         }
@@ -1587,14 +1608,15 @@
 
         // Quote markup varies: structural-element wrappers or div.paragraph children
         let quoteMarkdown = '';
+        const imageFailures = [];
         const textElements = textEl.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
         if (textElements.length > 0) {
           for (const element of textElements) {
-            const markdown = await htmlToMarkdownWithImages(element, includeImages);
+            const markdown = await htmlToMarkdownWithImages(element, includeImages, imageFailures);
             if (markdown && markdown.length > 0) quoteMarkdown += markdown + '\n\n';
           }
         } else {
-          quoteMarkdown = await htmlToMarkdownWithImages(textEl, includeImages);
+          quoteMarkdown = await htmlToMarkdownWithImages(textEl, includeImages, imageFailures);
         }
         // A long unpunctuated source shows only a cut window: mark it with "…"
         quoteMarkdown = NLME.markWindowedQuote(quoteMarkdown.trim());
@@ -1612,7 +1634,8 @@
 
         return {
           success: true,
-          data: { text: sourceTitle, quote: quoteMarkdown, sourceIndex: spanIndex }
+          data: { text: sourceTitle, quote: quoteMarkdown, sourceIndex: spanIndex },
+          imageFailures
         };
       } catch (error) {
         lastError = error.message;
@@ -1876,6 +1899,69 @@
     return await readOpenStudioNote(noteTitle, viewersBefore);
   }
 
+  // Titles found to be image sources, per notebook id: evidence for a citation
+  // with no quote, as a Full Takeout exports sources before notes and chat. The
+  // page outlives a move to another notebook, where a title means something else.
+  const knownImageSources = new Map();
+
+  function rememberImageSource(title) {
+    const notebookId = NLME.notebookIdFromUrl(location.href);
+    if (!notebookId) return;
+    if (!knownImageSources.has(notebookId)) knownImageSources.set(notebookId, new Set());
+    knownImageSources.get(notebookId).add(title);
+  }
+
+  function imageSourcesHere() {
+    return knownImageSources.get(NLME.notebookIdFromUrl(location.href)) || new Set();
+  }
+
+  // Content ready: the source BODY text (not the viewer shell, which settles
+  // before the text arrives) is at least 50 chars and unchanged over four 50 ms
+  // checks; capped at 10 s for large sources (was a fixed 500 ms after a fixed
+  // 1.5 s)
+  const SOURCE_BODY_WAIT = { interval: 50, checks: 4, minLength: 50, timeout: 10000 };
+
+  // Length of the open source's own text; a guide rendered inside the body is
+  // not source text
+  function sourceBodyTextLength(sourceViewer) {
+    const body = sourceViewer.querySelector('.scroll-container, labs-tailwind-doc-viewer, .ql-editor');
+    if (!body) return 0;
+    const guide = body.querySelector('.source-guide-container');
+    const guideLength = guide ? guide.textContent.trim().length : 0;
+    return Math.max(0, body.textContent.trim().length - guideLength);
+  }
+
+  /**
+   * Wait for the source body. An image source shows no text, so it cannot end
+   * this wait early: it is told apart only when the whole wait has passed with
+   * no text and the panel shows a notebook image. A slow text source therefore
+   * gets the same time as before, and still fails if nothing appears.
+   *
+   * @param {Element} sourceViewer
+   * @returns {Promise<{imageUrls: string[], error?: string}>} imageUrls is
+   *   non-empty for an image source
+   */
+  async function waitForSourceBody(sourceViewer) {
+    const measure = () => sourceBodyTextLength(sourceViewer);
+    const ready = await waitForStable(measure, SOURCE_BODY_WAIT);
+    if (ready || measure() > 0) return { imageUrls: [] };
+
+    const imageUrls = NLME.imageSourceUrls(Array.from(sourceViewer.querySelectorAll('img'), img => img.src));
+    // Never export an empty body as a success
+    if (imageUrls.length === 0) return { imageUrls, error: 'Source content did not load' };
+    console.log(`[NotebookLM Takeout] No text after ${SOURCE_BODY_WAIT.timeout} ms and ${imageUrls.length} image(s): image source`);
+    return { imageUrls };
+  }
+
+  // Text that appears after the image decision makes this a text source: drop
+  // the decision and let the text settle. Returns the image urls that stand.
+  async function recheckImageSource(sourceViewer, imageUrls) {
+    if (imageUrls.length === 0 || sourceBodyTextLength(sourceViewer) === 0) return imageUrls;
+    console.log('[NotebookLM Takeout] Text arrived late: treating this as a text source');
+    await waitForStable(() => sourceBodyTextLength(sourceViewer), SOURCE_BODY_WAIT);
+    return [];
+  }
+
   /**
    * Extract content from a source document
    * Click the source → wait for viewer → extract content from labs-tailwind-doc-viewer
@@ -2014,19 +2100,8 @@
 
       console.log(`[NotebookLM Takeout] source-viewer found`);
 
-      // Content ready: the source BODY text (not the viewer shell, which
-      // settles before the text arrives) is at least 50 chars and unchanged
-      // over four 50 ms checks; capped at 10 s for large sources
-      // (was a fixed 500 ms after a fixed 1.5 s)
-      const sourceBodyLength = () => {
-        const body = sourceViewer.querySelector('.scroll-container, labs-tailwind-doc-viewer, .ql-editor');
-        return body ? body.textContent.trim().length : 0;
-      };
-      const sourceReady = await waitForStable(sourceBodyLength, { interval: 50, checks: 4, minLength: 50, timeout: 10000 });
-      if (!sourceReady && sourceBodyLength() === 0) {
-        // Never export an empty body as a success
-        return { error: 'Source content did not load' };
-      }
+      const body = await waitForSourceBody(sourceViewer);
+      if (body.error) return { error: body.error };
 
       requestTimer.end('source.content');
       requestTimer.start('source.guide');
@@ -2069,6 +2144,10 @@
       }
       requestTimer.end('source.guide');
 
+      // The guide wait gave slow text more time: text now means a text source
+      const imageUrls = await recheckImageSource(sourceViewer, body.imageUrls);
+      if (imageUrls.length > 0) rememberImageSource(sourceTitle);
+
       // Try to find content container within source-viewer
       let contentElement = null;
       const contentSelectors = [
@@ -2094,10 +2173,10 @@
         contentElement = sourceViewer;
       }
 
-      // Extract HTML content
-      const htmlContent = contentElement.innerHTML || '';
+      // Extract HTML content (an image source has only its imageUrls)
+      const htmlContent = imageUrls.length > 0 ? '' : (contentElement.innerHTML || '');
 
-      if (!htmlContent || htmlContent.length < 10) {
+      if (imageUrls.length === 0 && (!htmlContent || htmlContent.length < 10)) {
         console.warn(`[NotebookLM Takeout] Warning: Content seems empty (${htmlContent.length} chars)`);
       }
 
@@ -2185,7 +2264,8 @@
         title: sourceTitle,
         guideMarkdown: sourceGuideMarkdown,
         keyTopics: keyTopics,
-        youtubeUrl: youtubeUrl
+        youtubeUrl: youtubeUrl,
+        imageUrls
       };
 
     } catch (error) {
@@ -2198,12 +2278,13 @@
   /**
    * Convert image URL to base64 data URL
    * @param {string} url - Image URL to convert
-   * @returns {Promise<string>} Base64 data URL or original URL if conversion fails
+   * @returns {Promise<{dataUri?: string, reason?: string, skipped?: boolean, cancelled?: boolean}>}
+   *   the data URL, or why there is none. Never throws: the caller reports it.
    */
   async function imageToBase64(url) {
     try {
-      // For Google URLs, ask the sidebar to download (it has proper permissions)
-      if (url.includes('googleusercontent.com') || url.includes('google.com')) {
+      // Notebook images need the user's sign-in: the sidebar fetches them
+      if (NLME.isAllowedImageUrl(url)) {
         console.log(`[NotebookLM Takeout] Requesting sidebar to download image: ${url.substring(0, 80)}...`);
 
         const response = await chrome.runtime.sendMessage({
@@ -2211,18 +2292,21 @@
           url: url
         });
 
-        if (response && response.success) {
+        if (response && response.success && response.dataUri) {
           console.log(`[NotebookLM Takeout] Image downloaded via sidebar (${(response.dataUri.length / 1024).toFixed(1)} KB)`);
-          return response.dataUri;
-        } else {
-          console.warn('[NotebookLM Takeout] Sidebar failed to download image:', response?.error || 'Unknown error');
-          return url; // Return original URL on failure
+          return { dataUri: response.dataUri };
         }
+        const reason = (response && response.error) || 'no response from the side panel';
+        console.warn('[NotebookLM Takeout] Sidebar failed to download image:', reason);
+        return { reason, skipped: !!response?.skipped, cancelled: !!response?.cancelled };
       }
 
-      // Fallback to regular fetch for non-Google URLs
+      // Regular fetch for any other host
       const response = await fetch(url);
+      if (!response.ok) return { reason: `HTTP ${response.status}` };
       const blob = await response.blob();
+      const problem = NLME.imageBlobProblem(blob);
+      if (problem) return { reason: problem };
 
       // Warn about large images (>2MB) that may cause issues
       const sizeMB = blob.size / (1024 * 1024);
@@ -2232,19 +2316,19 @@
 
       // Reject images larger than 5MB to prevent memory issues
       if (sizeMB > 5) {
-        console.warn(`[NotebookLM Takeout] Image too large (${sizeMB.toFixed(1)}MB), using original URL: ${url}`);
-        return url;
+        return { reason: `image too large (${sizeMB.toFixed(1)}MB)` };
       }
 
-      return new Promise((resolve, reject) => {
+      const dataUri = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onloadend = () => resolve(reader.result);
         reader.onerror = reject;
         reader.readAsDataURL(blob);
       });
+      return { dataUri };
     } catch (error) {
       console.warn('[NotebookLM Takeout] Failed to convert image to base64:', url, error);
-      return url; // Return original URL if conversion fails
+      return { reason: error.message || String(error) };
     }
   }
 
@@ -2252,9 +2336,11 @@
    * Convert HTML element to markdown with optional base64 image embedding
    * @param {Element} element - HTML element to convert
    * @param {boolean} includeImages - Whether to embed images as base64
+   * @param {Array} [imageFailures] - Receives { url, reason, skipped, cancelled }
+   *   for each image that stays a link
    * @returns {Promise<string>} Markdown string
    */
-  async function htmlToMarkdownWithImages(element, includeImages = false) {
+  async function htmlToMarkdownWithImages(element, includeImages = false, imageFailures = []) {
     if (!element) return '';
 
     // If images should be included, find and convert them to base64
@@ -2263,19 +2349,19 @@
       if (images.length > 0) {
         console.log(`[NotebookLM Takeout] Found ${images.length} images in citation, converting to base64...`);
 
-        // Convert all images to base64
-        const conversions = [];
-        images.forEach(img => {
+        // One at a time: every image is a request to Google
+        for (const img of images) {
+          if (isExportCancelled()) break;
           const originalSrc = img.src;
-          const conversion = imageToBase64(originalSrc).then(base64 => {
-            img.setAttribute('src', base64);
+          const { dataUri, reason, skipped, cancelled } = await imageToBase64(originalSrc);
+          if (dataUri) {
+            img.setAttribute('src', dataUri);
             img.setAttribute('data-original-src', originalSrc);
-          });
-          conversions.push(conversion);
-        });
-
-        await Promise.all(conversions);
-        console.log(`[NotebookLM Takeout] Converted ${images.length} images to base64`);
+          } else {
+            imageFailures.push({ url: originalSrc, reason, skipped, cancelled });
+          }
+        }
+        console.log(`[NotebookLM Takeout] Processed ${images.length} images`);
       }
     }
 
@@ -2375,6 +2461,7 @@
 
     // Step 3: hover each marker and read its tooltip
     const sources = [];
+    const imageFailures = [];
     for (const [index, button] of buttonsByIndex) {
       if (isExportCancelled()) break; // stop within one citation of Cancel
       const result = await extractSingleCitationWithRetry(button, index, includeCitationImages, 2);
@@ -2382,6 +2469,7 @@
         errors.push(result.error);
         continue;
       }
+      imageFailures.push(...result.imageFailures);
       if (!result.data.text) errors.push(`Citation ${index}: Empty source filename`);
       if (!result.data.quote) errors.push(`Citation ${index}: Empty quote text (source: ${result.data.text || 'unknown'})`);
       sources.push({
@@ -2405,7 +2493,8 @@
     return {
       html: viewer.innerHTML,
       sources,
-      errors
+      errors,
+      imageFailures
     };
   }
 
@@ -2852,7 +2941,7 @@
    * Main handler for artifact downloads via message passing
    * Coordinates the download process with proper error handling and metadata
    */
-  async function handleArtifactDownload(artifactIndex, artifactType, skipMoreButton = false, artifactName = null, downloadPreference = 'pdf') {
+  async function handleArtifactDownload(artifactIndex, artifactType, skipMoreButton = false, artifactName = null, downloadPreference = 'pdf', requireFormat = false) {
     console.log(`[NotebookLM Takeout] [Download] Starting download for artifact ${artifactIndex} (${artifactType})`);
     const startTime = Date.now();
 
@@ -2995,7 +3084,7 @@
       // fallback when the menu has no Download item (Milestone 1).
       let buttonResult;
       try {
-        buttonResult = await clickArtifactDownloadButton(artifactItem.querySelector('button[aria-label="More"]'), downloadPreference);
+        buttonResult = await clickArtifactDownloadButton(artifactItem.querySelector('button[aria-label="More"]'), downloadPreference, requireFormat);
       } catch (error) {
         if (artifactType === 'Infographic' && /Download button not found/.test(error.message)) {
           console.log('[NotebookLM Takeout] [Download] No Download item; capturing the rendered infographic...');
@@ -3054,7 +3143,7 @@
    * Uses MutationObserver to detect UI state changes instead of hard-coded delays
    * Now also captures intercepted download URLs from window.open
    */
-  async function clickArtifactDownloadButton(moreButton, downloadPreference = 'pdf') {
+  async function clickArtifactDownloadButton(moreButton, downloadPreference = 'pdf', requireFormat = false) {
     if (!moreButton) {
       throw new Error('More button not found for this item');
     }
@@ -3068,10 +3157,15 @@
     await waitForElement('.mat-mdc-menu-panel, .cdk-overlay-pane', 2000);
 
     // Find download button with multiple selector attempts
-    const downloadButton = await findDownloadButton(downloadPreference);
+    const downloadButton = await findDownloadButton(downloadPreference, requireFormat);
     if (!downloadButton) {
       // Close menu before throwing error
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      // Only this text crosses the message ({ success: false, error: message }); the side
+      // panel (fetchArtifactFiles) matches it exactly. Keep both ends in step.
+      // Only when the menu lists a Download item: an empty or stale overlay is a retry
+      const labels = Array.from(document.querySelectorAll('.mat-mdc-menu-item, [role="menuitem"]')).map(item => item.textContent || '');
+      if (requireFormat && downloadPreference === 'pptx' && NLME.pickDownloadMenuIndex(labels, 'pdf') !== -1) throw new Error(NLME.FORMAT_NOT_OFFERED);
       throw new Error('Download button not found in menu');
     }
 
@@ -3117,10 +3211,11 @@
    * Find the Download item in the open More menu. Slide decks offer PDF and
    * PowerPoint (Nov 2026); preference picks between them.
    * @param {'pdf'|'pptx'} preference
+   * @param {boolean} exact - no fallback to the PDF item when PowerPoint is not listed
    */
-  async function findDownloadButton(preference = 'pdf') {
+  async function findDownloadButton(preference = 'pdf', exact = false) {
     const items = Array.from(document.querySelectorAll('.mat-mdc-menu-item, [role="menuitem"]'));
-    const index = NLME.pickDownloadMenuIndex(items.map(item => item.textContent || ''), preference);
+    const index = NLME.pickDownloadMenuIndex(items.map(item => item.textContent || ''), preference, { exact });
     if (index !== -1) {
       console.log(`[NotebookLM Takeout] [Download] Menu item: "${items[index].textContent.trim()}"`);
     }
@@ -4119,6 +4214,7 @@
    * @returns {Promise<{sourcesByIndex: Object, errors: Array}>}
    */
   async function extractMessageCitations(messageIndex, messageHTML, sourceIndices, includeCitationImages = false) {
+    const imageFailures = [];
     console.log(`[NotebookLM Takeout] extractMessageCitations called for message ${messageIndex}`);
     console.log(`[NotebookLM Takeout] Source indices:`, sourceIndices);
     console.log(`[NotebookLM Takeout] Message HTML length:`, messageHTML?.length || 0);
@@ -4209,6 +4305,7 @@
         const result = await extractSingleCitationWithRetry(button, sourceIndex, includeCitationImages, 3);
 
         if (result.success) {
+          imageFailures.push(...result.imageFailures);
           sourcesByIndex[sourceIndex] = {
             text: result.data.text,
             quote: result.data.quote
@@ -4231,7 +4328,8 @@
 
     return {
       sourcesByIndex: sourcesByIndex,
-      errors: errors
+      errors: errors,
+      imageFailures
     };
   }
 

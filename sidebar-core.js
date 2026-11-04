@@ -159,13 +159,13 @@ document.addEventListener('DOMContentLoaded', () => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === NLME.MSG.DOWNLOAD_IMAGE_AS_BASE64) {
     // Handle image download request from content script
-    downloadImageAsBase64(message.url)
+    fetchJobImage(message.url, { tabId: sender.tab?.id })
       .then(dataUri => {
         sendResponse({ success: true, dataUri });
       })
       .catch(error => {
         console.error('[NotebookLM Takeout] Failed to download image:', error);
-        sendResponse({ success: false, error: error.message });
+        sendResponse({ success: false, error: error.message, skipped: !!error.skipped, cancelled: !!error.cancelled });
       });
     return true; // Keep channel open for async response
   }
@@ -821,6 +821,8 @@ async function retryDownload(downloadFn, maxRetries = 3, itemName = 'item') {
 
     } catch (error) {
       lastError = error;
+      // The menu will not change by waiting: no retries for a missing format
+      if (error && error.formatNotOffered) throw error;
       logger.warn('Download', `Attempt ${attempt} failed for ${itemName}`, error.message);
     }
 
@@ -1272,34 +1274,77 @@ function sanitizeFilename(filename) {
 }
 
 /**
- * Download an image from a URL and convert to base64 data URI
+ * Download a notebook image with the user's sign-in (fetchDownload, with its
+ * page-credentials fallback) as a base64 data URI. Anything but an image is a
+ * failure, so a sign-in page is never embedded.
+ *
+ * @param {string} url
+ * @param {{ tabId?: number }} [options] tab that serves the fallback
+ * @returns {Promise<string>} data:image/...;base64,...
+ * @throws {Error} 'Fetch failed: <reason>' with the reason
  */
-async function downloadImageAsBase64(url) {
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+async function downloadImageAsBase64(url, { tabId } = {}) {
+  const options = {
+    tabId,
+    isAllowed: NLME.isAllowedImageUrl,
+    blobProblem: NLME.imageBlobProblem,
+    // A limited host (429, 503) or a 403 gets no second request: the job's session waits and retries
+    fallbackAfter: status => status !== 403 && !NLME.isRateLimitedStatus(status)
+  };
+  // The url is requested without authuser (the form live run 4 verified), one attempt only.
+  // A 403 is retried by the embed pass with waits, not here.
+  const blob = await fetchDownload(NLME.imageFetchUrl(url), options);
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Send one item's failed images to the job, one summary per item.
+ *
+ * @param {Array<{url: string, reason: string}>} [failures]
+ * @param {string} item the note, source or message they belong to
+ * @param {Function} warn receives each NLME.summarizeImageFailures entry
+ * @param {Function} [jobWarn] receives the job-wide summary of skipped images
+ */
+function reportImageFailures(failures, item, warn, jobWarn = warn) {
+  const failed = (failures || []).filter(f => !f.skipped && !f.cancelled);
+  NLME.summarizeImageFailures(failed.map(f => ({ ...f, item }))).forEach(warn);
+  imageSession?.reportSkipped(jobWarn);
+}
+
+// Image downloads of the running job. One job runs at a time (job lock); the
+// sources pass and the page's citation images share it.
+let imageSession = null;
+
+/**
+ * @param {number} tabId tab that serves the page fetch fallback
+ * @param {Function} isCancelled
+ * @param {Function} [sleep] waits that end early on Cancel, by default
+ */
+function beginImageSession(tabId, isCancelled, sleep = null) {
+  const cancellableSleep = async ms => {
+    const end = Date.now() + ms;
+    while (Date.now() < end && !isCancelled()) {
+      await new Promise(resolve => setTimeout(resolve, Math.min(200, end - Date.now())));
     }
+  };
+  imageSession = NLME.createImageSession({
+    download: url => downloadImageAsBase64(url, { tabId }),
+    sleep: sleep || cancellableSleep,
+    isCancelled
+  });
+}
 
-    const blob = await response.blob();
+function endImageSession() {
+  imageSession = null;
+}
 
-    // Get MIME type from response or blob
-    const mimeType = blob.type || 'image/jpeg';
-
-    // Convert blob to base64
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        // reader.result is already a data URI (data:image/jpeg;base64,...)
-        resolve(reader.result);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  } catch (error) {
-    console.error(`[NotebookLM Takeout] Failed to download image: ${url}`, error);
-    throw error;
-  }
+function fetchJobImage(url, options) {
+  return imageSession ? imageSession.get(url, { patient: !!options?.patient }) : downloadImageAsBase64(url, options);
 }
 
 /**
@@ -1459,12 +1504,15 @@ async function withJobRecord(shell, kind, label, category, items, run, { update 
  * category folder, not in a notes/ or sources/ folder inside it).
  *
  * @typedef {{ pathPrefix?: string, zipKind?: string, folder?: string|null,
- *   variantSettings?: object, itemDir?: string, written?: Written }} CategoryTarget
+ *   variantSettings?: object, itemDir?: string, written?: Written,
+ *   capture?: ((path: string, text: string|null) => void)|null }} CategoryTarget
  *   itemDir: folder (with trailing '/') of the note or source files inside the
  *   package; default 'notes/' / 'sources/'. mind-maps/ and the combined files
  *   keep their package-relative paths; sources' youtube-urls*.txt follow itemDir.
  *   written: filled as each package is saved (see newWritten), so a caller that
  *   gets a throw from the runner still knows what reached disk.
+ *   capture: told of each saved file (see saveFiles); Full Takeout's viewer.
+ *   Tab exports pass none.
  */
 
 // What a category runner has saved so far. A caller (Full Takeout) passes its
@@ -1479,7 +1527,7 @@ function newWritten() {
 
 // One batch of a category's files to its ZIP (name pushed to written.zips) or,
 // with target.folder, into that Downloads folder; every path gets `prefix`
-async function saveCategoryBatch(shell, files, info, { prefix = '', zipKind, folder = null, written }) {
+async function saveCategoryBatch(shell, files, info, { prefix = '', zipKind, folder = null, written, capture = null }) {
   const placed = prefix ? files.map(f => ({ ...f, path: prefix + f.path })) : files;
   const record = () => {
     written.count++;
@@ -1487,7 +1535,7 @@ async function saveCategoryBatch(shell, files, info, { prefix = '', zipKind, fol
     written.parts = prefix && written.multi ? written.count : 0;
   };
   if (folder) {
-    await saveFiles(placed, { folder });
+    await saveFiles(placed, { folder, capture });
     record();
     return;
   }
@@ -1501,7 +1549,7 @@ async function saveCategoryBatch(shell, files, info, { prefix = '', zipKind, fol
     // not (-partN); a single package has no suffix
     totalParts: info.multi ? info.totalBatches : 1
   });
-  await saveFiles(placed, { zipName });
+  await saveFiles(placed, { zipName, capture });
   written.zips.push(zipName);
   record();
 }

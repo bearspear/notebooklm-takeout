@@ -138,27 +138,34 @@ sendResponse later).
 ```
 notebooklm-exporter/
 ├── manifest.json           — V3 manifest, permissions, side_panel, content_scripts
-├── takeout-shared.js (2183) — Selectors + DOM-free helpers (NLME global); content script,
+├── takeout-shared.js (2550) — Selectors + DOM-free helpers (NLME global); content script,
 │                             sidebar, service worker (importScripts) and Node tests load it
 ├── takeout-job.js (228)    — NLME.runExportJob: the one DOM-free job runner (sidebar + Node tests)
 ├── takeout-markdown.js (1029) — NLMEMarkdown: the one Markdown converter + KaTeX (sidebar + page)
-├── tools/validate_export.py — Export checker and baseline comparison (Python stdlib; see Testing)
+├── takeout-viewer.js (492) — NLMEViewer: DOM-free builder of the offline viewer's data and page
+│                             (sidebar + Node tests + tools/build_viewer.js)
+├── viewer/                 — The offline viewer's packaged files, read by the side panel and inlined
+│                             into viewer.html: viewer-template.html (138), viewer-app.js (427),
+│                             marked.min.js (marked 12.0.2), katex.min.js (KaTeX 0.16.11),
+│                             katex-inline.css (fonts inlined)
+├── tools/build_viewer.js (64) — Builds a viewer.html for an unzipped takeout folder (see Offline viewer)
+├── tools/validate_export.py (610) — Export checker and baseline comparison (Python stdlib; see Testing)
 ├── tests/                  — node:test unit tests for takeout-shared.js, takeout-job.js, the
 │                             message protocol and the file structure (load order, unique names)
-├── sidebar.html  ( 478)    — Side panel UI: tabs, controls, settings/health panels
-├── sidebar-core.js (1617) — Settings, init, tab and notebook switching, job lock, shared helpers,
+├── sidebar.html  ( 479)    — Side panel UI: tabs, controls, settings/health panels
+├── sidebar-core.js (1665) — Settings, init, tab and notebook switching, job lock, shared helpers,
 │                             notes Markdown (convertToMarkdown), job records (see Milestone 3d contracts)
-├── sidebar-artifacts.js (1183), sidebar-notes.js (788), sidebar-sources.js (741),
-│   sidebar-chat.js (772), sidebar-generated.js (314), sidebar-health.js (304)
+├── sidebar-artifacts.js (1222), sidebar-notes.js (813), sidebar-sources.js (777),
+│   sidebar-chat.js (809), sidebar-generated.js (314), sidebar-health.js (304)
 │                           — one file per tab (scan, list, export job, build files)
 ├── sidebar-list.js (336)   — List toolbar: filter, type chips, sort, select all visible
 ├── sidebar-results.js (148) — Results panel and Resume banner
-├── sidebar-takeout.js (934) — saveFiles, fetchDownload, withExportShell, runFullTakeout, resumeJob
+├── sidebar-takeout.js (1147) — saveFiles, fetchDownload, withExportShell, runFullTakeout, resumeJob
 ├── styles.css    (1791)    — Side panel styles
-├── content.js    (4229)    — DOM scraping + extraction, runs on NotebookLM (HANDLERS table)
+├── content.js    (4342)    — DOM scraping + extraction, runs on NotebookLM (HANDLERS table)
 ├── mindmap-extract.js (325) — Mind map SVG/tree extraction; content script and injected
 │                             by background into the *.scf.usercontent.goog app frame
-├── background.js (467)    — Service worker: download interception/naming, mind map frame extraction, citation cache clear on update (no ZIP code)
+├── background.js (456)    — Service worker: download interception/naming, mind map frame extraction, citation cache clear on update (no ZIP code)
 ├── injected.js   (  68)    — MAIN-world download hook (window.open + link clicks), armed per click
 ├── mindmap-template.html (371) — Standalone interactive mindmap viewer (used as template)
 ├── jszip.min.js  (  12)    — Bundled JSZip
@@ -197,6 +204,77 @@ Line numbers drift with every change, so anchors are names: `grep -n "<name>" <f
 | Health check | `runComprehensiveHealthCheck`, `checkProjectTitleHealth` (content.js) |
 | Mind maps | `mindmap-extract.js`; `extractMindmapFromAppFrame` (background.js) |
 | Layout helpers | `NLME.frontMatter`, `uniqueStems`, `exportMeta`, `buildManifest`, `zipName`, `artifactFolder`, `artifactStems`, `buildRootIndex` (takeout-shared.js) |
+
+## Offline viewer (viewer.html)
+
+Every Full Takeout writes `viewer.html` at the takeout root: one self-contained page (marked,
+KaTeX, styles, app and data inlined; no network use) to browse sources, notes, chat and artifacts.
+Built by `NLMEViewer.buildViewerData` + `assembleViewer` (takeout-viewer.js) in `buildViewerHtml`
+(sidebar-takeout.js), which reads `viewer/*` from the extension package. The data is JSON in
+`<script id="data" type="application/json">`, written by `escapeJson` (`</` , `<!--`, U+2028 and
+U+2029 escaped); `tools/validate_export.py` parses it back with a plain JSON parser.
+
+- **Capture rule.** The viewer is built from what the runners saved, not from a re-read. `saveFiles`
+  reports every written file to a `capture(path, data)` callback; `NLMEViewer.captureEntry` stores
+  `path -> text` only where `keepsText(path)` is true (the `.md` / `.csv` files the viewer reads, minus
+  `combined-notes*`, `_index*`, `_audit*`, `errors.md` and the variant files, plus `artifacts/manifest.json`
+  for titles) and `path -> null` for everything else, so media are listed for links but never held in
+  memory. Paths are relative to the takeout root and may sit under `part-N/`. A capture failure is
+  logged and never fails a save.
+- **Images are files, not data.** `viewer.html` holds no image data. `-with-images` files are captured
+  too (`wantsText`), and `captureEntry` runs `NLMEViewer.extractImages` on them at once: each
+  `![alt](data:image/...;base64,...)` becomes `![alt](images/<hash>.<ext>)` and `addImage(path, base64,
+  mime)` gets each distinct image once (the hash is `contentHash`, over the base64), so the store never
+  holds base64. `emptyDataImages` is the backstop, in `extractImages` and over all text in
+  `buildViewerData`: any other `data:image` (`<img src>`, a plain link, a reference, wrapped base64) is
+  emptied, so viewer.html cannot hold image data. Pass one `addImage` per takeout: it is what the dedupe is keyed on. The side panel turns
+  the bytes into Blobs in a Map until the end of the takeout. `buildViewerData` prefers the `-with-images`
+  text for sources, notes and chat (`sectionFiles`, same title only, so a note really called "X with
+  images" stays an item); a source keeps its plus-meta summary (`withSummary`).
+- **Saving images.** `saveTakeoutImages` (sidebar-takeout.js) runs first of the root files, because the
+  viewer may only link what was saved: images, then the viewer build with `savedImages`, then viewer.html,
+  then the other root files. Folder mode: `<root>/images/`. ZIP mode:
+  `<Notebook>-takeout-images-<ts>[-PARTIAL][-partNofM].zip`, split at `ARTIFACT_ZIP_MAX_BYTES`, listed in
+  the results panel. They are not in the root manifest. A failed save is logged, adds "Some images for the
+  offline viewer could not be saved" to errors.md, makes the outcome at least a warning and costs only
+  those images; `buildViewerData` empties their links (`![alt]()`). If the viewer fails after that, the
+  images stay as files nothing links.
+- **Failed images.** `sanitizeHtml` drops remote images. An `img` with no src shows its alt text, or "Image
+  not available offline", in a muted `span.no-image`; a URL is never shown as alt text (failed images often
+  have one). `collapseNoImage` makes adjacent placeholders one "N images not available offline". A capture
+  `error` listener on document does the same for a linked `images/` file that is missing, in page and popover.
+- **Citation images.** Quotes in `cites` stay plain text, for the popover and `findQuote`. `citeRecord`
+  takes images out of `q`: `imgs` lists the files, shown under the quote (`citeHtml`), `lost` counts those
+  not available.
+- **Links.** `buildViewerData(files, {notebook, exported, mediaBase, savedImages})`: each artifact's files become
+  `studio[].files = {ext: mediaBase + encoded path}`. The extension uses `mediaBase = ''` (links relative
+  to the takeout root, where viewer.html sits). `tools/build_viewer.js` sets it to the relative path from
+  the output file to the root. Files merge into one artifact only within one directory.
+- **`takeoutRootFiles`** (sidebar-takeout.js) returns `_index.md`, `_index.html`, `viewer.html`,
+  `errors.md` (when there are errors) and `manifest.json`, which lists all of them. `viewerHtml === null`
+  means no viewer: the index files do not name it and errors.md gets "The offline viewer could not be
+  built". A failed build or save never fails the takeout. Folder mode saves viewer.html first and alone,
+  so the files that name it are written only when it exists; ZIP mode retries the root package without
+  it. A cancelled takeout gets a viewer of what exists.
+- **Left out in ZIP mode.** Files the background saves straight into Downloads (`button_click`
+  artifacts, `one.savedName`) have no path from the takeout, so they get no viewer link there (errors.md
+  names them). In folder mode they are listed as `artifacts/<type>/../../../<name>` (`outsidePath`;
+  `landedPath` applies the name Chrome actually gave a URL download). In ZIP mode the category ZIPs must
+  be unzipped into one folder, or media and image links break: viewer.html is in the index ZIP, the media
+  in the category ZIPs and the images in the images ZIP.
+- **`node tools/build_viewer.js <takeout-root> <out.html> [--allow-downloads]`** rebuilds a viewer for an
+  unzipped takeout (also useful for takeouts from older versions). Embedded images go to `images/` beside
+  the output file. It refuses to write inside `~/Downloads` unless `--allow-downloads` is given, images
+  included, and only reads the takeout.
+- **Checker.** `check_viewer` in tools/validate_export.py: `viewer-invalid` (FAIL) when the data block is
+  missing, not JSON or has no `studio` list; `viewer-broken-link` (FAIL) when a URL-decoded
+  `studio[].files` path does not resolve to a file from the root (it may leave the root, for the
+  `../../../` case above), or an `images/<hash>.<ext>` reference anywhere in the data has no file; `viewer-missing` (WARN) for a `kind: takeout` manifest from exporter 1.8.0 or
+  later with no viewer.html (versions compared numerically). Link checks run only when `artifacts/` sits
+  next to viewer.html (merged tree or folder takeout); image links when any category folder is, so a
+  takeout with no artifacts is covered; the index ZIP alone is skipped. Files in a
+  takeout's `images/` count as listed (no `unlisted-file`), and an images ZIP passes as kind `images` (it
+  has no manifest).
 
 ## Settings shape and storage
 
@@ -348,8 +426,18 @@ side panel.
 2. User picks rows → `exportSources(selectedSources)`.
 3. For each source, message `EXTRACT_SOURCE` with index → content clicks source button,
    waits for `labs-tailwind-doc-viewer`, scrapes content + guide markdown + key topics.
+   An image source (an uploaded picture: Source guide plus one
+   `lh3.googleusercontent.com/notebooklm/` image, no text body, Nov 2026) cannot end the body wait
+   early, so a slow text source is never misread: `waitForSourceBody` runs the usual 10 s, and only
+   with no text at the end does it read `source-viewer img` (`NLME.imageSourceUrls`). An image gives
+   `imageUrls`; nothing gives `Source content did not load`. A guide inside the body is not counted as
+   text, and text that turns up during the guide wait undoes the decision (`recheckImageSource`).
+   Each image source costs that full 10 s.
 4. Sidebar produces 1–4 variants per source based on `settings.exportSource*`:
    - base.md, plus-meta.md, with-images.md (only if source has images), plus-meta-with-images.md
+   An image source's content is `NLME.imageSourceMarkdown`: a note plus image links, through the
+   usual embed pass and failure reporting. Base files keep the note, with the image stripped; with no
+   image version on, the job warns `image_source_not_saved`.
 5. ZIPs are batched (`sourcesPerZip`, default 25) by `runExportJob`; each ZIP has `_index.md`,
    `manifest.json`, `_audit.md` and `errors.md` (last ZIP only, when there are errors).
 6. Written by `saveFiles` (JSZip, then `downloadBlob`).
@@ -447,7 +535,10 @@ in every answer, so sources must never be keyed by number across answers.
      `method: 'mindmap_app_frame'` and the sidebar asks background `EXTRACT_MINDMAP_FRAME`
      (see [Mindmap extraction](#mindmap-extraction)). Output: ZIP with SVG, JSON, HTML.
    - **Slides**: the More menu offers PDF and PowerPoint; `findDownloadButton` picks via
-     `NLME.pickDownloadMenuIndex(labels, settings.slidesFormat)`.
+     `NLME.pickDownloadMenuIndex(labels, settings.slidesFormat)`. Older decks list only "Download PDF
+     Document (.pdf)"; a lone PDF item is also what a PPTX preference falls back to. Full Takeout sends
+     `requireFormat` with its PPTX request (`onlyIfOffered`), which passes `{ exact: true }`: with no
+     PowerPoint item the click is skipped and the page answers `NLME.FORMAT_NOT_OFFERED`.
    - **Others**: enter intercept mode preemptively, then message content, which resolves
      the row by title (`NLME.pickByIndexThenTitleStrict`), clicks its More button, arms the
      hook and clicks the "Download" menu item.
@@ -476,6 +567,23 @@ in every answer, so sources must never be keyed by number across answers.
    - Extension-started downloads (blob/data URLs) register their name first via
      `NAME_NEXT_DOWNLOAD`: Chrome drops the `filename` option while an
      `onDeterminingFilename` listener exists and does not suggest one.
+     `createDownloadNamer` (takeout-shared.js, wired in background.js) keeps the
+     registered names in `chrome.storage.session`, so they survive a service
+     worker restart; `NAME_NEXT_DOWNLOAD` answers only after that write.
+   - Notebook images (embedded in `-with-images` files, saved to `images/`, shown
+     in the citation popover) go through one set of helpers:
+     `NLME.isAllowedImageUrl` is the host list for credentialed requests (download
+     hosts plus `lh3.google.com`); `NLME.imageFetchUrl` gives the url to request
+     (without `authuser`; caches and reports keep the original url);
+     `downloadImageAsBase64` (sidebar-core.js) makes one request per call, and a
+     403, 429 or 503 gets no page fallback.
+   - The image session (`NLME.createImageSession`, takeout-shared.js) is the
+     retry policy. `beginImageSession` / `fetchJobImage` (sidebar-core.js) open one
+     per job and fetch through it. Patient calls (the embed pass) wait and retry:
+     5 s and 15 s after a 403, backoff on 429/503 with a 30 s pause, a 5-minute
+     budget for limits and a 10-minute budget for 403s, and a failed image is not
+     cached. Hover calls (citation popover) make one attempt. The cause of the
+     403s is not known; the session treats them as transient per request.
 
 Filename convention for a single artifact download: `[{prefix}]_{sanitized-title}.{ext}`
 (`NLME.artifactTypePrefix`). A single Data Table or mind map is one ZIP instead
@@ -596,6 +704,7 @@ Icon textContent → kind:
 | Inner `mat-icon` `unfold_less` / aria "Hide additional citations" | Open group: never click. Both states are excluded from citations by `NLME.isCitationExpander` |
 | `NLME.CITATION_TOOLTIP_SELECTOR` | Hover tooltip: `.cdk-overlay-pane.citation-tooltip-panel` > `nb-popover-container` > `div.popover-card[aria-label="Citation Details"]` (Nov 2026); legacy `xap-inline-dialog-container[role="dialog"]` |
 | `.citation-tooltip-header` | Source title in tooltip |
+| `.citation-tooltip-title` | `span` in the header holding the title, read from real popovers (Nov 2026). Required for an image citation (`NLME.isImageCitation`) |
 | `.citation-tooltip-text` | Quote: `div.paragraph` children or `labs-tailwind-structural-element-view-v2` wrappers (both seen) |
 | `.citation-tooltip-footer` | "View source" button |
 | `.mat-mdc-menu-panel` / `.cdk-overlay-pane` | Open menu / popup overlay |
@@ -628,6 +737,7 @@ Icon textContent → kind:
 | `.single-source-container` | Each source row |
 | `mat-expansion-panel.notes-category-panel` | "Notes" group inside the Sources panel (Nov 2026). Its rows are notes (open `note-editor`), not in the Studio list — `isNoteSourceContainer` |
 | `.scroll-area-desktop` | Scroll container (used in DOM health check) |
+| `source-viewer img` with `NLME.isImageSourceUrl` (`https://lh3.googleusercontent.com/notebooklm/…`) | The image of an image source. Read only after the body wait found no text. Not in the health check: it needs an open image source, and a miss gives the existing `Source content did not load` |
 
 ### Studio item more-menu items
 
@@ -653,6 +763,18 @@ chat-wide and per-message chat extraction all call it):
    the next citation reading the previous quote
 ```
 
+A popover with no quote after the last attempt is an image citation only with all of these
+(`NLME.isImageCitation`): `.citation-tooltip-title` has text, `.citation-tooltip-text` has no text, and
+there is image evidence: an `img` in the panel, a title ending in an image extension, or a title
+this page already found to be an image source during a sources export in the same notebook
+(`knownImageSources`, keyed by `NLME.notebookIdFromUrl`). It
+then carries `NLME.IMAGE_CITATION_NOTE` as its quote plus `noQuote: true`, with no error. Everything
+else, a fully empty popover included, stays `Tooltip content did not load`. The retries run first,
+so a slow popover is not misread. The note counts for the citation audit, is never cached
+(`NLME.citationSourcesComplete`) and is not a read quote for the health check. The selectors above
+were read from real popovers on text sources (Nov 2026); only the popover of a PNG source has not
+been reached, so that one's shape is unproven.
+
 Markdown keeps NotebookLM's citation numbers; `NLME.buildCitationEntries` builds the
 Sources section from extracted sources plus a placeholder for markers that failed, and
 `NLME.renumberCitationAnchors` makes occurrence anchors (`-1`, `-2`, …) follow document
@@ -665,7 +787,8 @@ No Gemini Notebook data request is made per hover.
 Common failures:
 - Tooltip never appears → marker is in a collapsed group. `expandCollapsedCitations` opens
   them during the chat scan; only click `NLME.isCollapsedCitationGroup` buttons.
-- Tooltip appears but is empty → race; retry with longer wait (already 600ms ceiling).
+- Tooltip appears but is empty → race; retry with longer wait (already 600ms ceiling). Still empty
+  on the last attempt with no image evidence → the citation fails, see above.
 - Tooltip from a previous hover persists → next hover's data is wrong. The close-wait at
   step 7 is the only thing preventing this.
 
@@ -966,7 +1089,7 @@ Found while checking real exports after #8; the export bugs below predate it.
   listeners use `NLME.isNotebookDownload` and ignore `byExtensionId` downloads. Permissions:
   storage, downloads, scripting, sidePanel, tabs (`notifications` was dropped in 1.4.0; nothing
   used `chrome.notifications`); hosts: notebook sites,
-  `contribution.usercontent.google.com`, `*.googleusercontent.com`, `*.scf.usercontent.goog`.
+  `contribution.usercontent.google.com`, `*.googleusercontent.com`, `*.scf.usercontent.goog`, `lh3.google.com` (image redirects).
 - **Helpers:** one copy each in `takeout-shared.js` — `isNotebookUrl` (exact host),
   `sanitizeFilename` (code-point safe), `artifactTypePrefix`, `exportTimestamp`, `escapeHtml`,
   `PROJECT_TITLE_SELECTORS`, `buildSourcesIndex`.
@@ -1074,7 +1197,18 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined out
 - **Slides in both formats:** it passes `bothSlideFormats: true` to `runArtifactsJob`, whose `extractOne`
   loops `NLME.slideFormatsFor(type, …)` and calls `fetchArtifactFiles(…, { slidesFormat })` once per
   format with the same stem (`extensionFor({ format })` guesses `.pdf`/`.pptx`); one format failing
-  warns, all failing fails the item. Tab downloads keep the single `settings.slidesFormat`.
+  warns, all failing fails the item. The PPTX request of a pair is made with `onlyIfOffered`: a deck whose
+  menu has no PowerPoint item (older decks, PDF only) raises `formatNotOffered` (not retried, not logged as an
+  error). `fetchSlideFormats` (tested in tests/pdf-only-deck.test.js) skips it with one `Info:` line in errors.md and no second PDF; it is not a failure
+  (before this, the PPTX click hit PDF again and Chrome saved `Name (1).pdf`, identical bytes). A single
+  `settings.slidesFormat = pptx` request keeps the old fallback, so such a deck still gets its PDF. Tab
+  downloads keep the single `settings.slidesFormat`.
+- **Formula audit.** `NLME.countMarkdownFormulas` counts `$$..$$` and `$..$` in the final Markdown. A formula
+  may touch words (`$x$rad`). A span that opens on a digit must not close before a digit, so `$400 ... $500`
+  is not a formula; other spans may (`$T$2`). Known gap: `$1 micron: 10-6 m$1 nanometre` reads as a price. On
+  the Venus sources (base files) it gives 149 against 150 on the page (it was 85).
+- **Checker links.** `check_links` reads a link target with balanced parentheses
+  (`[a](x-(S1)-y.md)`) and accepts the target as written or percent-decoded (a file name may hold `%2C`).
 - **ZIP on** (`takeoutZipEnabled`: the header's `#takeout-zip-checkbox`, else
   `NLME.takeoutZipChoice(settings)`): one ZIP per category, `<Notebook>-takeout-<category>-<ts>[-PARTIAL]
   [-partNofM|-partN].zip`, plus `<Notebook>-takeout-index-<ts>.zip`. `-partNofM` is a batch-size
@@ -1661,7 +1795,7 @@ Export checks that catch real bugs (scripted against the unzipped export):
 ### Syntax and unit tests
 
 ```bash
-for f in sidebar-*.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js; do node --check "$f"; done
+for f in sidebar-*.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js takeout-viewer.js viewer/viewer-app.js tools/build_viewer.js; do node --check "$f"; done
 node --test tests/
 python3 -I -m unittest discover -s tools
 ```
