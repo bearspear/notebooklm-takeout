@@ -649,6 +649,7 @@ test('a viewer that cannot be built is an errors.md line, not a failed takeout',
   assert.doesNotMatch(log.zipped['Book/_index.html'], /viewer\.html/);
   assert.ok(!JSON.parse(log.zipped['Book/manifest.json']).files.some(f => f.path === 'viewer.html'));
   assert.equal(log.panels.length, 1);
+  assert.equal(log.panels[0].level, 'warning');
   assert.ok(log.panels[0].errors.some(e => /offline viewer/.test(e.message)));
   assert.equal(typeof log.zipped['Book/notes/part-2/N.md'], 'string', 'the categories are all there');
 });
@@ -667,4 +668,63 @@ test('a category that fails leaves the others in the viewer', async () => {
   await sandbox.runFullTakeout();
   const html = log.zipped['Book/viewer.html'];
   assert.ok(html.includes('source body') && html.includes('Pretty Audio'));
+});
+
+// saveFiles that fails for any batch holding `failing`; what it did save lands in `written`
+function failSavesOf(sandbox, failing) {
+  const realSave = sandbox.saveFiles;
+  const written = {};
+  const attempts = [];
+  sandbox.saveFiles = async (files, options) => {
+    attempts.push([...files].map(f => f.path));
+    if (files.some(f => f.path === failing)) throw new Error('disk full');
+    const out = await realSave(files, options);
+    for (const f of files) written[f.path] = f.data;
+    return out;
+  };
+  return { written, attempts };
+}
+
+for (const zip of [true, false]) {
+  const mode = zip ? 'ZIP' : 'folder';
+
+  test(`viewer.html that cannot be saved costs nothing else (${mode} mode)`, async () => {
+    const { sandbox, log } = takeoutPanel({ zip });
+    const { written, attempts } = failSavesOf(sandbox, 'Book/viewer.html');
+    await sandbox.runFullTakeout();
+    assert.equal(written['Book/viewer.html'], undefined);
+    for (const f of ['_index.md', '_index.html', 'manifest.json', 'errors.md']) assert.equal(typeof written[`Book/${f}`], 'string', f);
+    assert.match(written['Book/errors.md'], /The offline viewer could not be built/);
+    assert.doesNotMatch(written['Book/_index.md'], /viewer\.html/);
+    assert.doesNotMatch(written['Book/_index.html'], /viewer\.html/);
+    const manifest = JSON.parse(written['Book/manifest.json']);
+    assert.ok(!manifest.files.some(f => f.path === 'viewer.html'));
+    assert.ok(manifest.files.some(f => f.path === 'errors.md'));
+    assert.equal(manifest.errorCount, 1);
+    assert.equal(log.panels[0].level, 'warning');
+    assert.ok(log.panels[0].errors.some(e => e.type === 'viewer'));
+    if (!zip) assert.deepEqual(attempts.filter(a => a.includes('Book/viewer.html')), [['Book/viewer.html']], 'first, alone');
+  });
+
+  test(`a root save failure that is not the viewer reports as before (${mode} mode)`, async () => {
+    const { sandbox, log } = takeoutPanel({ zip });
+    failSavesOf(sandbox, 'Book/_index.md');
+    await sandbox.runFullTakeout();
+    assert.equal(log.panels.length, 1);
+    assert.match(log.panels[0].message, /the takeout index could not be written/);
+    assert.equal(log.panels[0].level, 'warning');
+    assert.doesNotMatch(log.panels[0].message, /viewer/);
+    assert.deepEqual([...log.panels[0].errors], [], 'the viewer is not blamed');
+  });
+}
+
+test('folder mode: a saved viewer is still claimed, and nothing is saved twice', async () => {
+  const { sandbox } = takeoutPanel({ zip: false });
+  const { written, attempts } = failSavesOf(sandbox, 'none');
+  await sandbox.runFullTakeout();
+  const roots = attempts.filter(a => a.some(p => /^Book\/[^/]+$/.test(p)));
+  assert.deepEqual(roots.map(a => a[0]), ['Book/viewer.html', 'Book/_index.md']);
+  assert.equal(roots.flat().filter(p => p === 'Book/viewer.html').length, 1);
+  assert.ok(JSON.parse(written['Book/manifest.json']).files.some(f => f.path === 'viewer.html' && f.bytes > 0));
+  assert.match(written['Book/_index.md'], /\(viewer\.html\)/);
 });

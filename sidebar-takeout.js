@@ -408,6 +408,9 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
 
 // ---- Full Takeout (Milestone 3a) ----
 
+const VIEWER_FILE = 'viewer.html';
+const VIEWER_ERROR = { type: 'viewer', message: 'The offline viewer could not be built' };
+
 // viewer.html for the files captured so far. The side panel reads its own packaged
 // files, which needs no permission. Links are relative to the takeout root.
 async function buildViewerHtml(files, meta) {
@@ -426,6 +429,46 @@ async function buildViewerHtml(files, meta) {
 function takeoutZipEnabled() {
   const checkbox = document.getElementById('takeout-zip-checkbox');
   return checkbox ? checkbox.checked : NLME.takeoutZipChoice(settings);
+}
+
+// The files at a takeout's root. viewerHtml null: no viewer, and nothing names one.
+function takeoutRootFiles({ meta, summary, errors, partial, viewerHtml }) {
+  const viewerFile = viewerHtml === null ? null : VIEWER_FILE;
+  const errorsFile = errors.length ? 'errors.md' : null;
+  const rootFiles = [{
+    path: '_index.md',
+    data: NLME.buildRootIndex({ meta, categories: summary, errorsFile, viewerFile }) + timingSummary()
+  }, {
+    path: '_index.html',
+    data: NLME.buildRootIndexHtml({ meta, categories: summary, errorsFile, viewerFile })
+  }];
+  if (viewerFile) rootFiles.push({ path: viewerFile, data: viewerHtml });
+  if (errors.length) {
+    rootFiles.push({
+      path: 'errors.md',
+      data: NLME.buildErrorReport({
+        title: 'Takeout',
+        generatedAt: new Date().toLocaleString(),
+        errors,
+        stats: Object.fromEntries(summary.map(c => [c.name, `${c.exported} of ${c.selected} (${c.status})`]))
+      })
+    });
+  }
+  rootFiles.push({
+    path: 'manifest.json',
+    data: JSON.stringify({
+      ...NLME.buildManifest({
+        meta,
+        kind: 'takeout',
+        partial,
+        files: rootFiles.slice(), // _index.md, _index.html, viewer.html, errors.md (not itself)
+        counts: Object.fromEntries(summary.map(c => [c.folder, c.exported])),
+        errorCount: errors.length
+      }),
+      categories: summary
+    }, null, 2)
+  });
+  return rootFiles;
 }
 
 /**
@@ -451,8 +494,9 @@ function takeoutZipEnabled() {
  * root files are written anyway.
  *
  * viewer.html (offline viewer) is built from what the runners saved: a capture
- * through the target notes each file as saveFiles writes it. A failed build is
- * an errors.md line, never a failed takeout; a cancelled takeout gets a viewer
+ * through the target notes each file as saveFiles writes it. A failed build or
+ * save is an errors.md line and a warning, never a failed takeout: the other root
+ * files are written without naming the viewer. A cancelled takeout gets a viewer
  * of what exists.
  *
  * One combined results panel at the end (showResults): shell.finish reports a
@@ -641,58 +685,24 @@ async function runFullTakeout() {
       viewerHtml = await buildViewerHtml(viewerFiles, shell.meta);
     } catch (error) {
       console.error('[NotebookLM Takeout] Full Takeout: viewer failed:', error);
-      takeoutErrors.push({ type: 'viewer', message: 'The offline viewer could not be built' });
+      takeoutErrors.push(VIEWER_ERROR);
     }
     viewerFiles = null; // the texts are in viewerHtml now
-    const viewerFile = viewerHtml === null ? null : 'viewer.html';
 
     const summary = categories.map(({ name, folder: catFolder, status, selected, exported, failed, zips, parts, packages }) =>
       ({ name, folder: catFolder, status, selected, exported, failed, zips, parts, packages }));
-    const errors = [
+    const allErrors = () => [
       ...NLME.prefixExportErrors('Takeout', takeoutErrors),
       ...categories.flatMap(c => NLME.prefixExportErrors(c.name, c.errors))
     ];
     const cancelled = summary.some(c => c.status === 'partial' || c.status === 'skipped');
-    const errorsFile = errors.length ? 'errors.md' : null;
-    const rootFiles = [{
-      path: '_index.md',
-      data: NLME.buildRootIndex({ meta: shell.meta, categories: summary, errorsFile, viewerFile }) + timingSummary()
-    }, {
-      path: '_index.html',
-      data: NLME.buildRootIndexHtml({ meta: shell.meta, categories: summary, errorsFile, viewerFile })
-    }];
-    if (viewerFile) rootFiles.push({ path: viewerFile, data: viewerHtml });
-    if (errors.length) {
-      rootFiles.push({
-        path: 'errors.md',
-        data: NLME.buildErrorReport({
-          title: 'Takeout',
-          generatedAt: new Date().toLocaleString(),
-          errors,
-          stats: Object.fromEntries(summary.map(c => [c.name, `${c.exported} of ${c.selected} (${c.status})`]))
-        })
-      });
-    }
-    rootFiles.push({
-      path: 'manifest.json',
-      data: JSON.stringify({
-        ...NLME.buildManifest({
-          meta: shell.meta,
-          kind: 'takeout',
-          partial: cancelled,
-          files: rootFiles.slice(), // _index.md, _index.html, viewer.html, errors.md (not itself)
-          counts: Object.fromEntries(summary.map(c => [c.folder, c.exported])),
-          errorCount: errors.length
-        }),
-        categories: summary
-      }, null, 2)
-    });
+    const rootFilesWith = html => takeoutRootFiles({ meta: shell.meta, summary, errors: allErrors(), partial: cancelled, viewerHtml: html });
 
     shell.progress('Writing the takeout index...', 1);
     let rootWritten = true;
     let indexZip = null;
-    try {
-      const placed = rootFiles.map(f => ({ ...f, path: `${root}/${f.path}` }));
+    const saveRoot = async files => {
+      const placed = files.map(f => ({ ...f, path: `${root}/${f.path}` }));
       if (folder) {
         await saveFiles(placed, { folder });
       } else {
@@ -700,10 +710,39 @@ async function runFullTakeout() {
         await saveFiles(placed, { zipName });
         indexZip = zipName;
       }
+    };
+    // Folder mode: viewer.html goes first and alone, so the files that name it are
+    // only written once it is known to be there
+    if (folder && viewerHtml !== null) {
+      try {
+        await saveRoot([{ path: VIEWER_FILE, data: viewerHtml }]);
+      } catch (error) {
+        console.error('[NotebookLM Takeout] Full Takeout: viewer.html failed:', error);
+        viewerHtml = null;
+        takeoutErrors.push(VIEWER_ERROR);
+      }
+    }
+    try {
+      const rootFiles = rootFilesWith(viewerHtml);
+      await saveRoot(folder ? rootFiles.filter(f => f.path !== VIEWER_FILE) : rootFiles);
     } catch (error) {
       console.error('[NotebookLM Takeout] Full Takeout: root files failed:', error);
       rootWritten = false;
+      // ZIP mode: one package, so the viewer may be what sank it. Try without it; if
+      // that fails too, the viewer was not the reason and is not blamed
+      if (!folder && viewerHtml !== null) {
+        takeoutErrors.push(VIEWER_ERROR);
+        try {
+          await saveRoot(rootFilesWith(null));
+          rootWritten = true;
+        } catch (retryError) {
+          console.error('[NotebookLM Takeout] Full Takeout: root files failed without the viewer:', retryError);
+          takeoutErrors.pop();
+        }
+      }
     }
+    viewerHtml = null;
+    const errors = allErrors();
 
     // 4. One results panel for the whole takeout
     let { message, level } = NLME.summarizeTakeoutOutcome({
@@ -712,6 +751,10 @@ async function runFullTakeout() {
     });
     if (!rootWritten) {
       message += ' — the takeout index could not be written';
+      if (level !== 'error') level = 'warning';
+    }
+    if (takeoutErrors.includes(VIEWER_ERROR)) {
+      message += ' — the offline viewer could not be built';
       if (level !== 'error') level = 'warning';
     }
     console.log('[NotebookLM Takeout] Full Takeout finished:', message);
