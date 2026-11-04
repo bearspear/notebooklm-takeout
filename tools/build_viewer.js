@@ -52,4 +52,4 @@ const html = V.assembleViewer({ template, css, marked, katex, app, data });
 
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.writeFileSync(out, html);
-console.log(`${out}: ${data.sources.length} sources, ${data.studio.length} studio items, ${data.pairs.length} Q&A, ${data.cites.length} chat citations`);
+console.log(`${out}: ${data.sources.length} sources, ${data.studio.length} studio items, ${data.pairs.length} Q&A, ${data.pairs.reduce((n, p) => n + p.n, 0)} chat citations, ${data.cites.length} unique citation records`);

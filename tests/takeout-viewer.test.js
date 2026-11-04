@@ -321,12 +321,27 @@ test('build_viewer writes a page from a temp takeout', () => {
   assert.ok(html.includes(rel + '/artifacts/slides/deck%20one.pdf'), 'media link relative to out folder');
 });
 
-test('build_viewer requires out and refuses ~/Downloads without the flag', () => {
+test('build_viewer prints per-answer chat citations and unique records separately', () => {
   const root = makeTakeout();
-  assert.notEqual(spawnSync(process.execPath, [CLI, root], { encoding: 'utf8' }).status, 0);
-  const dl = path.join(os.homedir(), 'Downloads', 'nlme-should-not-exist', 'v.html');
-  const r = spawnSync(process.execPath, [CLI, root, dl], { encoding: 'utf8' });
+  fs.mkdirSync(path.join(root, 'chat'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'chat', 'chat.md'), CHAT + '\n## Q: Third?\n\n**A:** Again.' + `<sup>${link(1, 'src-1')}</sup>` + '\n\n**Sources:**\n\n' + src(1, 'Alpha', 'quote a') + '\n---\n');
+  const out = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'nlme-out-')), 'v.html');
+  const r = spawnSync(process.execPath, [CLI, root, out], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /3 chat citations, 2 unique citation records/);
+});
+
+test('build_viewer requires out and refuses ~/Downloads without the flag (fake HOME)', () => {
+  const root = makeTakeout();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'nlme-home-'));
+  const env = Object.assign({}, process.env, { HOME: home, USERPROFILE: home });
+  assert.notEqual(spawnSync(process.execPath, [CLI, root], { encoding: 'utf8', env }).status, 0);
+  const dl = path.join(home, 'Downloads', 'sub', 'v.html');
+  const r = spawnSync(process.execPath, [CLI, root, dl], { encoding: 'utf8', env });
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /allow-downloads/);
   assert.ok(!fs.existsSync(dl));
+  const ok = spawnSync(process.execPath, [CLI, root, dl, '--allow-downloads'], { encoding: 'utf8', env });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.ok(fs.existsSync(dl));
 });
