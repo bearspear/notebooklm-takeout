@@ -272,6 +272,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
         note.markdown = null;
         note.html = null;
         note.sources = null;
+        note.imageEmbeds = null;
         note.svgContent = null;
         note.treeData = null;
       });
@@ -326,7 +327,6 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
 
     if (noteData && !noteData.error) {
       (noteData.errors || []).forEach(err => ctx.warn(`[${note.title}] ${err}`));
-      reportImageFailures(noteData.imageFailures, note.title, ctx.warn);
 
       if (noteData.isMindmap) {
         return {
@@ -346,6 +346,10 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
       if (settings.citationDetail !== 'none') {
         addCitationCoverage(state.audit, noteData.html, noteData.sources, settings.citationDetail === 'quotes', notePage);
       }
+      // The files are built from the HTML later: keep the downloads for -with-images
+      const imageEmbeds = variantSettings.exportNoteWithImages
+        ? await embedAndReportImages(markdown, note.title, noteData.imageFailures, ctx.warn)
+        : null;
       if (notePage.citationNumbers.length > 0 && settings.citationDetail === 'quotes') {
         const fromCache = noteData.fromCache === true;
         tallyCitationCache(fromCache, state.audit);
@@ -368,7 +372,8 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
         markdown,
         // Raw data for combined-notes.md (which needs unique noteIds)
         html: noteData.html,
-        sources: noteData.sources
+        sources: noteData.sources,
+        imageEmbeds
       };
     }
   } catch (error) {
@@ -461,12 +466,6 @@ async function exportSingleNote(note) {
     throw new Error(noteData?.error || 'Failed to extract note');
   }
 
-  // One note, no job: nothing collects errors, so say it here
-  reportImageFailures(noteData.imageFailures, note.title, failure => {
-    console.warn(`[NotebookLM Takeout] "${note.title}": ${failure.message}`, failure.url);
-    showToast(`${note.title}: ${failure.message}`, 'warning');
-  });
-
   const obsidian = !!settings.obsidianNames;
   let filesWritten = 0;
 
@@ -475,6 +474,16 @@ async function exportSingleNote(note) {
     await saveFiles(files);
     return { success: true, filesWritten: files.length };
   }
+
+  // One note, no job: nothing collects errors, so say it here
+  const imageEmbeds = needsImages
+    ? await embedAndReportImages(
+      convertToMarkdown(noteData.html, noteData.sources, note.title, false, true, null, true, settings.citationDetail === 'none', settings.citationStyle),
+      note.title, noteData.imageFailures, failure => {
+        console.warn(`[NotebookLM Takeout] "${note.title}": ${failure.message}`, failure.url);
+        showToast(`${note.title}: ${failure.message}`, 'warning');
+      })
+    : null;
 
   // Regular note — produce enabled markdown versions, each as its own .md file.
   const versions = getEnabledNoteVersions({
@@ -493,9 +502,7 @@ async function exportSingleNote(note) {
       settings.citationDetail === 'none',
       settings.citationStyle
     );
-    if (version.stripImages) {
-      markdown = stripImagesFromMarkdown(markdown);
-    }
+    markdown = version.stripImages ? stripImagesFromMarkdown(markdown) : NLME.applyImageEmbeds(markdown, imageEmbeds);
     markdown = noteFrontMatter(meta, { title: note.title, variant: version.variant }) + markdown;
     const filename = `${NLME.prefixedStem('NOTE', note.title, { obsidian })}${version.fileSuffix}.md`;
     downloadBlob(new Blob([markdown], { type: 'text/markdown' }), filename);
@@ -571,10 +578,8 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
           settings.citationStyle
         );
 
-        // Strip images if needed
-        if (version.stripImages) {
-          markdown = stripImagesFromMarkdown(markdown);
-        }
+        // Strip images, or embed the ones extractNoteItem downloaded
+        markdown = version.stripImages ? stripImagesFromMarkdown(markdown) : NLME.applyImageEmbeds(markdown, note.imageEmbeds);
 
         const path = `${itemDir}${stems[idx]}${version.fileSuffix}.md`;
         files.push({
@@ -617,10 +622,8 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
           settings.citationStyle
         );
 
-        // Strip images if needed
-        if (version.stripImages) {
-          noteMarkdown = stripImagesFromMarkdown(noteMarkdown);
-        }
+        // Strip images, or embed the ones extractNoteItem downloaded
+        noteMarkdown = version.stripImages ? stripImagesFromMarkdown(noteMarkdown) : NLME.applyImageEmbeds(noteMarkdown, note.imageEmbeds);
 
         combinedMarkdown += noteMarkdown + '\n\n';
         if (idx < regularNotes.length - 1) {

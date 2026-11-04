@@ -173,6 +173,18 @@ test('fetchDownload is unchanged for artifact downloads: any file type, and no l
   await assert.rejects(sandbox.fetchDownload('https://lh3.google.com/rd-notebooklm/a'), /not a Gemini Notebook download URL/);
 });
 
+// The embed pass notes and chat share with sources
+function loadImagePass(sandbox) {
+  vm.runInContext(topLevelFn('sidebar-sources.js', 'embedImagesInMarkdown'), sandbox);
+  vm.runInContext(topLevelFn('sidebar-sources.js', 'embedAndReportImages'), sandbox);
+  vm.runInContext(topLevelFn('sidebar-core.js', 'reportImageFailures'), sandbox);
+}
+function loadChat(sandbox) {
+  loadImagePass(sandbox);
+  vm.runInContext(topLevelFn('sidebar-chat.js', 'readChatPair'), sandbox);
+  vm.runInContext(topLevelFn('sidebar-chat.js', 'extractChatPair'), sandbox);
+}
+
 function sourcesPanel(fetchImpl) {
   const panel = sidePanel({ fetchImpl });
   vm.runInContext(topLevelFn('sidebar-sources.js', 'embedImagesInMarkdown'), panel.sandbox);
@@ -270,8 +282,8 @@ test('a note hands its image failures to the job as one summary', async () => {
       }
     }
   });
+  loadImagePass(sandbox);
   vm.runInContext(topLevelFn('sidebar-notes.js', 'extractNoteItem'), sandbox);
-  vm.runInContext(topLevelFn('sidebar-core.js', 'reportImageFailures'), sandbox);
   const warned = [];
   await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'Note', index: 0 }, { warn: e => warned.push(e) }, {}, { exportNoteWithImages: true });
   assert.equal(warned.length, 1);
@@ -291,12 +303,12 @@ test('a chat message hands its image failures to the job, not as citation errors
       }),
       globals: {
         settings: {}, exportTimer: null, mergeTiming() {}, tallyCitationCache() {},
+        convertChatToMarkdown: () => '',
         document: { createElement: () => ({ set innerHTML(v) {}, querySelectorAll: () => [button] }) }
       }
     }
   });
-  vm.runInContext(topLevelFn('sidebar-chat.js', 'extractChatPair'), sandbox);
-  vm.runInContext(topLevelFn('sidebar-core.js', 'reportImageFailures'), sandbox);
+  loadChat(sandbox);
   const warned = [];
   const out = await sandbox.extractChatPair(
     { tab: { id: 5 }, progress() {} }, { userMessage: 'Why?', aiResponseHTML: '' },
@@ -403,8 +415,215 @@ test('content script passes image failures from a citation to the job', () => {
   assert.match(chat, /imageFailures\.push\(\.\.\.result\.imageFailures\)/);
 });
 
-test('a single note download reports its failed images too', () => {
-  const single = read('sidebar-notes.js');
-  assert.equal(single.match(/reportImageFailures\(noteData\.imageFailures/g).length, 2);
-  assert.match(single, /showToast\(`\$\{note\.title\}: \$\{failure\.message\}`, 'warning'\)/);
+test('applyImageEmbeds swaps image urls only, and is safe with no embeds', () => {
+  const url = 'https://lh3.googleusercontent.com/notebooklm/a';
+  const embeds = new Map([[url, 'data:image/png;base64,$&AA']]);
+  assert.equal(
+    NLME.applyImageEmbeds(`![x](${url}) [link](${url}) ![y](https://lh3.google.com/other)`, embeds),
+    `![x](data:image/png;base64,$&AA) [link](${url}) ![y](https://lh3.google.com/other)`
+  );
+  assert.equal(NLME.applyImageEmbeds('![x](u)', null), '![x](u)');
+  assert.equal(NLME.applyImageEmbeds('![x](u)', new Map()), '![x](u)');
+});
+
+test('embedImagesInMarkdown downloads a repeated image once and returns what it embedded', async () => {
+  let calls = 0;
+  const { sandbox } = sourcesPanel(async () => { calls++; return imageResponse(); });
+  const url = 'https://lh3.googleusercontent.com/notebooklm/1';
+  const out = await sandbox.embedImagesInMarkdown(`![a](${url}) ![b](${url})`, 'T');
+  assert.equal(calls, 1);
+  assert.equal(out.imagesEmbedded, 2);
+  assert.doesNotMatch(out.markdown, /https:/);
+  assert.match(out.embeds.get(url), /^data:image\/png/);
+});
+
+const OK_URL = 'https://lh3.googleusercontent.com/notebooklm/ok';
+const BAD_URL = 'https://lh3.googleusercontent.com/notebooklm/bad';
+// The <img> is what NLME.noteHasImages looks for in a note's HTML
+const BODY = `<img alt=""> Intro ![fig](${OK_URL}) mid ![fig2](${BAD_URL}) ![fig3](${BAD_URL}2) end`;
+const byUrl = async url => (url === OK_URL ? imageResponse() : { ok: false, status: 403 });
+const imagesGone = md => assert.doesNotMatch(md, /!\[|data:|https:/);
+
+function notesPanel({ fetchImpl = byUrl, noteData, notesSettings = { exportNoteWithImages: true } } = {}) {
+  const downloads = [];
+  const toasts = [];
+  const panel = sidePanel({
+    fetchImpl,
+    extra: {
+      tabMessage: message => (message.type === NLME.MSG.EXTRACT_NOTE ? noteData : undefined),
+      globals: {
+        settings: { citationDetail: 'quotes', ...notesSettings },
+        mergeTiming() {}, countPageContent: () => ({ citationNumbers: [] }), convertCounted: (a, h, run) => run(),
+        convertToMarkdown: h => h, addCitationCoverage() {}, tallyCitationCache() {},
+        noteFrontMatter: () => '', timingSummary: () => '', variantName: suffix => suffix.replace('-', '') || 'base',
+        stripImagesFromMarkdown: md => md.replace(/!\[([^\]]*)\]\([^\)]+\)/g, ''),
+        isNotebookUrl: () => true, ensureContentScriptLoaded: async () => {},
+        getProjectName: async () => 'P', showToast: (text, level) => toasts.push([text, level]),
+        downloadBlob: async (blob, name) => downloads.push([name, await blob.text()])
+      }
+    }
+  });
+  const { sandbox } = panel;
+  sandbox.chrome.tabs.query = async () => [{ id: 5, url: 'https://notebooklm.google.com/notebook/1' }];
+  sandbox.chrome.runtime = { getManifest: () => ({ version: '1' }) };
+  loadImagePass(sandbox);
+  vm.runInContext(topLevelFn('sidebar-notes.js', 'extractNoteItem'), sandbox);
+  vm.runInContext(topLevelFn('sidebar-notes.js', 'getEnabledNoteVersions'), sandbox);
+  vm.runInContext(topLevelFn('sidebar-notes.js', 'exportSingleNote'), sandbox);
+  vm.runInContext(topLevelFn('sidebar-notes.js', 'buildNotesFiles'), sandbox);
+  return { ...panel, downloads, toasts };
+}
+const META = { notebook: 'P', exported: 'now' };
+
+test('a note body image reaches the with-images files, and base files stay byte-identical', async () => {
+  const { sandbox, log } = notesPanel({ noteData: { html: BODY, sources: [], errors: [] } });
+  const warned = [];
+  const settingsOn = { exportNoteWithImages: true, exportNoteCodeBlocks: true };
+  const note = await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'Note', index: 0 }, { warn: e => warned.push(e) }, {}, settingsOn);
+
+  const quote = [{ text: 'S', quote: 'q' }];
+  const files = sandbox.buildNotesFiles([{ ...note, sources: quote }], { meta: META, variantSettings: settingsOn });
+  const data = name => files.find(f => f.path === name).data;
+  for (const name of ['notes/Note-with-images.md', 'combined-notes-with-images.md']) {
+    assert.match(data(name), /!\[fig\]\(data:image\/png;base64,/, name);
+    assert.ok(data(name).includes(`![fig2](${BAD_URL})`), `${name} keeps the failed link`);
+  }
+  const without = sandbox.buildNotesFiles([{ ...note, sources: quote, imageEmbeds: null }], { meta: META, variantSettings: settingsOn });
+  const unstamped = text => text.replace(/^Exported: .*$/m, '');
+  for (const name of ['notes/Note.md', 'notes/Note-code-blocks.md', 'combined-notes.md', 'combined-notes-code-blocks.md']) {
+    imagesGone(data(name).replace(/^Exported: .*$/m, ''));
+    assert.equal(unstamped(data(name)), unstamped(without.find(f => f.path === name).data), name);
+  }
+
+  assert.equal(warned.length, 1);
+  assert.equal(warned[0].type, 'image_download_failed');
+  assert.equal(warned[0].source, 'Note');
+  assert.equal(warned[0].count, 2);
+  // Sequential: every request in document order
+  assert.deepEqual(log.fetches.slice(0, 2).map(f => f.url), [OK_URL, BAD_URL]);
+});
+
+test('a note runs no embed pass with image versions off', async () => {
+  const { sandbox, log } = notesPanel({ noteData: { html: BODY, sources: [], errors: [] }, notesSettings: { exportNoteWithImages: false } });
+  const warned = [];
+  const note = await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'Note', index: 0 }, { warn: e => warned.push(e) }, {}, { exportNoteWithImages: false });
+  assert.equal(log.fetches.length, 0);
+  assert.equal(warned.length, 0);
+  assert.ok(!note.imageEmbeds);
+});
+
+test('a note from the citation cache still gets its body images', async () => {
+  const { sandbox } = notesPanel({ noteData: { html: BODY, sources: [], errors: [], fromCache: true } });
+  const warned = [];
+  const note = await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'Note', index: 0 }, { warn: e => warned.push(e) }, {}, { exportNoteWithImages: true });
+  assert.ok(note.imageEmbeds.has(OK_URL));
+  assert.equal(warned.length, 1);
+});
+
+test('a citation image that failed in the page counts once, or not at all if the pass gets it', async () => {
+  const { sandbox } = notesPanel({
+    noteData: {
+      html: BODY, sources: [], errors: [],
+      imageFailures: [{ url: OK_URL, reason: 'HTTP 500' }, { url: BAD_URL, reason: 'HTTP 403' }]
+    }
+  });
+  const warned = [];
+  await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'Note', index: 0 }, { warn: e => warned.push(e) }, {}, { exportNoteWithImages: true });
+  assert.equal(warned.length, 1);
+  assert.equal(warned[0].count, 2); // BAD_URL and BAD_URL2; OK_URL recovered
+  assert.doesNotMatch(warned[0].message, /HTTP 500/);
+});
+
+test('a single note download embeds body images and shows its failures', async () => {
+  const { sandbox, downloads, toasts } = notesPanel({ noteData: { html: BODY, sources: [], errors: [] } });
+  await sandbox.exportSingleNote({ title: 'Note', index: 0 });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const withImages = downloads.find(([name]) => /with-images/.test(name))[1];
+  const base = downloads.find(([name]) => !/with-images/.test(name))[1];
+  assert.match(withImages, /!\[fig\]\(data:image\/png/);
+  assert.ok(withImages.includes(`![fig2](${BAD_URL})`));
+  imagesGone(base);
+  assert.equal(toasts.length, 1);
+  assert.match(toasts[0][0], /Note: Failed to download 2 images/);
+  assert.equal(toasts[0][1], 'warning');
+});
+
+function chatPanel({ fetchImpl = byUrl, chatResponse } = {}) {
+  const button = { querySelector: () => ({ textContent: '1', getAttribute: () => '' }) };
+  const panel = sidePanel({
+    fetchImpl,
+    extra: {
+      tabMessage: () => chatResponse,
+      globals: {
+        settings: {}, exportTimer: null, mergeTiming() {}, tallyCitationCache() {}, logger: { info() {} },
+        document: { createElement: () => ({ set innerHTML(v) {}, querySelectorAll: () => [button] }) },
+        convertChatToMarkdown: (t, s, messages) => messages.map(m => m.aiResponseHTML).join('\n'),
+        stripImagesFromMarkdown: md => md.replace(/!\[([^\]]*)\]\([^\)]+\)/g, ''),
+        timingSummary: () => '', variantName: suffix => suffix.replace('-', '') || 'base'
+      }
+    }
+  });
+  loadChat(panel.sandbox);
+  vm.runInContext(read('sidebar-chat.js').match(/const CHAT_VERSION_INFO = \{[\s\S]*?\n\};\n/)[0].replace('const ', 'var '), panel.sandbox);
+  vm.runInContext(topLevelFn('sidebar-chat.js', 'buildChatFiles'), panel.sandbox);
+  return panel;
+}
+const CHAT_META = { notebook: 'P', notebook_url: 'u', notebook_id: 'i', exporter: 'e', exported: 'now' };
+const chatFilesFor = (sandbox, messages, on) => sandbox.buildChatFiles(messages, {
+  meta: CHAT_META, chatData: { notebookTitle: 'P' }, auditDoc: { ok: true, text: '' }, forceZip: false,
+  errors: [{ type: 'x', message: 'y' }], variantSettings: { exportNoteWithImages: on, exportNoteCodeBlocks: false }
+}).files;
+
+for (const citationMode of ['quotes', 'titles', 'none']) {
+  test(`a chat body image reaches chat-with-images only (${citationMode})`, async () => {
+    const { sandbox } = chatPanel({ chatResponse: { sourcesByIndex: { 1: { text: 'S', quote: 'q' } }, errors: [] } });
+    const warned = [];
+    const on = { exportNoteWithImages: true };
+    const message = await sandbox.extractChatPair(
+      { tab: { id: 5 }, progress() {} }, { userMessage: 'Why?', aiResponseHTML: BODY },
+      { index: 0, warn: e => warned.push(e) }, { citationMode, total: 1, variantSettings: on }
+    );
+    assert.equal(warned.length, 1);
+    assert.equal(warned[0].type, 'image_download_failed');
+    assert.equal(warned[0].userQuestion, 'Why?');
+    assert.equal(warned[0].messageIndex, 1);
+    assert.match(warned[0].message, /2 images/);
+
+    const files = chatFilesFor(sandbox, [message], true);
+    const data = name => files.find(f => f.path === name).data;
+    assert.match(data('chat-with-images.md'), /!\[fig\]\(data:image\/png/);
+    assert.ok(data('chat-with-images.md').includes(`![fig2](${BAD_URL})`));
+    const without = chatFilesFor(sandbox, [{ ...message, imageEmbeds: null }], true);
+    assert.equal(data('chat.md'), without.find(f => f.path === 'chat.md').data);
+    assert.doesNotMatch(data('chat.md'), /!\[|data:image/);
+  });
+}
+
+test('chat runs no embed pass with image versions off', async () => {
+  const { sandbox, log } = chatPanel({ chatResponse: { sourcesByIndex: {}, errors: [] } });
+  const warned = [];
+  const message = await sandbox.extractChatPair(
+    { tab: { id: 5 }, progress() {} }, { userMessage: 'Why?', aiResponseHTML: BODY },
+    { index: 0, warn: e => warned.push(e) }, { citationMode: 'none', total: 1, variantSettings: {} }
+  );
+  assert.equal(log.fetches.length, 0);
+  assert.equal(warned.length, 0);
+  assert.ok(!message.imageEmbeds);
+});
+
+test('a chat message whose citations failed outright still gets its body images', async () => {
+  const { sandbox } = chatPanel({ chatResponse: undefined });
+  sandbox.chrome.tabs.sendMessage = async () => { throw new Error('tab gone'); };
+  const warned = [];
+  const message = await sandbox.extractChatPair(
+    { tab: { id: 5 }, progress() {} }, { userMessage: 'Why?', aiResponseHTML: BODY },
+    { index: 0, warn: e => warned.push(e) }, { citationMode: 'quotes', total: 1, variantSettings: { exportNoteWithImages: true } }
+  );
+  assert.ok(message.imageEmbeds.has(OK_URL));
+  assert.ok(warned.some(e => e.type === 'image_download_failed'));
+});
+
+test('with image versions on, chat and notes never read the citation cache', () => {
+  assert.match(read('sidebar-chat.js'), /const cacheOn = settings\.reuseCitations !== false && !variantSettings\.exportNoteWithImages;/);
+  assert.match(read('content.js'), /const cacheUsable = reuseCitations && !includeCitationImages && buttonsByIndex\.size > 0;/);
 });

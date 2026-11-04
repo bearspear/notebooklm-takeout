@@ -818,6 +818,14 @@
     });
   }
 
+  // Put downloaded images into a variant's Markdown. embeds: Map of remote
+  // url -> data URI. Other images stay links; [text](url) links are left alone.
+  function applyImageEmbeds(markdown, embeds) {
+    if (!embeds || embeds.size === 0) return markdown;
+    return markdown.replace(/(!\[[^\]]*\]\()([^)]+)\)/g,
+      (match, open, url) => (embeds.has(url) ? `${open}${embeds.get(url)})` : match));
+  }
+
   // A download Gemini Notebook started: an allowed host, and (when Chrome
   // knows it) a notebook page as referrer. Downloads from other tabs, e.g.
   // Drive, are left alone.
@@ -2169,6 +2177,7 @@ footer { margin-top: 3rem; }
     isAllowedImageUrl,
     imageBlobProblem,
     summarizeImageFailures,
+    applyImageEmbeds,
     isNotebookDownload,
     NOTEBOOK_HOSTS,
     isNotebookUrl,

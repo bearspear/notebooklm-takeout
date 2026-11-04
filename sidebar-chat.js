@@ -254,12 +254,45 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
  *   variantSettings: where the export* variant settings come from (default `settings`)
  * @returns {Promise<object>} ProcessedMessage: { date, userMessage,
  *   aiResponseHTML, sources: [{ sourceIndex, text, quote }], fullCitations,
- *   stats: { hasCitations, citationsFound, successfulExtractions, failedExtractions }, fromCache }
+ *   stats: { hasCitations, citationsFound, successfulExtractions, failedExtractions }, fromCache,
+ *   imageEmbeds: url -> data URI for chat-with-images (null with that version off) }
  */
-async function extractChatPair(shell, pair, ctx, { citationMode = 'quotes', total, variantSettings = settings }) {
+async function extractChatPair(shell, pair, ctx, options) {
+  const { citationMode = 'quotes', variantSettings = settings } = options;
+  const processed = await readChatPair(shell, pair, ctx, options);
+  processed.imageEmbeds = null;
+  const { imageFailures } = processed;
+  delete processed.imageFailures;
+  if (!variantSettings.exportNoteWithImages) return processed;
+
+  // After the citations, so every path gets it: 'none', 'titles', cached
+  // quotes, or a message whose citations failed. chat.md itself is built later.
+  const question = (pair.userMessage || '').substring(0, 100);
+  const warn = failure => ctx.warn({
+    message: failure.message,
+    messageIndex: ctx.index + 1,
+    userQuestion: question,
+    type: failure.type,
+    url: failure.url
+  });
+  try {
+    const markdown = convertChatToMarkdown('', '', [processed], false, citationMode === 'none', citationMode === 'titles', settings.citationStyle);
+    processed.imageEmbeds = await embedAndReportImages(markdown, question, imageFailures, warn);
+  } catch (error) {
+    console.error(`[NotebookLM Takeout] Message ${ctx.index + 1}: Error embedding images:`, error);
+    reportImageFailures(imageFailures, question, warn);
+    ctx.warn({ message: `Failed to embed images: ${error.message}`, messageIndex: ctx.index + 1, userQuestion: question, type: 'image_embedding_error' });
+  }
+  return processed;
+}
+
+// Read one message pair: citations and their quotes. Failed citation images
+// stay links and come back as imageFailures, for extractChatPair.
+async function readChatPair(shell, pair, ctx, { citationMode = 'quotes', total, variantSettings = settings }) {
   const n = ctx.index + 1;
   const stats = { hasCitations: false, citationsFound: 0, successfulExtractions: 0, failedExtractions: 0 };
   let fromCache = false; // citation quotes reused from the cache (Milestone 3c)
+  const imageFailures = [];
   const message = sources => ({
     date: pair.date,
     userMessage: pair.userMessage,
@@ -267,7 +300,8 @@ async function extractChatPair(shell, pair, ctx, { citationMode = 'quotes', tota
     sources,
     fullCitations: citationMode === 'quotes',
     stats,
-    fromCache
+    fromCache,
+    imageFailures
   });
   const warn = (type, msg, extra = {}) => ctx.warn({
     message: msg,
@@ -400,8 +434,7 @@ async function extractChatPair(shell, pair, ctx, { citationMode = 'quotes', tota
             stats.failedExtractions += fullCitationData.errors.length;
             fullCitationData.errors.forEach(err => warn('citation_extraction', err));
           }
-          reportImageFailures(fullCitationData?.imageFailures, (pair.userMessage || '').substring(0, 100),
-            failure => warn(failure.type, failure.message, { url: failure.url }));
+          imageFailures.push(...(fullCitationData?.imageFailures || []));
 
           // Store only a complete read: every source has a filename and a quote
           // and nothing was reported as failed (never a partial result)
@@ -522,12 +555,13 @@ function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, parti
     const baseMarkdown = toMarkdown(false);
     const hasQuotes = messages.some(m => (m.sources || []).some(src => src.quote && src.quote.trim()));
     const hasImages = /!\[/.test(baseMarkdown);
+    const imageEmbeds = new Map(messages.flatMap(m => [...(m.imageEmbeds || [])]));
     for (const v of NLME.noteVariants(variantSettings, { hasQuotes, hasImages })) {
       const markdown = v.codeBlocks ? toMarkdown(true) : baseMarkdown;
       const variant = variantName(v.suffix);
       versionFiles.push({
         path: `chat${v.suffix}.md`,
-        data: frontMatter(variant) + (v.images ? markdown : stripImagesFromMarkdown(markdown)),
+        data: frontMatter(variant) + (v.images ? NLME.applyImageEmbeds(markdown, imageEmbeds) : stripImagesFromMarkdown(markdown)),
         title: CHAT_VERSION_INFO[v.suffix].title,
         description: CHAT_VERSION_INFO[v.suffix].description,
         variant,

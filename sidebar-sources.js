@@ -38,6 +38,8 @@ async function retryOperation(operation, maxRetries = 2, baseDelay = 1000, opera
 /**
  * Scan markdown for notebook image URLs and replace with base64 data URIs. A
  * failed image stays a link and goes to `failures` as { item, url, reason }.
+ * `embeds` maps each downloaded url to its data URI, for Markdown that is built
+ * again later (NLME.applyImageEmbeds).
  */
 async function embedImagesInMarkdown(markdown, sourceTitle) {
   // Match markdown image syntax: ![alt](url)
@@ -46,12 +48,13 @@ async function embedImagesInMarkdown(markdown, sourceTitle) {
   const matches = [...markdown.matchAll(imageRegex)];
 
   if (matches.length === 0) {
-    return { markdown, failures: [], imagesFound: 0, imagesEmbedded: 0 };
+    return { markdown, failures: [], embeds: new Map(), imagesFound: 0, imagesEmbedded: 0 };
   }
 
   console.log(`[NotebookLM Takeout] Found ${matches.length} images in "${sourceTitle}"`);
 
   const failures = [];
+  const embeds = new Map();
   let updatedMarkdown = markdown;
   let successCount = 0;
 
@@ -62,7 +65,8 @@ async function embedImagesInMarkdown(markdown, sourceTitle) {
 
     try {
       console.log(`[NotebookLM Takeout] Downloading image: ${imageUrl.substring(0, 100)}...`);
-      const dataUri = await downloadImageAsBase64(imageUrl);
+      const dataUri = embeds.get(imageUrl) ?? await downloadImageAsBase64(imageUrl);
+      embeds.set(imageUrl, dataUri);
 
       // Replace the URL with the data URI
       const replacement = `![${altText}](${dataUri})`;
@@ -79,9 +83,29 @@ async function embedImagesInMarkdown(markdown, sourceTitle) {
   return {
     markdown: updatedMarkdown,
     failures,
+    embeds,
     imagesFound: matches.length,
     imagesEmbedded: successCount
   };
+}
+
+/**
+ * The embed pass for a note or chat message, whose files are built later: one
+ * download per image, then one summary for the item. earlierFailures are
+ * citation images the page could not get; those stay links in the Markdown, so
+ * the pass tries them again and only a second failure counts.
+ *
+ * @param {string} markdown the item's Markdown, images as remote links
+ * @param {string} item its name in errors.md
+ * @param {Array<{url: string, reason: string}>} [earlierFailures]
+ * @param {Function} warn receives each summary
+ * @returns {Promise<Map<string, string>>} url -> data URI for NLME.applyImageEmbeds
+ */
+async function embedAndReportImages(markdown, item, earlierFailures, warn) {
+  const { embeds, failures } = await embedImagesInMarkdown(markdown, item);
+  const stillFailed = (earlierFailures || []).filter(failure => !embeds.has(failure.url));
+  reportImageFailures([...stillFailed, ...failures], item, warn);
+  return embeds;
 }
 
 /**
