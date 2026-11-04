@@ -155,6 +155,9 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
         throw new Error(`Unknown download method: ${response.method}`);
     }
   } catch (error) {
+    // content.js throws new Error(NLME.FORMAT_NOT_OFFERED) and handleArtifactDownload
+    // replies { success: false, error: error.message }: the text is all that
+    // crosses the message, so it is matched here by exact text. Keep both ends in step.
     if (onlyIfOffered && error && error.message === NLME.FORMAT_NOT_OFFERED) {
       error.formatNotOffered = true;
       logger.info('Download', `No PowerPoint item for ${label}`);
@@ -167,6 +170,42 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
     // download (even the user's own) as this item for up to 20 s
     await chrome.runtime.sendMessage({ type: NLME.MSG.CANCEL_INTERCEPT }).catch(() => {});
   }
+}
+
+/**
+ * One fetch per format of a Slides item (or one for any other item). A format
+ * the deck does not offer (error.formatNotOffered: an older deck with only PDF)
+ * is skipped with one Info line: not a failure, and no second PDF. The item
+ * fails only when a format failed and none was saved.
+ * @param {{ label: string }} item
+ * @param {Array<string|null>} formats
+ * @param {(format: string|null) => Promise<{ files: Array, savedOutside?: boolean }>} fetchOne
+ * @param {{ warn: Function }} ctx
+ */
+async function fetchSlideFormats(item, formats, fetchOne, ctx) {
+  const fetched = { files: [], savedOutside: false };
+  const failures = [];
+  const skipped = [];
+  for (const format of formats) {
+    try {
+      const one = await fetchOne(format);
+      fetched.files.push(...one.files);
+      fetched.savedOutside = fetched.savedOutside || !!one.savedOutside;
+    } catch (error) {
+      if (error && error.formatNotOffered) skipped.push(format);
+      else failures.push({ format, error });
+    }
+  }
+  // A format failed and none was saved: the item fails as with a single format
+  if (failures.length && failures.length + skipped.length === formats.length) throw failures[failures.length - 1].error;
+  for (const format of skipped) {
+    ctx.warn(`[${item.label}] Info: no ${format === 'pptx' ? 'PowerPoint' : format.toUpperCase()} version offered for this deck; the PDF was saved`);
+  }
+  // One format failed, another saved: keep the item, say what is missing
+  for (const { format, error } of failures) {
+    ctx.warn(`[${item.label}] ${format.toUpperCase()} version failed: ${error.message}`);
+  }
+  return fetched;
 }
 
 /**
@@ -1011,41 +1050,22 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
       // extension (the guessed one follows the format; the background's
       // real-extension rename keeps them apart)
       const formats = NLME.slideFormatsFor(item.type, { both: bothSlideFormats, preferred: settings.slidesFormat });
-      const fetched = { files: [], savedOutside: false };
-      const failures = [];
-      const skipped = [];
-      for (const format of formats) {
-        try {
-          const one = await retryDownload(() => fetchArtifactFiles(shell.tab.id, item, {
-            stem: stemOf.get(item),
-            mode: zipMode ? 'zip' : 'folder',
-            meta: shell.meta,
-            folder: zipMode ? '' : folder,
-            ...(format ? { slidesFormat: format } : {}),
-            // both formats asked: an older deck with only PDF is skipped for PPTX, not saved twice
-            ...(format === 'pptx' && formats.length > 1 ? { onlyIfOffered: true } : {})
-          }), 3, item.label);
-          fetched.files.push(...one.files);
-          fetched.savedOutside = fetched.savedOutside || one.savedOutside;
-          // Saved by the background, so saveFiles never sees it. Folder mode: the top
-          // of the Downloads folder, beside the root. ZIP mode: plain Downloads, no
-          // path from the takeout to it, so the viewer cannot link it (errors.md does)
-          if (capture && one.savedName && !zipMode) reportSaved(capture, pathPrefix + NLMEViewer.outsidePath(typeFolder, one.savedName), null);
-        } catch (error) {
-          if (error && error.formatNotOffered) skipped.push(format);
-          else failures.push({ format, error });
-        }
-      }
-      // Every format failed: the item fails as with a single format
-      if (failures.length && failures.length + skipped.length === formats.length) throw failures[failures.length - 1].error;
-      // Not a failure: an info line, no second PDF
-      for (const format of skipped) {
-        ctx.warn(`[${item.label}] Info: no ${format === 'pptx' ? 'PowerPoint' : format.toUpperCase()} version offered for this deck; the PDF was saved`);
-      }
-      // One format failed, another saved: keep the item, say what is missing
-      for (const { format, error } of failures) {
-        ctx.warn(`[${item.label}] ${format.toUpperCase()} version failed: ${error.message}`);
-      }
+      const fetched = await fetchSlideFormats(item, formats, async format => {
+        const one = await retryDownload(() => fetchArtifactFiles(shell.tab.id, item, {
+          stem: stemOf.get(item),
+          mode: zipMode ? 'zip' : 'folder',
+          meta: shell.meta,
+          folder: zipMode ? '' : folder,
+          ...(format ? { slidesFormat: format } : {}),
+          // both formats asked: an older deck with only PDF is skipped for PPTX, not saved twice
+          ...(format === 'pptx' && formats.length > 1 ? { onlyIfOffered: true } : {})
+        }), 3, item.label);
+        // Saved by the background, so saveFiles never sees it. Folder mode: the top
+        // of the Downloads folder, beside the root. ZIP mode: plain Downloads, no
+        // path from the takeout to it, so the viewer cannot link it (errors.md does)
+        if (capture && one.savedName && !zipMode) reportSaved(capture, pathPrefix + NLMEViewer.outsidePath(typeFolder, one.savedName), null);
+        return one;
+      }, ctx);
       if (fetched.savedOutside) {
         savedOutside++;
         // Folder mode: the background captured it into the folder's top level

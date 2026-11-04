@@ -668,7 +668,9 @@ test('pickDownloadMenuIndex can refuse a format the menu lacks', () => {
   assert.equal(NLME.pickDownloadMenuIndex(pdfOnly, 'pptx'), 1);
   assert.equal(NLME.pickDownloadMenuIndex(pdfOnly, 'pptx', { exact: true }), -1);
   assert.equal(NLME.pickDownloadMenuIndex(slideMenu, 'pptx', { exact: true }), 3);
-  assert.equal(NLME.pickDownloadMenuIndex(audioMenu, 'pdf', { exact: true }), 2);
+  // neither PowerPoint nor PDF listed: no fall-through to the first Download item
+  assert.equal(NLME.pickDownloadMenuIndex(audioMenu, 'pptx', { exact: true }), -1);
+  assert.equal(NLME.pickDownloadMenuIndex(['save_alt Download', 'delete Delete'], 'pptx', { exact: true }), -1);
 });
 
 test('citationCoverage counts distinct markers against sources actually read', () => {

@@ -155,14 +155,14 @@ notebooklm-exporter/
 ├── sidebar.html  ( 479)    — Side panel UI: tabs, controls, settings/health panels
 ├── sidebar-core.js (1662) — Settings, init, tab and notebook switching, job lock, shared helpers,
 │                             notes Markdown (convertToMarkdown), job records (see Milestone 3d contracts)
-├── sidebar-artifacts.js (1202), sidebar-notes.js (806), sidebar-sources.js (777),
+├── sidebar-artifacts.js (1222), sidebar-notes.js (806), sidebar-sources.js (777),
 │   sidebar-chat.js (809), sidebar-generated.js (314), sidebar-health.js (304)
 │                           — one file per tab (scan, list, export job, build files)
 ├── sidebar-list.js (336)   — List toolbar: filter, type chips, sort, select all visible
 ├── sidebar-results.js (148) — Results panel and Resume banner
 ├── sidebar-takeout.js (1146) — saveFiles, fetchDownload, withExportShell, runFullTakeout, resumeJob
 ├── styles.css    (1791)    — Side panel styles
-├── content.js    (4338)    — DOM scraping + extraction, runs on NotebookLM (HANDLERS table)
+├── content.js    (4340)    — DOM scraping + extraction, runs on NotebookLM (HANDLERS table)
 ├── mindmap-extract.js (325) — Mind map SVG/tree extraction; content script and injected
 │                             by background into the *.scf.usercontent.goog app frame
 ├── background.js (467)    — Service worker: download interception/naming, mind map frame extraction, citation cache clear on update (no ZIP code)
@@ -1182,7 +1182,7 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined out
   format with the same stem (`extensionFor({ format })` guesses `.pdf`/`.pptx`); one format failing
   warns, all failing fails the item. The PPTX request of a pair is made with `onlyIfOffered`: a deck whose
   menu has no PowerPoint item (older decks, PDF only) raises `formatNotOffered` (not retried, not logged as an
-  error). `extractOne` skips it with one `Info:` line in errors.md and no second PDF; it is not a failure
+  error). `fetchSlideFormats` (tested in tests/pdf-only-deck.test.js) skips it with one `Info:` line in errors.md and no second PDF; it is not a failure
   (before this, the PPTX click hit PDF again and Chrome saved `Name (1).pdf`, identical bytes). A single
   `settings.slidesFormat = pptx` request keeps the old fallback, so such a deck still gets its PDF. Tab
   downloads keep the single `settings.slidesFormat`.

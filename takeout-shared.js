@@ -202,7 +202,7 @@
     if (candidates.length === 0) return -1;
     const wanted = preference === 'pptx' ? ['powerpoint', '.pptx'] : preference === 'pdf' ? ['pdf'] : [];
     const preferred = candidates.find(i => wanted.some(w => lower[i].includes(w)));
-    if (exact && preference === 'pptx' && preferred === undefined && candidates.length > 0 && candidates.some(i => lower[i].includes('pdf'))) return -1;
+    if (exact && preferred === undefined && wanted.length > 0) return -1;
     return preferred !== undefined ? preferred : candidates[0];
   }
 

@@ -3161,6 +3161,8 @@
     if (!downloadButton) {
       // Close menu before throwing error
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      // Only this text crosses the message ({ success: false, error: message }); the side
+      // panel (fetchArtifactFiles) matches it exactly. Keep both ends in step.
       if (requireFormat && downloadPreference === 'pptx') throw new Error(NLME.FORMAT_NOT_OFFERED);
       throw new Error('Download button not found in menu');
     }
