@@ -949,3 +949,120 @@ test('every job opens a session, closes it, and frees it with each batch', () =>
   assert.match(single, /beginImageSession\(tab\.id, \(\) => false\)/);
   assert.match(single, /endImageSession\(\)/);
 });
+
+// ---- Task 7b fix round: wait budget ----
+
+const total = sleeps => sleeps.reduce((sum, ms) => sum + ms, 0);
+// Odd numbers are limited, even ones succeed, so the streak never builds
+const alternating = retryAfter => (url => {
+  if (Number(url) % 2 === 1) throw http(429, retryAfter);
+  return 'x';
+});
+
+test('retryAfterMs takes only digits or an HTTP date', () => {
+  const now = Date.parse('2026-11-04T12:00:00Z');
+  for (const bad of ['1.5', '1e3', '+5', '5 s', '2026-11-04', 'Nov 4 2026', 'Xxx, 99 Foo 2026 12:00:05 GMT', 'Wed, 04 Nov 2026 12:00:05 PST']) {
+    assert.equal(NLME.retryAfterMs(bad, now), null, bad);
+  }
+  assert.equal(NLME.retryAfterMs(' 5 ', now), 5000);
+});
+
+test('a Retry-After of 1.5 falls back to the normal backoff', async () => {
+  const { session, sleeps } = imageSession({ script: (u, n) => { if (n < 3) throw http(429, '1.5'); return 'x'; } });
+  await session.get('u');
+  assert.deepEqual(sleeps, [2000, 4000]);
+});
+
+test('alternating limited and fine images reach the 5 minute budget and skip the rest', async () => {
+  const { session, calls, sleeps } = imageSession({ script: alternating(null) });
+  let url = 0;
+  let skippedAt = null;
+  while (url < 200) {
+    url++;
+    try {
+      await session.get(String(url));
+    } catch (error) {
+      if (error.skipped) { skippedAt = url; break; }
+    }
+  }
+  // 50 limited images at 6 s land exactly on the budget: the very next one skips
+  assert.equal(skippedAt, 100);
+  assert.equal(sleeps.includes(30000), false, 'the streak never reached the pause');
+  assert.equal(total(sleeps), 300000);
+
+  const before = calls.length;
+  await assert.rejects(session.get('999'), error => error.skipped === true);
+  assert.equal(calls.length, before);
+
+  const warned = [];
+  session.reportSkipped(e => warned.push(e));
+  assert.equal(warned.length, 1);
+  assert.match(warned[0].message, /skipped because Google limited requests/);
+  assert.match(warned[0].message, /5 minute/);
+});
+
+test('a wait that would pass the budget is not taken', async () => {
+  const { session, sleeps } = imageSession({ script: alternating('7') });
+  let tripped = false;
+  for (let url = 1; url < 200 && !tripped; url++) {
+    await session.get(String(url)).catch(error => { tripped = !!error.skipped; });
+  }
+  assert.equal(tripped, true);
+  assert.ok(total(sleeps) <= 300000);
+  assert.ok(total(sleeps) > 290000);
+});
+
+test('the 30 s pause counts against the budget', async () => {
+  const { session, sleeps } = imageSession({ script: () => { throw http(429, '50'); } });
+  for (let url = 1; url <= 5; url++) await session.get(String(url)).catch(() => {});
+  await assert.rejects(session.get('6'), error => error.skipped === true);
+  // 50 s + 50 s per image hits 300 s inside image 3: the pause never fits
+  assert.ok(total(sleeps) <= 300000);
+  assert.equal(sleeps.includes(30000), false);
+});
+
+test('a taken pause uses up budget', async () => {
+  // 5 limited images and the pause are 60 s; 40 more limited images at 6 s fill it
+  const { session, sleeps } = imageSession({
+    script: url => {
+      const n = Number(url);
+      if (n <= 5 || (n > 6 && n % 2 === 1)) throw http(429);
+      return 'x';
+    }
+  });
+  let skippedAt = null;
+  for (let url = 1; url < 200 && !skippedAt; url++) {
+    await session.get(String(url)).catch(error => { if (error.skipped) skippedAt = url; });
+  }
+  assert.equal(sleeps.filter(ms => ms === 30000).length, 1);
+  assert.equal(total(sleeps), 300000);
+  assert.equal(skippedAt, 86); // the 40th is image 85
+});
+
+test('the budget message stays plain when limiting alone caused the skip', async () => {
+  const { session } = imageSession({ script: () => { throw http(429); } });
+  for (let url = 1; url <= 6; url++) await session.get(String(url)).catch(() => {});
+  await session.get('7').catch(() => {});
+  const warned = [];
+  session.reportSkipped(e => warned.push(e));
+  assert.doesNotMatch(warned[0].message, /5 minute/);
+});
+
+test('a cancel during the 30 s pause reports as cancelled, and is not remembered', async () => {
+  let cancelled = false;
+  const calls = [];
+  const session = NLME.createImageSession({
+    download: async url => {
+      calls.push(url);
+      if (cancelled) return 'x';
+      throw http(429);
+    },
+    sleep: async ms => { if (ms === 30000) cancelled = true; },
+    isCancelled: () => cancelled
+  });
+  for (const url of ['1', '2', '3', '4']) await session.get(url).catch(() => {});
+  await assert.rejects(session.get('5'), error => error.cancelled === true);
+  cancelled = false;
+  assert.equal(await session.get('5').catch(() => 'failed'), 'failed'); // asked again, still limited
+  assert.equal(calls.filter(url => url === '5').length, 6);
+});

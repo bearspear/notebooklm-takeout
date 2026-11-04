@@ -827,11 +827,11 @@
   }
 
   // A Retry-After header as milliseconds from now: seconds or an HTTP date.
-  // null when absent or unreadable.
+  // null for anything else; Date.parse alone would read "1.5" as a date.
   function retryAfterMs(value, now = Date.now()) {
     const text = String(value ?? '').trim();
     if (/^\d+$/.test(text)) return Number(text) * 1000;
-    if (!text || /^-/.test(text)) return null;
+    if (!/^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(text)) return null;
     const at = Date.parse(text);
     return Number.isNaN(at) ? null : Math.max(0, at - now);
   }
@@ -841,6 +841,7 @@
   const IMAGE_RETRY_AFTER_MAX_MS = 60000; // longer: give the image up, never stall the job
   const IMAGE_LIMITED_STREAK = 5; // consecutive limited images before the pause
   const IMAGE_LIMITED_PAUSE_MS = 30000;
+  const IMAGE_WAIT_BUDGET_MS = 5 * 60 * 1000; // all of a job's backoffs and its pause
 
   function isRateLimitedStatus(status) {
     return RATE_LIMIT_STATUSES.includes(status);
@@ -853,7 +854,9 @@
   // download(url) resolves a data URI, or throws an error with .status and
   // .retryAfter. sleep(ms) should end early on Cancel. get(url) rejects with
   // the download's error, or one marked .skipped (limiting did not stop) or
-  // .cancelled. Skipped images get one job-wide summary (reportSkipped);
+  // .cancelled. A job waits IMAGE_WAIT_BUDGET_MS at most: limited and fine
+  // images can alternate, which keeps the streak from ever reaching the pause.
+  // Skipped images get one job-wide summary (reportSkipped);
   // it is one object, updated by later skips, because it sits in the job's
   // errors by then.
   function createImageSession({ download, sleep, isCancelled = () => false, now = Date.now } = {}) {
@@ -864,11 +867,27 @@
     let streak = 0; // consecutive images that ended rate limited
     let paused = false;
     let skipping = false;
+    let waitedMs = 0;
+    let budgetSpent = false;
 
     const marked = (mark, message) => Object.assign(new Error(message), { [mark]: true });
     const stopIfCancelled = () => {
       if (isCancelled()) throw marked('cancelled', 'Export cancelled');
     };
+
+    // Wait if the budget allows. False, with skipping set, if it does not.
+    async function waitFromBudget(ms) {
+      const fits = waitedMs + ms <= IMAGE_WAIT_BUDGET_MS;
+      if (fits) {
+        waitedMs += ms;
+        await sleep(ms);
+      }
+      if (!fits || waitedMs >= IMAGE_WAIT_BUDGET_MS) {
+        skipping = true;
+        budgetSpent = true;
+      }
+      return fits;
+    }
 
     async function afterLimitedImage() {
       streak++;
@@ -877,7 +896,8 @@
         skipping = true;
       } else {
         paused = true;
-        await sleep(IMAGE_LIMITED_PAUSE_MS);
+        await waitFromBudget(IMAGE_LIMITED_PAUSE_MS);
+        stopIfCancelled();
       }
     }
 
@@ -901,7 +921,10 @@
           await afterLimitedImage();
           throw error;
         }
-        await sleep(wait);
+        if (!(await waitFromBudget(wait))) {
+          await afterLimitedImage();
+          throw error;
+        }
       }
     }
 
@@ -916,7 +939,8 @@
         if (skipping) {
           skipped.add(url);
           summary.count = skipped.size;
-          summary.message = `${skipped.size} image${skipped.size === 1 ? ' was' : 's were'} skipped because Google limited requests; they stay links`;
+          summary.message = `${skipped.size} image${skipped.size === 1 ? ' was' : 's were'} skipped because Google limited requests` +
+            `${budgetSpent ? ' and the job reached its 5 minute wait limit' : ''}; they stay links`;
           return Promise.reject(marked('skipped', 'Skipped: Google limited requests'));
         }
         const result = fetchWithRetries(url);
