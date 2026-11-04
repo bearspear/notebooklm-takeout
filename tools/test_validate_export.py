@@ -306,3 +306,96 @@ class PartialTests(Base):
         [r] = self.check(self.partial('X-notes-T-PARTIAL-part1of2', part=1, totalParts=2))
         self.assertEqual([f.level for f in r.findings if f.code == 'part-missing'], ['info'])
         self.assertEqual(r.status, 'WARN')
+
+
+def viewer_html(data):
+    """A stand-in for viewer.html: the data block is written the way escapeJson writes it."""
+    blob = json.dumps(data).replace('</', '<\\/')
+    return f'<!doctype html><title>Viewer</title><script id="data" type="application/json">{blob}</script><script>var x=1;</script>'
+
+
+def make_takeout(root, studio, version='1.8.0', viewer=True, artifacts=('artifacts/slides/Deck.pdf',), raw=None):
+    """A Full Takeout root: index files, viewer.html and an artifacts folder."""
+    files = {'_index.md': FM.replace('"index"', '"takeout"') + '# Takeout\n'}
+    if viewer:
+        files['viewer.html'] = raw if raw is not None else viewer_html({'notebook': 'Demo', 'studio': studio})
+    for rel in artifacts:
+        files[rel] = 'x'
+    os.makedirs(root, exist_ok=True)
+    for rel, text in files.items():
+        p = os.path.join(root, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, 'w', encoding='utf-8') as f:
+            f.write(text)
+    m = {
+        'exporter': f'NotebookLM Takeout {version}', 'exported': '2026-11-03T20:29:50.834Z',
+        'notebook': {'title': 'Demo', 'id': 'abc', 'url': 'https://example.invalid/n/abc'},
+        'kind': 'takeout', 'part': 1, 'totalParts': 1, 'partial': False, 'counts': {}, 'errorCount': 0,
+        'files': [{'path': rel, 'bytes': os.path.getsize(os.path.join(root, rel))}
+                  for rel in sorted(files)],
+    }
+    with open(os.path.join(root, 'manifest.json'), 'w', encoding='utf-8') as f:
+        json.dump(m, f)
+    return root
+
+
+class ViewerTests(Base):
+    def run_viewer(self, studio, **kw):
+        [r] = self.check(make_takeout(os.path.join(self.tmp, 't'), studio, **kw))
+        return r
+
+    def test_viewer_ok(self):
+        studio = [{'kind': 'slides', 'title': 'Deck', 'files': {'pdf': 'artifacts/slides/Deck.pdf'}}, {'kind': 'note', 'title': 'N'}]
+        r = self.run_viewer(studio)
+        self.assertEqual(codes(r), [], [str(f) for f in r.findings])
+
+    def test_viewer_link_is_url_decoded(self):
+        r = self.run_viewer([{'kind': 'slides', 'files': {'pdf': 'artifacts/slides/My%20Deck%20%C3%A9.pdf'}}],
+                            artifacts=('artifacts/slides/My Deck é.pdf',))
+        self.assertEqual(codes(r), [], [str(f) for f in r.findings])
+
+    def test_viewer_link_outside_root_is_allowed_when_it_exists(self):
+        out = os.path.join(self.tmp, 'Saved.pdf')
+        with open(out, 'w') as f:
+            f.write('x')
+        r = self.run_viewer([{'kind': 'slides', 'files': {'pdf': 'artifacts/slides/../../../Saved.pdf'}}])
+        self.assertEqual(codes(r), [], [str(f) for f in r.findings])
+
+    def test_viewer_broken_link(self):
+        r = self.run_viewer([{'kind': 'slides', 'files': {'pdf': 'artifacts/slides/Gone.pdf'}}])
+        self.assertEqual(r.status, 'FAIL')
+        self.assertEqual([f.detail for f in r.findings if f.code == 'viewer-broken-link'], ['artifacts/slides/Gone.pdf'])
+
+    def test_viewer_bad_data(self):
+        for raw in ('<!doctype html><p>no data</p>',
+                    '<script id="data" type="application/json">{not json</script>',
+                    '<script id="data" type="application/json">{"notebook": "x"}</script>'):
+            with self.subTest(raw=raw):
+                shutil.rmtree(os.path.join(self.tmp, 't'), ignore_errors=True)
+                r = self.run_viewer([], raw=raw)
+                self.assertEqual(r.status, 'FAIL')
+                self.assertIn('viewer-invalid', codes(r))
+
+    def test_unmerged_zip_without_artifacts_skips_link_checks(self):
+        r = self.run_viewer([{'kind': 'slides', 'files': {'pdf': 'artifacts/slides/Deck.pdf'}}], artifacts=())
+        self.assertEqual(codes(r), [], [str(f) for f in r.findings])
+
+    def test_takeout_without_viewer_from_1_8(self):
+        r = self.run_viewer([], viewer=False)
+        self.assertEqual(r.status, 'WARN')
+        self.assertEqual(codes(r), ['viewer-missing'])
+
+    def test_takeout_without_viewer_before_1_8_is_fine(self):
+        r = self.run_viewer([], viewer=False, version='1.7.0')
+        self.assertEqual(codes(r), [])
+
+    def test_version_compare_is_numeric(self):
+        r = self.run_viewer([], viewer=False, version='1.10.0')
+        self.assertEqual(codes(r), ['viewer-missing'])
+        shutil.rmtree(os.path.join(self.tmp, 't'))
+        r = self.run_viewer([], viewer=False, version='1.7.9')
+        self.assertEqual(codes(r), [])
+
+    def test_category_export_needs_no_viewer(self):
+        [r] = self.check(make_export(os.path.join(self.tmp, 'e'), version='1.8.0'))
+        self.assertNotIn('viewer-missing', codes(r))

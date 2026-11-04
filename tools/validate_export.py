@@ -212,6 +212,48 @@ def _first_error(text):
     return 'see errors.md'
 
 
+VIEWER_DATA_RE = re.compile(r'<script id="data" type="application/json">(.*?)</script>', re.S)
+
+
+def check_viewer(report, root):
+    """viewer.html (Full Takeout, from 1.8.0): its data must parse and its media links must exist.
+
+    The data is read the way the page reads it: the text of the script element goes to a JSON
+    parser (escapeJson only writes JSON escapes, so no other unescaping is needed). Links are
+    URL-decoded and resolved from the takeout root; they may leave the root, because a folder-mode
+    file saved by the browser sits beside it. Link checks run only when artifacts/ is present next
+    to viewer.html (a merged tree or a folder takeout): an unmerged category ZIP does not hold the
+    files the viewer links to, so there the links are skipped.
+    """
+    path = os.path.join(root, 'viewer.html')
+    if not os.path.isfile(path):
+        if report.kind == 'takeout' and _version_at_least(report.version, '1.8.0'):
+            report.add('warn', 'viewer-missing', 'no viewer.html (expected from 1.8.0; errors.md may say why)')
+        return
+    m = VIEWER_DATA_RE.search(_read(path))
+    if not m:
+        report.add('fail', 'viewer-invalid', 'viewer.html has no <script id="data" type="application/json"> block')
+        return
+    try:
+        data = json.loads(m.group(1))
+    except ValueError as e:
+        report.add('fail', 'viewer-invalid', f'viewer.html data is not valid JSON: {e}')
+        return
+    studio = data.get('studio') if isinstance(data, dict) else None
+    if not isinstance(studio, list):
+        report.add('fail', 'viewer-invalid', 'viewer.html data has no "studio" list')
+        return
+    if not os.path.isdir(os.path.join(root, 'artifacts')):
+        return
+    for item in studio:
+        files = item.get('files') if isinstance(item, dict) else None
+        if not isinstance(files, dict):
+            continue
+        for link in files.values():
+            if not isinstance(link, str) or not os.path.isfile(os.path.normpath(os.path.join(root, *unquote(link).split('/')))):
+                report.add('fail', 'viewer-broken-link', str(link))
+
+
 def check_export(root, label, nested_roots):
     report = Report(label=label, root=root)
     try:
@@ -263,6 +305,7 @@ def check_export(root, label, nested_roots):
         fm, _ = front_matter(_read(index))
         if fm is None and _version_at_least(report.version, '1.7.0'):
             report.add('fail', 'front-matter-missing', '_index.md has no front matter (expected from 1.7.0)')
+    check_viewer(report, root)
     for rel in ('_index.md', '_index.html'):
         if os.path.isfile(os.path.join(root, rel)):
             check_links(report, root, rel)

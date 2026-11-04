@@ -138,22 +138,29 @@ sendResponse later).
 ```
 notebooklm-exporter/
 ├── manifest.json           — V3 manifest, permissions, side_panel, content_scripts
-├── takeout-shared.js (2183) — Selectors + DOM-free helpers (NLME global); content script,
+├── takeout-shared.js (2185) — Selectors + DOM-free helpers (NLME global); content script,
 │                             sidebar, service worker (importScripts) and Node tests load it
 ├── takeout-job.js (228)    — NLME.runExportJob: the one DOM-free job runner (sidebar + Node tests)
 ├── takeout-markdown.js (1029) — NLMEMarkdown: the one Markdown converter + KaTeX (sidebar + page)
-├── tools/validate_export.py — Export checker and baseline comparison (Python stdlib; see Testing)
+├── takeout-viewer.js (346) — NLMEViewer: DOM-free builder of the offline viewer's data and page
+│                             (sidebar + Node tests + tools/build_viewer.js)
+├── viewer/                 — The offline viewer's packaged files, read by the side panel and inlined
+│                             into viewer.html: viewer-template.html (121), viewer-app.js (268),
+│                             marked.min.js (marked 12.0.2), katex.min.js (KaTeX 0.16.11),
+│                             katex-inline.css (fonts inlined)
+├── tools/build_viewer.js (54) — Builds a viewer.html for an unzipped takeout folder (see Offline viewer)
+├── tools/validate_export.py (571) — Export checker and baseline comparison (Python stdlib; see Testing)
 ├── tests/                  — node:test unit tests for takeout-shared.js, takeout-job.js, the
 │                             message protocol and the file structure (load order, unique names)
 ├── sidebar.html  ( 478)    — Side panel UI: tabs, controls, settings/health panels
-├── sidebar-core.js (1617) — Settings, init, tab and notebook switching, job lock, shared helpers,
+├── sidebar-core.js (1620) — Settings, init, tab and notebook switching, job lock, shared helpers,
 │                             notes Markdown (convertToMarkdown), job records (see Milestone 3d contracts)
-├── sidebar-artifacts.js (1183), sidebar-notes.js (788), sidebar-sources.js (741),
+├── sidebar-artifacts.js (1188), sidebar-notes.js (788), sidebar-sources.js (741),
 │   sidebar-chat.js (772), sidebar-generated.js (314), sidebar-health.js (304)
 │                           — one file per tab (scan, list, export job, build files)
 ├── sidebar-list.js (336)   — List toolbar: filter, type chips, sort, select all visible
 ├── sidebar-results.js (148) — Results panel and Resume banner
-├── sidebar-takeout.js (934) — saveFiles, fetchDownload, withExportShell, runFullTakeout, resumeJob
+├── sidebar-takeout.js (1046) — saveFiles, fetchDownload, withExportShell, runFullTakeout, resumeJob
 ├── styles.css    (1791)    — Side panel styles
 ├── content.js    (4229)    — DOM scraping + extraction, runs on NotebookLM (HANDLERS table)
 ├── mindmap-extract.js (325) — Mind map SVG/tree extraction; content script and injected
@@ -197,6 +204,48 @@ Line numbers drift with every change, so anchors are names: `grep -n "<name>" <f
 | Health check | `runComprehensiveHealthCheck`, `checkProjectTitleHealth` (content.js) |
 | Mind maps | `mindmap-extract.js`; `extractMindmapFromAppFrame` (background.js) |
 | Layout helpers | `NLME.frontMatter`, `uniqueStems`, `exportMeta`, `buildManifest`, `zipName`, `artifactFolder`, `artifactStems`, `buildRootIndex` (takeout-shared.js) |
+
+## Offline viewer (viewer.html)
+
+Every Full Takeout writes `viewer.html` at the takeout root: one self-contained page (marked,
+KaTeX, styles, app and data inlined; no network use) to browse sources, notes, chat and artifacts.
+Built by `NLMEViewer.buildViewerData` + `assembleViewer` (takeout-viewer.js) in `buildViewerHtml`
+(sidebar-takeout.js), which reads `viewer/*` from the extension package. The data is JSON in
+`<script id="data" type="application/json">`, written by `escapeJson` (`</` , `<!--`, U+2028 and
+U+2029 escaped); `tools/validate_export.py` parses it back with a plain JSON parser.
+
+- **Capture rule.** The viewer is built from what the runners saved, not from a re-read. `saveFiles`
+  reports every written file to a `capture(path, data)` callback; `NLMEViewer.captureEntry` stores
+  `path -> text` only where `keepsText(path)` is true (the `.md` / `.csv` files the viewer reads, minus
+  `combined-notes*`, `_index*`, `_audit*`, `errors.md` and the variant files, plus `artifacts/manifest.json`
+  for titles) and `path -> null` for everything else, so media are listed for links but never held in
+  memory. Paths are relative to the takeout root and may sit under `part-N/`. A capture failure is
+  logged and never fails a save.
+- **Links.** `buildViewerData(files, {notebook, exported, mediaBase})`: each artifact's files become
+  `studio[].files = {ext: mediaBase + encoded path}`. The extension uses `mediaBase = ''` (links relative
+  to the takeout root, where viewer.html sits). `tools/build_viewer.js` sets it to the relative path from
+  the output file to the root. Files merge into one artifact only within one directory.
+- **`takeoutRootFiles`** (sidebar-takeout.js) returns `_index.md`, `_index.html`, `viewer.html`,
+  `errors.md` (when there are errors) and `manifest.json`, which lists all of them. `viewerHtml === null`
+  means no viewer: the index files do not name it and errors.md gets "The offline viewer could not be
+  built". A failed build or save never fails the takeout. Folder mode saves viewer.html first and alone,
+  so the files that name it are written only when it exists; ZIP mode retries the root package without
+  it. A cancelled takeout gets a viewer of what exists.
+- **Left out in ZIP mode.** Files the background saves straight into Downloads (`button_click`
+  artifacts, `one.savedName`) have no path from the takeout, so they get no viewer link there (errors.md
+  names them). In folder mode they are listed as `artifacts/<type>/../../../<name>` (`outsidePath`;
+  `landedPath` applies the name Chrome actually gave a URL download). In ZIP mode the category ZIPs must
+  be unzipped into one folder, or media links break: viewer.html is in the index ZIP and the media in the
+  category ZIPs.
+- **`node tools/build_viewer.js <takeout-root> <out.html> [--allow-downloads]`** rebuilds a viewer for an
+  unzipped takeout (also useful for takeouts from older versions). It refuses to write inside
+  `~/Downloads` unless `--allow-downloads` is given.
+- **Checker.** `check_viewer` in tools/validate_export.py: `viewer-invalid` (FAIL) when the data block is
+  missing, not JSON or has no `studio` list; `viewer-broken-link` (FAIL) when a URL-decoded
+  `studio[].files` path does not resolve to a file from the root (it may leave the root, for the
+  `../../../` case above); `viewer-missing` (WARN) for a `kind: takeout` manifest from exporter 1.8.0 or
+  later with no viewer.html (versions compared numerically). Link checks run only when `artifacts/` sits
+  next to viewer.html (merged tree or folder takeout); an unmerged category ZIP is skipped.
 
 ## Settings shape and storage
 

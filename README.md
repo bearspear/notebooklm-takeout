@@ -184,6 +184,7 @@ New-Physics-takeout-index-2026-11-02T15-13-06.zip
 New-Physics/
   _index.md            what was exported, per category, with status and the ZIP list
   _index.html          the same, to open in a browser, linking each category's _index.html
+  viewer.html          browse everything offline (see below)
   manifest.json        the same as data
   errors.md            every category's errors and notes (only when there are any)
   sources/  notes/  chat/  artifacts/
@@ -216,6 +217,21 @@ that contains the same `<Notebook>/` tree, so the files land at
 `Downloads/<Notebook> takeout <timestamp>/<Notebook>/sources/…` (the `<Notebook>/`
 folder is the one the ZIPs also unpack into). Audio, video and other media go from Google's servers to disk without
 passing through memory, so this is the mode for large notebooks.
+
+#### The offline viewer
+
+Every Full Takeout also writes `viewer.html` at the top of the tree. Open it in a browser (no
+internet needed) to read your sources, notes and chat, and to open slides, audio and other
+artifacts, with citations linked to their sources. `_index.md` and `_index.html` link to it.
+
+With ZIP on, **unzip all the ZIPs into one folder** before you open it: the viewer is in the index
+ZIP and its media links point to files in the other ZIPs, so they only work side by side. Artifacts
+that Chrome saved straight into Downloads (outside the takeout) are listed but not linked in a ZIP
+takeout. With ZIP off the folder is already in one piece. If the viewer could not be built,
+the takeout is still complete and `errors.md` says so.
+
+For a takeout made with an older version, build a viewer for the unzipped folder with
+`node tools/build_viewer.js <takeout folder> <out.html>` (see Development).
 
 A category's status in `_index.md` and in the final message is one of: complete, partial
 (cancelled), skipped (cancelled earlier), none in notebook, partial (stopped, see errors) when
@@ -468,10 +484,11 @@ mindmap-extract.js    Mind map extraction (page and sandboxed mind map frame)
 background.js         Service worker: download interception and naming, mind map frame extraction
 injected.js           Page-world hook that captures download URLs
 mindmap-template.html Interactive mind map viewer template
+takeout-viewer.js     Builds the offline viewer (data and page); viewer/ holds its template, app and bundled libraries
 turndown.min.js       HTML → Markdown (bundled)
 jszip.min.js          ZIP creation (bundled)
 tests/                node:test unit tests for takeout-shared.js, takeout-job.js, the message protocol and file structure
-tools/                validate_export.py: checks exports and compares them with a baseline (Python 3, standard library)
+tools/                validate_export.py: checks exports and compares them with a baseline (Python 3, standard library); build_viewer.js: builds viewer.html for an unzipped takeout
 ```
 
 Check your changes:
@@ -499,7 +516,9 @@ python3 -I tools/validate_export.py NEW.zip --baseline OLD.zip --allow '\$[^$\n]
   `_audit.md` counts ("N of M") are complete; `_index.md` / `_index.html` links open; `_index.md`
   has front matter (from 1.7.0); every footnote has exactly one definition; no internal markers
   are left; no `[object …]` text; PARTIAL and failed exports are explained from `errors.md`; split
-  exports have every part and no item file appears in two parts.
+  exports have every part and no item file appears in two parts; in a Full Takeout, viewer.html
+  has readable data and every file it links exists (the link check needs the artifacts folder, so
+  it is skipped for a category ZIP checked alone).
 - **Against a baseline:** files are compared after removing run details (dates, times, version,
   export statistics, file sizes that only changed because a date got shorter). Differences only in
   front matter are listed separately; `--allow REGEX` accepts known changes.
@@ -511,6 +530,13 @@ python3 -I tools/validate_export.py NEW.zip --baseline OLD.zip --allow '\$[^$\n]
 contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
+
+**1.8.0 (Nov 2026)**: offline viewer.
+- Every Full Takeout writes `viewer.html`: browse sources, notes, chat and artifacts offline, with
+  linked citations. Unzip the ZIPs into one folder for media links to work.
+- `_index.md` and `_index.html` link to the viewer; the root `manifest.json` lists it.
+- `tools/build_viewer.js` builds a viewer for an unzipped takeout; the export checker reports
+  `viewer-invalid`, `viewer-broken-link` and `viewer-missing`.
 
 **1.7.0 (Nov 2026)**: one converter, clean structure, footnotes.
 - New ⚙️ options, both off by default: footnote-style citations (`[^1]`, for Obsidian, Typora and
@@ -647,4 +673,7 @@ Gemini Notebook can change at any time and break exports. Export only content yo
 right to use, and respect Google's terms of service.
 
 Built with [Turndown](https://github.com/mixmark-io/turndown) and
-[JSZip](https://stuk.github.io/jszip/).
+[JSZip](https://stuk.github.io/jszip/). The offline viewer includes
+[marked](https://github.com/markedjs/marked) 12.0.2 (MIT licence, Copyright (c) 2011-2024,
+Christopher Jeffrey) and [KaTeX](https://katex.org) 0.16.11 (MIT licence, KaTeX contributors),
+with its fonts.

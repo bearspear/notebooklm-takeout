@@ -47,6 +47,8 @@ Exit code: 1 on any FAIL or baseline difference; WARN alone exits 0; 2 means wro
 | `part-missing` (WARN; info if never written after a cancel) | a part not given | ask for it. If all were given, look for renamed files |
 | `duplicate-across-parts` (WARN) | same item file in two parts | merging parts loses one; likely a naming bug |
 | `unlisted-file` (WARN), `unknown-exporter` (WARN) | stray file; no version in manifest | usually harmless; mention it |
+| `viewer-invalid`, `viewer-broken-link` (FAIL) | viewer.html data unreadable, or it links a file that is not there | damaged or incomplete: re-export; for a broken link, check the ZIPs were unzipped into one folder and artifacts/ is complete |
+| `viewer-missing` (WARN) | Full Takeout from 1.8.0 without viewer.html | the viewer failed to build or save; errors.md says why |
 | `audit-surplus`, `footnote-unused` (info, `-v`) | more written than counted; unused footnote | expected (e.g. formulas in quotes); mention only if asked |
 
 **Baseline compare:** `identical` and `front matter only` are fine; `allowed` matched `--allow`; `different`, `missing`, `extra` need explaining. Dates, versions and statistics are already ignored. A deleted note shows as `missing`, a renamed one as `missing` plus `extra`; a different ⚙️ setting (footnotes, citation detail) shows as `different`. Rule those out before calling it a regression.
