@@ -65,7 +65,7 @@ async function embedImagesInMarkdown(markdown, sourceTitle) {
 
     try {
       console.log(`[NotebookLM Takeout] Downloading image: ${imageUrl.substring(0, 100)}...`);
-      const dataUri = embeds.get(imageUrl) ?? await fetchJobImage(imageUrl);
+      const dataUri = embeds.get(imageUrl) ?? await fetchJobImage(imageUrl, { patient: true });
       embeds.set(imageUrl, dataUri);
 
       // Replace the URL with the data URI

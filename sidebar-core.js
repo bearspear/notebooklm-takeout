@@ -1350,7 +1350,7 @@ function endImageSession() {
 }
 
 function fetchJobImage(url, options) {
-  return imageSession ? imageSession.get(url) : downloadImageAsBase64(url, options);
+  return imageSession ? imageSession.get(url, { patient: !!options?.patient }) : downloadImageAsBase64(url, options);
 }
 
 /**

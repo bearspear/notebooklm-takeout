@@ -758,16 +758,16 @@ test('limited images must be consecutive: a 404 between them restarts the count'
   assert.equal(sleeps.includes(30000), false);
 });
 
-test('one session asks for a url once, a failed one too, until the batch ends', async () => {
+test('one session asks for a url once, a success, until the batch ends', async () => {
   const { session, calls } = imageSession({ script: url => { if (url === 'bad') throw http(404); return `data:${url}`; } });
   assert.equal(await session.get('a'), 'data:a');
   assert.equal(await session.get('a'), 'data:a');
   await fails(session.get('bad'), /HTTP 404/);
-  await fails(session.get('bad'), /HTTP 404/);
-  assert.deepEqual(calls, ['a', 'bad']);
+  await fails(session.get('bad'), /HTTP 404/); // a failure is asked again
+  assert.deepEqual(calls, ['a', 'bad', 'bad']);
   session.endBatch();
   await session.get('a');
-  assert.deepEqual(calls, ['a', 'bad', 'a']);
+  assert.deepEqual(calls, ['a', 'bad', 'bad', 'a']);
 });
 
 test('cancel stops before the next request and during a backoff, and is not remembered', async () => {
@@ -1122,4 +1122,127 @@ test('session: authuser variants download once and the embed replaces the origin
   assert.equal(log.fetches.length, 1);
   const md = NLME.applyImageEmbeds(`![x](${original})`, new Map([[original, a]]));
   assert.match(md, /^!\[x\]\(data:image\/png;base64,/);
+});
+
+// ---- 403 handling (Task 13) ----
+
+test('a failed get is not remembered: the next get asks again and can succeed', async () => {
+  let n = 0;
+  const { session, calls } = imageSession({ script: () => { if (++n === 1) throw http(500); return 'data:ok'; } });
+  await fails(session.get('u'));
+  assert.equal(await session.get('u'), 'data:ok');
+  assert.equal(calls.length, 2);
+});
+
+test('a success is still cached until endBatch', async () => {
+  const { session, calls } = imageSession({ script: () => 'data:ok' });
+  await session.get('u');
+  await session.get('u');
+  assert.equal(calls.length, 1);
+  session.endBatch();
+  await session.get('u');
+  assert.equal(calls.length, 2);
+});
+
+test('patient get retries 403 after 5 s and 15 s', async () => {
+  const { session, calls, sleeps } = imageSession({ script: (u, n) => { if (n < 3) throw http(403); return 'data:ok'; } });
+  assert.equal(await session.get('u', { patient: true }), 'data:ok');
+  assert.deepEqual(sleeps, [5000, 15000]);
+  assert.equal(calls.length, 3);
+});
+
+test('patient get gives up after three 403s with the 403 error', async () => {
+  const { session, calls } = imageSession({ script: () => { throw http(403); } });
+  await assert.rejects(session.get('u', { patient: true }), e => e.status === 403);
+  assert.equal(calls.length, 3);
+});
+
+test('a non-patient 403 is one download and no wait', async () => {
+  const { session, calls, sleeps } = imageSession({ script: () => { throw http(403); } });
+  await assert.rejects(session.get('u'), e => e.status === 403);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(sleeps, []);
+});
+
+test('a used up forbidden budget fails the image at once and later images still download', async () => {
+  const { session, calls, sleeps } = imageSession({ script: url => { if (url.startsWith('bad')) throw http(403); return 'data:ok'; } });
+  for (let i = 0; i < 30; i++) await session.get(`bad${i}`, { patient: true }).catch(() => {});
+  assert.equal(sleeps.length, 60);
+  const callsBefore = calls.length;
+  await assert.rejects(session.get('bad-late', { patient: true }), e => e.status === 403);
+  assert.equal(calls.length, callsBefore + 1);
+  assert.equal(sleeps.length, 60);
+  assert.equal(await session.get('fine', { patient: true }), 'data:ok');
+  const warned = [];
+  session.reportSkipped(e => warned.push(e));
+  assert.deepEqual(warned, []);
+});
+
+test('403 leaves the 429 streak and skipping alone', async () => {
+  const { session, calls } = imageSession({ script: url => {
+    if (url.startsWith('f')) throw http(403);
+    if (url.startsWith('l')) throw http(429);
+    return 'data:ok';
+  } });
+  for (let i = 1; i <= 4; i++) await session.get(`l${i}`).catch(() => {}); // streak 4
+  for (let i = 0; i < 5; i++) await session.get(`f${i}`, { patient: true }).catch(() => {});
+  const before = calls.length;
+  assert.equal(await session.get('ok'), 'data:ok'); // not skipping
+  assert.equal(calls.length, before + 1);
+  await session.get('l5').catch(() => {}); // fifth limited image: the streak was kept
+  const warned = [];
+  session.reportSkipped(e => warned.push(e));
+  assert.deepEqual(warned, []);
+});
+
+test('a cancel during a forbidden wait rejects as cancelled', async () => {
+  let cancelled = false;
+  const session = NLME.createImageSession({
+    download: async () => { throw http(403); },
+    sleep: async () => { cancelled = true; },
+    isCancelled: () => cancelled
+  });
+  await assert.rejects(session.get('u', { patient: true }), e => e.cancelled === true);
+});
+
+test('a patient get joining a failed non-patient request makes its own attempt', async () => {
+  let n = 0;
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const session = NLME.createImageSession({
+    download: async () => { if (++n === 1) { await gate; throw http(403); } return 'data:ok'; },
+    sleep: async () => {}
+  });
+  const hover = session.get('u');
+  const embed = session.get('u', { patient: true });
+  hover.catch(() => {});
+  release();
+  await assert.rejects(hover, e => e.status === 403);
+  assert.equal(await embed, 'data:ok');
+  assert.equal(n, 2);
+});
+
+test('fetchJobImage passes patient to the session, and a hover failure that is embedded later is not reported', async () => {
+  const url = 'https://lh3.googleusercontent.com/notebooklm/1';
+  let hoverPhase = true;
+  const { sandbox } = sourcesPanel(async () => (hoverPhase ? { ok: false, status: 403, headers: { get: () => null } } : imageResponse()));
+  sandbox.beginImageSession(5, () => false, async () => {});
+  const hover = await sandbox.fetchJobImage(url, { tabId: 5 }).then(() => null, e => e);
+  assert.equal(hover.status, 403);
+  hoverPhase = false;
+  const warned = [];
+  const embeds = await sandbox.embedAndReportImages(`![a](${url})`, 'Venus', [{ url, reason: hover.message }], e => warned.push(e));
+  assert.match(embeds.get(url), /^data:image\/png/);
+  assert.deepEqual(warned, []);
+});
+
+test('an image still a link after the embed pass is reported once per item', async () => {
+  const url = 'https://lh3.googleusercontent.com/notebooklm/2';
+  const { sandbox } = sourcesPanel(async () => ({ ok: false, status: 403, headers: { get: () => null } }));
+  sandbox.beginImageSession(5, () => false, async () => {});
+  const warned = [];
+  const embeds = await sandbox.embedAndReportImages(`![a](${url})`, 'Venus', [{ url, reason: 'HTTP 403' }], e => warned.push(e));
+  assert.equal(embeds.size, 0);
+  assert.equal(warned.length, 1);
+  assert.equal(warned[0].source, 'Venus');
 });

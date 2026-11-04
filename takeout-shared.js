@@ -899,6 +899,10 @@
   const IMAGE_LIMITED_STREAK = 5; // consecutive limited images before the pause
   const IMAGE_LIMITED_PAUSE_MS = 30000;
   const IMAGE_WAIT_BUDGET_MS = 5 * 60 * 1000; // all of a job's backoffs and its pause
+  // HTTP 403 on an image request: patient calls (the embed pass) retry after
+  // these waits, on a budget of their own. Hover downloads never wait on 403.
+  const IMAGE_FORBIDDEN_DELAYS_MS = [5000, 15000];
+  const IMAGE_FORBIDDEN_WAIT_BUDGET_MS = 10 * 60 * 1000;
 
   function isRateLimitedStatus(status) {
     return RATE_LIMIT_STATUSES.includes(status);
@@ -917,7 +921,9 @@
   // it is one object, updated by later skips, because it sits in the job's
   // errors by then.
   function createImageSession({ download, sleep, isCancelled = () => false, now = Date.now } = {}) {
-    const results = new Map(); // imageFetchUrl(url) -> Promise of its data URI
+    const results = new Map(); // imageFetchUrl(url) -> Promise of its data URI; failures are removed
+    const patientKeys = new Set(); // keys whose in-flight request is patient
+    let forbiddenWaitedMs = 0;
     const skipped = new Set();
     const summary = { source: '', type: 'image_download_failed', count: 0, message: '' };
     let summaryReported = false;
@@ -958,7 +964,8 @@
       }
     }
 
-    async function fetchWithRetries(url) {
+    async function fetchWithRetries(url, patient = false) {
+      let forbiddenAttempt = 0;
       for (let attempt = 0; ; attempt++) {
         stopIfCancelled();
         let error;
@@ -968,6 +975,16 @@
           return dataUri;
         } catch (caught) {
           error = caught;
+        }
+        if (error.status === 403) {
+          // Own attempt counter and budget; streak and skipping stay as they are.
+          const delay = IMAGE_FORBIDDEN_DELAYS_MS[forbiddenAttempt];
+          if (!patient || delay === undefined || forbiddenWaitedMs + delay > IMAGE_FORBIDDEN_WAIT_BUDGET_MS) throw error;
+          forbiddenWaitedMs += delay;
+          forbiddenAttempt++;
+          await sleep(delay);
+          attempt--; // a 403 wait is not a 429/503 attempt
+          continue;
         }
         if (!isRateLimitedStatus(error.status)) {
           streak = 0;
@@ -986,9 +1003,17 @@
     }
 
     return {
-      get(url) {
+      get(url, { patient = false } = {}) {
         const key = imageFetchUrl(url); // authuser variants share one download
-        if (results.has(key)) return results.get(key);
+        if (results.has(key)) {
+          const shared = results.get(key);
+          if (!patient || patientKeys.has(key)) return shared;
+          // Joined a non-patient request: if it ends 403, make our own patient attempt.
+          return shared.catch(error => {
+            if (error.status === 403 && !error.cancelled) return this.get(url, { patient: true });
+            throw error;
+          });
+        }
         try {
           stopIfCancelled();
         } catch (error) {
@@ -1001,13 +1026,20 @@
             `${budgetSpent ? ' and the job reached its 5 minute wait limit' : ''}; they stay links`;
           return Promise.reject(marked('skipped', 'Skipped: Google limited requests'));
         }
-        const result = fetchWithRetries(url);
+        const result = fetchWithRetries(url, patient);
         results.set(key, result);
-        result.catch(error => { if (error.cancelled) results.delete(key); });
+        if (patient) patientKeys.add(key);
+        result.catch(() => {
+          if (results.get(key) === result) {
+            results.delete(key);
+            patientKeys.delete(key);
+          }
+        });
         return result;
       },
       endBatch() {
         results.clear();
+        patientKeys.clear();
       },
       reportSkipped(warn) {
         if (summary.count === 0 || summaryReported) return;
