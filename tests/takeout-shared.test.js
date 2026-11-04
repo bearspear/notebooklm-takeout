@@ -2069,11 +2069,17 @@ test('namer: a Map hit suggests synchronously and clears storage', async () => {
 });
 
 test('namer: register resolves after the storage write; a failed write keeps the Map entry', async () => {
-  const st = fakeSession();
-  const n = NLME.createDownloadNamer(st, 'ext');
-  const p = n.register('blob:a', 'T/x.md');
+  let finishWrite;
+  const written = [];
+  const slow = { set: items => new Promise(resolve => { finishWrite = () => { written.push(items); resolve(); }; }) };
+  let registered = false;
+  const p = NLME.createDownloadNamer(slow, 'ext').register('blob:a', 'T/x.md').then(() => { registered = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(registered, false);
+  finishWrite();
   await p;
-  assert.equal(Object.values(st.data)[0], 'T/x.md');
+  assert.equal(registered, true);
+  assert.equal(Object.values(written[0])[0], 'T/x.md');
   const bad = NLME.createDownloadNamer(fakeSession({ setFails: true }), 'ext');
   await bad.register('blob:b', 'T/y.md');
   const suggest = spy();
