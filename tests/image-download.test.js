@@ -1179,20 +1179,17 @@ test('a used up forbidden budget fails the image at once and later images still 
 });
 
 test('403 leaves the 429 streak and skipping alone', async () => {
-  const { session, calls } = imageSession({ script: url => {
+  const { session, sleeps } = imageSession({ script: url => {
     if (url.startsWith('f')) throw http(403);
-    if (url.startsWith('l')) throw http(429);
-    return 'data:ok';
+    throw http(429);
   } });
-  for (let i = 1; i <= 4; i++) await session.get(`l${i}`).catch(() => {}); // streak 4
-  for (let i = 0; i < 5; i++) await session.get(`f${i}`, { patient: true }).catch(() => {});
-  const before = calls.length;
-  assert.equal(await session.get('ok'), 'data:ok'); // not skipping
-  assert.equal(calls.length, before + 1);
-  await session.get('l5').catch(() => {}); // fifth limited image: the streak was kept
-  const warned = [];
-  session.reportSkipped(e => warned.push(e));
-  assert.deepEqual(warned, []);
+  for (let i = 1; i <= 4; i++) {
+    await session.get(`l${i}`).catch(() => {});
+    await session.get(`f${i}`, { patient: true }).catch(() => {}); // a 403 between limited images
+  }
+  assert.equal(sleeps.includes(30000), false);
+  await session.get('l5').catch(() => {});
+  assert.equal(sleeps.filter(ms => ms === 30000).length, 1); // streak survived the 403s
 });
 
 test('a cancel during a forbidden wait rejects as cancelled', async () => {
@@ -1245,4 +1242,64 @@ test('an image still a link after the embed pass is reported once per item', asy
   assert.equal(embeds.size, 0);
   assert.equal(warned.length, 1);
   assert.equal(warned[0].source, 'Venus');
+});
+
+test('concurrent failing gets share one download', async () => {
+  const { session, calls } = imageSession({ script: async () => { throw http(500); } });
+  const results = await Promise.allSettled([session.get('u'), session.get('u')]);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(results.map(r => r.status), ['rejected', 'rejected']);
+});
+
+test('a patient get for a url that gave up on 403 rejects at once, until endBatch', async () => {
+  const { session, calls, sleeps } = imageSession({ script: () => { throw http(403); } });
+  await assert.rejects(session.get('u', { patient: true }), e => e.status === 403);
+  const calls1 = calls.length, sleeps1 = sleeps.length;
+  await assert.rejects(session.get('u', { patient: true }), e => e.status === 403);
+  assert.equal(calls.length, calls1);
+  assert.equal(sleeps.length, sleeps1);
+  await assert.rejects(session.get('u'), e => e.status === 403); // non-patient may still ask once
+  assert.equal(calls.length, calls1 + 1);
+  session.endBatch();
+  await assert.rejects(session.get('u', { patient: true }), e => e.status === 403);
+  assert.equal(calls.length, calls1 + 4); // asked again: three patient attempts
+});
+
+test('a hover success clears the given-up record', async () => {
+  let ok = false;
+  const { session, calls } = imageSession({ script: () => { if (!ok) throw http(403); return 'data:ok'; } });
+  await session.get('u', { patient: true }).catch(() => {});
+  ok = true;
+  assert.equal(await session.get('u'), 'data:ok');
+  session.endBatch(); // success stays cached until endBatch, so clear it to look at the record only
+  ok = false;
+  const n = calls.length;
+  await session.get('u', { patient: true }).catch(() => {});
+  assert.equal(calls.length, n + 3);
+});
+
+test('the embed pass is patient: it outlasts a 403 that a hover would stop at', async () => {
+  const url = 'https://lh3.googleusercontent.com/notebooklm/9';
+  let slept = false;
+  const { sandbox } = sourcesPanel(async () => (slept ? imageResponse() : { ok: false, status: 403, headers: { get: () => null } }));
+  sandbox.beginImageSession(5, () => false, async () => { slept = true; });
+  const out = await sandbox.embedImagesInMarkdown(`![a](${url})`, 'Venus');
+  assert.equal(out.imagesEmbedded, 1);
+});
+
+test('the DOWNLOAD_IMAGE_AS_BASE64 handler stays non-patient', async () => {
+  const url = 'https://lh3.googleusercontent.com/notebooklm/10';
+  let slept = false;
+  const { sandbox } = sourcesPanel(async () => (slept ? imageResponse() : { ok: false, status: 403, headers: { get: () => null } }));
+  sandbox.beginImageSession(5, () => false, async () => { slept = true; });
+  let listener;
+  sandbox.chrome.runtime = { onMessage: { addListener: fn => { listener = fn; } } };
+  sandbox.document = { addEventListener() {} };
+  sandbox.init = () => {};
+  const src = read('sidebar-core.js');
+  const start = src.indexOf('chrome.runtime.onMessage.addListener(');
+  vm.runInContext(src.slice(start, src.indexOf('\n});\n', start) + 5), sandbox);
+  const reply = await new Promise(resolve => listener({ type: NLME.MSG.DOWNLOAD_IMAGE_AS_BASE64, url }, { tab: { id: 5 } }, resolve));
+  assert.equal(reply.success, false);
+  assert.equal(slept, false);
 });

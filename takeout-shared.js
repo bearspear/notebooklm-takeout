@@ -922,6 +922,7 @@
   // errors by then.
   function createImageSession({ download, sleep, isCancelled = () => false, now = Date.now } = {}) {
     const results = new Map(); // imageFetchUrl(url) -> Promise of its data URI; failures are removed
+    const forbidden = new Map(); // key -> 403 error of a patient attempt that gave up, this batch
     const patientKeys = new Set(); // keys whose in-flight request is patient
     let forbiddenWaitedMs = 0;
     const skipped = new Set();
@@ -1002,18 +1003,19 @@
       }
     }
 
-    return {
-      get(url, { patient = false } = {}) {
+    function get(url, { patient = false } = {}) {
         const key = imageFetchUrl(url); // authuser variants share one download
         if (results.has(key)) {
           const shared = results.get(key);
           if (!patient || patientKeys.has(key)) return shared;
           // Joined a non-patient request: if it ends 403, make our own patient attempt.
           return shared.catch(error => {
-            if (error.status === 403 && !error.cancelled) return this.get(url, { patient: true });
+            if (error.status === 403 && !error.cancelled) return get(url, { patient: true });
             throw error;
           });
         }
+        // A patient attempt already gave up on 403 in this batch: do not pay again.
+        if (patient && forbidden.has(key)) return Promise.reject(forbidden.get(key));
         try {
           stopIfCancelled();
         } catch (error) {
@@ -1029,17 +1031,22 @@
         const result = fetchWithRetries(url, patient);
         results.set(key, result);
         if (patient) patientKeys.add(key);
-        result.catch(() => {
+        result.then(() => { forbidden.delete(key); }, error => {
+          if (patient && error.status === 403) forbidden.set(key, error);
           if (results.get(key) === result) {
             results.delete(key);
             patientKeys.delete(key);
           }
         });
         return result;
-      },
+    }
+
+    return {
+      get,
       endBatch() {
         results.clear();
         patientKeys.clear();
+        forbidden.clear();
       },
       reportSkipped(warn) {
         if (summary.count === 0 || summaryReported) return;
