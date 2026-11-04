@@ -1031,12 +1031,11 @@
         const result = fetchWithRetries(url, patient);
         results.set(key, result);
         if (patient) patientKeys.add(key);
-        result.then(() => { forbidden.delete(key); }, error => {
+        result.catch(error => {
+          if (results.get(key) !== result) return; // a later batch owns the key now
           if (patient && error.status === 403) forbidden.set(key, error);
-          if (results.get(key) === result) {
-            results.delete(key);
-            patientKeys.delete(key);
-          }
+          results.delete(key);
+          patientKeys.delete(key);
         });
         return result;
     }

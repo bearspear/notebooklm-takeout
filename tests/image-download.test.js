@@ -1265,19 +1265,6 @@ test('a patient get for a url that gave up on 403 rejects at once, until endBatc
   assert.equal(calls.length, calls1 + 4); // asked again: three patient attempts
 });
 
-test('a hover success clears the given-up record', async () => {
-  let ok = false;
-  const { session, calls } = imageSession({ script: () => { if (!ok) throw http(403); return 'data:ok'; } });
-  await session.get('u', { patient: true }).catch(() => {});
-  ok = true;
-  assert.equal(await session.get('u'), 'data:ok');
-  session.endBatch(); // success stays cached until endBatch, so clear it to look at the record only
-  ok = false;
-  const n = calls.length;
-  await session.get('u', { patient: true }).catch(() => {});
-  assert.equal(calls.length, n + 3);
-});
-
 test('the embed pass is patient: it outlasts a 403 that a hover would stop at', async () => {
   const url = 'https://lh3.googleusercontent.com/notebooklm/9';
   let slept = false;
