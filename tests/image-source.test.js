@@ -1,6 +1,6 @@
 // Image sources and the citations that point at them (Task 9). Runs the real
-// content script and sidebar functions against fake panels and popovers: the
-// markup of a real citation popover for an image source has not been inspected.
+// content script and sidebar functions against fake panels and popovers: a real
+// popover for an image source has not been reached, so its shape is unproven.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -50,29 +50,23 @@ test('imageSourceMarkdown writes the note and an image link the embed pass can m
   assert.equal(link[2], 'https://lh3.googleusercontent.com/notebooklm/a%28b%29');
 });
 
-test('quotelessCitationTitle uses the popover title, then the marker label', () => {
-  const header = 'Chart.png';
-  assert.equal(NLME.quotelessCitationTitle({ tooltipText: header, headerText: header, markerLabel: '3: Other' }), header);
-  assert.equal(NLME.quotelessCitationTitle({ tooltipText: '', headerText: '', markerLabel: '3: Chart.png' }), 'Chart.png');
+test('isImageCitation needs a title, no quote, and evidence', () => {
+  assert.equal(NLME.isImageCitation({ title: 'Paper', hasImage: true }), true);
+  assert.equal(NLME.isImageCitation({ title: 'Paper', knownImageTitles: new Set(['Paper']) }), true);
+  assert.equal(NLME.isImageCitation({ title: 'Paper', knownImageTitles: new Set(['Other']) }), false);
+  assert.equal(NLME.isImageCitation({ title: 'Paper' }), false);
+  assert.equal(NLME.isImageCitation({ title: '', hasImage: true }), false);
+  assert.equal(NLME.isImageCitation({ title: 'Chart.png', quoteText: 'x' }), false);
+  assert.equal(NLME.isImageCitation({}), false);
 });
 
-test('quotelessCitationTitle allows a popover footer or a short label', () => {
-  assert.equal(NLME.quotelessCitationTitle({
-    tooltipText: 'Chart.pngView source', headerText: 'Chart.png', footerText: 'View source'
-  }), 'Chart.png');
-  assert.equal(NLME.quotelessCitationTitle({ tooltipText: 'Chart.pngImage', headerText: 'Chart.png' }), 'Chart.png');
-});
-
-test('quotelessCitationTitle refuses a popover that holds text it could not place', () => {
-  // Quote markup renamed by Google: this is drift, not an image
-  const quote = 'A sentence long enough to be a real quote from a real text source.';
-  assert.equal(NLME.quotelessCitationTitle({ tooltipText: `Chart.png${quote}`, headerText: 'Chart.png' }), '');
-});
-
-test('quotelessCitationTitle has no title to give when neither place has one', () => {
-  assert.equal(NLME.quotelessCitationTitle({ tooltipText: '', headerText: '', markerLabel: '' }), '');
-  assert.equal(NLME.quotelessCitationTitle({}), '');
-  assert.equal(NLME.quotelessCitationTitle({ markerLabel: '3:' }), '');
+test('isImageCitation takes each image extension, in any case, at the end only', () => {
+  for (const ext of ['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'bmp', 'tiff', 'PNG']) {
+    assert.equal(NLME.isImageCitation({ title: `Chart.${ext}` }), true, ext);
+  }
+  for (const title of ['Chart.pdf', 'png', 'Chart.png notes', 'Chart.png.txt']) {
+    assert.equal(NLME.isImageCitation({ title }), false, title);
+  }
 });
 
 test('an image citation keeps its title and note, counts as read, and is not cached', () => {
@@ -200,20 +194,21 @@ test('extractSourceContent uses the wait, keeps the error, and reports the image
   assert.match(code, /await waitForSourceBody\(sourceViewer\)/);
   assert.match(code, /if \(body\.error\) return \{ error: body\.error \}/);
   assert.match(code, /await recheckImageSource\(sourceViewer, body\.imageUrls\)/);
+  assert.match(code, /if \(imageUrls\.length > 0\) knownImageSources\.add\(sourceTitle\)/);
   assert.match(code, /\bimageUrls\b[^\n]*\n\s*\};\n/);
 });
 
 // ========== content.js: a citation popover with no text ==========
 
-function citationPage({ popovers, markerLabel = '3: Chart.png' }) {
+function citationPage({ popovers, knownImageTitles = [] }) {
   const page = { hovers: 0, open: null, tracked: [] };
   const el = text => ({ textContent: text });
   const tooltipFor = spec => ({
-    textContent: spec.all ?? [spec.header, spec.quote, spec.footer].filter(Boolean).join(''),
     querySelector(selector) {
       if (selector === '.citation-tooltip-text') return spec.quote == null ? null : { ...el(spec.quote), querySelectorAll: () => [] };
-      if (selector === '.citation-tooltip-header') return spec.header == null ? null : el(spec.header);
-      if (selector === '.citation-tooltip-footer') return spec.footer == null ? null : el(spec.footer);
+      if (selector === '.citation-tooltip-header') return spec.title == null ? null : el(spec.title);
+      if (selector === '.citation-tooltip-title') return spec.title == null ? null : el(spec.title);
+      if (selector === 'img') return spec.img ? {} : null;
       return null;
     }
   });
@@ -221,7 +216,6 @@ function citationPage({ popovers, markerLabel = '3: Chart.png' }) {
     getBoundingClientRect: () => ({ width: 10, top: 1, bottom: 2 }),
     closest: () => null,
     scrollIntoView() {},
-    querySelector: () => ({ getAttribute: () => markerLabel }),
     dispatchEvent(event) {
       if (event.type === 'mouseenter') page.open = tooltipFor(popovers[Math.min(page.hovers++, popovers.length - 1)]);
       if (event.type === 'mouseleave') page.open = null;
@@ -239,6 +233,7 @@ function citationPage({ popovers, markerLabel = '3: Chart.png' }) {
     setTimeout, clearTimeout,
     sleep: async () => {},
     waitForElement: async () => page.open,
+    knownImageSources: new Set(knownImageTitles),
     DOMHealthTracker: { track: (...args) => page.tracked.push(args) },
     htmlToMarkdownWithImages: async element => element.textContent
   };
@@ -247,8 +242,8 @@ function citationPage({ popovers, markerLabel = '3: Chart.png' }) {
   return { page, read: retries => sandbox.extractSingleCitationWithRetryInner(button, '3', false, retries) };
 }
 
-test('a popover with a title and no text gives the title and the note, with no error', async () => {
-  const { page, read } = citationPage({ popovers: [{ header: 'Chart.png', footer: 'View source' }] });
+test('a title ending .png and no text gives the title and the note, with no error', async () => {
+  const { page, read } = citationPage({ popovers: [{ title: 'Chart.png', quote: '' }] });
   const result = await read(2);
   assert.equal(result.success, true);
   assert.equal(result.data.text, 'Chart.png');
@@ -258,43 +253,59 @@ test('a popover with a title and no text gives the title and the note, with no e
   assert.equal(page.tracked.length, 0);
 });
 
-test('an empty quote element and a popover with no header both still give the title', async () => {
-  const empty = await citationPage({ popovers: [{ header: 'Chart.png', quote: '' }] }).read(3);
-  assert.equal(empty.data.text, 'Chart.png');
-  assert.equal(empty.data.quote, NLME.IMAGE_CITATION_NOTE);
-  const bare = await citationPage({ popovers: [{}] }).read(3);
-  assert.equal(bare.success, true);
-  assert.equal(bare.data.text, 'Chart.png'); // from the marker's aria-label
+test('an img in the popover and no text gives the note', async () => {
+  const result = await citationPage({ popovers: [{ title: 'Holiday snaps', img: true }] }).read(2);
+  assert.equal(result.success, true);
+  assert.equal(result.data.text, 'Holiday snaps');
+  assert.equal(result.data.quote, NLME.IMAGE_CITATION_NOTE);
 });
 
-test('a popover slow to fill gets every retry and keeps its real quote', async () => {
-  const { page, read } = citationPage({ popovers: [{ header: 'Paper.pdf' }, { header: 'Paper.pdf', quote: 'The real quote.' }] });
-  const result = await read(3);
-  assert.equal(result.data.quote, 'The real quote.');
-  assert.equal(result.data.noQuote, undefined);
-  assert.equal(page.hovers, 2);
+test('a title found to be an image source gives the note', async () => {
+  const result = await citationPage({ popovers: [{ title: 'Holiday snaps' }], knownImageTitles: ['Holiday snaps'] }).read(2);
+  assert.equal(result.data.quote, NLME.IMAGE_CITATION_NOTE);
 });
 
-test('the note comes only after the last attempt', async () => {
-  const { page, read } = citationPage({ popovers: [{ header: 'Chart.png' }] });
-  await read(3);
-  assert.equal(page.hovers, 3);
-});
-
-test('text the popover shows outside the quote element is still a failure', async () => {
-  const quote = 'A sentence long enough to be a real quote from a real text source.';
-  const { page, read } = citationPage({ popovers: [{ header: 'Paper.pdf', all: `Paper.pdf${quote}` }] });
+test('a fully empty popover stays an error', async () => {
+  const { page, read } = citationPage({ popovers: [{}] });
   const result = await read(2);
   assert.equal(result.success, false);
   assert.match(result.error, /Tooltip content did not load/);
   assert.equal(page.tracked.length, 1);
 });
 
-test('a popover with no text and no title anywhere is still a failure', async () => {
-  const { read } = citationPage({ popovers: [{}], markerLabel: '' });
-  const result = await read(2);
+test('a title and an empty body with no evidence stays an error', async () => {
+  const result = await citationPage({ popovers: [{ title: 'Paper.pdf', quote: '' }] }).read(3);
   assert.equal(result.success, false);
   assert.match(result.error, /Tooltip content did not load/);
+});
+
+test('an img with no title stays an error', async () => {
+  const result = await citationPage({ popovers: [{ img: true }] }).read(2);
+  assert.equal(result.success, false);
+});
+
+test('a popover slow to fill gets every retry and keeps its real quote', async () => {
+  const { page, read } = citationPage({ popovers: [{ title: 'Chart.png' }, { title: 'Chart.png', quote: 'The real quote.' }] });
+  const result = await read(3);
+  assert.equal(result.data.quote, 'The real quote.');
+  assert.equal(result.data.noQuote, undefined);
+  assert.equal(page.hovers, 2);
+});
+
+test('a short real quote is a quote', async () => {
+  const result = await citationPage({ popovers: [{ title: 'Chart.png', quote: 'Yes.' }] }).read(2);
+  assert.equal(result.data.quote, 'Yes.');
+});
+
+test('a popover with images and text keeps the text', async () => {
+  const result = await citationPage({ popovers: [{ title: 'Paper.pdf', quote: 'Figure one shows it.', img: true }] }).read(2);
+  assert.equal(result.data.quote, 'Figure one shows it.');
+});
+
+test('the note comes only after the last attempt', async () => {
+  const { page, read } = citationPage({ popovers: [{ title: 'Chart.png' }] });
+  await read(3);
+  assert.equal(page.hovers, 3);
 });
 
 test('the health check does not call an image citation a read quote', () => {

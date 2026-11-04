@@ -123,9 +123,7 @@
   const IMAGE_SOURCE_NOTE = 'This source is an image with no text.';
   const IMAGE_CITATION_NOTE = 'This source is an image, so this citation has no quote text.';
 
-  // Popover text beyond its header and footer that can still be a label. More
-  // than this is a quote the selectors missed, which is drift and not an image.
-  const QUOTELESS_STRAY_TEXT_LIMIT = 40;
+  const IMAGE_TITLE_RE = /\.(png|jpe?g|gif|webp|heic|bmp|tiff)$/i;
 
   function isImageSourceUrl(url) {
     try {
@@ -148,13 +146,12 @@
     return [`*${IMAGE_SOURCE_NOTE}*`, ...links].join('\n\n');
   }
 
-  // The title of a citation whose popover shows no quote, or '' when this
-  // cannot pass as one: the popover holds text of its own, or no title exists.
-  // The popover of an image source has not been inspected, so the header may
-  // be missing; the marker's aria-label then gives the title.
-  function quotelessCitationTitle({ tooltipText = '', headerText = '', footerText = '', markerLabel = '' } = {}) {
-    if (tooltipText.length - headerText.length - footerText.length > QUOTELESS_STRAY_TEXT_LIMIT) return '';
-    return headerText || String(markerLabel || '').replace(/^\s*\d+\s*:\s*/, '').trim();
+  // A popover with a title and no quote is an image citation only with positive
+  // evidence: an img in it, an image file name, or a title this export already
+  // found to be an image source. Anything else is a popover that did not load.
+  function isImageCitation({ title = '', quoteText = '', hasImage = false, knownImageTitles = [] } = {}) {
+    if (!title || quoteText) return false;
+    return hasImage || IMAGE_TITLE_RE.test(title) || [...knownImageTitles].some(known => titlesMatch(known, title));
   }
 
   // Viewer close button in the Studio panel header, outside <studio-panel>.
@@ -2403,7 +2400,7 @@ footer { margin-top: 3rem; }
     isImageSourceUrl,
     imageSourceUrls,
     imageSourceMarkdown,
-    quotelessCitationTitle,
+    isImageCitation,
     ICON_TO_TYPE,
     NOTE_ICONS,
     resolveArtifactType,

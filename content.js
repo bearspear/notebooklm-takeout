@@ -1583,14 +1583,15 @@
           console.warn(`[NotebookLM Takeout] Citation ${spanIndex}: Attempt ${attempt}/${maxRetries} - ${lastError}`);
           // A citation of an image source has no quote to wait for. Decide that
           // only on the last attempt: a slow popover keeps all its retries.
-          const title = attempt === maxRetries ? NLME.quotelessCitationTitle({
-            tooltipText: tooltip.textContent.trim(),
-            headerText: tooltip.querySelector('.citation-tooltip-header')?.textContent?.trim() || '',
-            footerText: tooltip.querySelector('.citation-tooltip-footer')?.textContent?.trim() || '',
-            markerLabel: button.querySelector('span')?.getAttribute('aria-label')
-          }) : '';
+          const title = tooltip.querySelector('.citation-tooltip-title')?.textContent?.trim() || '';
+          const imageCitation = attempt === maxRetries && NLME.isImageCitation({
+            title,
+            quoteText: tooltip.querySelector('.citation-tooltip-text')?.textContent?.trim() || '',
+            hasImage: !!tooltip.querySelector('img'),
+            knownImageTitles: knownImageSources
+          });
           leave();
-          if (title) {
+          if (imageCitation) {
             await ensureTooltipGone();
             return {
               success: true,
@@ -1897,6 +1898,10 @@
     return await readOpenStudioNote(noteTitle, viewersBefore);
   }
 
+  // Titles this page has found to be image sources: evidence for a citation
+  // with no quote, as a Full Takeout exports sources before notes and chat
+  const knownImageSources = new Set();
+
   // Content ready: the source BODY text (not the viewer shell, which settles
   // before the text arrives) is at least 50 chars and unchanged over four 50 ms
   // checks; capped at 10 s for large sources (was a fixed 500 ms after a fixed
@@ -2128,6 +2133,7 @@
 
       // The guide wait gave slow text more time: text now means a text source
       const imageUrls = await recheckImageSource(sourceViewer, body.imageUrls);
+      if (imageUrls.length > 0) knownImageSources.add(sourceTitle);
 
       // Try to find content container within source-viewer
       let contentElement = null;
