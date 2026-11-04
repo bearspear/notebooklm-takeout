@@ -285,3 +285,48 @@ test('viewer page makes no remote requests', () => {
     assert.ok(!/(src|href)="https?:|url\(https?:|@import|fetch\(|XMLHttpRequest/.test(src), f);
   }
 });
+
+// ---- tools/build_viewer.js ----
+const os = require('node:os');
+const { spawnSync } = require('node:child_process');
+const CLI = path.join(__dirname, '..', 'tools', 'build_viewer.js');
+
+function makeTakeout() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nlme-take-'));
+  const put = (p, c) => { fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true }); fs.writeFileSync(path.join(root, p), c); };
+  put('manifest.json', JSON.stringify({ notebook: { title: 'Zebra Notebook' }, exported: '2026-05-06T00:00:00Z' }));
+  put('notes/My Note Title.md', '# My Note Title\n\nbody text here');
+  put('artifacts/slides/deck one.pdf', 'PDF');
+  put('artifacts/manifest.json', JSON.stringify({ files: [{ path: 'slides/deck one.pdf', title: 'Pretty Deck' }] }));
+  return root;
+}
+
+test('buildViewerData prefixes media links with mediaBase, default stays root-relative', () => {
+  const files = { 'artifacts/slides/a b.pdf': null };
+  assert.equal(V.buildViewerData(files, {}).studio[0].files.pdf, 'artifacts/slides/a%20b.pdf');
+  assert.equal(V.buildViewerData(files, { mediaBase: '../t/' }).studio[0].files.pdf, '../t/artifacts/slides/a%20b.pdf');
+});
+
+test('build_viewer writes a page from a temp takeout', () => {
+  const root = makeTakeout();
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nlme-out-'));
+  const out = path.join(outDir, 'sub', 'viewer.html');
+  const r = spawnSync(process.execPath, [CLI, root, out], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const html = fs.readFileSync(out, 'utf8');
+  assert.ok(html.includes('My Note Title'));
+  assert.ok(html.includes('Zebra Notebook'));
+  assert.ok(html.includes('Pretty Deck'));
+  const rel = path.relative(path.dirname(out), root).split(path.sep).map(encodeURIComponent).join('/');
+  assert.ok(html.includes(rel + '/artifacts/slides/deck%20one.pdf'), 'media link relative to out folder');
+});
+
+test('build_viewer requires out and refuses ~/Downloads without the flag', () => {
+  const root = makeTakeout();
+  assert.notEqual(spawnSync(process.execPath, [CLI, root], { encoding: 'utf8' }).status, 0);
+  const dl = path.join(os.homedir(), 'Downloads', 'nlme-should-not-exist', 'v.html');
+  const r = spawnSync(process.execPath, [CLI, root, dl], { encoding: 'utf8' });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /allow-downloads/);
+  assert.ok(!fs.existsSync(dl));
+});

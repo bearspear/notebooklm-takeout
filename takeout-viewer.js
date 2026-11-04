@@ -1,7 +1,8 @@
 // NotebookLM Takeout - offline viewer data builder
 // Classic script. Exposes globalThis.NLMEViewer (and module.exports for tests):
 //   wantsText(path)                    true for the .md / .csv files the viewer reads
-//   buildViewerData(files, {notebook, exported})
+//   buildViewerData(files, {notebook, exported, mediaBase})
+//                                      mediaBase: prefix for media links (default '' = relative to the takeout root)
 //                                      files: {relative path: text | null}
 //                                      (null = present, not read). Paths may sit
 //                                      under part-N/. Returns the viewer's data object.
@@ -227,7 +228,7 @@
 
   const encodePath = p => p.split('/').map(encodeURIComponent).join('/');
 
-  function loadArtifacts(files) {
+  function loadArtifacts(files, mediaBase) {
     const titles = {};
     for (const [raw, text] of Object.entries(files)) {
       if (normalizePath(raw) !== 'artifacts/manifest.json' || typeof text !== 'string') continue;
@@ -260,7 +261,7 @@
       })) {
         const { stem, files: g } = groups.get(key);
         const a = { kind, title: titles[stem] || stem.replace(/-/g, ' '), files: {} };
-        for (const [ext, raw] of Object.entries(g)) a.files[ext] = encodePath(raw);
+        for (const [ext, raw] of Object.entries(g)) a.files[ext] = mediaBase + encodePath(raw);
         if (typeof files[g.md] === 'string') a.md = dropH1(front(files[g.md])[1].trimStart());
         if (typeof files[g.csv] === 'string') a.rows = parseCsv(files[g.csv]);
         out.push(a);
@@ -269,13 +270,13 @@
     return out;
   }
 
-  function buildViewerData(files, { notebook = '', exported = '' } = {}) {
+  function buildViewerData(files, { notebook = '', exported = '', mediaBase = '' } = {}) {
     const cites = createCites();
     const { summary, pairs } = loadChat(files, cites);
     return {
       notebook, exported, summary,
       sources: loadSources(files),
-      studio: loadNotes(files, cites).concat(loadArtifacts(files)),
+      studio: loadNotes(files, cites).concat(loadArtifacts(files, mediaBase)),
       pairs,
       cites: cites.items
     };
