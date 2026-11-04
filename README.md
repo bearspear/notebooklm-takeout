@@ -455,8 +455,8 @@ causes no extra requests to Gemini Notebook.
 citation cache; no install warning). Host access is limited to `notebook.google.com` /
 `notebooklm.google.com` and the hosts Gemini Notebook serves downloads from
 (`contribution.usercontent.google.com`, `*.googleusercontent.com`, and
-`*.scf.usercontent.goog` for mind maps). Downloads from any other host, or from other tabs,
-are never touched.
+`*.scf.usercontent.goog` for mind maps), plus `lh3.google.com`, where notebook image URLs
+redirect. Downloads from any other host, or from other tabs, are never touched.
 
 ## Development
 

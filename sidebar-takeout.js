@@ -29,21 +29,30 @@ function base64ToBlob(base64, mime) {
  * with the page's credentials (FETCH_FILE).
  *
  * @param {string} url
- * @param {{ tabId?: number }} [options] tab whose content script serves the
- *   fallback; defaults to the running export shell's tab, then the active tab
+ * @param {{ tabId?: number, isAllowed?: Function, blobProblem?: Function }} [options]
+ *   tabId: tab whose content script serves the fallback; defaults to the
+ *   running export shell's tab, then the active tab
+ *   isAllowed: replaces the host check
+ *   blobProblem: blob => a reason to refuse it, or null. A refused blob counts
+ *   as a failed attempt: refused direct, the fallback still runs.
  * @returns {Promise<Blob>}
  * @throws {Error} 'Fetch failed: <reason>' when both attempts fail
  */
-async function fetchDownload(url, { tabId } = {}) {
-  if (!NLME.isAllowedDownloadUrl(url)) {
+async function fetchDownload(url, { tabId, isAllowed = NLME.isAllowedDownloadUrl, blobProblem = () => null } = {}) {
+  if (!isAllowed(url)) {
     throw new Error('Fetch failed: not a Gemini Notebook download URL');
   }
 
   let directReason;
   try {
     const response = await fetch(url, { credentials: 'include' });
-    if (response.ok) return await response.blob();
-    directReason = `HTTP ${response.status}`;
+    if (response.ok) {
+      const blob = await response.blob();
+      directReason = blobProblem(blob);
+      if (!directReason) return blob;
+    } else {
+      directReason = `HTTP ${response.status}`;
+    }
   } catch (error) {
     directReason = error.message || String(error);
   }
@@ -59,9 +68,12 @@ async function fetchDownload(url, { tabId } = {}) {
     if (targetTab == null) throw new Error('no notebook tab');
     const result = await chrome.tabs.sendMessage(targetTab, { type: NLME.MSG.FETCH_FILE, url });
     if (result && result.success && result.data != null) {
-      return base64ToBlob(result.data, result.mime);
+      const blob = base64ToBlob(result.data, result.mime);
+      fallbackReason = blobProblem(blob);
+      if (!fallbackReason) return blob;
+    } else {
+      fallbackReason = (result && result.error) || 'no data';
     }
-    fallbackReason = (result && result.error) || 'no data';
   } catch (error) {
     fallbackReason = error.message || String(error);
   }

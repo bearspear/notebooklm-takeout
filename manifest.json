@@ -16,6 +16,7 @@
     "https://notebooklm.google.com/*",
     "https://contribution.usercontent.google.com/*",
     "https://*.googleusercontent.com/*",
+    "https://lh3.google.com/*",
     "https://*.scf.usercontent.goog/*"
   ],
   "action": {

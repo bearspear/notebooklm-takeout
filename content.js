@@ -1587,14 +1587,15 @@
 
         // Quote markup varies: structural-element wrappers or div.paragraph children
         let quoteMarkdown = '';
+        const imageFailures = [];
         const textElements = textEl.querySelectorAll(':scope > labs-tailwind-structural-element-view-v2');
         if (textElements.length > 0) {
           for (const element of textElements) {
-            const markdown = await htmlToMarkdownWithImages(element, includeImages);
+            const markdown = await htmlToMarkdownWithImages(element, includeImages, imageFailures);
             if (markdown && markdown.length > 0) quoteMarkdown += markdown + '\n\n';
           }
         } else {
-          quoteMarkdown = await htmlToMarkdownWithImages(textEl, includeImages);
+          quoteMarkdown = await htmlToMarkdownWithImages(textEl, includeImages, imageFailures);
         }
         // A long unpunctuated source shows only a cut window: mark it with "…"
         quoteMarkdown = NLME.markWindowedQuote(quoteMarkdown.trim());
@@ -1612,7 +1613,8 @@
 
         return {
           success: true,
-          data: { text: sourceTitle, quote: quoteMarkdown, sourceIndex: spanIndex }
+          data: { text: sourceTitle, quote: quoteMarkdown, sourceIndex: spanIndex },
+          imageFailures
         };
       } catch (error) {
         lastError = error.message;
@@ -2198,12 +2200,13 @@
   /**
    * Convert image URL to base64 data URL
    * @param {string} url - Image URL to convert
-   * @returns {Promise<string>} Base64 data URL or original URL if conversion fails
+   * @returns {Promise<{dataUri?: string, reason?: string}>} the data URL, or
+   *   why there is none. Never throws: the caller reports the reason.
    */
   async function imageToBase64(url) {
     try {
-      // For Google URLs, ask the sidebar to download (it has proper permissions)
-      if (url.includes('googleusercontent.com') || url.includes('google.com')) {
+      // Notebook images need the user's sign-in: the sidebar fetches them
+      if (NLME.isAllowedImageUrl(url)) {
         console.log(`[NotebookLM Takeout] Requesting sidebar to download image: ${url.substring(0, 80)}...`);
 
         const response = await chrome.runtime.sendMessage({
@@ -2211,18 +2214,21 @@
           url: url
         });
 
-        if (response && response.success) {
+        if (response && response.success && response.dataUri) {
           console.log(`[NotebookLM Takeout] Image downloaded via sidebar (${(response.dataUri.length / 1024).toFixed(1)} KB)`);
-          return response.dataUri;
-        } else {
-          console.warn('[NotebookLM Takeout] Sidebar failed to download image:', response?.error || 'Unknown error');
-          return url; // Return original URL on failure
+          return { dataUri: response.dataUri };
         }
+        const reason = (response && response.error) || 'no response from the side panel';
+        console.warn('[NotebookLM Takeout] Sidebar failed to download image:', reason);
+        return { reason };
       }
 
-      // Fallback to regular fetch for non-Google URLs
+      // Regular fetch for any other host
       const response = await fetch(url);
+      if (!response.ok) return { reason: `HTTP ${response.status}` };
       const blob = await response.blob();
+      const problem = NLME.imageBlobProblem(blob);
+      if (problem) return { reason: problem };
 
       // Warn about large images (>2MB) that may cause issues
       const sizeMB = blob.size / (1024 * 1024);
@@ -2232,19 +2238,19 @@
 
       // Reject images larger than 5MB to prevent memory issues
       if (sizeMB > 5) {
-        console.warn(`[NotebookLM Takeout] Image too large (${sizeMB.toFixed(1)}MB), using original URL: ${url}`);
-        return url;
+        return { reason: `image too large (${sizeMB.toFixed(1)}MB)` };
       }
 
-      return new Promise((resolve, reject) => {
+      const dataUri = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onloadend = () => resolve(reader.result);
         reader.onerror = reject;
         reader.readAsDataURL(blob);
       });
+      return { dataUri };
     } catch (error) {
       console.warn('[NotebookLM Takeout] Failed to convert image to base64:', url, error);
-      return url; // Return original URL if conversion fails
+      return { reason: error.message || String(error) };
     }
   }
 
@@ -2252,9 +2258,11 @@
    * Convert HTML element to markdown with optional base64 image embedding
    * @param {Element} element - HTML element to convert
    * @param {boolean} includeImages - Whether to embed images as base64
+   * @param {Array} [imageFailures] - Receives { url, reason } for each image
+   *   that stays a link
    * @returns {Promise<string>} Markdown string
    */
-  async function htmlToMarkdownWithImages(element, includeImages = false) {
+  async function htmlToMarkdownWithImages(element, includeImages = false, imageFailures = []) {
     if (!element) return '';
 
     // If images should be included, find and convert them to base64
@@ -2267,15 +2275,19 @@
         const conversions = [];
         images.forEach(img => {
           const originalSrc = img.src;
-          const conversion = imageToBase64(originalSrc).then(base64 => {
-            img.setAttribute('src', base64);
-            img.setAttribute('data-original-src', originalSrc);
+          const conversion = imageToBase64(originalSrc).then(({ dataUri, reason }) => {
+            if (dataUri) {
+              img.setAttribute('src', dataUri);
+              img.setAttribute('data-original-src', originalSrc);
+            } else {
+              imageFailures.push({ url: originalSrc, reason });
+            }
           });
           conversions.push(conversion);
         });
 
         await Promise.all(conversions);
-        console.log(`[NotebookLM Takeout] Converted ${images.length} images to base64`);
+        console.log(`[NotebookLM Takeout] Processed ${images.length} images`);
       }
     }
 
@@ -2375,6 +2387,7 @@
 
     // Step 3: hover each marker and read its tooltip
     const sources = [];
+    const imageFailures = [];
     for (const [index, button] of buttonsByIndex) {
       if (isExportCancelled()) break; // stop within one citation of Cancel
       const result = await extractSingleCitationWithRetry(button, index, includeCitationImages, 2);
@@ -2382,6 +2395,7 @@
         errors.push(result.error);
         continue;
       }
+      imageFailures.push(...result.imageFailures);
       if (!result.data.text) errors.push(`Citation ${index}: Empty source filename`);
       if (!result.data.quote) errors.push(`Citation ${index}: Empty quote text (source: ${result.data.text || 'unknown'})`);
       sources.push({
@@ -2405,7 +2419,8 @@
     return {
       html: viewer.innerHTML,
       sources,
-      errors
+      errors,
+      imageFailures
     };
   }
 
@@ -4119,6 +4134,7 @@
    * @returns {Promise<{sourcesByIndex: Object, errors: Array}>}
    */
   async function extractMessageCitations(messageIndex, messageHTML, sourceIndices, includeCitationImages = false) {
+    const imageFailures = [];
     console.log(`[NotebookLM Takeout] extractMessageCitations called for message ${messageIndex}`);
     console.log(`[NotebookLM Takeout] Source indices:`, sourceIndices);
     console.log(`[NotebookLM Takeout] Message HTML length:`, messageHTML?.length || 0);
@@ -4209,6 +4225,7 @@
         const result = await extractSingleCitationWithRetry(button, sourceIndex, includeCitationImages, 3);
 
         if (result.success) {
+          imageFailures.push(...result.imageFailures);
           sourcesByIndex[sourceIndex] = {
             text: result.data.text,
             quote: result.data.quote
@@ -4231,7 +4248,8 @@
 
     return {
       sourcesByIndex: sourcesByIndex,
-      errors: errors
+      errors: errors,
+      imageFailures
     };
   }
 

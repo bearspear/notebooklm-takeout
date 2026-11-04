@@ -36,21 +36,22 @@ async function retryOperation(operation, maxRetries = 2, baseDelay = 1000, opera
 }
 
 /**
- * Scan markdown for Googleusercontent image URLs and replace with base64 data URIs
+ * Scan markdown for notebook image URLs and replace with base64 data URIs. A
+ * failed image stays a link and goes to `failures` as { item, url, reason }.
  */
 async function embedImagesInMarkdown(markdown, sourceTitle) {
   // Match markdown image syntax: ![alt](url)
-  const imageRegex = /!\[([^\]]*)\]\((https:\/\/lh3\.googleusercontent\.com\/[^\)]+)\)/g;
+  const imageRegex = /!\[([^\]]*)\]\((https:\/\/lh3\.google(?:usercontent)?\.com\/[^\)]+)\)/g;
 
   const matches = [...markdown.matchAll(imageRegex)];
 
   if (matches.length === 0) {
-    return { markdown, errors: [], imagesFound: 0, imagesEmbedded: 0 };
+    return { markdown, failures: [], imagesFound: 0, imagesEmbedded: 0 };
   }
 
   console.log(`[NotebookLM Takeout] Found ${matches.length} images in "${sourceTitle}"`);
 
-  const errors = [];
+  const failures = [];
   let updatedMarkdown = markdown;
   let successCount = 0;
 
@@ -71,18 +72,13 @@ async function embedImagesInMarkdown(markdown, sourceTitle) {
       console.log(`[NotebookLM Takeout] Successfully embedded image (${(dataUri.length / 1024).toFixed(1)} KB)`);
     } catch (error) {
       console.error(`[NotebookLM Takeout] Failed to embed image:`, error);
-      errors.push({
-        source: sourceTitle,
-        type: 'image_download_failed',
-        message: `Failed to download image: ${error.message}`,
-        url: imageUrl.substring(0, 100) + '...'
-      });
+      failures.push({ item: sourceTitle, url: imageUrl, reason: error.message });
     }
   }
 
   return {
     markdown: updatedMarkdown,
-    errors,
+    failures,
     imagesFound: matches.length,
     imagesEmbedded: successCount
   };
@@ -434,17 +430,20 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
   let plusMetaWithImages = null;
   let imagesFound = 0;
   let imagesEmbedded = 0;
+  const imageFailures = [];
   if (variantSettings.exportSourceWithImages || variantSettings.exportSourcePlusMetaWithImages) {
     try {
       const embedded = await embedImagesInMarkdown(baseMarkdown, source.title);
       imagesFound = embedded.imagesFound;
       imagesEmbedded = embedded.imagesEmbedded;
-      embedded.errors.forEach(err => ctx.warn(err));
+      imageFailures.push(...embedded.failures);
 
       if (imagesFound > 0) {
         withImages = embedded.markdown;
         if (plusMetaMarkdown) {
-          plusMetaWithImages = (await embedImagesInMarkdown(plusMetaMarkdown, source.title)).markdown;
+          const embeddedMeta = await embedImagesInMarkdown(plusMetaMarkdown, source.title);
+          plusMetaWithImages = embeddedMeta.markdown;
+          imageFailures.push(...embeddedMeta.failures);
         }
         console.log(`[NotebookLM Takeout] "${source.title}": ${imagesFound} images found, creating image versions`);
       } else {
@@ -457,6 +456,7 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
   } else {
     console.log(`[NotebookLM Takeout] Skipping image downloads for "${source.title}" (no image versions enabled)`);
   }
+  reportImageFailures(imageFailures, source.title, ctx.warn);
 
   return {
     title: source.title,

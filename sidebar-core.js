@@ -159,7 +159,7 @@ document.addEventListener('DOMContentLoaded', () => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === NLME.MSG.DOWNLOAD_IMAGE_AS_BASE64) {
     // Handle image download request from content script
-    downloadImageAsBase64(message.url)
+    downloadImageAsBase64(message.url, { tabId: sender.tab?.id })
       .then(dataUri => {
         sendResponse({ success: true, dataUri });
       })
@@ -1272,34 +1272,38 @@ function sanitizeFilename(filename) {
 }
 
 /**
- * Download an image from a URL and convert to base64 data URI
+ * Download a notebook image with the user's sign-in (fetchDownload, with its
+ * page-credentials fallback) as a base64 data URI. Anything but an image is a
+ * failure, so a sign-in page is never embedded.
+ *
+ * @param {string} url
+ * @param {{ tabId?: number }} [options] tab that serves the fallback
+ * @returns {Promise<string>} data:image/...;base64,...
+ * @throws {Error} 'Fetch failed: <reason>' with both attempts' reasons
  */
-async function downloadImageAsBase64(url) {
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
+async function downloadImageAsBase64(url, { tabId } = {}) {
+  const blob = await fetchDownload(url, {
+    tabId,
+    isAllowed: NLME.isAllowedImageUrl,
+    blobProblem: NLME.imageBlobProblem
+  });
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
 
-    const blob = await response.blob();
-
-    // Get MIME type from response or blob
-    const mimeType = blob.type || 'image/jpeg';
-
-    // Convert blob to base64
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        // reader.result is already a data URI (data:image/jpeg;base64,...)
-        resolve(reader.result);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  } catch (error) {
-    console.error(`[NotebookLM Takeout] Failed to download image: ${url}`, error);
-    throw error;
-  }
+/**
+ * Send one item's failed images to the job, one summary per item.
+ *
+ * @param {Array<{url: string, reason: string}>} [failures]
+ * @param {string} item the note, source or message they belong to
+ * @param {Function} warn receives each NLME.summarizeImageFailures entry
+ */
+function reportImageFailures(failures, item, warn) {
+  NLME.summarizeImageFailures((failures || []).map(f => ({ ...f, item }))).forEach(warn);
 }
 
 /**

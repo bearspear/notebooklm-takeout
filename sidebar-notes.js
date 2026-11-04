@@ -326,6 +326,7 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
 
     if (noteData && !noteData.error) {
       (noteData.errors || []).forEach(err => ctx.warn(`[${note.title}] ${err}`));
+      reportImageFailures(noteData.imageFailures, note.title, ctx.warn);
 
       if (noteData.isMindmap) {
         return {
@@ -459,6 +460,12 @@ async function exportSingleNote(note) {
   if (!noteData || noteData.error) {
     throw new Error(noteData?.error || 'Failed to extract note');
   }
+
+  // One note, no job: nothing collects errors, so say it here
+  reportImageFailures(noteData.imageFailures, note.title, failure => {
+    console.warn(`[NotebookLM Takeout] "${note.title}": ${failure.message}`, failure.url);
+    showToast(`${note.title}: ${failure.message}`, 'warning');
+  });
 
   const obsidian = !!settings.obsidianNames;
   let filesWritten = 0;

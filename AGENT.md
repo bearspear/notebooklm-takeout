@@ -1015,7 +1015,7 @@ Found while checking real exports after #8; the export bugs below predate it.
   listeners use `NLME.isNotebookDownload` and ignore `byExtensionId` downloads. Permissions:
   storage, downloads, scripting, sidePanel, tabs (`notifications` was dropped in 1.4.0; nothing
   used `chrome.notifications`); hosts: notebook sites,
-  `contribution.usercontent.google.com`, `*.googleusercontent.com`, `*.scf.usercontent.goog`.
+  `contribution.usercontent.google.com`, `*.googleusercontent.com`, `*.scf.usercontent.goog`, `lh3.google.com` (image redirects).
 - **Helpers:** one copy each in `takeout-shared.js` — `isNotebookUrl` (exact host),
   `sanitizeFilename` (code-point safe), `artifactTypePrefix`, `exportTimestamp`, `escapeHtml`,
   `PROJECT_TITLE_SELECTORS`, `buildSourcesIndex`.

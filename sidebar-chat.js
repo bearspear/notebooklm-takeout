@@ -164,8 +164,8 @@ async function exportChat(chatData) {
       selected: chatData.messagePairs.length,
       result,
       auditOk,
-      // Citation problems leave every message exported, so name the errors
-      errorNote: result.errors.length > 0 ? `${result.errors.length} citation error(s), see errors.md` : undefined,
+      // Citation and image problems leave every message exported, so name the errors
+      errorNote: result.errors.length > 0 ? `${result.errors.length} error(s), see errors.md` : undefined,
       saved: zips
       // No retry: a chat's messages never fail as a whole (citation problems
       // keep the message); re-export the chat instead
@@ -400,6 +400,8 @@ async function extractChatPair(shell, pair, ctx, { citationMode = 'quotes', tota
             stats.failedExtractions += fullCitationData.errors.length;
             fullCitationData.errors.forEach(err => warn('citation_extraction', err));
           }
+          reportImageFailures(fullCitationData?.imageFailures, (pair.userMessage || '').substring(0, 100),
+            failure => warn(failure.type, failure.message, { url: failure.url }));
 
           // Store only a complete read: every source has a filename and a quote
           // and nothing was reported as failed (never a partial result)

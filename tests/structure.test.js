@@ -161,3 +161,11 @@ test('the runners hand the capture to every category save; tab-only saves pass n
   const manifest = JSON.parse(read('manifest.json'));
   assert.ok(!manifest.web_accessible_resources, 'the side panel fetches its own files; nothing is exposed to pages');
 });
+
+test('manifest grants lh3.google.com, where notebook image URLs redirect', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
+  assert.ok(manifest.host_permissions.includes('https://lh3.google.com/*'));
+  // The approval covers this host only
+  assert.equal(manifest.host_permissions.filter(h => /google\.com/.test(h) && !/usercontent/.test(h)).length, 3);
+  assert.equal(manifest.host_permissions.length, 6);
+});

@@ -762,6 +762,62 @@
       host === 'googleusercontent.com' || host.endsWith('.googleusercontent.com');
   }
 
+  // Hosts notebook images are fetched from with the user's sign-in. Image URLs
+  // on lh3.googleusercontent.com redirect to lh3.google.com. Separate from
+  // isAllowedDownloadUrl, which also decides which Chrome downloads to take over.
+  function isAllowedImageUrl(url) {
+    if (isAllowedDownloadUrl(url)) return true;
+    try {
+      const u = new URL(url);
+      return u.protocol === 'https:' && u.hostname === 'lh3.google.com';
+    } catch {
+      return false;
+    }
+  }
+
+  // Why a fetched Blob must not be embedded as an image, or null when it can
+  // be. A signed-out request gets Google's sign-in page, with HTTP 200.
+  function imageBlobProblem(blob) {
+    const type = (blob && blob.type) || '';
+    if (!/^image\//i.test(type)) return `not an image (${type || 'no type'})`;
+    if (!blob.size) return 'empty image';
+    return null;
+  }
+
+  // One error per item for failed images, not one per image: a Venus-sized
+  // notebook has over a thousand. failures: [{ item, url, reason }]. An image
+  // that failed twice in one item (a citation repeated, a second variant)
+  // counts once.
+  function summarizeImageFailures(failures = []) {
+    const items = new Map();
+    for (const failure of failures || []) {
+      const item = String(failure.item || '');
+      if (!items.has(item)) items.set(item, { urls: new Set(), unnamed: 0, reasons: [] });
+      const entry = items.get(item);
+      if (failure.url) {
+        if (entry.urls.has(failure.url)) continue;
+        entry.urls.add(failure.url);
+      } else {
+        entry.unnamed++;
+      }
+      if (failure.reason && !entry.reasons.includes(failure.reason)) entry.reasons.push(failure.reason);
+    }
+    return [...items].map(([item, { urls, unnamed, reasons }]) => {
+      const count = urls.size + unnamed;
+      const others = reasons.length - 1;
+      const reason = (reasons[0] || 'unknown error') +
+        (others > 0 ? ` (and ${others} other reason${others === 1 ? '' : 's'})` : '');
+      const [first = ''] = urls;
+      return {
+        source: item,
+        type: 'image_download_failed',
+        count,
+        message: count === 1 ? `Failed to download image: ${reason}` : `Failed to download ${count} images: ${reason}`,
+        url: first.length > 100 ? `${first.slice(0, 100)}...` : first
+      };
+    });
+  }
+
   // A download Gemini Notebook started: an allowed host, and (when Chrome
   // knows it) a notebook page as referrer. Downloads from other tabs, e.g.
   // Drive, are left alone.
@@ -2110,6 +2166,9 @@ footer { margin-top: 3rem; }
     sourceVariants,
     takeoutVariantSettings,
     isAllowedDownloadUrl,
+    isAllowedImageUrl,
+    imageBlobProblem,
+    summarizeImageFailures,
     isNotebookDownload,
     NOTEBOOK_HOSTS,
     isNotebookUrl,
