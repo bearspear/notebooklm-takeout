@@ -349,9 +349,16 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
         addCitationCoverage(state.audit, noteData.html, noteData.sources, settings.citationDetail === 'quotes', notePage);
       }
       // The files are built from the HTML later: keep the downloads for -with-images
-      const imageEmbeds = variantSettings.exportNoteWithImages
-        ? await embedAndReportImages(markdown, note.title, noteData.imageFailures, ctx.warn)
-        : null;
+      let imageEmbeds = null;
+      if (variantSettings.exportNoteWithImages) {
+        try {
+          imageEmbeds = await embedAndReportImages(markdown, note.title, noteData.imageFailures, ctx.warn);
+        } catch (error) {
+          // Images stay links; the note itself is fine
+          console.error(`[NotebookLM Takeout] [${note.title}] Error embedding images:`, error);
+          ctx.warn(`[${note.title}] Failed to embed images: ${error.message}`);
+        }
+      }
       if (notePage.citationNumbers.length > 0 && settings.citationDetail === 'quotes') {
         const fromCache = noteData.fromCache === true;
         tallyCitationCache(fromCache, state.audit);

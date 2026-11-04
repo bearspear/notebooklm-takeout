@@ -155,14 +155,14 @@ notebooklm-exporter/
 ├── sidebar.html  ( 479)    — Side panel UI: tabs, controls, settings/health panels
 ├── sidebar-core.js (1662) — Settings, init, tab and notebook switching, job lock, shared helpers,
 │                             notes Markdown (convertToMarkdown), job records (see Milestone 3d contracts)
-├── sidebar-artifacts.js (1222), sidebar-notes.js (806), sidebar-sources.js (777),
+├── sidebar-artifacts.js (1222), sidebar-notes.js (813), sidebar-sources.js (777),
 │   sidebar-chat.js (809), sidebar-generated.js (314), sidebar-health.js (304)
 │                           — one file per tab (scan, list, export job, build files)
 ├── sidebar-list.js (336)   — List toolbar: filter, type chips, sort, select all visible
 ├── sidebar-results.js (148) — Results panel and Resume banner
-├── sidebar-takeout.js (1146) — saveFiles, fetchDownload, withExportShell, runFullTakeout, resumeJob
+├── sidebar-takeout.js (1147) — saveFiles, fetchDownload, withExportShell, runFullTakeout, resumeJob
 ├── styles.css    (1791)    — Side panel styles
-├── content.js    (4340)    — DOM scraping + extraction, runs on NotebookLM (HANDLERS table)
+├── content.js    (4342)    — DOM scraping + extraction, runs on NotebookLM (HANDLERS table)
 ├── mindmap-extract.js (325) — Mind map SVG/tree extraction; content script and injected
 │                             by background into the *.scf.usercontent.goog app frame
 ├── background.js (467)    — Service worker: download interception/naming, mind map frame extraction, citation cache clear on update (no ZIP code)

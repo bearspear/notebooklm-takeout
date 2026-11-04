@@ -465,8 +465,9 @@ function imageZipBatches(entries, maxBytes) {
 
 /**
  * Save a takeout's images: into the folder, or into ZIPs named by zipNameFor. Saved
- * first of the root files, so the viewer links only what is really there. A save that
- * fails is logged here and costs only its own images.
+ * first of the root files, so the viewer links only what is really there. Folder mode
+ * saves one image per call and ZIP mode one batch per ZIP; a save that fails is logged
+ * here and costs only its own image or ZIP.
  *
  * @param {Map<string, Blob>} images images/ path -> bytes
  * @param {{ root: string, folder: string|null, zipNameFor: (part: number, totalParts: number) => string }} target
@@ -478,7 +479,7 @@ async function saveTakeoutImages(images, { root, folder, zipNameFor }) {
   let failed = false;
   const entries = [...images].map(([path, data]) => ({ path: `${root}/${path}`, data }));
   const capture = path => paths.add(path.slice(root.length + 1));
-  const batches = folder ? [entries] : imageZipBatches(entries, ARTIFACT_ZIP_MAX_BYTES);
+  const batches = folder ? entries.map(e => [e]) : imageZipBatches(entries, ARTIFACT_ZIP_MAX_BYTES);
   for (const [i, batch] of batches.entries()) {
     if (!batch.length) continue;
     try {

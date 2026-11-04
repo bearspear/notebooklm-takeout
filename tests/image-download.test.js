@@ -1066,3 +1066,13 @@ test('a cancel during the 30 s pause reports as cancelled, and is not remembered
   assert.equal(await session.get('5').catch(() => 'failed'), 'failed'); // asked again, still limited
   assert.equal(calls.filter(url => url === '5').length, 6);
 });
+
+test('an unexpected throw from the embed pass leaves the note with links, not a failed note', async () => {
+  const { sandbox } = notesPanel({ noteData: { html: BODY, sources: [], errors: [] } });
+  sandbox.embedAndReportImages = async () => { throw new Error('boom'); };
+  const warned = [];
+  const note = await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'Note', index: 0 }, { warn: e => warned.push(e) }, {}, { exportNoteWithImages: true });
+  assert.ok(note.markdown, 'the note is still written');
+  assert.ok(!note.imageEmbeds, 'no embeds: images stay links');
+  assert.ok(warned.some(w => /boom/.test(typeof w === 'string' ? w : JSON.stringify(w))), 'the failure is reported');
+});

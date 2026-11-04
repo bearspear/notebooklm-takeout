@@ -3163,7 +3163,9 @@
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
       // Only this text crosses the message ({ success: false, error: message }); the side
       // panel (fetchArtifactFiles) matches it exactly. Keep both ends in step.
-      if (requireFormat && downloadPreference === 'pptx') throw new Error(NLME.FORMAT_NOT_OFFERED);
+      // Only when the menu lists a Download item: an empty or stale overlay is a retry
+      const labels = Array.from(document.querySelectorAll('.mat-mdc-menu-item, [role="menuitem"]')).map(item => item.textContent || '');
+      if (requireFormat && downloadPreference === 'pptx' && NLME.pickDownloadMenuIndex(labels, 'pdf') !== -1) throw new Error(NLME.FORMAT_NOT_OFFERED);
       throw new Error('Download button not found in menu');
     }
 

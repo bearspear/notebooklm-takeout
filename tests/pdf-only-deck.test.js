@@ -95,3 +95,35 @@ test('a single PPTX request keeps the fallback and never asks for an exact match
   assert.equal(fetched.files.length, 1);
   assert.equal(sent[0].requireFormat, undefined);
 });
+
+// content.js clickArtifactDownloadButton, run against a stubbed menu
+function clickSandbox(labels) {
+  const src = read('content.js');
+  const start = src.indexOf('  async function clickArtifactDownloadButton(');
+  const body = src.slice(start, src.indexOf('\n  }\n', start) + 5);
+  const items = labels.map(textContent => ({ textContent, click() {} }));
+  const ctx = vm.createContext({
+    NLME, console, Error, Date, KeyboardEvent: class {}, CustomEvent: class {},
+    document: { dispatchEvent() {}, querySelectorAll: () => items },
+    waitForElement: async () => true,
+    findDownloadButton: async (preference, exact) => {
+      const i = NLME.pickDownloadMenuIndex(items.map(x => x.textContent), preference, { exact });
+      return i === -1 ? null : items[i];
+    },
+    waitForInterceptedUrl: async () => 'https://contribution.usercontent.google.com/d.pdf'
+  });
+  vm.runInContext(body + '\nthis.click = clickArtifactDownloadButton;', ctx);
+  return ctx;
+}
+
+test('FORMAT_NOT_OFFERED only when the menu lists a Download item but no PowerPoint', async () => {
+  const ctx = clickSandbox(['Download PDF']);
+  await assert.rejects(ctx.click({ click() {} }, 'pptx', true), e => e.message === NLME.FORMAT_NOT_OFFERED);
+});
+
+test('a menu with no Download item yet stays a retryable "not found" error', async () => {
+  const ctx = clickSandbox(['Rename', 'Delete']);
+  await assert.rejects(ctx.click({ click() {} }, 'pptx', true), e => e.message === 'Download button not found in menu');
+  const empty = clickSandbox([]);
+  await assert.rejects(empty.click({ click() {} }, 'pptx', true), e => e.message === 'Download button not found in menu');
+});

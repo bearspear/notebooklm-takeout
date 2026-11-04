@@ -1270,3 +1270,19 @@ test('a quoted data URI wrapped over lines goes whole', () => {
   const out = V.extractImages(`<img src="data:image/png;base64,${PAYLOAD.slice(0, 8)}\n  ${PAYLOAD.slice(8)}"> after`, () => {});
   assert.equal(out, '<img src=""> after');
 });
+
+test('folder mode saves each image on its own, so one failed download costs only itself', async () => {
+  const { sandbox } = sidePanel();
+  const calls = [];
+  sandbox.saveFiles = async (files, options) => {
+    calls.push([...files].map(f => f.path));
+    if (files.some(f => f.path === 'R/images/b.png')) throw new Error('blocked');
+    for (const f of files) options.capture(f.path, null);
+    return {};
+  };
+  const images = new Map([['images/a.png', new Blob(['a'])], ['images/b.png', new Blob(['b'])], ['images/c.png', new Blob(['c'])]]);
+  const out = await sandbox.saveTakeoutImages(images, { root: 'R', folder: 'T', zipNameFor: () => 'z.zip' });
+  assert.deepEqual(calls, [['R/images/a.png'], ['R/images/b.png'], ['R/images/c.png']]);
+  assert.deepEqual([...out.paths].sort(), ['images/a.png', 'images/c.png']);
+  assert.equal(out.failed, true);
+});

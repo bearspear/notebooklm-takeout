@@ -16,7 +16,7 @@ test('clampColumns shrinks the right pane first, then the left, so chat keeps 36
   // space 1000 - 360 = 640 for the sides
   assert.deepEqual(app.clampColumns(1048, { l: 500, r: 500 }), { l: 420, r: 220 });
   assert.deepEqual(app.clampColumns(1048, { l: 600, r: 300 }), { l: 420, r: 220 });
-  // the stacked layout starts below 851px, so 850 is the narrowest grid: 802 - 360 leaves 442 for the sides
+  // the stacked layout applies up to 850px (max-width: 850px), so the grid starts at 851; 850 is a boundary the clamp must still handle: 802 - 360 leaves 442 for the sides
   assert.deepEqual(app.clampColumns(850, { l: 500, r: 500 }), { l: 222, r: 220 });
 });
 
