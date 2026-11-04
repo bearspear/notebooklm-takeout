@@ -1331,17 +1331,23 @@
   // Names compare after NFC normalization.
   // `obsidian` (4th parameter): the "Obsidian-friendly file names" option, see
   // obsidianSafeName. Off, the stems are exactly as before.
-  function uniqueStems(titles, suffixes = [], reserved = [], { obsidian = false } = {}) {
+  // `taken` (4th parameter, optional): a Set of folded names that outlives one
+  // call. A job that splits into parts shares one Set across the parts, so a
+  // name used in part 1 is numbered in part 2 and one unzipped folder never
+  // holds two files of one name. It is read and added to; `reserved` stays
+  // per call and is not added to it.
+  function uniqueStems(titles, suffixes = [], reserved = [], { obsidian = false, taken = null } = {}) {
     // Names compare as NFC, lower-cased: "Café" typed as e + combining accent
     // and as the single é look identical and collide on a macOS disk
     const fold = name => String(name).normalize('NFC').toLowerCase();
-    const used = new Set((reserved || []).map(fold));
+    const used = taken instanceof Set ? taken : new Set();
+    const held = new Set((reserved || []).map(fold));
     const endings = ['', ...suffixes];
     const names = candidate => endings.map(s => fold(candidate + s));
     return (titles || []).map(title => {
       const base = fileStem(title, { obsidian });
       let candidate = base;
-      for (let n = 2; names(candidate).some(name => used.has(name)); n++) candidate = `${base}-${n}`;
+      for (let n = 2; names(candidate).some(name => used.has(name) || held.has(name)); n++) candidate = `${base}-${n}`;
       names(candidate).forEach(name => used.add(name));
       return candidate;
     });

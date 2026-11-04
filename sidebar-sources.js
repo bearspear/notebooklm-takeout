@@ -275,6 +275,8 @@ async function exportSources(selectedSources, { tabId, updateRecord = false, rec
  *   zips/parts/packages: what target.written holds (see newWritten)
  */
 async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind = 'sources', folder = null, variantSettings = settings, itemDir = 'sources/', written = newWritten(), tracker = null, capture = null } = {}) {
+  // File names already used by an earlier part of this job (see runNotesJob)
+  const takenStems = new Set();
   const perZip = settings.sourcesPerZip;
   // Shared by every extractSourceItem call: audit counters and the
   // DOM-warning decision
@@ -341,6 +343,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
         partial: info.partial,
         variantSettings,
         itemDir,
+        takenStems,
         // errors.md summary, on the package that carries the errors (the last)
         stats: { Selected: selectedSources.length, Exported: info.exported, Failed: info.failed }
       });
@@ -593,11 +596,12 @@ const SOURCE_VERSION_INFO = {
  *   errors: ALL errors of the run, passed only to the last ZIP it writes
  *   stats: errors.md's summary ({ Selected, Exported, Failed }), passed with the errors
  *   variantSettings: where sourceVariants reads the export* settings (default `settings`)
+ *   takenStems: Set of names earlier parts of the job used (runSourcesJob)
  *   itemDir: folder of the source files and youtube-urls*.txt ('sources/';
  *   '' puts them next to errors.md and _index.md)
  * @returns {Array<{path: string, data: string, title?: string, variant?: string, itemKind?: string}>}
  */
-function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batchIndex = 1, totalBatches = 1, partial = false, variantSettings = settings, itemDir = 'sources/', stats = {} }) {
+function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batchIndex = 1, totalBatches = 1, partial = false, variantSettings = settings, itemDir = 'sources/', stats = {}, takenStems = new Set() }) {
   const files = [];
   const indexEntries = [];
 
@@ -608,7 +612,7 @@ function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batch
   // Next to the package files (itemDir ''), no source may take the name of
   // errors.md or _audit.md
   const reserved = itemDir ? [] : ['errors', '_index', '_audit'];
-  const stems = NLME.uniqueStems(sources.map(s => s.title), zipSuffixes, reserved, { obsidian: !!settings.obsidianNames });
+  const stems = NLME.uniqueStems(sources.map(s => s.title), zipSuffixes, reserved, { obsidian: !!settings.obsidianNames, taken: takenStems });
 
   sources.forEach((source, idx) => {
     const written = [];

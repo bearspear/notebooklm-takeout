@@ -544,6 +544,11 @@ contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
 
+**1.8.1 (Nov 2026)**: no more duplicate file names across parts.
+- When an export splits into several ZIPs, a note, source or mind map whose name repeats one from an
+  earlier part is now numbered (`Name-2`), as it already was inside one part. Unzipping the parts into
+  one folder no longer overwrites a file. Names that never collided are unchanged.
+
 **1.8.0 (Nov 2026)**: offline viewer.
 - Every Full Takeout writes `viewer.html`: browse sources, notes, chat and artifacts offline, with
   linked citations. Unzip the ZIPs into one folder for media links to work.

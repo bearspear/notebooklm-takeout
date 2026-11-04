@@ -797,6 +797,31 @@ test('uniqueStems treats stem+variant names as taken', () => {
   assert.deepEqual(NLME.uniqueStems(['Summary', 'summary CODE blocks'], ['-code-blocks']), ['Summary', 'summary-CODE-blocks-2']);
 });
 
+test('uniqueStems with taken numbers a name used in an earlier part', () => {
+  const taken = new Set();
+  const first = NLME.uniqueStems(["Arcturus's"], [], [], { taken });
+  const second = NLME.uniqueStems(['Arcturus\u2019s'], [], [], { taken });
+  assert.notEqual(first[0], second[0]);
+  assert.equal(second[0], `${first[0]}-2`);
+  assert.deepEqual(NLME.uniqueStems(['Other'], [], [], { taken }), ['Other']);
+});
+
+test('uniqueStems with taken also holds variant names', () => {
+  const taken = new Set();
+  NLME.uniqueStems(['Diagram'], ['-with-images'], [], { taken });
+  assert.deepEqual(NLME.uniqueStems(['Diagram with images'], ['-with-images'], [], { taken }), ['Diagram-with-images-2']);
+  assert.deepEqual(NLME.uniqueStems(['diagram'], ['-with-images'], [], { taken }), ['diagram-2']);
+  // reserved names stay per call
+  assert.deepEqual(NLME.uniqueStems(['errors'], [], ['errors'], { taken }), ['errors-2']);
+  assert.deepEqual(NLME.uniqueStems(['errors'], [], [], { taken }), ['errors']);
+});
+
+test('uniqueStems without taken is unchanged', () => {
+  assert.deepEqual(NLME.uniqueStems(['A', 'a']), ['A', 'a-2']);
+  assert.deepEqual(NLME.uniqueStems(['A'], [], [], { taken: null }), ['A']);
+  assert.deepEqual(NLME.uniqueStems(['A']), ['A']);
+});
+
 test('takeoutVariantSettings turns on image versions and keeps the rest', () => {
   const s = { exportNoteWithImages: false, exportSourceWithImages: false, exportSourcePlusMetaWithImages: false, exportNoteCodeBlocks: true };
   const t = NLME.takeoutVariantSettings(s);
