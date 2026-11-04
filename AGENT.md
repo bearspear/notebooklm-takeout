@@ -142,7 +142,7 @@ notebooklm-exporter/
 │                             sidebar, service worker (importScripts) and Node tests load it
 ├── takeout-job.js (228)    — NLME.runExportJob: the one DOM-free job runner (sidebar + Node tests)
 ├── takeout-markdown.js (1029) — NLMEMarkdown: the one Markdown converter + KaTeX (sidebar + page)
-├── takeout-viewer.js (462) — NLMEViewer: DOM-free builder of the offline viewer's data and page
+├── takeout-viewer.js (465) — NLMEViewer: DOM-free builder of the offline viewer's data and page
 │                             (sidebar + Node tests + tools/build_viewer.js)
 ├── viewer/                 — The offline viewer's packaged files, read by the side panel and inlined
 │                             into viewer.html: viewer-template.html (121), viewer-app.js (330),

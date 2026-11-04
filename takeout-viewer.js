@@ -33,12 +33,14 @@
   // Alt text of a Markdown image: escaped brackets, line breaks, a backslash at the very end.
   // It stops at the next '![', or text full of unclosed ones would take quadratic time.
   const ALT = String.raw`(?:\\[\s\S]|!(?!\[)|[^\]\\!])*\\?`;
-  // After the url: an optional title in any of Markdown's three quotes
-  const TITLE = String.raw`(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?`;
+  // The end of a link after its url: an optional title in any of Markdown's three quotes, then ')'.
+  // One whitespace run, matched once: two in a row would take quadratic time on a long run.
+  const LINK_END = String.raw`>?(?:\s+(?:(?:"[^"]*"|'[^']*'|\([^)]*\))\s*)?)?\)`;
   // An embedded image: alt, type, base64
-  const EMBEDDED_IMAGE_RE = new RegExp(String.raw`!\[(${ALT})\]\(\s*<?data:(image\/[a-z0-9._+-]+)(?:;[^;,()\s]*)*;base64,([a-z0-9+/=_-]+)>?${TITLE}\s*\)`, 'gi');
+  const EMBEDDED_IMAGE_RE = new RegExp(String.raw`!\[(${ALT})\]\(\s*<?data:(image\/[a-z0-9._+-]+)(?:;[^;,()\s]*)*;base64,([a-z0-9+/=_-]+)${LINK_END}`, 'gi');
   // Any Markdown image: '![alt]' is group 1, the url group 2
-  const ANY_IMAGE_RE = new RegExp(String.raw`(!\[${ALT}\])\(\s*<?([^)\s>]*)>?${TITLE}\s*\)`, 'g');
+  // The url is not optional inside the group, so '\s*' cannot give back spaces to be tried again
+  const ANY_IMAGE_RE = new RegExp(String.raw`(!\[${ALT}\])\(\s*(?:<?([^)\s>]+)${LINK_END}|\))`, 'g');
   const IMAGE_PATH_RE = /^images\/[0-9a-f]{16}\.[a-z0-9]+$/;
   const IMAGE_EXT = { jpeg: 'jpg', jpg: 'jpg', png: 'png', gif: 'gif', webp: 'webp', avif: 'avif', bmp: 'bmp', 'svg+xml': 'svg', tiff: 'tif' };
 
@@ -91,11 +93,12 @@
   }
 
   // The last word on "viewer.html holds no image data": whatever extractImages could not
-  // take, or a file it never saw, loses its data: URI. '(...)', then quoted, then bare.
+  // take, or a file it never saw, loses its data: URI: '(...)', quoted base64 (which may be
+  // wrapped over lines), then the bare value, which ends at a space, so words after it stay.
   function emptyDataImages(text) {
     return text
       .replace(/\(\s*<?data:image\/[^()]*\)/gi, '()')
-      .replace(/(["'])\s*data:image\/[\s\S]*?\1/gi, '$1$1')
+      .replace(/(["'])\s*data:image\/[^\s"'<>,]*;base64,[a-z0-9+/=_-]*(?:[ \t\r]*\n[ \t]*[a-z0-9+/=_-]+)*\s*\1/gi, '$1$1')
       .replace(/data:image\/[^\s"'<>)]*/gi, '');
   }
 

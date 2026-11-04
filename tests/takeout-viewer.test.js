@@ -1227,3 +1227,46 @@ test('text full of unclosed image marks stays fast', () => {
   }
   assert.ok(Date.now() - started < 2000, `${Date.now() - started} ms`);
 });
+
+// ---- fix round 2 ----
+for (const [name, text] of [
+  ['before the url', `![a](${' '.repeat(200000)}x`],
+  ['after the url', `![a](x${' '.repeat(200000)}y`],
+  ['after embedded data', `![a](data:image/png;base64,AAAA${' '.repeat(200000)}x`]
+]) {
+  test(`a whitespace run ${name} stays fast`, () => {
+    const timed = fn => { const started = process.hrtime.bigint(); fn(); return Number(process.hrtime.bigint() - started) / 1e6; };
+    const extract = timed(() => V.extractImages(text, () => {}));
+    assert.ok(extract < 200, `extractImages: ${extract} ms`);
+    const build = timed(() => V.buildViewerData({ 'notes/N.md': text }, { savedImages: new Set() }));
+    assert.ok(build < 200, `buildViewerData: ${build} ms`);
+  });
+}
+
+test('an image with space around its url and title is still one image', () => {
+  const lost = 'images/bbbbbbbbbbbbbbbb.jpg';
+  for (const form of [`![a](  ${lost}  )`, `![a](${lost}   "t"  )`, `![a](<${lost}>)`]) {
+    const md = V.buildViewerData({ 'notes/N.md': `# N\n\n${form}` }, { savedImages: new Set() }).studio[0].md;
+    assert.equal(md, '![a]()', form);
+  }
+  assert.equal(V.buildViewerData({ 'notes/N.md': '# N\n\n![a](   )' }, { savedImages: new Set() }).studio[0].md, '![a](   )');
+  const { added, addImage } = collector();
+  const out = V.extractImages(`![a](  data:image/png;base64,${PAYLOAD}   "t"  )`, addImage);
+  assert.equal(out, `![a](${added[0].p})`);
+});
+
+test('a quoted data URI in a sentence leaves the words around it', () => {
+  const uri = `data:image/png;base64,${PAYLOAD}`;
+  for (const [text, expected] of [
+    [`He wrote "${uri}" and then left.`, 'He wrote "" and then left.'],
+    [`He wrote "${uri} and then left.`, 'He wrote " and then left.'],
+    [`He wrote "${uri} and then left" she said.`, 'He wrote " and then left" she said.'],
+    [`It's '${uri}' here, isn't it.`, `It's '' here, isn't it.`],
+    ['A "data:image/png" type, and "more" words.', 'A "" type, and "more" words.']
+  ]) assert.equal(V.extractImages(text, () => {}), expected);
+});
+
+test('a quoted data URI wrapped over lines goes whole', () => {
+  const out = V.extractImages(`<img src="data:image/png;base64,${PAYLOAD.slice(0, 8)}\n  ${PAYLOAD.slice(8)}"> after`, () => {});
+  assert.equal(out, '<img src=""> after');
+});
