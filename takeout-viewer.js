@@ -92,17 +92,40 @@
     }));
   }
 
+  // ](data:image/...) becomes ](). A scan, not a regex: on text full of unclosed starts a
+  // regex looks for the same closing bracket from every start. Here each is found once.
+  function emptyDataLinkTargets(text) {
+    const start = /\]\(\s*<?data:image\//gi;
+    const bracket = /[()]/g;
+    let out = '';
+    let copied = 0;
+    let closeAt = -1; // the first bracket after the latest start
+    let match;
+    while ((match = start.exec(text))) {
+      if (closeAt < start.lastIndex) {
+        bracket.lastIndex = start.lastIndex;
+        const found = bracket.exec(text);
+        closeAt = found ? found.index : text.length;
+      }
+      if (text[closeAt] !== ')') continue;
+      out += `${text.slice(copied, match.index)}]()`;
+      copied = closeAt + 1;
+      start.lastIndex = copied;
+    }
+    return out + text.slice(copied);
+  }
+
   // The last word on "viewer.html holds no image data": whatever extractImages could not
   // take, or a file it never saw, loses its data: URI, but only where it is a target: a
   // Markdown link or image '](...)', a quoted attribute value (which may be wrapped over
   // lines), an unquoted src=, or a reference definition; a base64 payload of 16 or more characters goes wherever it stands. Prose that merely mentions a
   // data:image URI, in backticks or plain words, stays as written.
   function emptyDataImages(text) {
-    return text
-      .replace(/(\]\()\s*<?data:image\/[^()]*\)/gi, '$1)')
+    return emptyDataLinkTargets(text)
+      .replace(/(\bsrc\s*=\s*)(["'])\s*data:image\/[^"']*\2/gi, '$1$2$2')
       .replace(/(["'])\s*data:image\/[^\s"'<>,]*;base64,[a-z0-9+/=_-]*(?:[ \t\r]*\n[ \t]*[a-z0-9+/=_-]+)*\s*\1/gi, '$1$1')
       .replace(/(\bsrc\s*=\s*)data:image\/[^\s"'<>]*/gi, '$1')
-      .replace(/data:image\/[^\s"'<>,;]*;base64,[a-z0-9+/=_-]{16,}/gi, '')
+      .replace(/data:image\/[a-z0-9.+-]*;base64,[a-z0-9+/=_-]{16,}/gi, '')
       .replace(/^([ ]{0,3}\[[^\]\n]*\]:[ \t]*)<?data:image\/[^\s>]*>?/gim, '$1');
   }
 

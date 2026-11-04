@@ -295,7 +295,7 @@ test('viewer page makes no remote requests', () => {
   assert.ok(!/(src|href)=["']?https?:/.test(read('katex-inline.css')));
   // KaTeX's parser has a harmless method named fetch(), so only a bare fetch(argument) counts
   for (const f of ['katex.min.js', 'marked.min.js']) {
-    assert.ok(!/XMLHttpRequest|(?<![.\w])fetch\([^)]|new WebSocket|importScripts|sendBeacon/.test(read(f)), `${f}: network call`);
+    assert.ok(!/XMLHttpRequest|(?<![.\w])fetch\s*\(\s*[^)\s]|\b(?:window|self|globalThis)\.fetch\b|new WebSocket|importScripts|sendBeacon|\bimport\s*\(|<script[^>]*\ssrc\s*=/.test(read(f)), `${f}: network call`);
   }
   // and the page as assembled
   const page = V.assembleViewer({ template: read('viewer-template.html'), data: {}, app: read('viewer-app.js'), css: read('katex-inline.css'), katex: read('katex.min.js'), marked: read('marked.min.js') });
@@ -309,6 +309,19 @@ test('literal XMATHX token in text renders as text and never throws', () => {
   const math = ['$x$'];
   const out = 'a XMATHX7XEND b XMATHX0XEND'.replace(/XMATHX(\d+)XEND/g, (_, i) => { const m = math[+i]; if (m === undefined) return _; return m; });
   assert.equal(out, 'a XMATHX7XEND b $x$');
+});
+
+test('viewer data: odd data:image forms go, and unclosed starts stay fast', () => {
+  const clean = text => V.buildViewerData({ 'notes/a.md': text }, { notebook: 'N', exported: 'x' });
+  for (const html of [
+    '<img src="data:image/png;base64, AAAA">',
+    '<img src="data:image/svg+xml,%3Csvg%3E">',
+    "<img src='data:image/gif;base64,R0lG'>",
+    '![a](data:image/png;base64,QUJD)'
+  ]) assert.ok(!JSON.stringify(clean(html)).includes('data:image'), html);
+  const started = Date.now();
+  clean('](data:image/'.repeat(30000));
+  assert.ok(Date.now() - started < 2000, `took ${Date.now() - started} ms`);
 });
 
 test('prose that mentions a data:image uri survives the viewer data intact', () => {
