@@ -138,14 +138,14 @@ sendResponse later).
 ```
 notebooklm-exporter/
 ├── manifest.json           — V3 manifest, permissions, side_panel, content_scripts
-├── takeout-shared.js (2445) — Selectors + DOM-free helpers (NLME global); content script,
+├── takeout-shared.js (2550) — Selectors + DOM-free helpers (NLME global); content script,
 │                             sidebar, service worker (importScripts) and Node tests load it
 ├── takeout-job.js (228)    — NLME.runExportJob: the one DOM-free job runner (sidebar + Node tests)
 ├── takeout-markdown.js (1029) — NLMEMarkdown: the one Markdown converter + KaTeX (sidebar + page)
 ├── takeout-viewer.js (465) — NLMEViewer: DOM-free builder of the offline viewer's data and page
 │                             (sidebar + Node tests + tools/build_viewer.js)
 ├── viewer/                 — The offline viewer's packaged files, read by the side panel and inlined
-│                             into viewer.html: viewer-template.html (138), viewer-app.js (424),
+│                             into viewer.html: viewer-template.html (138), viewer-app.js (427),
 │                             marked.min.js (marked 12.0.2), katex.min.js (KaTeX 0.16.11),
 │                             katex-inline.css (fonts inlined)
 ├── tools/build_viewer.js (64) — Builds a viewer.html for an unzipped takeout folder (see Offline viewer)
@@ -153,7 +153,7 @@ notebooklm-exporter/
 ├── tests/                  — node:test unit tests for takeout-shared.js, takeout-job.js, the
 │                             message protocol and the file structure (load order, unique names)
 ├── sidebar.html  ( 479)    — Side panel UI: tabs, controls, settings/health panels
-├── sidebar-core.js (1662) — Settings, init, tab and notebook switching, job lock, shared helpers,
+├── sidebar-core.js (1665) — Settings, init, tab and notebook switching, job lock, shared helpers,
 │                             notes Markdown (convertToMarkdown), job records (see Milestone 3d contracts)
 ├── sidebar-artifacts.js (1222), sidebar-notes.js (813), sidebar-sources.js (777),
 │   sidebar-chat.js (809), sidebar-generated.js (314), sidebar-health.js (304)
@@ -165,7 +165,7 @@ notebooklm-exporter/
 ├── content.js    (4342)    — DOM scraping + extraction, runs on NotebookLM (HANDLERS table)
 ├── mindmap-extract.js (325) — Mind map SVG/tree extraction; content script and injected
 │                             by background into the *.scf.usercontent.goog app frame
-├── background.js (467)    — Service worker: download interception/naming, mind map frame extraction, citation cache clear on update (no ZIP code)
+├── background.js (456)    — Service worker: download interception/naming, mind map frame extraction, citation cache clear on update (no ZIP code)
 ├── injected.js   (  68)    — MAIN-world download hook (window.open + link clicks), armed per click
 ├── mindmap-template.html (371) — Standalone interactive mindmap viewer (used as template)
 ├── jszip.min.js  (  12)    — Bundled JSZip
@@ -567,6 +567,23 @@ in every answer, so sources must never be keyed by number across answers.
    - Extension-started downloads (blob/data URLs) register their name first via
      `NAME_NEXT_DOWNLOAD`: Chrome drops the `filename` option while an
      `onDeterminingFilename` listener exists and does not suggest one.
+     `createDownloadNamer` (takeout-shared.js, wired in background.js) keeps the
+     registered names in `chrome.storage.session`, so they survive a service
+     worker restart; `NAME_NEXT_DOWNLOAD` answers only after that write.
+   - Notebook images (embedded in `-with-images` files, saved to `images/`, shown
+     in the citation popover) go through one set of helpers:
+     `NLME.isAllowedImageUrl` is the host list for credentialed requests (download
+     hosts plus `lh3.google.com`); `NLME.imageFetchUrl` gives the url to request
+     (without `authuser`; caches and reports keep the original url);
+     `downloadImageAsBase64` (sidebar-core.js) makes one request per call, and a
+     403, 429 or 503 gets no page fallback.
+   - The image session (`NLME.createImageSession`, takeout-shared.js) is the
+     retry policy. `beginImageSession` / `fetchJobImage` (sidebar-core.js) open one
+     per job and fetch through it. Patient calls (the embed pass) wait and retry:
+     5 s and 15 s after a 403, backoff on 429/503 with a 30 s pause, a 5-minute
+     budget for limits and a 10-minute budget for 403s, and a failed image is not
+     cached. Hover calls (citation popover) make one attempt. The cause of the
+     403s is not known; the session treats them as transient per request.
 
 Filename convention for a single artifact download: `[{prefix}]_{sanitized-title}.{ext}`
 (`NLME.artifactTypePrefix`). A single Data Table or mind map is one ZIP instead
