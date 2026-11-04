@@ -206,18 +206,77 @@ test('findQuote returns null for text that is absent', () => {
   assert.equal(app.findQuote('some text', '  ...  '), null);
 });
 
+// Minimal stand-in for DOMParser: flat tag soup with attributes, enough for sanitizeHtml.
+function fakeParser() {
+  const VOID = /^(img|br|hr|input|source|track|link|meta|base|use|image)$/i;
+  return { parseFromString(html) {
+    const nodes = [];
+    const re = /<\/?([a-zA-Z][\w:-]*)((?:\s+[^\s=>\/]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*\/?>|([^<]+)/g;
+    let m, stack = [];
+    const doc = {
+      createTextNode: text => ({ text, isText: true }),
+      querySelectorAll(sel) {
+        const names = sel === '*' ? null : sel.split(',');
+        return nodes.filter(n => !n.gone && !n.isText && (!names || names.includes(n.tagName.toLowerCase())));
+      },
+      body: { get innerHTML() { return nodes.filter(n => !n.gone).map(n => n.isText ? n.text : n.open() + (VOID.test(n.tagName) ? '' : '')).join('') + stack.map(t => `</${t}>`).join(''); } }
+    };
+    const closeTag = (name) => { const i = stack.lastIndexOf(name); if (i >= 0) stack = stack.slice(0, i); };
+    while ((m = re.exec(html))) {
+      if (m[3] !== undefined) { nodes.push({ text: m[3], isText: true }); continue; }
+      if (m[0][1] === '/') { nodes.push({ close: m[1], isText: true, text: `</${m[1]}>` }); closeTag(m[1]); continue; }
+      const attrs = [];
+      m[2].replace(/([^\s=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g, (_, k, a, b, c) => { attrs.push({ name: k, value: a ?? b ?? c ?? '' }); return ''; });
+      const el = {
+        tagName: m[1].toUpperCase(), attributes: attrs,
+        getAttribute(k) { const a = attrs.find(x => x.name === k); return a ? a.value : null; },
+        removeAttribute(k) { const i = attrs.findIndex(x => x.name === k); if (i >= 0) attrs.splice(i, 1); },
+        remove() { el.gone = true; },
+        replaceWith(t) { el.gone = true; nodes.splice(nodes.indexOf(el) + 1, 0, t); },
+        open() { return `<${el.tagName.toLowerCase()}${attrs.map(a => ` ${a.name}="${a.value}"`).join('')}${el.target ? ` target="${el.target}" rel="${el.rel}"` : ''}>`; }
+      };
+      nodes.push(el);
+    }
+    return doc;
+  } };
+}
+const clean = html => app.sanitizeHtml(html, fakeParser());
+
 test('viewer app removes scripts and handlers', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8');
   assert.equal(typeof app.sanitizeHtml, 'function');
-  // no DOM in Node, so check the rules in the source
-  for (const tag of ['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'form', 'base']) {
-    assert.match(src, new RegExp("DANGEROUS_TAGS = '[^']*\\b" + tag + "\\b"), tag);
-  }
-  assert.match(src, /\/\^on\/i\.test\(a\.name\)/);
-  assert.match(src, /javascript/);
+  let out = clean('<p>hi</p><script>alert(1)</script><b onclick="x()" title="t">b</b>');
+  assert.ok(!/<script/i.test(out), out);
+  assert.ok(!/onclick/i.test(out) && /title="t"/.test(out), out);
+  out = clean('<img src="x.png" onerror="alert(1)">');
+  assert.ok(!/onerror/.test(out) && /src="x\.png"/.test(out), out);
+  out = clean('<a href="javascript:alert(1)">x</a><a href=" JavaScript:alert(1)">y</a>');
+  assert.ok(!/javascript/i.test(out), out);
+  out = clean('<a href="https://example.org/p">ok</a>');
+  assert.match(out, /href="https:\/\/example\.org\/p"/);
+  assert.match(out, /rel="noopener"/);
   // every markdown render passes through sanitize
+  const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8');
   assert.match(src, /var html = sanitize\(marked\.parse\(/);
   assert.equal((src.match(/marked\.parse\(/g) || []).length, 1);
+});
+
+test('sanitizeHtml drops remote loads and keeps local ones', () => {
+  let out = clean('<img src="https://h.example/a.png" alt="A chart">');
+  assert.ok(!/https/.test(out) && !/<img/.test(out) && /A chart/.test(out), out);
+  out = clean('<img src="//h.example/a.png">');
+  assert.ok(!/h\.example/.test(out) && !/<img/.test(out), out);
+  out = clean('<img src="a/b.png" alt="x"><img src="data:image/png;base64,AAAA">');
+  assert.match(out, /src="a\/b\.png"/);
+  assert.match(out, /src="data:image\/png;base64,AAAA"/);
+  for (const html of [
+    '<video src="http://h.example/v.mp4" poster="http://h.example/p.png"></video>',
+    '<audio src="https://h.example/a.mp3"></audio>',
+    '<source src="https://h.example/a.mp4">',
+    '<img srcset="https://h.example/a.png 2x" src="ok.png">',
+    '<svg><image href="https://h.example/a.png"></image><use href="https://h.example/s.svg#a"></use></svg>',
+    '<p style="background:url(https://h.example/b.png)">t</p>',
+    '<p style="background:URL( \'https://h.example/b.png\')">t</p>'
+  ]) assert.ok(!/h\.example/.test(clean(html)), clean(html));
 });
 
 test('viewer page makes no remote requests', () => {

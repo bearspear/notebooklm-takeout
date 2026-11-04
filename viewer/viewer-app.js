@@ -6,18 +6,40 @@ var DANGEROUS_TAGS = 'script,style,iframe,object,embed,link,meta,form,base,frame
 var URL_ATTRS = /^(href|src|xlink:href|action|formaction|srcdoc|poster|data)$/i;
 var BAD_URL = /^[\s\u0000-\u001f]*(javascript|vbscript|data\s*:\s*text\/html)/i;
 
-// Strip scripts, event handlers and script URLs. parser is a DOMParser.
+// Elements that load something on display. Their URLs must stay inside the archive.
+var LOADING_TAGS = /^(img|video|audio|source|track|picture|image|use|svg|input|feimage)$/i;
+var LOADING_ATTRS = /^(src|srcset|poster|data|href|xlink:href)$/i;
+
+// Relative path or an embedded image; anything with a scheme or // stays out.
+function isLocalUrl(v) {
+  var u = String(v).replace(/[\u0000-\u001f\s]+/g, '');
+  if (/^data:image\/(?!svg)/i.test(u)) return true;
+  return !/^([a-z][a-z0-9+.-]*:|\/\/|\\)/i.test(u);
+}
+
+// Strip scripts, event handlers, script URLs and anything that would fetch a remote
+// file on display. parser is a DOMParser. Links the reader clicks (a href) are kept.
 function sanitizeHtml(html, parser) {
   var doc = parser.parseFromString(html, 'text/html');
   doc.querySelectorAll(DANGEROUS_TAGS).forEach(function (n) { n.remove(); });
   doc.querySelectorAll('*').forEach(function (n) {
+    var tag = String(n.tagName).toLowerCase(), loads = LOADING_TAGS.test(tag), dropped = false;
     Array.prototype.slice.call(n.attributes).forEach(function (a) {
-      if (/^on/i.test(a.name) || (URL_ATTRS.test(a.name) && BAD_URL.test(a.value))) n.removeAttribute(a.name);
+      var name = a.name;
+      if (/^on/i.test(name) || (URL_ATTRS.test(name) && BAD_URL.test(a.value))) n.removeAttribute(name);
+      else if (/^style$/i.test(name) && /url\s*\(|image-set|[@]import|expression|\\/i.test(a.value)) n.removeAttribute(name);
+      else if (loads && LOADING_ATTRS.test(name) && (/^srcset$/i.test(name) || !isLocalUrl(a.value))) { n.removeAttribute(name); dropped = true; }
     });
-    if (n.tagName === 'A') { n.target = '_blank'; n.rel = 'noopener'; }
+    if (tag === 'img' && dropped && !n.getAttribute('src')) {
+      var alt = n.getAttribute('alt');
+      if (alt) n.replaceWith(doc.createTextNode(alt)); else n.remove();
+    }
+    if (tag === 'a') { n.target = '_blank'; n.rel = 'noopener'; }
   });
   return doc.body.innerHTML;
 }
+
+function isWebUrl(v) { return /^https?:\/\//i.test(String(v).trim()); }
 
 // Quotes and source text differ in line breaks, curly quotes and markdown marks,
 // so match on a folded copy. Returns the folded string and, per folded char,
@@ -124,7 +146,7 @@ if (typeof document !== 'undefined') (function () {
     var s = D.sources[i];
     document.documentElement.style.setProperty('--l', '36vw');
     $('left').innerHTML = '<div class="p-head"><button class="icon-btn" id="srcback" aria-label="Back to sources">' + icon(BACK) + '</button><h2 style="flex:1">' + esc(s.title) + '</h2></div><div class="scroll"><div class="reader md" id="srcbody">' +
-      (s.url ? '<p><a class="ext" href="' + esc(s.url) + '" target="_blank" rel="noopener">Open original video</a></p>' : '') + md(s.md) + '</div></div>';
+      (isWebUrl(s.url) ? '<p><a class="ext" href="' + esc(s.url) + '" target="_blank" rel="noopener">Open original video</a></p>' : '') + md(s.md) + '</div></div>';
     if (quote) setTimeout(function () { markQuote($('srcbody'), quote); }, 200);
   }
 
