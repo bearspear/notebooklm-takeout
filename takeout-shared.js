@@ -819,6 +819,19 @@
     }
   }
 
+  // The url to request for a notebook image: without authuser, which makes
+  // lh3 answer 403 although the same image loads in the page. Other hosts and
+  // unparsable values come back unchanged. Caches and reports keep the original.
+  function imageFetchUrl(url) {
+    let u;
+    try { u = new URL(url); } catch { return url; }
+    if (u.protocol !== 'https:' || !['lh3.googleusercontent.com', 'lh3.google.com'].includes(u.hostname)) return url;
+    if (u.hostname === 'lh3.googleusercontent.com' && !u.pathname.startsWith('/notebooklm/')) return url;
+    if (!u.searchParams.has('authuser')) return url;
+    u.searchParams.delete('authuser');
+    return u.toString();
+  }
+
   // Why a fetched Blob must not be embedded as an image, or null when it can
   // be. A signed-out request gets Google's sign-in page, with HTTP 200.
   function imageBlobProblem(blob) {
@@ -904,7 +917,7 @@
   // it is one object, updated by later skips, because it sits in the job's
   // errors by then.
   function createImageSession({ download, sleep, isCancelled = () => false, now = Date.now } = {}) {
-    const results = new Map(); // url -> Promise of its data URI
+    const results = new Map(); // imageFetchUrl(url) -> Promise of its data URI
     const skipped = new Set();
     const summary = { source: '', type: 'image_download_failed', count: 0, message: '' };
     let summaryReported = false;
@@ -974,7 +987,8 @@
 
     return {
       get(url) {
-        if (results.has(url)) return results.get(url);
+        const key = imageFetchUrl(url); // authuser variants share one download
+        if (results.has(key)) return results.get(key);
         try {
           stopIfCancelled();
         } catch (error) {
@@ -988,8 +1002,8 @@
           return Promise.reject(marked('skipped', 'Skipped: Google limited requests'));
         }
         const result = fetchWithRetries(url);
-        results.set(url, result);
-        result.catch(error => { if (error.cancelled) results.delete(url); });
+        results.set(key, result);
+        result.catch(error => { if (error.cancelled) results.delete(key); });
         return result;
       },
       endBatch() {
@@ -2357,6 +2371,7 @@ footer { margin-top: 3rem; }
     takeoutVariantSettings,
     isAllowedDownloadUrl,
     isAllowedImageUrl,
+    imageFetchUrl,
     imageBlobProblem,
     summarizeImageFailures,
     applyImageEmbeds,

@@ -1076,3 +1076,50 @@ test('an unexpected throw from the embed pass leaves the note with links, not a 
   assert.ok(!note.imageEmbeds, 'no embeds: images stay links');
   assert.ok(warned.some(w => /boom/.test(typeof w === 'string' ? w : JSON.stringify(w))), 'the failure is reported');
 });
+
+// Task 12: authuser makes notebook image requests fail with 403
+const AU = 'https://lh3.googleusercontent.com/notebooklm/AB-c=w800-h600';
+
+test('imageFetchUrl drops authuser and keeps the rest', () => {
+  assert.equal(NLME.imageFetchUrl(`${AU}?authuser=0`), AU);
+  assert.equal(NLME.imageFetchUrl(`${AU}?authuser=0&sz=2`), `${AU}?sz=2`);
+  assert.equal(NLME.imageFetchUrl(`${AU}?sz=2&authuser=1`), `${AU}?sz=2`);
+  assert.equal(NLME.imageFetchUrl('https://lh3.google.com/rd-notebooklm/x?authuser=0'), 'https://lh3.google.com/rd-notebooklm/x');
+  assert.equal(NLME.imageFetchUrl(AU), AU);
+  assert.equal(NLME.imageFetchUrl('https://example.com/a.png?authuser=0'), 'https://example.com/a.png?authuser=0');
+  assert.equal(NLME.imageFetchUrl('not a url'), 'not a url');
+});
+
+test('downloadImageAsBase64 fetches without authuser', async () => {
+  const { sandbox, log } = sidePanel({ fetchImpl: async () => imageResponse() });
+  await sandbox.downloadImageAsBase64(`${AU}?authuser=0`);
+  assert.deepEqual(log.fetches.map(f => f.url), [AU]);
+});
+
+test('downloadImageAsBase64 tries the original url once after 403 on the stripped one', async () => {
+  const { sandbox, log } = sidePanel({
+    fetchImpl: async url => url.includes('authuser') ? imageResponse() : { ok: false, status: 403, headers: { get: () => null } }
+  });
+  const uri = await sandbox.downloadImageAsBase64(`${AU}?authuser=0`);
+  assert.match(uri, /^data:image\/png/);
+  assert.deepEqual(log.fetches.map(f => f.url), [AU, `${AU}?authuser=0`]);
+});
+
+test('downloadImageAsBase64 takes no extra attempt after 429', async () => {
+  const { sandbox, log } = sidePanel({
+    fetchImpl: async () => ({ ok: false, status: 429, headers: { get: () => null } })
+  });
+  await assert.rejects(sandbox.downloadImageAsBase64(`${AU}?authuser=0`), e => e.status === 429);
+  assert.deepEqual(log.fetches.map(f => f.url), [AU]);
+});
+
+test('session: authuser variants download once and the embed replaces the original link', async () => {
+  const { sandbox, log } = sidePanel({ fetchImpl: async () => imageResponse() });
+  sandbox.beginImageSession(5, () => false, async () => {});
+  const original = `${AU}?authuser=0`;
+  const [a, b] = await Promise.all([sandbox.fetchJobImage(original), sandbox.fetchJobImage(AU)]);
+  assert.equal(a, b);
+  assert.equal(log.fetches.length, 1);
+  const md = NLME.applyImageEmbeds(`![x](${original})`, new Map([[original, a]]));
+  assert.match(md, /^!\[x\]\(data:image\/png;base64,/);
+});

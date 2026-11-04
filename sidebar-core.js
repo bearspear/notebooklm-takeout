@@ -1284,13 +1284,22 @@ function sanitizeFilename(filename) {
  * @throws {Error} 'Fetch failed: <reason>' with both attempts' reasons
  */
 async function downloadImageAsBase64(url, { tabId } = {}) {
-  const blob = await fetchDownload(url, {
+  const options = {
     tabId,
     isAllowed: NLME.isAllowedImageUrl,
     blobProblem: NLME.imageBlobProblem,
     // A limited host gets no second request: the job's session waits and retries
     fallbackAfter: status => !NLME.isRateLimitedStatus(status)
-  });
+  };
+  // authuser makes lh3 answer 403: ask without it, then the original once
+  const stripped = NLME.imageFetchUrl(url);
+  let blob;
+  try {
+    blob = await fetchDownload(stripped, options);
+  } catch (error) {
+    if (stripped === url || ![401, 403, 404].includes(error.status)) throw error;
+    blob = await fetchDownload(url, options);
+  }
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => resolve(reader.result);
