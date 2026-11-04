@@ -821,6 +821,8 @@ async function retryDownload(downloadFn, maxRetries = 3, itemName = 'item') {
 
     } catch (error) {
       lastError = error;
+      // The menu will not change by waiting: no retries for a missing format
+      if (error && error.formatNotOffered) throw error;
       logger.warn('Download', `Attempt ${attempt} failed for ${itemName}`, error.message);
     }
 

@@ -190,12 +190,19 @@
   // Pick the More-menu item to download. Slide decks offer "Download PDF
   // Document (.pdf)" and "Download PowerPoint (.pptx)" (Nov 2026); other
   // types have a single "Download". -1 when the menu has no download item.
-  function pickDownloadMenuIndex(labels, preference) {
+  // Older decks list only the PDF item: with exact, a preference no item
+  // matches gives -1 instead of the first Download item, so a PPTX request
+  // never clicks PDF again (a second, identical PDF).
+  // The error a PPTX request raises when the deck's menu lists no PowerPoint item
+  const FORMAT_NOT_OFFERED = 'PowerPoint download not offered for this deck';
+
+  function pickDownloadMenuIndex(labels, preference, { exact = false } = {}) {
     const lower = (labels || []).map(l => (l || '').toLowerCase());
     const candidates = lower.map((l, i) => (l.includes('download') ? i : -1)).filter(i => i !== -1);
     if (candidates.length === 0) return -1;
     const wanted = preference === 'pptx' ? ['powerpoint', '.pptx'] : preference === 'pdf' ? ['pdf'] : [];
     const preferred = candidates.find(i => wanted.some(w => lower[i].includes(w)));
+    if (exact && preference === 'pptx' && preferred === undefined && candidates.length > 0 && candidates.some(i => lower[i].includes('pdf'))) return -1;
     return preferred !== undefined ? preferred : candidates[0];
   }
 
@@ -1137,9 +1144,12 @@
   }
 
   // Formulas in final Markdown ($$...$$ and $...$), each counted once,
-  // however many times the converter ran on nested lists or tables
+  // however many times the converter ran on nested lists or tables.
+  // A formula may touch words ($x$rad, a$b$). A price is a $ and a digit, so
+  // a span that opens on a digit must not close before a digit ($400 ... $500);
+  // other spans may ($T$2).
   function countMarkdownFormulas(markdown) {
-    const re = /\$\$[\s\S]+?\$\$|(?<![\\$\w])\$(?!\s)[^$\n]+?(?<!\s)\$(?![\w$])/g;
+    const re = /\$\$[\s\S]+?\$\$|(?<![\\$])\$(?:(?=\d)[^$\n]+?(?<!\s)\$(?![\d$])|(?![\s\d])[^$\n]+?(?<!\s)\$(?!\$))/g;
     return (String(markdown || '').match(re) || []).length;
   }
 
@@ -2390,6 +2400,7 @@ footer { margin-top: 3rem; }
     isCollapsedCitationGroup,
     renumberCitationAnchors,
     pickDownloadMenuIndex,
+    FORMAT_NOT_OFFERED,
     countFailedExtractions,
     ISSUES_URL,
     pickByIndexThenTitle,

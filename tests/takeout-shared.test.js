@@ -657,6 +657,20 @@ test('countMarkdownFormulas counts each formula once in the final Markdown', () 
   assert.equal(NLME.countMarkdownFormulas(''), 0);
 });
 
+test('countMarkdownFormulas counts a formula touching a word, not a price', () => {
+  assert.equal(NLME.countMarkdownFormulas('turn $x$rad and $MV /ME$ then $0.815$.'), 3);
+  assert.equal(NLME.countMarkdownFormulas('$400 and $500'), 0);
+  assert.equal(NLME.countMarkdownFormulas('word$x$ and (a $y$)'), 2);
+});
+
+test('pickDownloadMenuIndex can refuse a format the menu lacks', () => {
+  const pdfOnly = ['share Share', 'drive_pdfDownload PDF Document (.pdf)', 'delete Delete'];
+  assert.equal(NLME.pickDownloadMenuIndex(pdfOnly, 'pptx'), 1);
+  assert.equal(NLME.pickDownloadMenuIndex(pdfOnly, 'pptx', { exact: true }), -1);
+  assert.equal(NLME.pickDownloadMenuIndex(slideMenu, 'pptx', { exact: true }), 3);
+  assert.equal(NLME.pickDownloadMenuIndex(audioMenu, 'pdf', { exact: true }), 2);
+});
+
 test('citationCoverage counts distinct markers against sources actually read', () => {
   const sources = [{ sourceIndex: '1', text: 'A', quote: 'q' }, { sourceIndex: '2', text: 'B', quote: '' }, { sourceIndex: '3', text: '', quote: '' }];
   assert.deepEqual(NLME.citationCoverage({ markerNumbers: ['1', '2', '3', '3'], sources, needQuotes: true }), { expected: 3, written: 1 });

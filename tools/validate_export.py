@@ -183,13 +183,15 @@ def check_markdown(report, rel, text):
 
 def check_links(report, root, rel):
     text = _read(os.path.join(root, rel))
-    pattern = r'href="([^"]+)"' if rel.endswith('.html') else r'\]\(([^)\s]+)\)'
+    pattern = r'href="([^"]+)"' if rel.endswith('.html') else r'\]\(((?:[^()\s]|\([^()\s]*\))+)\)'
     base = os.path.dirname(os.path.join(root, rel))
     for target in re.findall(pattern, text):
         if target.startswith('#') or re.match(r'^[a-zA-Z][\w+.-]*:', target):
             continue
-        path = unquote(target.split('#', 1)[0])
-        if path and not os.path.exists(os.path.join(base, path)):
+        raw = target.split('#', 1)[0]
+        path = unquote(raw)
+        # a name may hold a literal %2C, so the link as written counts too
+        if path and not any(os.path.exists(os.path.join(base, p)) for p in (path, raw)):
             report.add('fail', 'broken-link', f'{rel} → {path}')
 
 

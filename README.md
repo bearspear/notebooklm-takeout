@@ -150,7 +150,8 @@ The quoted passage from the source…
      with multi-GB videos, ZIP off (a folder in Downloads) is still the lightest option.
      Folder mode is not split (files go straight to disk).
    - Reports are always Markdown (with front matter), never raw HTML.
-3. Slide decks download as PDF or PowerPoint depending on **Settings → Slide deck format**.
+3. Slide decks download as PDF or PowerPoint depending on **Settings → Slide deck format**. Older
+   decks only offer PDF and always download as PDF.
 
 ### Full Takeout
 
@@ -226,7 +227,8 @@ Every Full Takeout also writes `viewer.html` at the top of the tree. Open it in 
 internet needed) to read your sources, notes and chat, and to open slides, audio and other
 artifacts, with citations linked to their sources. `_index.md` and `_index.html` link to it.
 
-Images are files in `images/`, not data inside `viewer.html`, so the page stays small. An image that
+Images are files in `images/`, not data inside `viewer.html`, so the page stays small. Uploaded pictures
+(sources that are only an image) show there too, and citations of them name the source. An image that
 could not be downloaded shows "Image not available offline". Images in a citation quote show in the
 citation's popup.
 
@@ -543,6 +545,12 @@ contract with Gemini Notebook, past drift and recipes.
 - Every Full Takeout writes `viewer.html`: browse sources, notes, chat and artifacts offline, with
   linked citations. Unzip the ZIPs into one folder for media links to work.
 - Images show in the viewer, from an `images/` folder (its own ZIP with ZIP on), also in citation popups.
+- Image sources (an uploaded picture) are exported with their image, and citations of them are kept
+  by title instead of failing. Images download with your Google sign-in, with retries and limits.
+- Older slide decks that only offer PDF: Full Takeout saves the PDF once and notes the missing
+  PowerPoint in `errors.md`, instead of saving it twice (`Name (1).pdf`).
+- The export checker accepts links with parentheses, and the formula count in `_audit.md` now counts
+  formulas next to words (85 of 150 was a false alarm).
 - `_index.md` and `_index.html` link to the viewer; the root `manifest.json` lists it.
 - `tools/build_viewer.js` builds a viewer for an unzipped takeout; the export checker reports
   `viewer-invalid`, `viewer-broken-link` and `viewer-missing`.

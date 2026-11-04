@@ -73,14 +73,15 @@ function reportFile(stem, response, title, meta) {
  *
  * @param {number} tabId
  * @param {{ index: number, type: string, label: string }} item
- * @param {{ stem: string, mode: 'single'|'zip'|'folder', meta?: object, folder?: string, slidesFormat?: 'pdf'|'pptx' }} options
+ * @param {{ stem: string, mode: 'single'|'zip'|'folder', meta?: object, folder?: string, slidesFormat?: 'pdf'|'pptx', onlyIfOffered?: boolean }} options
  *   meta: front matter metadata (computed from the tab when omitted);
  *   folder: Downloads subfolder for a captured button_click download;
- *   slidesFormat: Slides format for this call (default: the ⚙️ setting)
+ *   slidesFormat: Slides format for this call (default: the ⚙️ setting);
+ *   onlyIfOffered: a PPTX request fails with .formatNotOffered when the menu lists no PowerPoint item (never clicks PDF instead)
  * @returns {Promise<{ files: Array<{path: string, data?: string|Blob, url?: string}>, savedOutside: boolean, savedName?: string }>}
  *   savedName: the captured download's name, with `folder` when given
  */
-async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', slidesFormat = settings.slidesFormat }) {
+async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', slidesFormat = settings.slidesFormat, onlyIfOffered = false }) {
   const { index, type, label } = item;
   const format = slidesFormat === 'pptx' ? 'pptx' : 'pdf';
   logger.info('Download', `Downloading artifact ${index} (${type})`, label);
@@ -100,7 +101,7 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
       type: NLME.MSG.DOWNLOAD_ARTIFACT,
       data: extractable
         ? { artifactIndex: index, artifactType: type, artifactName: label, skipMoreButton: true }
-        : { artifactIndex: index, artifactType: type, artifactName: label, downloadPreference: format }
+        : { artifactIndex: index, artifactType: type, artifactName: label, downloadPreference: format, ...(onlyIfOffered ? { requireFormat: true } : {}) }
     });
     if (!response || !response.success) {
       throw new Error(response?.error || 'Download failed');
@@ -154,7 +155,12 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
         throw new Error(`Unknown download method: ${response.method}`);
     }
   } catch (error) {
-    logger.error('Download', `Failed to download ${label}`, error);
+    if (onlyIfOffered && error && error.message === NLME.FORMAT_NOT_OFFERED) {
+      error.formatNotOffered = true;
+      logger.info('Download', `No PowerPoint item for ${label}`);
+    } else {
+      logger.error('Download', `Failed to download ${label}`, error);
+    }
     throw error;
   } finally {
     // A queued intercept request would otherwise rename the next unrelated
@@ -1007,6 +1013,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
       const formats = NLME.slideFormatsFor(item.type, { both: bothSlideFormats, preferred: settings.slidesFormat });
       const fetched = { files: [], savedOutside: false };
       const failures = [];
+      const skipped = [];
       for (const format of formats) {
         try {
           const one = await retryDownload(() => fetchArtifactFiles(shell.tab.id, item, {
@@ -1014,7 +1021,9 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
             mode: zipMode ? 'zip' : 'folder',
             meta: shell.meta,
             folder: zipMode ? '' : folder,
-            ...(format ? { slidesFormat: format } : {})
+            ...(format ? { slidesFormat: format } : {}),
+            // both formats asked: an older deck with only PDF is skipped for PPTX, not saved twice
+            ...(format === 'pptx' && formats.length > 1 ? { onlyIfOffered: true } : {})
           }), 3, item.label);
           fetched.files.push(...one.files);
           fetched.savedOutside = fetched.savedOutside || one.savedOutside;
@@ -1023,11 +1032,16 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
           // path from the takeout to it, so the viewer cannot link it (errors.md does)
           if (capture && one.savedName && !zipMode) reportSaved(capture, pathPrefix + NLMEViewer.outsidePath(typeFolder, one.savedName), null);
         } catch (error) {
-          failures.push({ format, error });
+          if (error && error.formatNotOffered) skipped.push(format);
+          else failures.push({ format, error });
         }
       }
       // Every format failed: the item fails as with a single format
-      if (failures.length === formats.length) throw failures[failures.length - 1].error;
+      if (failures.length && failures.length + skipped.length === formats.length) throw failures[failures.length - 1].error;
+      // Not a failure: an info line, no second PDF
+      for (const format of skipped) {
+        ctx.warn(`[${item.label}] Info: no ${format === 'pptx' ? 'PowerPoint' : format.toUpperCase()} version offered for this deck; the PDF was saved`);
+      }
       // One format failed, another saved: keep the item, say what is missing
       for (const { format, error } of failures) {
         ctx.warn(`[${item.label}] ${format.toUpperCase()} version failed: ${error.message}`);

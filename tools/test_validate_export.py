@@ -130,6 +130,12 @@ class ValidateTests(Base):
         self.assertIn('errors-missing', codes(r))
         self.assertEqual(r.status, 'FAIL')
 
+    def test_links_with_balanced_parentheses_are_valid(self):
+        files = {'notes/x-(S1)-y.md': '# A\n', 'notes/x-(No%2C-Filters).md': '# B\n'}
+        index = FM + '- [a](notes/x-(S1)-y.md)\n- [b](notes/x-(No%2C-Filters).md)\n- [c](notes/Gone-(1).md)\n'
+        [r] = self.check(make_export(os.path.join(self.tmp, 'e'), files=files, index=index))
+        self.assertEqual([f.detail for f in r.findings if f.code == 'broken-link'], ['_index.md \u2192 notes/Gone-(1).md'])
+
     def test_broken_index_links_fail_in_md_and_html(self):
         files = {'notes/A.md': '# A\n', '_index.html': '<a href="notes/A.md">A</a> <a href="notes/Gone.md">x</a> <a href="https://x.invalid/">w</a>'}
         index = FM + '- [A](notes/A.md)\n- [B](notes/B%20c.md)\n- [web](https://example.invalid/)\n- [anchor](#top)\n'

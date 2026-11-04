@@ -138,31 +138,31 @@ sendResponse later).
 ```
 notebooklm-exporter/
 ├── manifest.json           — V3 manifest, permissions, side_panel, content_scripts
-├── takeout-shared.js (2185) — Selectors + DOM-free helpers (NLME global); content script,
+├── takeout-shared.js (2445) — Selectors + DOM-free helpers (NLME global); content script,
 │                             sidebar, service worker (importScripts) and Node tests load it
 ├── takeout-job.js (228)    — NLME.runExportJob: the one DOM-free job runner (sidebar + Node tests)
 ├── takeout-markdown.js (1029) — NLMEMarkdown: the one Markdown converter + KaTeX (sidebar + page)
 ├── takeout-viewer.js (465) — NLMEViewer: DOM-free builder of the offline viewer's data and page
 │                             (sidebar + Node tests + tools/build_viewer.js)
 ├── viewer/                 — The offline viewer's packaged files, read by the side panel and inlined
-│                             into viewer.html: viewer-template.html (121), viewer-app.js (330),
+│                             into viewer.html: viewer-template.html (123), viewer-app.js (330),
 │                             marked.min.js (marked 12.0.2), katex.min.js (KaTeX 0.16.11),
 │                             katex-inline.css (fonts inlined)
 ├── tools/build_viewer.js (64) — Builds a viewer.html for an unzipped takeout folder (see Offline viewer)
-├── tools/validate_export.py (608) — Export checker and baseline comparison (Python stdlib; see Testing)
+├── tools/validate_export.py (610) — Export checker and baseline comparison (Python stdlib; see Testing)
 ├── tests/                  — node:test unit tests for takeout-shared.js, takeout-job.js, the
 │                             message protocol and the file structure (load order, unique names)
-├── sidebar.html  ( 478)    — Side panel UI: tabs, controls, settings/health panels
-├── sidebar-core.js (1620) — Settings, init, tab and notebook switching, job lock, shared helpers,
+├── sidebar.html  ( 479)    — Side panel UI: tabs, controls, settings/health panels
+├── sidebar-core.js (1662) — Settings, init, tab and notebook switching, job lock, shared helpers,
 │                             notes Markdown (convertToMarkdown), job records (see Milestone 3d contracts)
-├── sidebar-artifacts.js (1188), sidebar-notes.js (788), sidebar-sources.js (741),
-│   sidebar-chat.js (772), sidebar-generated.js (314), sidebar-health.js (304)
+├── sidebar-artifacts.js (1202), sidebar-notes.js (806), sidebar-sources.js (777),
+│   sidebar-chat.js (809), sidebar-generated.js (314), sidebar-health.js (304)
 │                           — one file per tab (scan, list, export job, build files)
 ├── sidebar-list.js (336)   — List toolbar: filter, type chips, sort, select all visible
 ├── sidebar-results.js (148) — Results panel and Resume banner
 ├── sidebar-takeout.js (1146) — saveFiles, fetchDownload, withExportShell, runFullTakeout, resumeJob
 ├── styles.css    (1791)    — Side panel styles
-├── content.js    (4229)    — DOM scraping + extraction, runs on NotebookLM (HANDLERS table)
+├── content.js    (4338)    — DOM scraping + extraction, runs on NotebookLM (HANDLERS table)
 ├── mindmap-extract.js (325) — Mind map SVG/tree extraction; content script and injected
 │                             by background into the *.scf.usercontent.goog app frame
 ├── background.js (467)    — Service worker: download interception/naming, mind map frame extraction, citation cache clear on update (no ZIP code)
@@ -535,7 +535,10 @@ in every answer, so sources must never be keyed by number across answers.
      `method: 'mindmap_app_frame'` and the sidebar asks background `EXTRACT_MINDMAP_FRAME`
      (see [Mindmap extraction](#mindmap-extraction)). Output: ZIP with SVG, JSON, HTML.
    - **Slides**: the More menu offers PDF and PowerPoint; `findDownloadButton` picks via
-     `NLME.pickDownloadMenuIndex(labels, settings.slidesFormat)`.
+     `NLME.pickDownloadMenuIndex(labels, settings.slidesFormat)`. Older decks list only "Download PDF
+     Document (.pdf)"; a lone PDF item is also what a PPTX preference falls back to. Full Takeout sends
+     `requireFormat` with its PPTX request (`onlyIfOffered`), which passes `{ exact: true }`: with no
+     PowerPoint item the click is skipped and the page answers `NLME.FORMAT_NOT_OFFERED`.
    - **Others**: enter intercept mode preemptively, then message content, which resolves
      the row by title (`NLME.pickByIndexThenTitleStrict`), clicks its More button, arms the
      hook and clicks the "Download" menu item.
@@ -1177,7 +1180,18 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined out
 - **Slides in both formats:** it passes `bothSlideFormats: true` to `runArtifactsJob`, whose `extractOne`
   loops `NLME.slideFormatsFor(type, …)` and calls `fetchArtifactFiles(…, { slidesFormat })` once per
   format with the same stem (`extensionFor({ format })` guesses `.pdf`/`.pptx`); one format failing
-  warns, all failing fails the item. Tab downloads keep the single `settings.slidesFormat`.
+  warns, all failing fails the item. The PPTX request of a pair is made with `onlyIfOffered`: a deck whose
+  menu has no PowerPoint item (older decks, PDF only) raises `formatNotOffered` (not retried, not logged as an
+  error). `extractOne` skips it with one `Info:` line in errors.md and no second PDF; it is not a failure
+  (before this, the PPTX click hit PDF again and Chrome saved `Name (1).pdf`, identical bytes). A single
+  `settings.slidesFormat = pptx` request keeps the old fallback, so such a deck still gets its PDF. Tab
+  downloads keep the single `settings.slidesFormat`.
+- **Formula audit.** `NLME.countMarkdownFormulas` counts `$$..$$` and `$..$` in the final Markdown. A formula
+  may touch words (`$x$rad`). A span that opens on a digit must not close before a digit, so `$400 ... $500`
+  is not a formula; other spans may (`$T$2`). Known gap: `$1 micron: 10-6 m$1 nanometre` reads as a price. On
+  the Venus sources (base files) it gives 149 against 150 on the page (it was 85).
+- **Checker links.** `check_links` reads a link target with balanced parentheses
+  (`[a](x-(S1)-y.md)`) and accepts the target as written or percent-decoded (a file name may hold `%2C`).
 - **ZIP on** (`takeoutZipEnabled`: the header's `#takeout-zip-checkbox`, else
   `NLME.takeoutZipChoice(settings)`): one ZIP per category, `<Notebook>-takeout-<category>-<ts>[-PARTIAL]
   [-partNofM|-partN].zip`, plus `<Notebook>-takeout-index-<ts>.zip`. `-partNofM` is a batch-size
