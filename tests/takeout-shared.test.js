@@ -2013,3 +2013,92 @@ test('buildRootIndex and buildRootIndexHtml are unchanged when viewerFile is nul
   assert.doesNotMatch(NLME.buildRootIndex(viewerIndexArgs), /viewer/i);
   assert.doesNotMatch(NLME.buildRootIndexHtml(viewerIndexArgs), /viewer/i);
 });
+
+// ---- download namer (folder-mode names survive a worker restart) ----
+function fakeSession(opts = {}) {
+  const data = {};
+  return {
+    data,
+    log: [],
+    async set(o) { this.log.push('set'); if (opts.setFails) throw new Error('x'); Object.assign(data, o); },
+    async get(k) { this.log.push('get'); if (opts.getFails) throw new Error('x'); return k in data ? { [k]: data[k] } : {}; },
+    async remove(ks) { this.log.push('remove'); for (const k of [].concat(ks)) delete data[k]; }
+  };
+}
+const blobItem = (url, extra = {}) => ({ url, byExtensionId: 'ext', ...extra });
+const spy = () => { const calls = []; const f = (...a) => calls.push(a); f.calls = calls; return f; };
+const tick = () => new Promise(r => setTimeout(r, 0));
+
+test('namer: a stored name applies after the Map is emptied', async () => {
+  const st = fakeSession();
+  const n1 = NLME.createDownloadNamer(st, 'ext');
+  await n1.register('blob:a', 'T/x.md');
+  const n2 = NLME.createDownloadNamer(st, 'ext'); // simulated restart
+  const suggest = spy();
+  assert.equal(n2.handle(blobItem('blob:a'), suggest), true);
+  await tick();
+  assert.deepEqual(suggest.calls, [[{ filename: 'T/x.md', conflictAction: 'uniquify' }]]);
+  assert.deepEqual(st.data, {});
+});
+
+test('namer: no stored name suggests once with no arguments', async () => {
+  const n = NLME.createDownloadNamer(fakeSession(), 'ext');
+  const suggest = spy();
+  assert.equal(n.handle(blobItem('blob:none'), suggest), true);
+  await tick();
+  assert.deepEqual(suggest.calls, [[]]);
+});
+
+test('namer: a rejected storage read still suggests once', async () => {
+  const n = NLME.createDownloadNamer(fakeSession({ getFails: true }), 'ext');
+  const suggest = spy();
+  n.handle(blobItem('blob:a'), suggest);
+  await tick();
+  assert.deepEqual(suggest.calls, [[]]);
+});
+
+test('namer: a Map hit suggests synchronously and clears storage', async () => {
+  const st = fakeSession();
+  const n = NLME.createDownloadNamer(st, 'ext');
+  await n.register('blob:a', 'T/x.md');
+  const suggest = spy();
+  assert.equal(n.handle(blobItem('blob:a'), suggest), true);
+  assert.deepEqual(suggest.calls, [[{ filename: 'T/x.md', conflictAction: 'uniquify' }]]);
+  await tick();
+  assert.deepEqual(st.data, {});
+});
+
+test('namer: register resolves after the storage write; a failed write keeps the Map entry', async () => {
+  const st = fakeSession();
+  const n = NLME.createDownloadNamer(st, 'ext');
+  const p = n.register('blob:a', 'T/x.md');
+  await p;
+  assert.equal(Object.values(st.data)[0], 'T/x.md');
+  const bad = NLME.createDownloadNamer(fakeSession({ setFails: true }), 'ext');
+  await bad.register('blob:b', 'T/y.md');
+  const suggest = spy();
+  bad.handle(blobItem('blob:b'), suggest);
+  assert.equal(suggest.calls[0][0].filename, 'T/y.md');
+});
+
+test('namer: no timer expires a registered name', async () => {
+  const realSet = globalThis.setTimeout;
+  let timers = 0;
+  globalThis.setTimeout = (...a) => { timers++; return realSet(...a); };
+  try {
+    const n = NLME.createDownloadNamer(fakeSession(), 'ext');
+    await n.register('blob:a', 'T/x.md');
+    assert.equal(timers, 0);
+  } finally { globalThis.setTimeout = realSet; }
+});
+
+test('namer: downloads that are not this extension\'s blobs never read storage', async () => {
+  const st = fakeSession();
+  const n = NLME.createDownloadNamer(st, 'ext');
+  const suggest = spy();
+  assert.equal(n.handle({ url: 'https://notebook.google.com/f.pdf', byExtensionId: 'ext' }, suggest), false);
+  assert.equal(n.handle({ url: 'blob:z', byExtensionId: 'other' }, suggest), false);
+  assert.equal(n.handle({ url: 'blob:z' }, suggest), false);
+  assert.deepEqual(st.log, []);
+  assert.deepEqual(suggest.calls, []);
+});

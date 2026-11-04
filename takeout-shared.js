@@ -2223,6 +2223,56 @@ footer { margin-top: 3rem; }
       !versionLess(currentVersion, CITE_CACHE_CLEAR_BELOW);
   }
 
+  // Names for downloads the extension starts itself (folder mode). Chrome drops
+  // the `filename` given to chrome.downloads.download while an
+  // onDeterminingFilename listener exists, so the listener applies these. The
+  // name lives in memory and in storage.session (a service worker restart empties
+  // the Map) until its download consumes it; nothing expires it.
+  const DOWNLOAD_NAME_PREFIX = 'nlme.dlname.';
+  function createDownloadNamer(storage, extensionId) {
+    const names = new Map();
+    const keyOf = url => DOWNLOAD_NAME_PREFIX + url;
+    async function removeStored(urls) {
+      const keys = urls.filter(Boolean).map(keyOf);
+      if (!storage || !keys.length) return;
+      try { await storage.remove(keys); } catch (e) { console.warn('[NotebookLM Takeout] Download name cleanup failed:', e); }
+    }
+    // Resolves after the storage write; a failed write is logged and the Map entry stays
+    async function register(url, filename) {
+      names.set(url, filename);
+      try { await storage.set({ [keyOf(url)]: filename }); }
+      catch (e) { console.warn('[NotebookLM Takeout] Download name not stored:', e); }
+    }
+    // True when this download is handled here (suggest is called exactly once,
+    // possibly later); false leaves it to the caller's other branches
+    function handle(item, suggest) {
+      const urls = [item.url, item.finalUrl];
+      const hit = names.get(item.url) || names.get(item.finalUrl);
+      if (hit) {
+        urls.forEach(u => names.delete(u));
+        removeStored(urls);
+        suggest({ filename: hit, conflictAction: 'uniquify' });
+        return true;
+      }
+      if (!extensionId || item.byExtensionId !== extensionId || typeof item.url !== 'string' || !item.url.startsWith('blob:')) return false;
+      (async () => {
+        let name = null;
+        try {
+          const key = keyOf(item.url);
+          name = ((await storage.get(key)) || {})[key] || null;
+          if (name) await removeStored([item.url]);
+        } catch (e) {
+          console.warn('[NotebookLM Takeout] Download name lookup failed:', e);
+          name = null;
+        }
+        if (name) suggest({ filename: name, conflictAction: 'uniquify' });
+        else suggest();
+      })();
+      return true;
+    }
+    return { register, handle, names };
+  }
+
   async function citationCacheClear(storage) {
     if (!storage) return false;
     try {
@@ -2484,6 +2534,7 @@ footer { margin-top: 3rem; }
     citationCacheRead,
     citationCacheWrite,
     citationCacheClear,
+    createDownloadNamer,
     versionLess,
     shouldClearCitationCache,
     citationSourcesComplete,
