@@ -93,13 +93,17 @@
   }
 
   // The last word on "viewer.html holds no image data": whatever extractImages could not
-  // take, or a file it never saw, loses its data: URI: '(...)', quoted base64 (which may be
-  // wrapped over lines), then the bare value, which ends at a space, so words after it stay.
+  // take, or a file it never saw, loses its data: URI, but only where it is a target: a
+  // Markdown link or image '](...)', a quoted attribute value (which may be wrapped over
+  // lines), an unquoted src=, or a reference definition; a base64 payload of 16 or more characters goes wherever it stands. Prose that merely mentions a
+  // data:image URI, in backticks or plain words, stays as written.
   function emptyDataImages(text) {
     return text
-      .replace(/\(\s*<?data:image\/[^()]*\)/gi, '()')
+      .replace(/(\]\()\s*<?data:image\/[^()]*\)/gi, '$1)')
       .replace(/(["'])\s*data:image\/[^\s"'<>,]*;base64,[a-z0-9+/=_-]*(?:[ \t\r]*\n[ \t]*[a-z0-9+/=_-]+)*\s*\1/gi, '$1$1')
-      .replace(/data:image\/[^\s"'<>)]*/gi, '');
+      .replace(/(\bsrc\s*=\s*)data:image\/[^\s"'<>]*/gi, '$1')
+      .replace(/data:image\/[^\s"'<>,;]*;base64,[a-z0-9+/=_-]{16,}/gi, '')
+      .replace(/^([ ]{0,3}\[[^\]\n]*\]:[ \t]*)<?data:image\/[^\s>]*>?/gim, '$1');
   }
 
   // The text the viewer may use: no image data, and with savedImages (the page shows the

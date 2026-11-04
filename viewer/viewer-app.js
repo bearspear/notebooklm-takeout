@@ -176,7 +176,9 @@ if (typeof document !== 'undefined') (function () {
     });
     var html = sanitize(marked.parse(t, { gfm: true }));
     return html.replace(/XMATHX(\d+)XEND/g, function (_, i) {
-      var m = math[+i], block = m.slice(0, 2) === '$$', src = m.replace(/^\$+|\$+$/g, '');
+      var m = math[+i];
+      if (m === undefined) return _;
+      var block = m.slice(0, 2) === '$$', src = m.replace(/^\$+|\$+$/g, '');
       src = src.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
       try { return katex.renderToString(src, { displayMode: block, throwOnError: false }); } catch (e) { return esc(m); }
     });

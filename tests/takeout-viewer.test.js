@@ -282,10 +282,39 @@ test('sanitizeHtml drops remote loads and keeps local ones', () => {
 });
 
 test('viewer page makes no remote requests', () => {
+  const dir = path.join(__dirname, '..', 'viewer');
+  const read = f => fs.readFileSync(path.join(dir, f), 'utf8');
   for (const f of ['viewer-template.html', 'viewer-app.js']) {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', f), 'utf8');
-    assert.ok(!/(src|href)="https?:|url\(https?:|@import|fetch\(|XMLHttpRequest/.test(src), f);
+    assert.ok(!/(src|href)="https?:|url\(https?:|@import|fetch\(|XMLHttpRequest/.test(read(f)), f);
   }
+  // the three vendored files that assembleViewer inlines
+  for (const f of ['katex-inline.css', 'katex.min.js', 'marked.min.js']) {
+    assert.ok(!/url\(\s*["']?(https?:)?\/\//i.test(read(f)), `${f}: remote url(`);
+    assert.ok(!/@import/.test(read(f)), `${f}: @import`);
+  }
+  assert.ok(!/(src|href)=["']?https?:/.test(read('katex-inline.css')));
+  // KaTeX's parser has a harmless method named fetch(), so only a bare fetch(argument) counts
+  for (const f of ['katex.min.js', 'marked.min.js']) {
+    assert.ok(!/XMLHttpRequest|(?<![.\w])fetch\([^)]|new WebSocket|importScripts|sendBeacon/.test(read(f)), `${f}: network call`);
+  }
+  // and the page as assembled
+  const page = V.assembleViewer({ template: read('viewer-template.html'), data: {}, app: read('viewer-app.js'), css: read('katex-inline.css'), katex: read('katex.min.js'), marked: read('marked.min.js') });
+  assert.ok(!/(src|href)="https?:|url\(\s*["']?https?:|@import/.test(page));
+});
+
+test('literal XMATHX token in text renders as text and never throws', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8');
+  assert.match(src, /m === undefined\) return _;/);
+  // same logic as md(): a token beyond the formula count must come back unchanged
+  const math = ['$x$'];
+  const out = 'a XMATHX7XEND b XMATHX0XEND'.replace(/XMATHX(\d+)XEND/g, (_, i) => { const m = math[+i]; if (m === undefined) return _; return m; });
+  assert.equal(out, 'a XMATHX7XEND b $x$');
+});
+
+test('prose that mentions a data:image uri survives the viewer data intact', () => {
+  const text = 'Use `data:image/png;base64,iVBORw0KGgo=` in CSS, then keep going.';
+  const md = V.buildViewerData({ 'notes/N.md': `# N\n\n${text}` }, manifestOpts).studio[0].md;
+  assert.ok(md.includes(text), md);
 });
 
 // ---- tools/build_viewer.js ----
@@ -1262,7 +1291,7 @@ test('a quoted data URI in a sentence leaves the words around it', () => {
     [`He wrote "${uri} and then left.`, 'He wrote " and then left.'],
     [`He wrote "${uri} and then left" she said.`, 'He wrote " and then left" she said.'],
     [`It's '${uri}' here, isn't it.`, `It's '' here, isn't it.`],
-    ['A "data:image/png" type, and "more" words.', 'A "" type, and "more" words.']
+    ['A "data:image/png" type, and "more" words.', 'A "data:image/png" type, and "more" words.']
   ]) assert.equal(V.extractImages(text, () => {}), expected);
 });
 
