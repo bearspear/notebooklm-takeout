@@ -157,3 +157,16 @@ test('an h2 heading inside an answer stays in the answer', () => {
   assert.equal(d.pairs.length, 2);
   assert.match(d.pairs[0].a, /Intro\n\n## Details\n\nMore text$/);
 });
+
+test('artifact files merge only within their own directory, whatever the order', () => {
+  const d = V.buildViewerData({
+    'part-2/artifacts/slides/x.md': '# X\n\ntwo',
+    'part-1/artifacts/slides/x.pdf': null,
+    'part-2/artifacts/slides/x.pdf': null
+  }, manifestOpts);
+  assert.equal(d.studio.length, 2);
+  const withMd = d.studio.find(a => a.md);
+  assert.equal(withMd.md, 'two');
+  assert.equal(withMd.files.pdf, 'part-2/artifacts/slides/x.pdf');
+  assert.equal(d.studio.find(a => !a.md).files.pdf, 'part-1/artifacts/slides/x.pdf');
+});

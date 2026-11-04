@@ -244,25 +244,24 @@
       if (VARIANT_STEM(stem)) continue;
       if (!kinds.has(m[1])) kinds.set(m[1], new Map());
       const groups = kinds.get(m[1]);
-      if (!groups.has(stem)) groups.set(stem, []);
-      // The same name in two parts must not overwrite: a clash starts another entry
-      const list = groups.get(stem);
-      const ext = extOf(name);
-      let g = list.find(x => !(ext in x));
-      if (!g) { g = {}; list.push(g); }
-      g[ext] = raw;
+      // Files merge only within one directory, so parts never cross-attach
+      const key = raw.slice(0, raw.length - name.length) + '\0' + stem;
+      if (!groups.has(key)) groups.set(key, { stem, files: {} });
+      groups.get(key).files[extOf(name)] = raw;
     }
     const out = [];
     for (const kind of [...kinds.keys()].sort()) {
       const groups = kinds.get(kind);
-      for (const stem of [...groups.keys()].sort()) {
-        for (const g of groups.get(stem)) {
-          const a = { kind, title: titles[stem] || stem.replace(/-/g, ' '), files: {} };
-          for (const [ext, raw] of Object.entries(g)) a.files[ext] = encodePath(raw);
-          if (typeof files[g.md] === 'string') a.md = dropH1(front(files[g.md])[1].trimStart());
-          if (typeof files[g.csv] === 'string') a.rows = parseCsv(files[g.csv]);
-          out.push(a);
-        }
+      for (const key of [...groups.keys()].sort((x, y) => {
+        const gx = groups.get(x).stem, gy = groups.get(y).stem;
+        return gx < gy ? -1 : gx > gy ? 1 : x < y ? -1 : x > y ? 1 : 0;
+      })) {
+        const { stem, files: g } = groups.get(key);
+        const a = { kind, title: titles[stem] || stem.replace(/-/g, ' '), files: {} };
+        for (const [ext, raw] of Object.entries(g)) a.files[ext] = encodePath(raw);
+        if (typeof files[g.md] === 'string') a.md = dropH1(front(files[g.md])[1].trimStart());
+        if (typeof files[g.csv] === 'string') a.rows = parseCsv(files[g.csv]);
+        out.push(a);
       }
     }
     return out;
