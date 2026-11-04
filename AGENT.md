@@ -426,8 +426,18 @@ side panel.
 2. User picks rows → `exportSources(selectedSources)`.
 3. For each source, message `EXTRACT_SOURCE` with index → content clicks source button,
    waits for `labs-tailwind-doc-viewer`, scrapes content + guide markdown + key topics.
+   An image source (an uploaded picture: Source guide plus one
+   `lh3.googleusercontent.com/notebooklm/` image, no text body, Nov 2026) cannot end the body wait
+   early, so a slow text source is never misread: `waitForSourceBody` runs the usual 10 s, and only
+   with no text at the end does it read `source-viewer img` (`NLME.imageSourceUrls`). An image gives
+   `imageUrls`; nothing gives `Source content did not load`. A guide inside the body is not counted as
+   text, and text that turns up during the guide wait undoes the decision (`recheckImageSource`).
+   Each image source costs that full 10 s.
 4. Sidebar produces 1–4 variants per source based on `settings.exportSource*`:
    - base.md, plus-meta.md, with-images.md (only if source has images), plus-meta-with-images.md
+   An image source's content is `NLME.imageSourceMarkdown`: a note plus image links, through the
+   usual embed pass and failure reporting. Base files keep the note, with the image stripped; with no
+   image version on, the job warns `image_source_not_saved`.
 5. ZIPs are batched (`sourcesPerZip`, default 25) by `runExportJob`; each ZIP has `_index.md`,
    `manifest.json`, `_audit.md` and `errors.md` (last ZIP only, when there are errors).
 6. Written by `saveFiles` (JSZip, then `downloadBlob`).
@@ -675,7 +685,7 @@ Icon textContent → kind:
 | `NLME.CITATION_TOOLTIP_SELECTOR` | Hover tooltip: `.cdk-overlay-pane.citation-tooltip-panel` > `nb-popover-container` > `div.popover-card[aria-label="Citation Details"]` (Nov 2026); legacy `xap-inline-dialog-container[role="dialog"]` |
 | `.citation-tooltip-header` | Source title in tooltip |
 | `.citation-tooltip-text` | Quote: `div.paragraph` children or `labs-tailwind-structural-element-view-v2` wrappers (both seen) |
-| `.citation-tooltip-footer` | "View source" button |
+| `.citation-tooltip-footer` | "View source" button; its text is left out when judging whether a popover has no quote |
 | `.mat-mdc-menu-panel` / `.cdk-overlay-pane` | Open menu / popup overlay |
 
 ### Chat
@@ -706,6 +716,7 @@ Icon textContent → kind:
 | `.single-source-container` | Each source row |
 | `mat-expansion-panel.notes-category-panel` | "Notes" group inside the Sources panel (Nov 2026). Its rows are notes (open `note-editor`), not in the Studio list — `isNoteSourceContainer` |
 | `.scroll-area-desktop` | Scroll container (used in DOM health check) |
+| `source-viewer img` with `NLME.isImageSourceUrl` (`https://lh3.googleusercontent.com/notebooklm/…`) | The image of an image source. Read only after the body wait found no text. Not in the health check: it needs an open image source, and a miss gives the existing `Source content did not load` |
 
 ### Studio item more-menu items
 
@@ -731,6 +742,15 @@ chat-wide and per-message chat extraction all call it):
    the next citation reading the previous quote
 ```
 
+A popover with no quote after the last attempt is a citation of an image source (the routine
+keeps its retries first, so a slow popover is not misread). `NLME.quotelessCitationTitle` takes the
+title from `.citation-tooltip-header`, else the marker's aria-label, and the result carries
+`NLME.IMAGE_CITATION_NOTE` as its quote plus `noQuote: true`, with no error. It stays a failure
+when the popover holds over 40 characters of other text (a quote the selectors missed: drift) or no
+title exists. The note counts for the citation audit, is never cached
+(`NLME.citationSourcesComplete`) and is not a read quote for the health check. That popover's
+real markup has not been inspected (Nov 2026).
+
 Markdown keeps NotebookLM's citation numbers; `NLME.buildCitationEntries` builds the
 Sources section from extracted sources plus a placeholder for markers that failed, and
 `NLME.renumberCitationAnchors` makes occurrence anchors (`-1`, `-2`, …) follow document
@@ -743,7 +763,8 @@ No Gemini Notebook data request is made per hover.
 Common failures:
 - Tooltip never appears → marker is in a collapsed group. `expandCollapsedCitations` opens
   them during the chat scan; only click `NLME.isCollapsedCitationGroup` buttons.
-- Tooltip appears but is empty → race; retry with longer wait (already 600ms ceiling).
+- Tooltip appears but is empty → race; retry with longer wait (already 600ms ceiling). Still empty
+  on the last attempt → treated as an image source citation, see above.
 - Tooltip from a previous hover persists → next hover's data is wrong. The close-wait at
   step 7 is the only thing preventing this.
 

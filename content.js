@@ -1305,7 +1305,9 @@
       results.push(await extractSingleCitationWithRetry(button, index, false, 2));
     }
     const opened = results.filter(r => r.success);
-    const withQuote = opened.filter(r => (r.data.quote || '').trim().length > 0);
+    // A citation of an image source has a note, not a read quote
+    const quoted = opened.filter(r => !r.data.noQuote);
+    const withQuote = quoted.filter(r => (r.data.quote || '').trim().length > 0);
     const withTitle = opened.filter(r => (r.data.text || '').trim().length > 0);
 
     checks.push({
@@ -1319,9 +1321,10 @@
     checks.push({
       name: 'Citation quote text read',
       selector: '.citation-tooltip-text',
-      passed: opened.length > 0 && withQuote.length === opened.length,
+      passed: opened.length > 0 && withQuote.length === quoted.length,
       critical: true,
-      note: `${withQuote.length} of ${opened.length} quotes read`
+      note: `${withQuote.length} of ${quoted.length} quotes read` +
+        (quoted.length < opened.length ? `, ${opened.length - quoted.length} citation(s) with no text (image source)` : '')
     });
     checks.push({
       name: 'Citation source title read',
@@ -1578,7 +1581,23 @@
         if (!textEl) {
           lastError = 'Tooltip content did not load';
           console.warn(`[NotebookLM Takeout] Citation ${spanIndex}: Attempt ${attempt}/${maxRetries} - ${lastError}`);
+          // A citation of an image source has no quote to wait for. Decide that
+          // only on the last attempt: a slow popover keeps all its retries.
+          const title = attempt === maxRetries ? NLME.quotelessCitationTitle({
+            tooltipText: tooltip.textContent.trim(),
+            headerText: tooltip.querySelector('.citation-tooltip-header')?.textContent?.trim() || '',
+            footerText: tooltip.querySelector('.citation-tooltip-footer')?.textContent?.trim() || '',
+            markerLabel: button.querySelector('span')?.getAttribute('aria-label')
+          }) : '';
           leave();
+          if (title) {
+            await ensureTooltipGone();
+            return {
+              success: true,
+              data: { text: title, quote: NLME.IMAGE_CITATION_NOTE, sourceIndex: spanIndex, noQuote: true },
+              imageFailures: []
+            };
+          }
           await waitForTooltipGone();
           continue;
         }
@@ -1878,6 +1897,53 @@
     return await readOpenStudioNote(noteTitle, viewersBefore);
   }
 
+  // Content ready: the source BODY text (not the viewer shell, which settles
+  // before the text arrives) is at least 50 chars and unchanged over four 50 ms
+  // checks; capped at 10 s for large sources (was a fixed 500 ms after a fixed
+  // 1.5 s)
+  const SOURCE_BODY_WAIT = { interval: 50, checks: 4, minLength: 50, timeout: 10000 };
+
+  // Length of the open source's own text; a guide rendered inside the body is
+  // not source text
+  function sourceBodyTextLength(sourceViewer) {
+    const body = sourceViewer.querySelector('.scroll-container, labs-tailwind-doc-viewer, .ql-editor');
+    if (!body) return 0;
+    const guide = body.querySelector('.source-guide-container');
+    const guideLength = guide ? guide.textContent.trim().length : 0;
+    return Math.max(0, body.textContent.trim().length - guideLength);
+  }
+
+  /**
+   * Wait for the source body. An image source shows no text, so it cannot end
+   * this wait early: it is told apart only when the whole wait has passed with
+   * no text and the panel shows a notebook image. A slow text source therefore
+   * gets the same time as before, and still fails if nothing appears.
+   *
+   * @param {Element} sourceViewer
+   * @returns {Promise<{imageUrls: string[], error?: string}>} imageUrls is
+   *   non-empty for an image source
+   */
+  async function waitForSourceBody(sourceViewer) {
+    const measure = () => sourceBodyTextLength(sourceViewer);
+    const ready = await waitForStable(measure, SOURCE_BODY_WAIT);
+    if (ready || measure() > 0) return { imageUrls: [] };
+
+    const imageUrls = NLME.imageSourceUrls(Array.from(sourceViewer.querySelectorAll('img'), img => img.src));
+    // Never export an empty body as a success
+    if (imageUrls.length === 0) return { imageUrls, error: 'Source content did not load' };
+    console.log(`[NotebookLM Takeout] No text after ${SOURCE_BODY_WAIT.timeout} ms and ${imageUrls.length} image(s): image source`);
+    return { imageUrls };
+  }
+
+  // Text that appears after the image decision makes this a text source: drop
+  // the decision and let the text settle. Returns the image urls that stand.
+  async function recheckImageSource(sourceViewer, imageUrls) {
+    if (imageUrls.length === 0 || sourceBodyTextLength(sourceViewer) === 0) return imageUrls;
+    console.log('[NotebookLM Takeout] Text arrived late: treating this as a text source');
+    await waitForStable(() => sourceBodyTextLength(sourceViewer), SOURCE_BODY_WAIT);
+    return [];
+  }
+
   /**
    * Extract content from a source document
    * Click the source → wait for viewer → extract content from labs-tailwind-doc-viewer
@@ -2016,19 +2082,8 @@
 
       console.log(`[NotebookLM Takeout] source-viewer found`);
 
-      // Content ready: the source BODY text (not the viewer shell, which
-      // settles before the text arrives) is at least 50 chars and unchanged
-      // over four 50 ms checks; capped at 10 s for large sources
-      // (was a fixed 500 ms after a fixed 1.5 s)
-      const sourceBodyLength = () => {
-        const body = sourceViewer.querySelector('.scroll-container, labs-tailwind-doc-viewer, .ql-editor');
-        return body ? body.textContent.trim().length : 0;
-      };
-      const sourceReady = await waitForStable(sourceBodyLength, { interval: 50, checks: 4, minLength: 50, timeout: 10000 });
-      if (!sourceReady && sourceBodyLength() === 0) {
-        // Never export an empty body as a success
-        return { error: 'Source content did not load' };
-      }
+      const body = await waitForSourceBody(sourceViewer);
+      if (body.error) return { error: body.error };
 
       requestTimer.end('source.content');
       requestTimer.start('source.guide');
@@ -2071,6 +2126,9 @@
       }
       requestTimer.end('source.guide');
 
+      // The guide wait gave slow text more time: text now means a text source
+      const imageUrls = await recheckImageSource(sourceViewer, body.imageUrls);
+
       // Try to find content container within source-viewer
       let contentElement = null;
       const contentSelectors = [
@@ -2096,10 +2154,10 @@
         contentElement = sourceViewer;
       }
 
-      // Extract HTML content
-      const htmlContent = contentElement.innerHTML || '';
+      // Extract HTML content (an image source has only its imageUrls)
+      const htmlContent = imageUrls.length > 0 ? '' : (contentElement.innerHTML || '');
 
-      if (!htmlContent || htmlContent.length < 10) {
+      if (imageUrls.length === 0 && (!htmlContent || htmlContent.length < 10)) {
         console.warn(`[NotebookLM Takeout] Warning: Content seems empty (${htmlContent.length} chars)`);
       }
 
@@ -2187,7 +2245,8 @@
         title: sourceTitle,
         guideMarkdown: sourceGuideMarkdown,
         keyTopics: keyTopics,
-        youtubeUrl: youtubeUrl
+        youtubeUrl: youtubeUrl,
+        imageUrls
       };
 
     } catch (error) {

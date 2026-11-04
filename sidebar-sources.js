@@ -435,9 +435,13 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
     console.warn(`[NotebookLM Takeout] "${source.title}": Key topics are missing`);
   }
 
-  // Convert (and count formulas) once; every version shares the content
-  const content = convertCounted(audit, sourceData.html,
-    () => convertToMarkdown(sourceData.html, sourceData.sources || [], '', false, false, null, false));
+  // Convert (and count formulas) once; every version shares the content. An
+  // image source has no page HTML, only its image links (extractSourceContent)
+  const imageUrls = sourceData.imageUrls || [];
+  const content = imageUrls.length > 0
+    ? NLME.imageSourceMarkdown(source.title, imageUrls)
+    : convertCounted(audit, sourceData.html,
+      () => convertToMarkdown(sourceData.html, sourceData.sources || [], '', false, false, null, false));
 
   const buildMarkdown = includeMeta => {
     let md = `# ${source.title}\n\n`;
@@ -483,6 +487,10 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
     }
   } else {
     console.log(`[NotebookLM Takeout] Skipping image downloads for "${source.title}" (no image versions enabled)`);
+    // The image is all this source has: the file would otherwise lose it silently
+    if (imageUrls.length > 0) {
+      ctx.warn({ source: source.title, type: 'image_source_not_saved', message: 'This source is an image: turn on a with-images version to save it' });
+    }
   }
   reportImageFailures(imageFailures, source.title, ctx.warn);
 

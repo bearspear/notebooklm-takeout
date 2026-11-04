@@ -117,6 +117,46 @@
     return [...byNumber.values()].sort((a, b) => (parseInt(a.number, 10) || 0) - (parseInt(b.number, 10) || 0));
   }
 
+  // An uploaded picture is a source with a Source guide and one notebook image
+  // but no text (Nov 2026): the Markdown of its body, and what stands in for a
+  // quote when a citation points at it.
+  const IMAGE_SOURCE_NOTE = 'This source is an image with no text.';
+  const IMAGE_CITATION_NOTE = 'This source is an image, so this citation has no quote text.';
+
+  // Popover text beyond its header and footer that can still be a label. More
+  // than this is a quote the selectors missed, which is drift and not an image.
+  const QUOTELESS_STRAY_TEXT_LIMIT = 40;
+
+  function isImageSourceUrl(url) {
+    try {
+      const u = new URL(url);
+      return u.protocol === 'https:' && u.hostname === 'lh3.googleusercontent.com' && u.pathname.startsWith('/notebooklm/');
+    } catch {
+      return false;
+    }
+  }
+
+  function imageSourceUrls(urls) {
+    return [...new Set((urls || []).filter(isImageSourceUrl))];
+  }
+
+  // Body of an image source. The links go through the normal embed pass, whose
+  // pattern ends a link at ")" and an alt text at "]".
+  function imageSourceMarkdown(title, urls) {
+    const alt = String(title || '').replace(/[[\]]/g, '').replace(/\s+/g, ' ').trim();
+    const links = urls.map(url => `![${alt}](${url.replace(/\(/g, '%28').replace(/\)/g, '%29')})`);
+    return [`*${IMAGE_SOURCE_NOTE}*`, ...links].join('\n\n');
+  }
+
+  // The title of a citation whose popover shows no quote, or '' when this
+  // cannot pass as one: the popover holds text of its own, or no title exists.
+  // The popover of an image source has not been inspected, so the header may
+  // be missing; the marker's aria-label then gives the title.
+  function quotelessCitationTitle({ tooltipText = '', headerText = '', footerText = '', markerLabel = '' } = {}) {
+    if (tooltipText.length - headerText.length - footerText.length > QUOTELESS_STRAY_TEXT_LIMIT) return '';
+    return headerText || String(markerLabel || '').replace(/^\s*\d+\s*:\s*/, '').trim();
+  }
+
   // Viewer close button in the Studio panel header, outside <studio-panel>.
   // Labels vary ("Close web page viewer", "Close report viewer", "Close table",
   // "Close note view"); "Collapse studio panel" must never match (Nov 2026).
@@ -2148,9 +2188,11 @@ footer { margin-top: 3rem; }
 
   // A result is cacheable only when every expected marker produced a source
   // with a filename and a non-empty quote (partial results are never stored).
+  // An image citation's note is not a read quote: it is read again next time.
   function citationSourcesComplete(sources, expectedCount) {
     return Array.isArray(sources) && expectedCount > 0 && sources.length === expectedCount &&
-      sources.every(s => s && typeof s.text === 'string' && s.text !== '' && typeof s.quote === 'string' && s.quote !== '');
+      sources.every(s => s && typeof s.text === 'string' && s.text !== '' && typeof s.quote === 'string' && s.quote !== '' &&
+        s.quote !== IMAGE_CITATION_NOTE);
   }
 
   // Header text of the Sources panel's "Notes" group, with its mat-icons already
@@ -2356,6 +2398,12 @@ footer { margin-top: 3rem; }
     pickByIndexThenTitle,
     STUDIO_HEADER_CLOSE_SELECTOR,
     buildCitationEntries,
+    IMAGE_SOURCE_NOTE,
+    IMAGE_CITATION_NOTE,
+    isImageSourceUrl,
+    imageSourceUrls,
+    imageSourceMarkdown,
+    quotelessCitationTitle,
     ICON_TO_TYPE,
     NOTE_ICONS,
     resolveArtifactType,
