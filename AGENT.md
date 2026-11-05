@@ -1180,6 +1180,12 @@ extension stopped the job. One export runs at a time (`runExclusive`).
   `-2`, `-3`, compared case-insensitively; a stem counts as taken when any stem+suffix name
   is in use (so `Diagram with images` cannot overwrite `Diagram`'s `-with-images` variant).
   `NLME.artifactStems` applies it per type folder. Do not add another uniquifier.
+  A 4th parameter `{ obsidian, taken }`: `taken` is a `Set` of folded names that a split job shares
+  across its parts (`runNotesJob` makes one for notes and one for mind maps, `runSourcesJob` one), so a
+  name used in part 1 is numbered in part 2 (v1.8.1; before, `used` reset per part and two parts
+  unzipped into one folder overwrote each other). `reserved` stays per part. Names that do not collide
+  stay byte-identical. A Retry or a Resume is a new job with a new set, so it does not see names the
+  earlier run wrote; a repeated title can still overwrite when both runs are unzipped into one folder.
 - `NLME.extensionFor({ url, mime, type })` picks an extension (URL, then MIME, then type
   default); `NLME.withRealExtension(name, realExt)` lets the background swap a guessed
   extension for the real one once the download's own name is known (`.pptx` vs `.pdf`).

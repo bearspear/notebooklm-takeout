@@ -192,6 +192,10 @@ async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = fals
  *   result: runExportJob's result
  */
 async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'notes', folder = null, variantSettings = settings, itemDir = 'notes/', written = newWritten(), tracker = null, capture = null } = {}) {
+  // File names already used by an earlier part of this job: every part of one
+  // export unzips into one folder, so a repeat is numbered, not overwritten.
+  // Mind maps have their own folder, so their own set.
+  const takenStems = { notes: new Set(), mindmaps: new Set() };
   const perZip = settings.notesPerZip;
   // Shared by every extractNoteItem call: audit counters, early-stop
   // counters, and the DOM-warning decision
@@ -261,7 +265,8 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
         totalBatches: info.totalBatches,
         partial: info.partial,
         variantSettings,
-        itemDir
+        itemDir,
+        takenStems
       });
       await saveCategoryBatch(shell, files, info, { prefix: batchPrefix(pathPrefix, info), zipKind, folder, written, capture });
       console.log(`[NotebookLM Takeout] Downloaded notes ZIP ${info.batchIndex}/${info.totalBatches}`);
@@ -538,11 +543,12 @@ async function exportSingleNote(note) {
  *   variantSettings?: object, itemDir?: string }} options
  *   errors: ALL errors of the run, passed only to the last ZIP it writes
  *   variantSettings: where noteVariants reads the export* settings (default `settings`)
+ *   takenStems: { notes, mindmaps } Sets of names earlier parts of the job used (runNotesJob)
  *   itemDir: folder of the note files ('notes/'; '' puts them next to the
  *   combined files)
  * @returns {Array<{path: string, data: string, title?: string, variant?: string, itemKind?: string}>}
  */
-function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchIndex = 1, totalBatches = 1, partial = false, variantSettings = settings, itemDir = 'notes/' }) {
+function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchIndex = 1, totalBatches = 1, partial = false, variantSettings = settings, itemDir = 'notes/', takenStems = { notes: new Set(), mindmaps: new Set() } }) {
   const files = [];
   const indexFiles = []; // Track all files for _index.md
 
@@ -574,7 +580,7 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
     // errors.md, _audit.md or a combined-notes file
     const reserved = itemDir ? [] : ['errors', '_index', '_audit', ...versions.map(v => `combined-notes${v.combinedSuffix}`)];
     const stems = NLME.uniqueStems(regularNotes.map(n => n.title),
-      versions.map(v => v.fileSuffix).filter(Boolean), reserved, { obsidian: !!settings.obsidianNames });
+      versions.map(v => v.fileSuffix).filter(Boolean), reserved, { obsidian: !!settings.obsidianNames, taken: takenStems.notes });
 
     versions.forEach(version => {
       // Individual note files with version suffix
@@ -667,7 +673,7 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
 
   // Mind map SVG, JSON and interactive HTML files
   if (mindmaps.length > 0) {
-    const stems = NLME.uniqueStems(mindmaps.map(m => m.title), [], [], { obsidian: !!settings.obsidianNames });
+    const stems = NLME.uniqueStems(mindmaps.map(m => m.title), [], [], { obsidian: !!settings.obsidianNames, taken: takenStems.mindmaps });
 
     mindmaps.forEach((mindmap, idx) => {
       const base = `mind-maps/${stems[idx]}`;
