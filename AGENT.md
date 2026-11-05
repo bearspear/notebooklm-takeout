@@ -1073,6 +1073,8 @@ Found while checking real exports after #8; the export bugs below predate it.
   relied on to keep the viewer open.
 - **Notebook emoji:** `.cover-emoji` holds it as text, plus its picker's words, so `NLME.notebookEmoji` keeps
   the first word. It stays in the page wherever the chat is scrolled.
+- **Viewer search and place:** `buildSearchIndex` flattens all text once, on the first search; `searchArchive`
+  only scans those strings. What is open lives in the address (`#s3,a2`), so a refresh or a bookmark restores it.
 - **Testing an update:** toggle the extension off and on, THEN refresh the notebook tab. The reload icon left
   page scripts stale for hours, and the side panel updating too made it look like the fix had failed.
   Check a new `NLME` function in the page's console to confirm.

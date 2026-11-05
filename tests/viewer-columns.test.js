@@ -102,6 +102,7 @@ test('showCopyResult says what happened on the button, then puts it back', () =>
   assert.equal(btn.innerHTML, 'copy-icon');
   assert.equal(attrs['aria-label'], 'Copy answer');
   assert.equal(attrs.title, 'Copy answer');
+});
 test('sourceKind reads every icon name seen on the page', () => {
   const kind = (type, title = 'x', url = '') => app.sourceKind(type, title, url);
   assert.equal(kind('video_youtube'), 'youtube');
@@ -146,4 +147,91 @@ test('every link the viewer writes itself opens in a new tab', () => {
   const links = src.split('\n').filter(line => /<a (class|href)=/.test(line));
   assert.ok(links.length >= 2);
   for (const line of links) assert.match(line, /target="_blank" rel="noopener"/, line.trim().slice(0, 80));
+});
+
+const archive = () => ({
+  sources: [
+    { title: 'feb23_part1.m4a', md: '## Content\n\nWe toured **Alberta Bible** College, which has a gym.\n\nThe gym needs work. Another gym too.' },
+    { title: 'Budget.pdf', md: 'Tuition rises. See [the plan](https://x/y) and ![pic](images/a.png).' }
+  ],
+  studio: [
+    { kind: 'note', title: 'Minutes on Alberta', md: 'Resolved to visit.<sup><a href="#src-1">[1]</a></sup>' },
+    { kind: 'tables', title: 'Costs', rows: [['Site', 'Cost'], ['Fatima', '$1M']] },
+    { kind: 'slides', title: 'Deck', files: { pdf: 'a.pdf' } }
+  ],
+  pairs: [{ q: 'where is the gym?', a: 'It’s at the college <button class="cite" data-c="1">1</button>.' }]
+});
+
+test('searchText leaves readable text: no marks, tags, urls or citation chips', () => {
+  assert.equal(app.searchText('**Bold** [link](https://x) ![p](a.png)  <sup>[1]</sup>\n\nend'), 'Bold link [1] end');
+  assert.equal(app.searchText('a <button class="cite" data-c="1">3</button> b'), 'a b');
+  assert.equal(app.searchText('it’s “ok”'), 'it\'s "ok"');
+  assert.equal(app.searchText(null), '');
+});
+
+test('searchArchive finds text inside sources, notes, tables and chat, grouped', () => {
+  const index = app.buildSearchIndex(archive());
+  const found = app.searchArchive(index, 'gym');
+  assert.deepEqual(found.groups.map(g => [g.key, g.hits.length]), [['source', 1], ['chat', 1]]);
+  assert.equal(found.total, 2);
+  const hit = found.groups[0].hits[0];
+  assert.deepEqual([hit.kind, hit.i, hit.title, hit.count], ['source', 0, 'feb23_part1.m4a', 3]);
+  assert.equal(hit.match, 'gym');
+  assert.match(hit.before, /College, which has a $/);
+  assert.equal(app.searchArchive(index, 'fatima').groups[0].key, 'studio');
+});
+
+test('searchArchive ignores case and punctuation in the text, and matches across bold', () => {
+  const index = app.buildSearchIndex(archive());
+  assert.equal(app.searchArchive(index, 'ALBERTA BIBLE COLLEGE').total, 1);
+  assert.equal(app.searchArchive(index, 'it\'s at').total, 1);
+});
+
+test('searchArchive needs every word, but not next to each other, and titles count', () => {
+  const index = app.buildSearchIndex(archive());
+  assert.equal(app.searchArchive(index, 'college work').total, 1);
+  assert.equal(app.searchArchive(index, 'college zebra').total, 0);
+  const title = app.searchArchive(index, 'deck');
+  assert.equal(title.groups[0].hits[0].match, '');
+  // A title match comes first
+  const first = app.searchArchive(index, 'alberta').groups;
+  assert.deepEqual(first.map(g => g.key), ['source', 'studio']);
+});
+
+test('searchArchive keeps a large result short and says how many there are', () => {
+  const data = { sources: Array.from({ length: 40 }, (_, i) => ({ title: `s${i}`, md: 'needle' })), studio: [], pairs: [] };
+  const found = app.searchArchive(app.buildSearchIndex(data), 'needle', 30);
+  assert.equal(found.groups[0].hits.length, 30);
+  assert.equal(found.groups[0].total, 40);
+  assert.equal(found.total, 40);
+});
+
+test('searchArchive ignores a query too short to mean anything', () => {
+  const index = app.buildSearchIndex(archive());
+  assert.deepEqual(app.searchArchive(index, ' a ').groups, []);
+  assert.deepEqual(app.searchArchive(index, '').groups, []);
+});
+
+test('searchArchive is quick on a large archive', () => {
+  const md = 'word '.repeat(200000);
+  const index = app.buildSearchIndex({ sources: Array.from({ length: 50 }, (_, i) => ({ title: `s${i}`, md })), studio: [], pairs: [] });
+  const start = Date.now();
+  app.searchArchive(index, 'nothing here');
+  assert.ok(Date.now() - start < 500);
+});
+
+test('findQuote can ignore case, for a search match', () => {
+  assert.equal(app.findQuote('Alberta College', 'alberta'), null);
+  assert.deepEqual(app.findQuote('Alberta College', 'alberta', true), { at: 0, length: 7 });
+});
+
+test('the view state round-trips and rejects anything else', () => {
+  assert.equal(app.formatViewState({ source: 3, art: null }), 's3');
+  assert.equal(app.formatViewState({ source: null, art: 2 }), 'a2');
+  assert.equal(app.formatViewState({ source: 3, art: 2 }), 's3,a2');
+  assert.equal(app.formatViewState({ source: null, art: null }), '');
+  assert.deepEqual(app.parseViewState('#s3,a2'), { source: 3, art: 2 });
+  assert.deepEqual(app.parseViewState('#a2'), { source: null, art: 2 });
+  assert.deepEqual(app.parseViewState(''), { source: null, art: null });
+  assert.deepEqual(app.parseViewState('#x9,<b>,s-1'), { source: null, art: null });
 });

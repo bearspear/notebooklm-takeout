@@ -2207,6 +2207,7 @@ test('listItemMarkdown keeps a nested list inside its item', () => {
   // A blank line stays empty
   assert.equal(item('*', 'a\n\nb'), '* a\n\n  b\n');
   assert.equal(item('1.', 'plain'), '1. plain\n');
+});
 test('a notice is listed in errors.md but is not counted as an error', () => {
   const notice = { type: 'info', title: 'Deck', message: 'no PowerPoint version offered for this deck; the PDF was saved' };
   assert.equal(NLME.countExportErrors([notice, '[Item] failed', { type: 'viewer', message: 'x' }]), 2);

@@ -544,6 +544,14 @@ contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
 
+**1.8.6 (Nov 2026)**: the offline viewer can search everything, and exports are clearer about what happened.
+- Viewer: a search box covers source text, notes, reports, tables, chat and titles, and a result opens at the highlighted match. What is open survives a refresh and can be bookmarked.
+- Viewer: sources show a type icon (audio, PDF, image, video, web, document, slides, spreadsheet, Markdown, text), the cover and tab title show the notebook's emoji, and Studio file links open in a new tab. Older takeouts need a re-export.
+- The Notes, Artifacts and Generated tabs say when an open Studio item hides the list, instead of showing it empty.
+- A deck with no PowerPoint version is a notice, not an error, so a clean takeout no longer warns.
+- Full Takeout's Cancel button goes away during the final save, which always runs to the end.
+- Citation popups are closed properly when one lingers.
+
 **1.8.5 (Nov 2026)**: nested lists stay nested in notes and chat. Sub-bullets used to export at the same level as their parent. The offline viewer's Copy answer button now shows a tick, or a cross if the copy failed.
 
 **1.8.4 (Nov 2026)**: no false `formulas: 0 of 2` audit warning for price ranges. The page draws `$3-$4 million` as math; the export's text was always right.

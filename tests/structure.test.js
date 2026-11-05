@@ -233,6 +233,7 @@ test('the Turndown list rule writes items through listItemMarkdown', () => {
   const src = fs.readFileSync(path.join(ROOT, 'takeout-markdown.js'), 'utf8');
   const rule = src.slice(src.indexOf("addRule('listsWithWrappers'"), src.indexOf("addRule('tables'"));
   assert.match(rule, /NLME\.listItemMarkdown\(marker, /);
+});
 test('the Notes, Artifacts and Generated tabs say when an open item hides the Studio list', () => {
   const scans = { 'sidebar-notes.js': 'scanNotesPage', 'sidebar-artifacts.js': 'scanPage', 'sidebar-generated.js': 'scanStudioPage' };
   for (const [file, name] of Object.entries(scans)) {
