@@ -152,6 +152,16 @@ class ValidateTests(Base):
         self.assertNotIn('front-matter-missing', codes(old))
         self.assertEqual(old.version, '1.6.0')
 
+    def test_footnote_text_that_is_not_a_marker(self):
+        body = ('# A\n\nPlain words.\n\n'
+                '\\[^1\\]: an escaped definition from a source\n\n'
+                'See \\[^2\\] in the text.\n\n'
+                '> A quote keeps its own marker.[^3] And another.[^4]\n\n'
+                'A real one[^9].\n')
+        [r] = self.check(make_export(os.path.join(self.tmp, 'e'), files={'notes/A.md': body}))
+        got = {(f.code, f.detail) for f in r.findings if f.code.startswith('footnote')}
+        self.assertEqual(got, {('footnote-undefined', 'notes/A.md: [^9]')})
+
     def test_footnote_problems(self):
         text = ('# A\n\nOne[^1] two[^2] three[^9]\n\n```\nnot a ref [^7]\n```\n\n'
                 '[^1]: **S** — q\n[^1]: **S** — dup\n[^2]: **T** — q\n[^3]: **U** — unused\n')

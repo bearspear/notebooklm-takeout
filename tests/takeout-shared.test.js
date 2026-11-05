@@ -2228,3 +2228,19 @@ test('notebookEmoji takes the emoji from the cover, without its picker text', ()
   assert.equal(NLME.notebookEmoji(''), '');
   assert.equal(NLME.notebookEmoji(null), '');
 });
+
+test('takeoutFolderName trims a long notebook name, never the timestamp', () => {
+  const ts = '2026-11-05T16-50-12';
+  const long = 'Lunar Pockets Basin-Bound Hydrology and Atmosphere in Lorber';
+  const name = NLME.takeoutFolderName(long, ts);
+  assert.ok(name.endsWith(` takeout ${ts}`));
+  assert.ok(name.length <= 80);
+  assert.ok(name.startsWith('Lunar Pockets'));
+  assert.equal(NLME.downloadFolderPath(name, 'f.md'), `${name}/f.md`);
+  // A short name is as it always was
+  assert.equal(NLME.takeoutFolderName('New Math', ts), `New Math takeout ${ts}`);
+  // No half emoji, and no space or dot left before the suffix
+  const emoji = NLME.takeoutFolderName('a'.repeat(52) + '😀😀', ts);
+  assert.equal(emoji, `${'a'.repeat(52)} takeout ${ts}`);
+  assert.equal(NLME.takeoutFolderName(`${'b'.repeat(50)} . extra words here`, ts), `${'b'.repeat(50)} takeout ${ts}`);
+});

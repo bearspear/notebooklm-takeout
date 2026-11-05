@@ -168,8 +168,10 @@ def check_markdown(report, rel, text):
     if '[object ' in text:
         report.add('fail', 'js-leftover', f'{rel}: contains "[object …]" (a JavaScript value written as text)')
     body = _strip_code(text)
-    defs = re.findall(r'^\[\^([^\]\s]+)\]:', body, re.M)
-    refs = set(re.findall(r'\[\^([^\]\s]+)\](?!:)', re.sub(r'^\[\^[^\]\s]+\]:', '', body, flags=re.M)))
+    defs = re.findall(r'^\[\^([^\]\s\\]+)\]:', body, re.M)
+    # A quote holds its source's own text, and \\[^1\\] is written out: neither is a marker
+    prose = '\n'.join(line for line in body.split('\n') if not line.lstrip().startswith('>'))
+    refs = set(re.findall(r'(?<!\\)\[\^([^\]\s\\]+)\](?!:)', re.sub(r'^\[\^[^\]\s]+\]:', '', prose, flags=re.M)))
     seen = set()
     for d in defs:
         if d in seen:
