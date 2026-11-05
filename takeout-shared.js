@@ -477,6 +477,12 @@
     });
   }
 
+  // An infographic's More → Download link (Nov 2026). Only this path of the
+  // host: the rest of lh3.google.com is not Gemini Notebook's.
+  function isInfographicDownload(u) {
+    return u.hostname === 'lh3.google.com' && u.pathname.startsWith('/notebooklm/');
+  }
+
   // Gemini Notebook's own download links (More → Download opens one via
   // window.open). Hostname-based, so lookalike query strings don't match.
   function isNotebookDownloadUrl(url) {
@@ -484,7 +490,7 @@
     try { u = new URL(url); } catch { return false; }
     if (u.protocol !== 'https:') return false;
     const host = u.hostname;
-    if (host === 'contribution.usercontent.google.com') return true;
+    if (host === 'contribution.usercontent.google.com' || isInfographicDownload(u)) return true;
     if (host === 'googleusercontent.com' || host.endsWith('.googleusercontent.com')) {
       const path = u.pathname.toLowerCase();
       return path.includes('notebook') || path.startsWith('/download') || host.includes('notebook');
@@ -802,7 +808,7 @@
     try { u = new URL(url); } catch { return false; }
     if (u.protocol !== 'https:') return false;
     const host = u.hostname;
-    return host === 'contribution.usercontent.google.com' ||
+    return host === 'contribution.usercontent.google.com' || isInfographicDownload(u) ||
       host === 'googleusercontent.com' || host.endsWith('.googleusercontent.com');
   }
 
@@ -1194,6 +1200,18 @@
   function noteHasImages({ html = '', sources = [] } = {}) {
     if (/<img\b/i.test(html || '')) return true;
     return (sources || []).some(src => /!\[/.test((src && src.quote) || ''));
+  }
+
+  // Turndown escapes every [ and ], but math viewers read \[ ... \] as display
+  // math: "[Resolution #1]" became a MathJax error in Markdown Viewer. Frees a
+  // bracket pair in one text node unless it could become Markdown: a link
+  // ("](", "][", "]:"), a footnote ("[^"), a task box ("[ ]", "[x]"), an empty
+  // pair, or nested brackets such as an Obsidian [[link]].
+  function relaxBracketEscapes(text) {
+    return String(text).replace(
+      /(?<!\\|\\\[)\\\[((?:[^\\\[\]]|\\[^\[\]])+)\\\](?![(\[:]|\\[\[\]])/g,
+      (match, inner) => (/^\^|^[ xX]$/.test(inner) ? match : `[${inner}]`)
+    );
   }
 
   // Formulas in final Markdown ($$...$$ and $...$), each counted once,
@@ -2452,6 +2470,7 @@ footer { margin-top: 3rem; }
     markWindowedQuote,
     noteHasImages,
     countMarkdownFormulas,
+    relaxBracketEscapes,
     citationCoverage,
     unknownStudioIcons,
     auditExport,

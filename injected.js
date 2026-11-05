@@ -14,14 +14,16 @@
 (function () {
   'use strict';
 
-  if (window.__nlmeDownloadHook) return;
-  window.__nlmeDownloadHook = true;
-
   const NLME = globalThis.NLME;
   if (!NLME || !NLME.createInterceptArm) {
     console.warn('[NotebookLM Takeout] takeout-shared.js missing in page world; download hook disabled');
     return;
   }
+
+  // Marked with the NLME it uses: after an update, a tab left open is injected
+  // again with a new NLME, and the new hook goes on top of the stale one
+  if (window.__nlmeDownloadHook === NLME) return;
+  window.__nlmeDownloadHook = NLME;
 
   const arm = NLME.createInterceptArm(3000);
   const originalWindowOpen = window.open;

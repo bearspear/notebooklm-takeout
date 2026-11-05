@@ -97,17 +97,20 @@ test('a single PPTX request keeps the fallback and never asks for an exact match
 });
 
 // content.js clickArtifactDownloadButton, run against a stubbed menu
-function clickSandbox(labels) {
+function clickSandbox(labels, closeResult = true) {
   const src = read('content.js');
   const start = src.indexOf('  async function clickArtifactDownloadButton(');
   const body = src.slice(start, src.indexOf('\n  }\n', start) + 5);
   const items = labels.map(textContent => ({ textContent, click() {} }));
+  const panel = { querySelectorAll: () => items };
+  const calls = [];
   const ctx = vm.createContext({
-    NLME, console, Error, Date, KeyboardEvent: class {}, CustomEvent: class {},
-    document: { dispatchEvent() {}, querySelectorAll: () => items },
-    waitForElement: async () => true,
-    findDownloadButton: async (preference, exact) => {
-      const i = NLME.pickDownloadMenuIndex(items.map(x => x.textContent), preference, { exact });
+    NLME, console, Error, Date, CustomEvent: class {}, calls,
+    document: { dispatchEvent() {}, querySelectorAll: () => [] }, // stale menus are not this item's
+    closeOpenMenus: async () => { calls.push('close'); return closeResult; },
+    openMenuForTrigger: async () => { calls.push('open'); return panel; },
+    findDownloadButton: async (preference, exact, inPanel) => {
+      const i = NLME.pickDownloadMenuIndex(Array.from(inPanel.querySelectorAll()).map(x => x.textContent), preference, { exact });
       return i === -1 ? null : items[i];
     },
     waitForInterceptedUrl: async () => 'https://contribution.usercontent.google.com/d.pdf'
@@ -126,4 +129,31 @@ test('a menu with no Download item yet stays a retryable "not found" error', asy
   await assert.rejects(ctx.click({ click() {} }, 'pptx', true), e => e.message === 'Download button not found in menu');
   const empty = clickSandbox([]);
   await assert.rejects(empty.click({ click() {} }, 'pptx', true), e => e.message === 'Download button not found in menu');
+});
+
+test('a menu left open is closed before the next item opens its own, and after a miss', async () => {
+  const ctx = clickSandbox(['Download PDF']);
+  await assert.rejects(ctx.click({ click() {} }, 'pptx', true), e => e.message === NLME.FORMAT_NOT_OFFERED);
+  assert.deepEqual(Array.from(ctx.calls), ['close', 'open', 'close']);
+});
+
+test('a menu that will not close stops the item instead of clicking in the wrong menu', async () => {
+  const ctx = clickSandbox(['Download'], false);
+  await assert.rejects(ctx.click({ click() {} }, 'pdf', false), /menu/i);
+  assert.deepEqual(Array.from(ctx.calls), ['close']);
+});
+
+test('findDownloadButton reads only the given menu, never a stale one on the page', async () => {
+  const src = read('content.js');
+  const start = src.indexOf('  async function findDownloadButton(');
+  const body = src.slice(start, src.indexOf('\n  }\n', start) + 5);
+  const stale = { textContent: 'drive_pdfDownload PDF Document (.pdf)' };
+  const own = { textContent: 'save_alt Download' };
+  const ctx = vm.createContext({
+    NLME, console,
+    document: { querySelectorAll: () => [stale, own] },
+    panel: { querySelectorAll: () => [own] }
+  });
+  vm.runInContext(body + '\nthis.find = findDownloadButton;', ctx);
+  assert.equal(await ctx.find('pdf', false, ctx.panel), own);
 });

@@ -29,7 +29,10 @@
       linkStyle: 'inlined'        // Use [text](url) format (not reference style)
     };
 
-    return new TurndownService({ ...defaultOptions, ...customOptions });
+    const service = new TurndownService({ ...defaultOptions, ...customOptions });
+    const escape = service.escape;
+    service.escape = text => NLME.relaxBracketEscapes(escape.call(service, text));
+    return service;
   }
 
   const KATEX_UNICODE_MAP = {
