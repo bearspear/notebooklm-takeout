@@ -1103,7 +1103,8 @@ function countPageContent(html) {
   const citationNumbers = [...doc.querySelectorAll('button.citation-marker')]
     .map(b => NLME.parseCitationIndex(b.querySelector('span')?.textContent))
     .filter(Boolean);
-  const formulas = doc.querySelectorAll('.katex').length;
+  const formulas = [...doc.querySelectorAll('.katex')]
+    .filter(el => !NLME.isPriceRangeFragment(el.closest('[data-math]')?.getAttribute('data-math'))).length;
   return { citationNumbers, formulas };
 }
 

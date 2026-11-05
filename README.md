@@ -544,6 +544,8 @@ contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
 
+**1.8.4 (Nov 2026)**: no false `formulas: 0 of 2` audit warning for price ranges. The page draws `$3-$4 million` as math; the export's text was always right.
+
 **1.8.3 (Nov 2026)**: infographics download again.
 - Their download link moved to a host the extension did not recognise, so each one failed with "Download was not captured".
 - A takeout started with a note open now closes it first. Before, the notes and artifacts lists were not in the page, so the compatibility warning showed and "Try Anyway" could miss them.

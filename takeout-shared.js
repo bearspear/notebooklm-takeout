@@ -1214,6 +1214,13 @@
     );
   }
 
+  // The page reads "$3-$4 million" as math and draws "3-" as a formula. The
+  // export's text is still "$3-$4 million", which countMarkdownFormulas rightly
+  // takes for prices, so the audit leaves these out of the page's count.
+  function isPriceRangeFragment(tex) {
+    return /^\d[\d.,]*(?:\s*(?:thousand|million|billion|k|m|b))?\s*(?:[-–—]|to|or|and)$/i.test(String(tex ?? '').trim());
+  }
+
   // Formulas in final Markdown ($$...$$ and $...$), each counted once,
   // however many times the converter ran on nested lists or tables.
   // A formula may touch words ($x$rad, a$b$). A price is a $ and a digit, so
@@ -2470,6 +2477,7 @@ footer { margin-top: 3rem; }
     markWindowedQuote,
     noteHasImages,
     countMarkdownFormulas,
+    isPriceRangeFragment,
     relaxBracketEscapes,
     citationCoverage,
     unknownStudioIcons,

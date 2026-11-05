@@ -212,3 +212,19 @@ test('an export of notes closes an open note before the health check and the sca
   assert.ok(close < shell.indexOf('NLME.MSG.CHECK_DOM_HEALTH'));
   assert.match(shell.slice(0, close), /healthType === 'notes'/);
 });
+
+test('countPageContent leaves price ranges drawn as math out of the formula count', () => {
+  const vm = require('node:vm');
+  const NLME = require('../takeout-shared.js');
+  const src = fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8');
+  const start = src.indexOf('function countPageContent(');
+  const body = src.slice(start, src.indexOf('\n}\n', start) + 3);
+  const katex = math => ({ closest: () => ({ getAttribute: () => math }) });
+  const formulas = [katex('3-'), katex('1-'), katex('x^2'), { closest: () => null }];
+  class DOMParser {
+    parseFromString() { return { querySelectorAll: selector => (selector === '.katex' ? formulas : []) }; }
+  }
+  const ctx = vm.createContext({ NLME, DOMParser });
+  vm.runInContext(body + '\nthis.count = countPageContent;', ctx);
+  assert.equal(ctx.count('').formulas, 2);
+});
