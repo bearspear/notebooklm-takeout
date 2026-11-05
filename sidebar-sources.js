@@ -500,6 +500,8 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
   return {
     title: source.title,
     youtubeUrl: sourceData.youtubeUrl || null,
+    // The page's type icon; 'document' is only the scan's default
+    sourceType: source.type === 'document' ? null : source.type || null,
     // Metadata for _index.md
     summary: sourceData.guideMarkdown || null,
     keyTopics: sourceData.keyTopics || [],
@@ -516,8 +518,8 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
 }
 
 // Front matter for a source file (field order fixed by the Milestone 3a
-// layout; youtube_url is dropped when null)
-function sourceFrontMatter(meta, { title, variant, youtubeUrl = null }) {
+// layout; youtube_url and source_type are dropped when null)
+function sourceFrontMatter(meta, { title, variant, youtubeUrl = null, sourceType = null }) {
   return NLME.frontMatter({
     title,
     notebook: meta.notebook,
@@ -527,7 +529,8 @@ function sourceFrontMatter(meta, { title, variant, youtubeUrl = null }) {
     exported: meta.exported,
     kind: 'source',
     variant,
-    youtube_url: youtubeUrl
+    youtube_url: youtubeUrl,
+    source_type: sourceType
   });
 }
 
@@ -626,7 +629,7 @@ function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batch
       const filename = `${stems[idx]}${suffix}.md`;
       files.push({
         path: `${itemDir}${filename}`,
-        data: sourceFrontMatter(meta, { title: source.title, variant, youtubeUrl: source.youtubeUrl }) + markdown,
+        data: sourceFrontMatter(meta, { title: source.title, variant, youtubeUrl: source.youtubeUrl, sourceType: source.sourceType }) + markdown,
         title: source.title,
         variant,
         itemKind: 'source'

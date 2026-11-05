@@ -244,6 +244,7 @@ function citationPage({ popovers, knownImageTitles = [] }) {
   vm.runInContext('var knownImageSources = new Map();', sandbox);
   vm.runInContext(nestedFn('content.js', 'rememberImageSource'), sandbox);
   vm.runInContext(nestedFn('content.js', 'imageSourcesHere'), sandbox);
+  vm.runInContext(`var lastCitationButton = null;\n${nestedFn('content.js', 'leaveCitation')}`, sandbox);
   vm.runInContext(nestedFn('content.js', 'extractSingleCitationWithRetryInner'), sandbox);
   knownImageTitles.forEach(title => sandbox.rememberImageSource(title));
   return { page, sandbox, read: retries => sandbox.extractSingleCitationWithRetryInner(button, '3', false, retries) };

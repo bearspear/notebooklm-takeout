@@ -259,6 +259,7 @@ async function saveFiles(files, { zipName, folder, capture = null } = {}) {
  * shell = {
  *   tab, projectName, timestamp, meta,
  *   isCancelled()              // true after Cancel (overlay or side panel)
+ *   finishing()                // the rest cannot be cancelled: no Cancel button
  *   progress(text, fraction)   // fraction 0..1: side-panel bar + page overlay
  *   finish({ kind, selected, result, auditOk = true, stoppedMessage, errorNote, saved = [], retry = null })
  *                              // Shows the outcome in the results panel
@@ -300,6 +301,8 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
   let overlayShown = false;
   let panelShown = false;
   let cancelled = false;
+  let finishingStarted = false;
+  const cancelBtn = document.getElementById('cancel-download-btn');
   let cancelListener = null;
   let outcome;
 
@@ -391,6 +394,14 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
       timestamp,
       meta,
       isCancelled: () => cancelled,
+      // The final save runs to the end, so an unfinished takeout still has its
+      // index: take Cancel away rather than leave a button that does nothing
+      finishing() {
+        finishingStarted = true;
+        cancelBtn.disabled = true;
+        cancelBtn.title = 'Finishing: saving what was exported';
+        chrome.tabs.sendMessage(tabId, { type: NLME.MSG.UPDATE_EXPORT_OVERLAY, hideCancel: true }).catch(() => {});
+      },
       progress(text, fraction) {
         const percent = Math.max(0, Math.min(1, fraction || 0)) * 100;
         progressFill.style.width = `${percent}%`;
@@ -431,6 +442,11 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
       }
     }
 
+    if (finishingStarted) {
+      cancelBtn.disabled = false;
+      cancelBtn.title = 'Cancel';
+    }
+
     // Hide sidebar progress panel
     if (panelShown) progressPanel.style.display = 'none';
   }
@@ -446,13 +462,24 @@ const IMAGES_ERROR = { type: 'viewer', message: 'Some images for the offline vie
 // viewer.html for the files captured so far. The side panel reads its own packaged
 // files, which needs no permission. Links are relative to the takeout root.
 // savedImages: the images/ paths that exist; other image links are left out.
+// The notebook's emoji for the viewer's cover; none is not a failure
+async function getNotebookEmoji(tabId) {
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.GET_NOTEBOOK_EMOJI });
+    return response?.emoji || '';
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Could not read the notebook emoji:', error.message);
+    return '';
+  }
+}
+
 async function buildViewerHtml(files, meta, savedImages = new Set()) {
   const [template, app, marked, katex, css] = await Promise.all(NLMEViewer.VIEWER_ASSETS.map(async asset => {
     const response = await fetch(chrome.runtime.getURL(asset));
     if (!response.ok) throw new Error(`${asset}: HTTP ${response.status}`);
     return response.text();
   }));
-  const data = NLMEViewer.buildViewerData(files, { notebook: meta.notebook, exported: meta.exported, savedImages });
+  const data = NLMEViewer.buildViewerData(files, { notebook: meta.notebook, exported: meta.exported, savedImages, emoji: meta.emoji });
   return NLMEViewer.assembleViewer({ template, css, marked, katex, app, data });
 }
 
@@ -540,7 +567,7 @@ function takeoutRootFiles({ meta, summary, errors, partial, viewerHtml }) {
         partial,
         files: rootFiles.slice(), // _index.md, _index.html, viewer.html, errors.md (not itself)
         counts: Object.fromEntries(summary.map(c => [c.folder, c.exported])),
-        errorCount: errors.length
+        errorCount: NLME.countExportErrors(errors)
       }),
       categories: summary
     }, null, 2)
@@ -775,6 +802,7 @@ async function runFullTakeout() {
       ({ name, folder: catFolder, status, selected, exported, failed, zips, parts, packages }));
     const cancelled = summary.some(c => c.status === 'partial' || c.status === 'skipped');
 
+    shell.finishing();
     // Images before the viewer: it may only link what was saved
     shell.progress('Saving images...', 1);
     const savedImages = await saveTakeoutImages(images, {
@@ -788,7 +816,7 @@ async function runFullTakeout() {
     let viewerHtml = null;
     shell.progress('Building the offline viewer...', 1);
     try {
-      viewerHtml = await buildViewerHtml(viewerFiles, shell.meta, savedImages.paths);
+      viewerHtml = await buildViewerHtml(viewerFiles, { ...shell.meta, emoji: await getNotebookEmoji(tabId) }, savedImages.paths);
     } catch (error) {
       console.error('[NotebookLM Takeout] Full Takeout: viewer failed:', error);
       takeoutErrors.push(VIEWER_ERROR);
@@ -849,7 +877,7 @@ async function runFullTakeout() {
 
     // 4. One results panel for the whole takeout
     let { message, level } = NLME.summarizeTakeoutOutcome({
-      categories: summary.map((c, i) => ({ ...c, errorCount: categories[i].errors.length })),
+      categories: summary.map((c, i) => ({ ...c, errorCount: NLME.countExportErrors(categories[i].errors) })),
       auditOk: categories.every(c => c.auditOk)
     });
     if (!rootWritten) {

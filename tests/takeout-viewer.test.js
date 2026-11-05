@@ -67,7 +67,7 @@ test('titles-only and no-citation chats still parse', () => {
 test('sources prefer plus-meta, and variants never appear as extra sources', () => {
   const d = V.buildViewerData({
     'sources/a.md': '# A\n\nplain body',
-    'sources/a-plus-meta.md': '---\ntitle: "Alpha"\nyoutube_url: "https://y/1"\n---\n# A\n\nmeta body',
+    'sources/a-plus-meta.md': '---\ntitle: "Alpha"\nyoutube_url: "https://y/1"\nsource_type: "video_youtube"\n---\n# A\n\nmeta body',
     'sources/a-with-images.md': '# A\n\nimg body',
     'sources/a-code-blocks.md': '# A\n\ncode body',
     'sources/b.md': '# B\n\nb body',
@@ -75,6 +75,9 @@ test('sources prefer plus-meta, and variants never appear as extra sources', () 
   }, manifestOpts);
   assert.deepEqual(d.sources.map(s => s.title), ['Alpha', 'b']);
   assert.equal(d.sources[0].url, 'https://y/1');
+  assert.equal(d.sources[0].type, 'video_youtube');
+  assert.equal(V.buildViewerData({}, { emoji: '♾️' }).emoji, '♾️');
+  assert.equal(V.buildViewerData({}).emoji, '');
   assert.equal(d.sources[0].md, 'meta body');
 });
 
@@ -655,7 +658,7 @@ function takeoutPanel({ zip = true, fetchFile, cancelAfter = null, notesThrow = 
     scanChatData: async () => ({ messagePairs: [{}], stats: {} }),
     runSourcesJob: batch('sources'), runNotesJob: batch('notes'), runChatJob: batch('chat'), runArtifactsJob: batch('artifacts'),
     withExportShell: (opts, run) => run({
-      tab: { id: 1 }, projectName: 'Book', timestamp: 'T', isCancelled: () => cancelled, progress() {},
+      tab: { id: 1 }, projectName: 'Book', timestamp: 'T', isCancelled: () => cancelled, finishing() {}, progress() {},
       meta: { notebook: 'Book Title', notebook_url: '', notebook_id: '', exporter: 'NotebookLM Takeout 1.8.0', exported: 'EXPORTED-AT' }
     })
   });

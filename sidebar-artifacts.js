@@ -199,7 +199,7 @@ async function fetchSlideFormats(item, formats, fetchOne, ctx) {
   // A format failed and none was saved: the item fails as with a single format
   if (failures.length && failures.length + skipped.length === formats.length) throw failures[failures.length - 1].error;
   for (const format of skipped) {
-    ctx.warn(`[${item.label}] Info: no ${format === 'pptx' ? 'PowerPoint' : format.toUpperCase()} version offered for this deck; the PDF was saved`);
+    ctx.warn({ type: 'info', title: item.label, message: `no ${format === 'pptx' ? 'PowerPoint' : format.toUpperCase()} version offered for this deck; the PDF was saved` });
   }
   // One format failed, another saved: keep the item, say what is missing
   for (const { format, error } of failures) {
@@ -294,6 +294,13 @@ async function scanPage() {
     }
 
     const items = await scanArtifactsData(tab.id);
+
+    if (await studioViewerOpen(tab.id)) {
+      dropArtifactsList();
+      resultsEl.innerHTML = STUDIO_ITEM_OPEN_HTML;
+      countBadge.textContent = '0';
+      return;
+    }
 
     if (items.length === 0) {
       dropArtifactsList();
@@ -1215,7 +1222,7 @@ function artifactsRootFiles(files, exportedItems, { meta, info, part = 1, totalP
       partial: info.partial,
       files: [...files, ...root],
       counts,
-      errorCount: errors.length
+      errorCount: NLME.countExportErrors(errors)
     }), null, 2)
   });
   return root;

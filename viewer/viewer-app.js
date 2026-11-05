@@ -106,12 +106,14 @@ function foldText(str) {
 
 // Where quote sits in text: { at, length } in original indexes, or null.
 // Falls back to the first 60 characters when the whole quote is not found.
-function findQuote(text, quote) {
+function findQuote(text, quote, ignoreCase) {
   var q = foldText(String(quote)).text.replace(/^[\s\u2026.]+|[\s\u2026.]+$/g, '');
   if (!q) return null;
   var f = foldText(String(text));
-  var at = f.text.indexOf(q), len = q.length;
-  if (at < 0) { len = Math.min(60, q.length); at = f.text.indexOf(q.slice(0, len)); }
+  var hay = ignoreCase ? f.text.toLowerCase() : f.text;
+  if (ignoreCase) q = q.toLowerCase();
+  var at = hay.indexOf(q), len = q.length;
+  if (at < 0) { len = Math.min(60, q.length); at = hay.indexOf(q.slice(0, len)); }
   if (at < 0) return null;
   var from = f.pos[at], to = f.pos[at + len - 1] + 1;
   return { at: from, length: to - from };
@@ -147,7 +149,154 @@ function parseCols(text) {
   return JSON.parse(serializeCols(o));
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage };
+// The clipboard call can be refused on a page opened from disk; the old copy
+// command often still works there. @returns {Promise<boolean>} whether it copied
+function copyText(text, clipboard, doc) {
+  function fallback() {
+    var area = doc.createElement('textarea');
+    area.value = text;
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    doc.body.appendChild(area);
+    area.select();
+    var ok = false;
+    try { ok = doc.execCommand('copy'); } catch (e) { /* stays false */ }
+    area.remove();
+    return ok;
+  }
+  if (!clipboard) return Promise.resolve(fallback());
+  return clipboard.writeText(text).then(function () { return true; }, fallback);
+}
+
+// Shows the result on the button for a moment. The resting look is saved once,
+// so a click while a result shows does not keep "Copied" for good.
+function showCopyResult(btn, ok, icons, later, cancel) {
+  if (!btn.copyRest) btn.copyRest = { html: btn.innerHTML, label: btn.getAttribute('aria-label'), timer: null };
+  var rest = btn.copyRest;
+  var text = ok ? 'Copied' : 'Copy failed';
+  cancel(rest.timer);
+  btn.innerHTML = ok ? icons.ok : icons.fail;
+  btn.setAttribute('aria-label', text);
+  btn.setAttribute('title', text);
+  rest.timer = later(function () {
+    btn.innerHTML = rest.html;
+    btn.setAttribute('aria-label', rest.label);
+    btn.setAttribute('title', rest.label);
+    btn.copyRest = null;
+  }, 1500);
+}
+
+if (typeof module === 'object' && module.exports) module.exports = { copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
+// A source's kind for its icon: the type icon the page showed, which also covers
+// titles with no extension, then the title's extension, then the url. A generic
+// document icon comes after the extension, which may say more ("plan.docx").
+var SOURCE_ICON_KINDS = [
+  [/youtube/, 'youtube'], [/pdf/, 'pdf'], [/audio|mic|music|podcast|call/, 'audio'], [/video|movie/, 'video'],
+  [/image|photo/, 'image'], [/presentation|slides/, 'slides'], [/spreadsheet|sheet/, 'sheet'],
+  [/drive_document|docs/, 'doc'], [/markdown/, 'markdown'], [/web|language|link|public|globe/, 'web']
+];
+var SOURCE_EXT_KINDS = {
+  pdf: 'pdf', mp3: 'audio', m4a: 'audio', wav: 'audio', aac: 'audio', ogg: 'audio', oga: 'audio', opus: 'audio', flac: 'audio', aiff: 'audio', wma: 'audio',
+  mp4: 'video', mov: 'video', webm: 'video', mkv: 'video', avi: 'video', m4v: 'video', mpeg: 'video', mpg: 'video',
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', heic: 'image', heif: 'image', bmp: 'image', tif: 'image', tiff: 'image', svg: 'image', avif: 'image',
+  md: 'markdown', markdown: 'markdown', txt: 'text', text: 'text', rtf: 'text', log: 'text',
+  doc: 'doc', docx: 'doc', odt: 'doc', pages: 'doc', epub: 'doc',
+  ppt: 'slides', pptx: 'slides', odp: 'slides', key: 'slides',
+  xls: 'sheet', xlsx: 'sheet', ods: 'sheet', csv: 'sheet', tsv: 'sheet', numbers: 'sheet',
+  html: 'web', htm: 'web'
+};
+function sourceKind(type, title, url) {
+  var t = String(type || '').toLowerCase();
+  for (var i = 0; i < SOURCE_ICON_KINDS.length; i++) {
+    if (SOURCE_ICON_KINDS[i][0].test(t)) return SOURCE_ICON_KINDS[i][1];
+  }
+  var name = String(title || '').trim();
+  var ext = /\.([a-z0-9]{1,8})$/i.exec(name);
+  var byExt = ext && SOURCE_EXT_KINDS[ext[1].toLowerCase()];
+  if (byExt && Object.prototype.hasOwnProperty.call(SOURCE_EXT_KINDS, ext[1].toLowerCase())) return byExt;
+  if (/^https?:\/\//i.test(name)) return 'web';
+  if (/youtube\.com|youtu\.be/i.test(String(url || ''))) return 'youtube';
+  if (/description|article|text|notes|content_paste/.test(t)) return 'text';
+  return 'document';
+}
+
+// Search across everything. Text is flattened once, so a search only scans strings.
+function searchText(md) {
+  return String(md == null ? '' : md)
+    .replace(/<button class="cite"[^>]{0,80}>[^<]{0,12}<\/button>/g, '')
+    .replace(/<[^>]{0,300}>/g, ' ')
+    .replace(/!\[[^\]\n]{0,300}\]\([^)\n]{0,2000}\)/g, ' ')
+    .replace(/\[([^\]\n]{0,300})\]\([^)\n]{0,2000}\)/g, '$1')
+    .replace(/[*_`#>\\]/g, '')
+    .replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
+    .replace(/\s+/g, ' ').trim();
+}
+
+function buildSearchIndex(data) {
+  function entry(kind, i, title, text) {
+    var flat = searchText(text);
+    return { kind: kind, i: i, title: String(title || ''), text: flat, low: flat.toLowerCase(), titleLow: String(title || '').toLowerCase() };
+  }
+  var out = [];
+  (data.sources || []).forEach(function (s, i) { out.push(entry('source', i, s.title, s.md)); });
+  (data.studio || []).forEach(function (a, i) {
+    out.push(entry('studio', i, a.title, a.md != null ? a.md : (a.rows || []).map(function (r) { return r.join(' '); }).join(' ')));
+  });
+  (data.pairs || []).forEach(function (p, i) { out.push(entry('chat', i, p.q, p.q + ' ' + p.a)); });
+  return out;
+}
+
+var SEARCH_GROUPS = [['source', 'Sources'], ['studio', 'Notes and Studio'], ['chat', 'Chat']];
+
+// Every word must be in the item, anywhere. The snippet shows the whole phrase
+// when it is there, else the first word. Items matching in the title come first.
+function searchArchive(index, query, perGroup) {
+  var phrase = searchText(query).toLowerCase(), limit = perGroup || 30;
+  var words = phrase.split(' ').filter(Boolean);
+  if (phrase.length < 2) return { total: 0, groups: [] };
+  var found = { source: [], studio: [], chat: [] }, total = 0;
+  index.forEach(function (e) {
+    for (var w = 0; w < words.length; w++) {
+      if (e.low.indexOf(words[w]) < 0 && e.titleLow.indexOf(words[w]) < 0) return;
+    }
+    var find = e.low.indexOf(phrase) > -1 ? phrase : words[0];
+    var at = e.low.indexOf(find), count = 0;
+    for (var p = at; p > -1; p = e.low.indexOf(find, p + find.length)) count++;
+    var from = Math.max(0, at - 70), to = at + find.length + 110;
+    found[e.kind].push({
+      kind: e.kind, i: e.i, title: e.title, count: count, inTitle: e.titleLow.indexOf(words[0]) > -1,
+      before: at < 0 ? '' : (from > 0 ? '…' : '') + e.text.slice(from, at),
+      match: at < 0 ? '' : e.text.slice(at, at + find.length),
+      after: at < 0 ? '' : e.text.slice(at + find.length, to) + (to < e.text.length ? '…' : '')
+    });
+    total++;
+  });
+  var groups = [];
+  SEARCH_GROUPS.forEach(function (g) {
+    var hits = found[g[0]];
+    if (!hits.length) return;
+    var ordered = hits.filter(function (h) { return h.inTitle; }).concat(hits.filter(function (h) { return !h.inTitle; }));
+    groups.push({ key: g[0], label: g[1], total: hits.length, hits: ordered.slice(0, limit) });
+  });
+  return { total: total, groups: groups };
+}
+
+// What is open, kept in the address: survives a refresh and can be bookmarked
+function formatViewState(state) {
+  var parts = [];
+  if (state.source !== null) parts.push('s' + state.source);
+  if (state.art !== null) parts.push('a' + state.art);
+  return parts.join(',');
+}
+function parseViewState(hash) {
+  var state = { source: null, art: null };
+  String(hash || '').replace(/^#/, '').split(',').forEach(function (part) {
+    var m = /^([sa])(\d{1,6})$/.exec(part);
+    if (m) state[m[1] === 's' ? 'source' : 'art'] = +m[2];
+  });
+  return state;
+}
+
 
 if (typeof document !== 'undefined') (function () {
   var D = JSON.parse(document.getElementById('data').textContent);
@@ -164,8 +313,28 @@ if (typeof document !== 'undefined') (function () {
   ];
   var KIND = {}; KINDS.forEach(function (k) { KIND[k[0]] = k; });
   function icon(body, color) { return '<svg viewBox="0 0 24 24"' + (color ? ' style="color:' + color + '"' : '') + '>' + body + '</svg>'; }
-  var CLOSE = '<path d="M6 6l12 12M18 6L6 18"/>', BACK = '<path d="M15 5l-7 7 7 7"/>', COPY = '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M5 16V5a1 1 0 0 1 1-1h10"/>';
+  var CLOSE = '<path d="M6 6l12 12M18 6L6 18"/>', BACK = '<path d="M15 5l-7 7 7 7"/>', COPIED = '<path d="M5 13l4.5 4.5L19 7"/>', COPY = '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M5 16V5a1 1 0 0 1 1-1h10"/>';
   var esc = escHtml;
+  var DOC_SHEET = 'M7 3h7l4 4v14H7zM14 3v4h4';
+  var SOURCE_ICONS = {
+    pdf: ['PDF', 'var(--pink)', '<path d="' + DOC_SHEET + '"/><path d="M10 12h5M10 16h5"/>'],
+    audio: ['Audio', 'var(--blue)', '<path d="M5 10v4M9 7v10M13 4v16M17 8v8M21 10v4"/>'],
+    video: ['Video', 'var(--green)', '<rect x="3" y="6" width="13" height="12" rx="3"/><path d="M16 11l5-3v8l-5-3"/>'],
+    image: ['Image', 'var(--green)', '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="M21 16l-5-5-8 8"/>'],
+    web: ['Web page', 'var(--blue)', '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/>'],
+    doc: ['Document', 'var(--blue)', '<path d="' + DOC_SHEET + '"/><path d="M10 12h5M10 15h5M10 18h3"/>'],
+    slides: ['Slides', 'var(--orange)', '<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M12 17v4M8 21h8"/>'],
+    sheet: ['Spreadsheet', 'var(--green)', '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M4 15h16M10 4v16"/>'],
+    markdown: ['Markdown', 'var(--purple)', '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M6 15V9l2.5 3L11 9v6M15 9v6M13 13l2 2 2-2"/>'],
+    text: ['Text', 'var(--muted)', '<path d="M5 6h14M5 10h14M5 14h14M5 18h9"/>'],
+    document: ['Source', 'var(--muted)', '<path d="' + DOC_SHEET + '"/>']
+  };
+  function sourceIcon(s) {
+    var kind = sourceKind(s.type, s.title, s.url);
+    if (kind === 'youtube') return '<i class="yt" title="YouTube"></i>';
+    var look = SOURCE_ICONS[kind];
+    return '<i class="src-ic" title="' + look[0] + '">' + icon(look[2], look[1]) + '</i>';
+  }
 
   // Exported text comes from third-party sources, so scripts and handlers never survive
   function sanitize(html) { return sanitizeHtml(html, new DOMParser()); }
@@ -186,10 +355,10 @@ if (typeof document !== 'undefined') (function () {
   function norm(s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g, ''); }
   var srcByTitle = {}; D.sources.forEach(function (s, i) { srcByTitle[norm(s.title)] = i; });
 
-  function markQuote(box, quote) {
+  function markQuote(box, quote, ignoreCase) {
     var w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT), nodes = [], n, full = '';
     while ((n = w.nextNode())) { nodes.push(n); full += n.nodeValue; }
-    var hit = findQuote(full, quote); if (!hit) return false;
+    var hit = findQuote(full, quote, ignoreCase); if (!hit) return false;
     var from = hit.at, to = hit.at + hit.length, offs = [], o = 0;
     nodes.forEach(function (nd) { offs.push(o); o += nd.nodeValue.length; });
     var owner = [];
@@ -270,25 +439,40 @@ if (typeof document !== 'undefined') (function () {
 
   /* Sources pane */
   var srcQ = '';
+  // Open items, and where each list was scrolled before one opened
+  var view = { source: null, art: null }, listTop = { l: 0, r: 0 }, savedHash = '';
+  function saveView() {
+    var hash = formatViewState(view);
+    if (hash === savedHash) return;
+    savedHash = hash;
+    try { location.replace('#' + hash); } catch (e) { /* the page works without it */ }
+  }
+  function listScroller(pane) { return $(pane).querySelector('.scroll'); }
   function sourcesList() {
     auto.l = null;
+    view.source = null;
     var q = srcQ.toLowerCase(), hits = [];
     D.sources.forEach(function (s, i) { if (!q || s.title.toLowerCase().indexOf(q) > -1) hits.push(i); });
     $('left').innerHTML = '<div class="p-head"><h2>Sources</h2>' + colBtn('l') + '</div><label class="search-block">' + icon('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>') +
       '<input id="srcq" type="search" aria-label="Search sources" placeholder="Search sources" value="' + esc(srcQ) + '"></label><div class="group">' + hits.length + ' of ' + D.sources.length + '</div><div class="scroll">' +
       hits.map(function (i) {
         var s = D.sources[i];
-        return '<button class="src" data-src="' + i + '">' + (s.url ? '<i class="yt"></i>' : icon('<path d="M7 3h7l4 4v14H7zM14 3v4h4"/>', 'var(--muted)')) + '<span>' + esc(s.title) + '</span></button>';
+        return '<button class="src" data-src="' + i + '">' + sourceIcon(s) + '<span>' + esc(s.title) + '</span></button>';
       }).join('') + '</div>';
     applyCols();
+    listScroller('left').scrollTop = listTop.l;
+    saveView();
   }
-  function openSource(i, quote) {
+  function openSource(i, quote, ignoreCase) {
     var s = D.sources[i];
+    if (view.source === null) listTop.l = listScroller('left').scrollTop;
+    view.source = i;
     reveal('l', Math.round(innerWidth * 0.36));
     $('left').innerHTML = '<div class="p-head"><button class="icon-btn" id="srcback" aria-label="Back to sources">' + icon(BACK) + '</button><h2 style="flex:1">' + esc(s.title) + '</h2>' + colBtn('l') + '</div><div class="scroll"><div class="reader md" id="srcbody">' +
       (isWebUrl(s.url) ? '<p><a class="ext" href="' + esc(s.url) + '" target="_blank" rel="noopener">Open original video</a></p>' : '') + md(s.md) + '</div></div>';
     applyCols();
-    if (quote) setTimeout(function () { markQuote($('srcbody'), quote); }, 200);
+    if (quote) setTimeout(function () { markQuote($('srcbody'), quote, ignoreCase); }, 200);
+    saveView();
   }
 
   /* Chat */
@@ -298,20 +482,30 @@ if (typeof document !== 'undefined') (function () {
     idx.forEach(function (i) {
       var p = D.pairs[i];
       if (p.date !== last) { html += '<div class="date">' + esc(p.date) + '</div>'; last = p.date; }
-      html += '<article id="pair-' + i + '"><div class="q"><div>' + esc(p.q) + '</div></div><div class="answer"><div class="md">' + md(p.a) + '</div><div class="actions"><button class="icon-btn" data-copy="' + i + '" aria-label="Copy answer" title="Copy answer">' + icon(COPY) + '</button></div></div></article>';
+      html += '<article id="pair-' + i + '"><div class="q"><div>' + esc(p.q) + '</div></div><div class="answer"><div class="md">' + md(p.a) + '</div><div class="actions"><button class="icon-btn" data-copy="' + i + '" aria-label="Copy answer" title="Copy answer" aria-live="polite">' + icon(COPY) + '</button></div></div></article>';
     });
     return html;
   }
+  // Where the chat was scrolled before a refresh (only until the tab closes)
+  var CHAT_TOP_KEY = 'nlme-viewer-chat-top:' + D.notebook, chatTop = null;
+  try { var savedTop = sessionStorage.getItem(CHAT_TOP_KEY); if (savedTop) chatTop = +savedTop || null; } catch (e) { /* no storage */ }
+  addEventListener('pagehide', function () {
+    try { sessionStorage.setItem(CHAT_TOP_KEY, String($('chatscroll').scrollTop)); } catch (e) { /* no storage */ }
+  });
   function renderChat(q) {
     var low = (q || '').toLowerCase(), idx = [];
     D.pairs.forEach(function (p, i) { if (!low || (p.q + ' ' + p.a).toLowerCase().indexOf(low) > -1) idx.push(i); });
-    var top = low ? '' : '<div class="nb-title">' + esc(D.notebook) + '</div><div class="nb-meta">' + D.sources.length + ' sources</div>' + (D.summary ? '<div class="md">' + md(D.summary) + '</div>' : '');
+    var top = low ? '' : (D.emoji ? '<div class="nb-emoji">' + esc(D.emoji) + '</div>' : '') + '<div class="nb-title">' + esc(D.notebook) + '</div><div class="nb-meta">' + D.sources.length + ' sources</div>' + (D.summary ? '<div class="md">' + md(D.summary) + '</div>' : '');
     var box = $('chat');
     box.innerHTML = top;
     $('chatcount').textContent = low ? idx.length + ' of ' + D.pairs.length : D.sources.length + ' sources';
     var at = 0, token = (renderChat.t = (renderChat.t || 0) + 1);
     (function batch() {
-      if (token !== renderChat.t || at >= idx.length) return;
+      if (token !== renderChat.t) return;
+      if (at >= idx.length) {
+        if (chatTop !== null) { $('chatscroll').scrollTop = chatTop; chatTop = null; }
+        return;
+      }
       var part = idx.slice(at, at + 15); at += 15;
       box.insertAdjacentHTML('beforeend', chatHtml(part));
       setTimeout(batch, 0);
@@ -322,6 +516,7 @@ if (typeof document !== 'undefined') (function () {
   var filter = '', opened = null;
   function studioList() {
     opened = null;
+    view.art = null;
     auto.r = null;
     var counts = {}; D.studio.forEach(function (a) { counts[a.kind] = (counts[a.kind] || 0) + 1; });
     var tiles = KINDS.map(function (k) {
@@ -334,11 +529,13 @@ if (typeof document !== 'undefined') (function () {
     }).join('');
     $('right').innerHTML = '<div class="p-head"><h2>Studio</h2>' + colBtn('r') + '</div><div class="tiles">' + tiles + '</div><div class="scroll">' + rows + '</div>';
     applyCols();
+    listScroller('right').scrollTop = listTop.r;
+    saveView();
   }
   function dlLinks(a, skip) {
     if (!a.files) return '';
     return '<div class="dl">' + Object.keys(a.files).filter(function (e) { return e !== skip; }).map(function (e) {
-      return '<a href="' + esc(a.files[e]) + '" download>' + esc(e.toUpperCase()) + '</a>'; }).join('') + '</div>';
+      return '<a href="' + esc(a.files[e]) + '" target="_blank" rel="noopener" download>' + esc(e.toUpperCase()) + '</a>'; }).join('') + '</div>';
   }
   function tableHtml(rows) {
     if (!rows || !rows.length) return '<p>Empty table.</p>';
@@ -347,7 +544,9 @@ if (typeof document !== 'undefined') (function () {
   }
   function openArt(i) {
     var a = D.studio[i], f = a.files || {}, body;
+    if (view.art === null) listTop.r = listScroller('right').scrollTop;
     opened = i;
+    view.art = i;
     reveal('r', Math.round(innerWidth * 0.40));
     if (a.md != null) body = '<div class="scroll"><div class="reader md">' + md(a.md) + '</div></div>';
     else if (a.rows) body = '<div class="scroll"><div class="reader md">' + tableHtml(a.rows) + '</div></div>';
@@ -360,6 +559,7 @@ if (typeof document !== 'undefined') (function () {
     else body = '<div class="player"><p>This file type opens outside the viewer.</p></div>';
     $('right').innerHTML = '<div class="p-head"><button class="icon-btn" id="artback" aria-label="Back to Studio">' + icon(BACK) + '</button><h2 style="flex:1">' + esc(a.title) + '</h2><button class="icon-btn" id="artclose" aria-label="Close">' + icon(CLOSE) + '</button>' + colBtn('r') + '</div>' + dlLinks(a) + body;
     applyCols();
+    saveView();
   }
 
   /* Citation popover */
@@ -386,8 +586,54 @@ if (typeof document !== 'undefined') (function () {
   pop.addEventListener('mouseenter', function () { clearTimeout(hideT); });
   pop.addEventListener('mouseleave', hidePop);
 
+  /* Search everything */
+  var searchIndex = null, results = $('results');
+  function hitHtml(h) {
+    var where = h.count > 1 ? h.count + ' matches' : '';
+    return '<button class="hit" data-hit="' + h.kind + '" data-i="' + h.i + '" data-find="' + esc(h.match) + '"><b>' + esc(h.title) + '</b>' +
+      (where ? '<small>' + where + '</small>' : '') +
+      (h.match ? '<p>' + esc(h.before) + '<mark>' + esc(h.match) + '</mark>' + esc(h.after) + '</p>' : '') + '</button>';
+  }
+  function runSearch(q) {
+    if (searchText(q).length < 2) { results.hidden = true; return; }
+    searchIndex = searchIndex || buildSearchIndex(D);
+    var found = searchArchive(searchIndex, q);
+    results.innerHTML = found.total
+      ? found.groups.map(function (g) {
+          return '<h3>' + esc(g.label) + ' <span>' + g.total + '</span></h3>' + g.hits.map(hitHtml).join('') +
+            (g.total > g.hits.length ? '<p class="more">Showing the first ' + g.hits.length + ' of ' + g.total + '. Add a word to narrow it down.</p>' : '');
+        }).join('')
+      : '<p class="more">Nothing found.</p>';
+    results.scrollTop = 0;
+    results.hidden = false;
+  }
+  function clearMarks(box) {
+    box.querySelectorAll('mark').forEach(function (m) { m.replaceWith(document.createTextNode(m.textContent)); });
+    box.normalize();
+  }
+  function jumpToPair(i, find, tries) {
+    var pair = $('pair-' + i);
+    if (!pair) { if (tries > 0) setTimeout(function () { jumpToPair(i, find, tries - 1); }, 100); return; }
+    clearMarks($('chat'));
+    if (!find || !markQuote(pair, find, true)) pair.scrollIntoView({ block: 'start' });
+  }
+  function openHit(kind, i, find) {
+    results.hidden = true;
+    if (kind === 'source') openSource(i, find, true);
+    else if (kind === 'studio') {
+      openArt(i);
+      var reader = $('right').querySelector('.reader');
+      if (reader && find) setTimeout(function () { markQuote(reader, find, true); }, 200);
+    } else {
+      if ($('chatq').value) { $('chatq').value = ''; renderChat(''); }
+      jumpToPair(i, find, 40);
+    }
+  }
+
   document.addEventListener('click', function (e) {
+    if (!results.hidden && e.target.closest && !e.target.closest('#results, .gsearch')) results.hidden = true;
     var t = e.target.closest ? e.target.closest('button') : null; if (!t) return;
+    if (t.dataset.hit) { openHit(t.dataset.hit, +t.dataset.i, t.dataset.find); return; }
     if (t.classList.contains('cite')) {
       var c = D.cites[+t.dataset.c], i = c && srcByTitle[norm(c.t)];
       if (i !== undefined) { pop.hidden = true; openSource(i, c.q); }
@@ -396,17 +642,26 @@ if (typeof document !== 'undefined') (function () {
     else if (t.id === 'srcback') sourcesList();
     else if (t.dataset.art !== undefined) openArt(+t.dataset.art);
     else if (t.id === 'artback' || t.id === 'artclose') studioList();
-    else if (t.dataset.kind) { filter = filter === t.dataset.kind ? '' : t.dataset.kind; studioList(); }
+    else if (t.dataset.kind) { filter = filter === t.dataset.kind ? '' : t.dataset.kind; listTop.r = 0; studioList(); }
     else if (t.dataset.copy !== undefined) {
       var box = t.closest('.answer').querySelector('.md');
-      if (navigator.clipboard) navigator.clipboard.writeText(box.innerText).catch(function () {});
+      copyText(box.innerText, navigator.clipboard, document).then(function (ok) {
+        showCopyResult(t, ok, { ok: icon(COPIED, 'var(--green)'), fail: icon(CLOSE, 'var(--pink)') }, setTimeout, clearTimeout);
+      });
     }
   });
   document.addEventListener('input', function (e) {
-    if (e.target.id === 'srcq') { srcQ = e.target.value; var pos = e.target.selectionStart; sourcesList(); var n = $('srcq'); n.focus(); n.setSelectionRange(pos, pos); }
+    if (e.target.id === 'allq') { clearTimeout(runSearch.d); var all = e.target.value; runSearch.d = setTimeout(function () { runSearch(all); }, 200); }
+    if (e.target.id === 'srcq') { listTop.l = 0; srcQ = e.target.value; var pos = e.target.selectionStart; sourcesList(); var n = $('srcq'); n.focus(); n.setSelectionRange(pos, pos); }
     if (e.target.id === 'chatq') { clearTimeout(renderChat.d); var v = e.target.value; renderChat.d = setTimeout(function () { renderChat(v); }, 180); }
   });
-  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { pop.hidden = true; if (opened !== null) studioList(); } });
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    if (!results.hidden) { results.hidden = true; return; }
+    pop.hidden = true;
+    if (opened !== null) studioList();
+  });
+  $('allq').addEventListener('focus', function (e) { if (e.target.value) runSearch(e.target.value); });
 
   // Error events do not bubble: this needs the capture phase. One pass per burst of failures,
   // because writing innerHTML restarts the images still loading.
@@ -420,8 +675,12 @@ if (typeof document !== 'undefined') (function () {
     }, 50);
   }, true);
 
-  document.title = D.notebook + ' archive';
+  document.title = (D.emoji ? D.emoji + ' ' : '') + D.notebook + ' archive';
   $('nb').textContent = D.notebook;
   $('stamp').textContent = 'Read-only' + (D.exported ? ' · exported ' + String(D.exported).slice(0, 10) : '');
   sourcesList(); renderChat(''); studioList();
+  // Whatever was open before a refresh, or what a bookmark points at
+  var restored = parseViewState(location.hash);
+  if (restored.source !== null && D.sources[restored.source]) openSource(restored.source);
+  if (restored.art !== null && D.studio[restored.art]) openArt(restored.art);
 })();

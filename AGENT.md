@@ -1048,6 +1048,37 @@ Found while checking real exports after #8; the export bugs below predate it.
   occurrences (423 of 1,406 back-links broken). **Fix**: `NLME.renumberCitationAnchors`
   after conversion.
 
+### Lessons from v1.8.x (Nov 2026)
+
+- **Dispatched Escape closes nothing here.** Tested live: a `KeyboardEvent` on `document` left open a More
+  menu, a citation popup and a note. Close a menu with `closeOpenMenus()`, a citation popup with a mouseleave
+  on the button that opened it (`leaveCitation`), a viewer with its header button. The `pressEscape()` calls
+  left in `closeStudioViewer` and `closeSourceViewer` are last-resort fallbacks for old layouts.
+- **Read only the item's own menu.** Open it with `openMenuForTrigger` and search that panel. A search of
+  every open menu saved a PDF-only deck's file under the next item's name, and reported a success.
+- **Infographics download from `lh3.google.com/notebooklm/…`** through `window.open`. Only that path is
+  trusted: `rd-notebooklm` on the same host is not a download.
+- **The Studio list is not in the page while one of its items is open.** Exports close the item first
+  (`withExportShell`); the tabs show `STUDIO_ITEM_OPEN_HTML`, since a scan would be empty or partial.
+- **The page reads `$3-$4 million` as math** and draws `3-` as a formula. The audit leaves such fragments out
+  (`isPriceRangeFragment`). The file's text was right all along.
+- **Turndown's `\[` is display math to MathJax.** `[Resolution #1]` became an error in Markdown Viewer, so
+  bracket pairs that cannot become Markdown stay plain (`relaxBracketEscapes`).
+- **Source types:** the page's `.source-item-source-icon` text is the reliable type, since titles may have no
+  extension. Seen Nov 2026 across 8 notebooks: `drive_pdf`, `image`, `video_youtube`, `video_audio_call`
+  (uploaded audio), `markdown`, `description`, `article`. Written as `source_type`; `sourceKind` in
+  `viewer/viewer-app.js` maps it for the viewer, then falls back to the extension and the url.
+- **Viewer links open in a new tab.** The sanitizer does it for Markdown links; every `<a>` the viewer writes
+  itself needs `target="_blank"` too. `download` is unreliable on a page opened from disk, so it cannot be
+  relied on to keep the viewer open.
+- **Notebook emoji:** `.cover-emoji` holds it as text, plus its picker's words, so `NLME.notebookEmoji` keeps
+  the first word. It stays in the page wherever the chat is scrolled.
+- **Viewer search and place:** `buildSearchIndex` flattens all text once, on the first search; `searchArchive`
+  only scans those strings. What is open lives in the address (`#s3,a2`), so a refresh or a bookmark restores it.
+- **Testing an update:** toggle the extension off and on, THEN refresh the notebook tab. The reload icon left
+  page scripts stale for hours, and the side panel updating too made it look like the fix had failed.
+  Check a new `NLME` function in the page's console to confirm.
+
 ### Spotting drift early
 
 - If every tab says "Please open NotebookLM first" → the host gates are stale; check
@@ -1205,7 +1236,7 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined out
   format with the same stem (`extensionFor({ format })` guesses `.pdf`/`.pptx`); one format failing
   warns, all failing fails the item. The PPTX request of a pair is made with `onlyIfOffered`: a deck whose
   menu has no PowerPoint item (older decks, PDF only) raises `formatNotOffered` (not retried, not logged as an
-  error). `fetchSlideFormats` (tested in tests/pdf-only-deck.test.js) skips it with one `Info:` line in errors.md and no second PDF; it is not a failure
+  error). `fetchSlideFormats` (tested in tests/pdf-only-deck.test.js) skips it with one notice (type `info`, listed under INFO in errors.md, not counted by `NLME.countExportErrors`) and no second PDF; it is not a failure
   (before this, the PPTX click hit PDF again and Chrome saved `Name (1).pdf`, identical bytes). A single
   `settings.slidesFormat = pptx` request keeps the old fallback, so such a deck still gets its PDF. Tab
   downloads keep the single `settings.slidesFormat`.
