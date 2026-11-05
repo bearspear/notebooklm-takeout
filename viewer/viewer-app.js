@@ -149,6 +149,14 @@ function parseCols(text) {
   return JSON.parse(serializeCols(o));
 }
 
+// What a Copy button puts on the clipboard: the Markdown as written, without the
+// viewer's citation chips, which would be stray numbers anywhere else.
+function copyMarkdown(md, title) {
+  var body = String(md == null ? '' : md).replace(/[ \t]*<button class="cite"[^>]{0,80}>[^<]{0,12}<\/button>/g, '').trim();
+  if (!title) return body;
+  return body ? '# ' + title + '\n\n' + body : '# ' + title;
+}
+
 // The clipboard call can be refused on a page opened from disk; the old copy
 // command often still works there. @returns {Promise<boolean>} whether it copied
 function copyText(text, clipboard, doc) {
@@ -186,7 +194,7 @@ function showCopyResult(btn, ok, icons, later, cancel) {
   }, 1500);
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
+if (typeof module === 'object' && module.exports) module.exports = { copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
 // A source's kind for its icon: the type icon the page showed, which also covers
 // titles with no extension, then the title's extension, then the url. A generic
 // document icon comes after the extension, which may say more ("plan.docx").
@@ -329,6 +337,9 @@ if (typeof document !== 'undefined') (function () {
     text: ['Text', 'var(--muted)', '<path d="M5 6h14M5 10h14M5 14h14M5 18h9"/>'],
     document: ['Source', 'var(--muted)', '<path d="' + DOC_SHEET + '"/>']
   };
+  function copyButton(kind, i) {
+    return '<button class="icon-btn" data-copy-' + kind + '="' + i + '" aria-label="Copy as Markdown" title="Copy as Markdown" aria-live="polite">' + icon(COPY) + '</button>';
+  }
   function sourceIcon(s) {
     var kind = sourceKind(s.type, s.title, s.url);
     if (kind === 'youtube') return '<i class="yt" title="YouTube"></i>';
@@ -468,7 +479,7 @@ if (typeof document !== 'undefined') (function () {
     if (view.source === null) listTop.l = listScroller('left').scrollTop;
     view.source = i;
     reveal('l', Math.round(innerWidth * 0.36));
-    $('left').innerHTML = '<div class="p-head"><button class="icon-btn" id="srcback" aria-label="Back to sources">' + icon(BACK) + '</button><h2 style="flex:1">' + esc(s.title) + '</h2>' + colBtn('l') + '</div><div class="scroll"><div class="reader md" id="srcbody">' +
+    $('left').innerHTML = '<div class="p-head"><button class="icon-btn" id="srcback" aria-label="Back to sources">' + icon(BACK) + '</button><h2 style="flex:1">' + esc(s.title) + '</h2>' + copyButton('source', i) + colBtn('l') + '</div><div class="scroll"><div class="reader md" id="srcbody">' +
       (isWebUrl(s.url) ? '<p><a class="ext" href="' + esc(s.url) + '" target="_blank" rel="noopener">Open original video</a></p>' : '') + md(s.md) + '</div></div>';
     applyCols();
     if (quote) setTimeout(function () { markQuote($('srcbody'), quote, ignoreCase); }, 200);
@@ -482,7 +493,7 @@ if (typeof document !== 'undefined') (function () {
     idx.forEach(function (i) {
       var p = D.pairs[i];
       if (p.date !== last) { html += '<div class="date">' + esc(p.date) + '</div>'; last = p.date; }
-      html += '<article id="pair-' + i + '"><div class="q"><div>' + esc(p.q) + '</div></div><div class="answer"><div class="md">' + md(p.a) + '</div><div class="actions"><button class="icon-btn" data-copy="' + i + '" aria-label="Copy answer" title="Copy answer" aria-live="polite">' + icon(COPY) + '</button></div></div></article>';
+      html += '<article id="pair-' + i + '"><div class="q"><div>' + esc(p.q) + '</div></div><div class="answer"><div class="md">' + md(p.a) + '</div><div class="actions"><button class="icon-btn" data-copy="' + i + '" aria-label="Copy as Markdown" title="Copy as Markdown" aria-live="polite">' + icon(COPY) + '</button></div></div></article>';
     });
     return html;
   }
@@ -557,7 +568,7 @@ if (typeof document !== 'undefined') (function () {
     else if (f.mp4 || f.webm) body = '<div class="player"><video controls preload="metadata" src="' + esc(f.mp4 || f.webm) + '"></video></div>';
     else if (f.png || f.jpg || f.jpeg || f.webp) body = '<div class="scroll"><img alt="' + esc(a.title) + '" src="' + esc(f.png || f.jpg || f.jpeg || f.webp) + '" style="width:100%"></div>';
     else body = '<div class="player"><p>This file type opens outside the viewer.</p></div>';
-    $('right').innerHTML = '<div class="p-head"><button class="icon-btn" id="artback" aria-label="Back to Studio">' + icon(BACK) + '</button><h2 style="flex:1">' + esc(a.title) + '</h2><button class="icon-btn" id="artclose" aria-label="Close">' + icon(CLOSE) + '</button>' + colBtn('r') + '</div>' + dlLinks(a) + body;
+    $('right').innerHTML = '<div class="p-head"><button class="icon-btn" id="artback" aria-label="Back to Studio">' + icon(BACK) + '</button><h2 style="flex:1">' + esc(a.title) + '</h2>' + (a.md != null ? copyButton('art', i) : '') + '<button class="icon-btn" id="artclose" aria-label="Close">' + icon(CLOSE) + '</button>' + colBtn('r') + '</div>' + dlLinks(a) + body;
     applyCols();
     saveView();
   }
@@ -585,6 +596,12 @@ if (typeof document !== 'undefined') (function () {
   document.addEventListener('focusout', function (e) { if (e.target.classList && e.target.classList.contains('cite')) hidePop(); });
   pop.addEventListener('mouseenter', function () { clearTimeout(hideT); });
   pop.addEventListener('mouseleave', hidePop);
+
+  function copyAndShow(btn, text) {
+    copyText(text, navigator.clipboard, document).then(function (ok) {
+      showCopyResult(btn, ok, { ok: icon(COPIED, 'var(--green)'), fail: icon(CLOSE, 'var(--pink)') }, setTimeout, clearTimeout);
+    });
+  }
 
   /* Search everything */
   var searchIndex = null, results = $('results');
@@ -643,12 +660,9 @@ if (typeof document !== 'undefined') (function () {
     else if (t.dataset.art !== undefined) openArt(+t.dataset.art);
     else if (t.id === 'artback' || t.id === 'artclose') studioList();
     else if (t.dataset.kind) { filter = filter === t.dataset.kind ? '' : t.dataset.kind; listTop.r = 0; studioList(); }
-    else if (t.dataset.copy !== undefined) {
-      var box = t.closest('.answer').querySelector('.md');
-      copyText(box.innerText, navigator.clipboard, document).then(function (ok) {
-        showCopyResult(t, ok, { ok: icon(COPIED, 'var(--green)'), fail: icon(CLOSE, 'var(--pink)') }, setTimeout, clearTimeout);
-      });
-    }
+    else if (t.dataset.copy !== undefined) copyAndShow(t, copyMarkdown(D.pairs[+t.dataset.copy].a));
+    else if (t.dataset.copySource !== undefined) { var cs0 = D.sources[+t.dataset.copySource]; copyAndShow(t, copyMarkdown(cs0.md, cs0.title)); }
+    else if (t.dataset.copyArt !== undefined) { var ca0 = D.studio[+t.dataset.copyArt]; copyAndShow(t, copyMarkdown(ca0.md, ca0.title)); }
   });
   document.addEventListener('input', function (e) {
     if (e.target.id === 'allq') { clearTimeout(runSearch.d); var all = e.target.value; runSearch.d = setTimeout(function () { runSearch(all); }, 200); }

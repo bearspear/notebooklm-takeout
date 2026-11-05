@@ -235,3 +235,25 @@ test('the view state round-trips and rejects anything else', () => {
   assert.deepEqual(app.parseViewState(''), { source: null, art: null });
   assert.deepEqual(app.parseViewState('#x9,<b>,s-1'), { source: null, art: null });
 });
+
+test('copyMarkdown keeps the Markdown and drops citation chips', () => {
+  const chip = n => `<button class="cite" data-c="${n}">${n}</button>`;
+  assert.equal(app.copyMarkdown(`**Bold** text${chip(1)}.`), '**Bold** text.');
+  assert.equal(app.copyMarkdown(`one${chip(1)} ${chip(2)} two`), 'one two');
+  assert.equal(app.copyMarkdown(`* item${chip(1)}\n  * nested${chip(2)}\n\n## Head`), '* item\n  * nested\n\n## Head');
+  assert.equal(app.copyMarkdown('a formula $x^2$ and [a link](https://x)'), 'a formula $x^2$ and [a link](https://x)');
+  assert.equal(app.copyMarkdown(`  body${chip(1)}\n\n`), 'body');
+  assert.equal(app.copyMarkdown(null), '');
+});
+
+test('copyMarkdown puts a note or source title on top when given one', () => {
+  assert.equal(app.copyMarkdown('body', 'Minutes'), '# Minutes\n\nbody');
+  assert.equal(app.copyMarkdown('', 'Minutes'), '# Minutes');
+});
+
+test('the copy buttons copy Markdown, and sources and notes have one', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8');
+  assert.doesNotMatch(src, /box\.innerText/);
+  assert.match(src, /copyButton\('source', i\)/);
+  assert.match(src, /a\.md != null \? copyButton\('art', i\) : ''/);
+});

@@ -544,6 +544,8 @@ contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
 
+**1.8.7 (Nov 2026)**: the offline viewer's Copy button gives clean Markdown, without citation numbers, and open sources, notes and reports now have one too.
+
 **1.8.6 (Nov 2026)**: the offline viewer can search everything, and exports are clearer about what happened.
 - Viewer: a search box covers source text, notes, reports, tables, chat and titles, and a result opens at the highlighted match. What is open survives a refresh and can be bookmarked.
 - Viewer: sources show a type icon (audio, PDF, image, video, web, document, slides, spreadsheet, Markdown, text), the cover and tab title show the notebook's emoji, and Studio file links open in a new tab. Older takeouts need a re-export.
