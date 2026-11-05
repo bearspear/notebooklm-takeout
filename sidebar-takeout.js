@@ -643,7 +643,7 @@ async function runFullTakeout() {
     const root = NLME.fileStem(shell.projectName, { obsidian: !!settings.obsidianNames });
     // Obsidian-friendly names also cover the folder (its name is part of every link path)
     const folderName = settings.obsidianNames ? (NLME.obsidianSafeName(shell.projectName) || 'notebook') : shell.projectName;
-    const folder = zipMode ? null : `${folderName} takeout ${shell.timestamp}`;
+    const folder = zipMode ? null : NLME.takeoutFolderName(folderName, shell.timestamp);
     console.log(`[NotebookLM Takeout] Full Takeout (${zipMode ? 'ZIP' : `folder "${folder}"`})`);
 
     const categories = [

@@ -568,6 +568,18 @@
 
   // "<Notebook>/<file>" for chrome.downloads, which saves into subfolders of
   // Downloads. Folder names drop characters filesystems reject.
+  // A Full Takeout's folder name, within downloadFolderPath's 80 characters. A
+  // long notebook name gives way, not the timestamp that keeps two runs apart.
+  function takeoutFolderName(name, timestamp) {
+    const suffix = ` takeout ${timestamp}`;
+    let kept = '';
+    for (const char of String(name || '')) {
+      if (kept.length + char.length + suffix.length > 80) break;
+      kept += char;
+    }
+    return kept.replace(/[\s.]+$/, '') + suffix;
+  }
+
   function downloadFolderPath(folder, filename) {
     const clean = (folder || '')
       .replace(/[\/\\:*?"<>|\u0000-\u001f]/g, ' ')
@@ -2544,6 +2556,7 @@ footer { margin-top: 3rem; }
     distinctVariants,
     createStabilityTracker,
     downloadFolderPath,
+    takeoutFolderName,
     extensionFromDownloadUrl,
     titlesMatch,
     pickByIndexThenTitleStrict,

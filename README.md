@@ -544,6 +544,8 @@ contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
 
+**1.8.8 (Nov 2026)**: a long notebook name no longer cuts the time off a Full Takeout folder, so two runs on one day stay apart. The export checker no longer fails a source's own footnote text.
+
 **1.8.7 (Nov 2026)**: the offline viewer's Copy button gives clean Markdown, without citation numbers, and open sources, notes and reports now have one too.
 
 **1.8.6 (Nov 2026)**: the offline viewer can search everything, and exports are clearer about what happened.
