@@ -2186,3 +2186,12 @@ test('an infographic Download URL on lh3.google.com counts as a notebook downloa
     assert.equal(NLME.isAllowedDownloadUrl(other), false, other);
   }
 });
+
+test('isPriceRangeFragment spots a price range the page drew as math', () => {
+  for (const tex of ['3-', '1-', '15,000-', '1.5 -', '3–', '5 to', '5 million to', '2 or']) {
+    assert.equal(NLME.isPriceRangeFragment(tex), true, tex);
+  }
+  for (const tex of ['0.815', '3-x', '3-4', 'x-', '\\frac{1}{2}-', '', null]) {
+    assert.equal(NLME.isPriceRangeFragment(tex), false, String(tex));
+  }
+});
