@@ -2208,3 +2208,23 @@ test('listItemMarkdown keeps a nested list inside its item', () => {
   assert.equal(item('*', 'a\n\nb'), '* a\n\n  b\n');
   assert.equal(item('1.', 'plain'), '1. plain\n');
 });
+test('a notice is listed in errors.md but is not counted as an error', () => {
+  const notice = { type: 'info', title: 'Deck', message: 'no PowerPoint version offered for this deck; the PDF was saved' };
+  assert.equal(NLME.countExportErrors([notice, '[Item] failed', { type: 'viewer', message: 'x' }]), 2);
+  assert.equal(NLME.countExportErrors([notice]), 0);
+  assert.equal(NLME.countExportErrors(NLME.prefixExportErrors('Artifacts', [notice])), 0);
+  const report = NLME.buildErrorReport({ title: 'Takeout', errors: [notice] });
+  assert.match(report, /^Errors: 0$/m);
+  assert.match(report, /^## INFO \(1\)$/m);
+  assert.match(report, /^- Deck: no PowerPoint version offered/m);
+});
+
+test('notebookEmoji takes the emoji from the cover, without its picker text', () => {
+  assert.equal(NLME.notebookEmoji('♾️ \n   \n   Search results\n   No emoji found\n  Recently used\n Loading'), '♾️');
+  assert.equal(NLME.notebookEmoji('  👨‍👩‍👧‍👦 \n Search results'), '👨‍👩‍👧‍👦');
+  assert.equal(NLME.notebookEmoji('🇨🇦'), '🇨🇦');
+  assert.equal(NLME.notebookEmoji('Search results'), '');
+  assert.equal(NLME.notebookEmoji('<b>'), '');
+  assert.equal(NLME.notebookEmoji(''), '');
+  assert.equal(NLME.notebookEmoji(null), '');
+});

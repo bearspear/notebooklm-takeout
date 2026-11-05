@@ -156,6 +156,7 @@
 
     // Create cancel button
     const cancelButton = document.createElement('button');
+    cancelButton.id = 'export-cancel-button';
     cancelButton.textContent = 'Cancel Export';
     cancelButton.style.cssText = `
       background: transparent;
@@ -214,6 +215,11 @@
     if (progressBar) progressBar.style.width = `${progress}%`;
   }
 
+  function hideExportCancel() {
+    const button = exportOverlay && exportOverlay.querySelector('#export-cancel-button');
+    if (button) button.style.display = 'none';
+  }
+
   function removeExportOverlay() {
     if (exportOverlay && exportOverlay.parentNode) {
       exportOverlay.parentNode.removeChild(exportOverlay);
@@ -265,6 +271,12 @@
       run(message, sender, sendResponse) {
         // Simple ping to check if content script is loaded
         sendResponse({ success: true });
+      }
+    },
+    [NLME.MSG.GET_NOTEBOOK_EMOJI]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        sendResponse({ emoji: NLME.notebookEmoji(document.querySelector(NLME.NOTEBOOK_EMOJI_SELECTOR)?.textContent) });
       }
     },
     [NLME.MSG.GET_PROJECT_NAME]: {
@@ -371,7 +383,8 @@
     [NLME.MSG.UPDATE_EXPORT_OVERLAY]: {
       async: true,
       run(message, sender, sendResponse) {
-        updateExportOverlay(message.message, message.progress || 0);
+        if (message.hideCancel) hideExportCancel();
+        else updateExportOverlay(message.message, message.progress || 0);
         sendResponse({ success: true });
       }
     },
@@ -465,6 +478,13 @@
           issues,
           trackerIssues: DOMHealthTracker.getIssues()
         });
+      }
+    },
+    [NLME.MSG.IS_STUDIO_VIEWER_OPEN]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        // The Studio list is not in the page while one of its items is open
+        sendResponse({ open: !!findOpenStudioViewer() });
       }
     },
     [NLME.MSG.GET_DOM_ERRORS]: {
@@ -1492,14 +1512,20 @@
     return timePhase('citation.hover', () => extractSingleCitationWithRetryInner(button, spanIndex, includeImages, maxRetries));
   }
 
+  // The citation hovered last: a popup still open belongs to its button, and
+  // only a mouseleave there closes it (Escape does nothing, Nov 2026)
+  let lastCitationButton = null;
+
+  function leaveCitation(citationButton) {
+    citationButton.dispatchEvent(new MouseEvent('mouseleave', { view: window, bubbles: false, cancelable: true }));
+    citationButton.dispatchEvent(new MouseEvent('mouseout', { view: window, bubbles: true, cancelable: true }));
+  }
+
   async function extractSingleCitationWithRetryInner(button, spanIndex, includeImages = false, maxRetries = 3) {
     let lastError = null;
     const TOOLTIP = NLME.CITATION_TOOLTIP_SELECTOR;
 
-    const leave = () => {
-      button.dispatchEvent(new MouseEvent('mouseleave', { view: window, bubbles: false, cancelable: true }));
-      button.dispatchEvent(new MouseEvent('mouseout', { view: window, bubbles: true, cancelable: true }));
-    };
+    const leave = () => leaveCitation(button);
 
     // The tooltip is a singleton overlay; reading before the previous one is
     // gone returns the previous citation's text. Resolve on the removal itself
@@ -1519,11 +1545,11 @@
         resolve(!document.querySelector(TOOLTIP));
       }, timeout);
     });
-    // If it lingers, press Escape once more; if it still stays, the caller
+    // If it lingers, leave once more; if it still stays, the caller
     // fails the citation rather than risk the next one reading this text.
     const ensureTooltipGone = async () => {
       if (await waitForTooltipGone()) return true;
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      leave();
       return waitForTooltipGone(500);
     };
     // Skip scrolling when the marker is already fully visible
@@ -1544,10 +1570,11 @@
         }
 
         if (document.querySelector(TOOLTIP)) {
-          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+          leaveCitation(lastCitationButton || button);
           await waitForTooltipGone();
         }
 
+        lastCitationButton = button;
         // Gemini Notebook opens the citation popover on mouseenter/pointerenter (Nov 2026)
         button.dispatchEvent(new MouseEvent('mouseenter', { view: window, bubbles: false, cancelable: true }));
         button.dispatchEvent(new PointerEvent('pointerenter', { view: window, bubbles: false, cancelable: true, pointerType: 'mouse' }));

@@ -644,6 +644,12 @@
     };
   }
 
+  // Notices (type 'info', a deck with no PowerPoint version) are listed in
+  // errors.md but nothing went wrong, so they do not count as errors.
+  function countExportErrors(errors = []) {
+    return (errors || []).filter(raw => normalizeExportError(raw).type !== 'info').length;
+  }
+
   // A Full Takeout's errors.md holds every category's errors: each keeps its
   // type and gets its category in front ("Notes: <item>: <message>").
   function prefixExportErrors(category, errors = []) {
@@ -663,7 +669,7 @@
       for (const [key, value] of statEntries) lines.push(`- ${key}: ${value}`);
       lines.push('');
     }
-    lines.push(`Errors: ${errors.length}`, '');
+    lines.push(`Errors: ${countExportErrors(errors)}`, '');
     const groups = new Map();
     for (const raw of errors) {
       const e = normalizeExportError(raw);
@@ -793,6 +799,14 @@
 
   // Notebook title in the page header, most specific first (one chain for
   // file names, chat export and the health check)
+  // The notebook's own emoji, on the cover at the top of the chat. The element
+  // also holds its emoji picker's words, so only the first word is the emoji.
+  const NOTEBOOK_EMOJI_SELECTOR = '.cover-emoji';
+  function notebookEmoji(text) {
+    const first = String(text || '').trim().split(/\s+/)[0] || '';
+    return first.length <= 16 && /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(first) ? first : '';
+  }
+
   const PROJECT_TITLE_SELECTORS = [
     '.title-label-inner',
     'editable-project-title .title-label span',
@@ -2373,8 +2387,10 @@ footer { margin-top: 3rem; }
     FETCH_FILE: 'FETCH_FILE',
     GET_DOM_ERRORS: 'GET_DOM_ERRORS',
     GET_INTERCEPTED_DOWNLOAD: 'GET_INTERCEPTED_DOWNLOAD',
+    GET_NOTEBOOK_EMOJI: 'GET_NOTEBOOK_EMOJI',
     GET_PROJECT_NAME: 'GET_PROJECT_NAME',
     HIDE_EXPORT_OVERLAY: 'HIDE_EXPORT_OVERLAY',
+    IS_STUDIO_VIEWER_OPEN: 'IS_STUDIO_VIEWER_OPEN',
     NAME_NEXT_DOWNLOAD: 'NAME_NEXT_DOWNLOAD',
     NAVIGATE_BACK: 'NAVIGATE_BACK',
     NLME_DOWNLOAD_URL_INTERCEPTED: 'NLME_DOWNLOAD_URL_INTERCEPTED',
@@ -2486,6 +2502,7 @@ footer { margin-top: 3rem; }
     noteHasImages,
     countMarkdownFormulas,
     listItemMarkdown,
+    countExportErrors,
     isPriceRangeFragment,
     relaxBracketEscapes,
     citationCoverage,
@@ -2518,6 +2535,8 @@ footer { margin-top: 3rem; }
     exportTimestamp,
     escapeHtml,
     PROJECT_TITLE_SELECTORS,
+    NOTEBOOK_EMOJI_SELECTOR,
+    notebookEmoji,
     normalizeExportError,
     prefixExportErrors,
     buildErrorReport,
