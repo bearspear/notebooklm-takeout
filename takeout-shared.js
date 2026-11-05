@@ -644,6 +644,12 @@
     };
   }
 
+  // Notices (type 'info', a deck with no PowerPoint version) are listed in
+  // errors.md but nothing went wrong, so they do not count as errors.
+  function countExportErrors(errors = []) {
+    return (errors || []).filter(raw => normalizeExportError(raw).type !== 'info').length;
+  }
+
   // A Full Takeout's errors.md holds every category's errors: each keeps its
   // type and gets its category in front ("Notes: <item>: <message>").
   function prefixExportErrors(category, errors = []) {
@@ -663,7 +669,7 @@
       for (const [key, value] of statEntries) lines.push(`- ${key}: ${value}`);
       lines.push('');
     }
-    lines.push(`Errors: ${errors.length}`, '');
+    lines.push(`Errors: ${countExportErrors(errors)}`, '');
     const groups = new Map();
     for (const raw of errors) {
       const e = normalizeExportError(raw);
@@ -2375,6 +2381,7 @@ footer { margin-top: 3rem; }
     GET_INTERCEPTED_DOWNLOAD: 'GET_INTERCEPTED_DOWNLOAD',
     GET_PROJECT_NAME: 'GET_PROJECT_NAME',
     HIDE_EXPORT_OVERLAY: 'HIDE_EXPORT_OVERLAY',
+    IS_STUDIO_VIEWER_OPEN: 'IS_STUDIO_VIEWER_OPEN',
     NAME_NEXT_DOWNLOAD: 'NAME_NEXT_DOWNLOAD',
     NAVIGATE_BACK: 'NAVIGATE_BACK',
     NLME_DOWNLOAD_URL_INTERCEPTED: 'NLME_DOWNLOAD_URL_INTERCEPTED',
@@ -2486,6 +2493,7 @@ footer { margin-top: 3rem; }
     noteHasImages,
     countMarkdownFormulas,
     listItemMarkdown,
+    countExportErrors,
     isPriceRangeFragment,
     relaxBracketEscapes,
     citationCoverage,

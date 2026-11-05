@@ -36,6 +36,10 @@ async function scanStudioPage() {
     }
 
     await ensureContentScriptLoaded(tab.id);
+    if (await studioViewerOpen(tab.id)) {
+      resultsEl.innerHTML = STUDIO_ITEM_OPEN_HTML;
+      return;
+    }
     const response = await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.SCAN_STUDIO_ITEMS });
     const items = [...(response?.items || [])];
 

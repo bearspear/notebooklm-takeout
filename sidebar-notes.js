@@ -31,6 +31,12 @@ async function scanNotesPage() {
     const notes = await scanNotesData(tab.id);
     console.log('[NotebookLM Takeout] Scanned notes:', notes);
 
+    if (await studioViewerOpen(tab.id)) {
+      renderNotesList([]);
+      notesResults.innerHTML = STUDIO_ITEM_OPEN_HTML;
+      return;
+    }
+
     renderNotesList(notes);
 
   } catch (error) {

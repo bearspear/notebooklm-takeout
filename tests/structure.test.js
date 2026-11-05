@@ -233,4 +233,42 @@ test('the Turndown list rule writes items through listItemMarkdown', () => {
   const src = fs.readFileSync(path.join(ROOT, 'takeout-markdown.js'), 'utf8');
   const rule = src.slice(src.indexOf("addRule('listsWithWrappers'"), src.indexOf("addRule('tables'"));
   assert.match(rule, /NLME\.listItemMarkdown\(marker, /);
+test('the Notes, Artifacts and Generated tabs say when an open item hides the Studio list', () => {
+  const scans = { 'sidebar-notes.js': 'scanNotesPage', 'sidebar-artifacts.js': 'scanPage', 'sidebar-generated.js': 'scanStudioPage' };
+  for (const [file, name] of Object.entries(scans)) {
+    const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    const start = src.indexOf(`async function ${name}(`);
+    assert.ok(start >= 0, `${name} not found in ${file}`);
+    const body = src.slice(start, src.indexOf('\n}\n', start));
+    assert.match(body, /await studioViewerOpen\(tab\.id\)/, file);
+    assert.match(body, /STUDIO_ITEM_OPEN_HTML/, file);
+  }
+});
+
+test('a citation popup is closed by mouseleave, not Escape, which does nothing to it', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const start = src.indexOf('async function extractSingleCitationWithRetryInner(');
+  const body = src.slice(start, src.indexOf('\n  }\n', start));
+  assert.doesNotMatch(body, /Escape'/);
+  // A popup left by the previous citation belongs to that citation's button
+  assert.match(body, /leaveCitation\(lastCitationButton \|\| button\)/);
+  assert.match(body, /lastCitationButton = button/);
+});
+
+test('Full Takeout takes Cancel away before its final save, and gives it back', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'sidebar-takeout.js'), 'utf8');
+  const finishing = src.indexOf('shell.finishing()');
+  assert.ok(finishing > 0 && finishing < src.indexOf("shell.progress('Saving images...', 1)"));
+  const shell = src.slice(src.indexOf('async function withExportShell('), src.indexOf('// ---- Full Takeout (Milestone 3a)'));
+  assert.match(shell, /finishing\(\) \{/);
+  const cleanup = shell.slice(shell.indexOf('finally'));
+  assert.match(cleanup, /cancelBtn\.disabled = false/);
+});
+
+test('artifact and takeout manifests count errors, not notices', () => {
+  for (const file of ['sidebar-artifacts.js', 'sidebar-takeout.js']) {
+    const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    assert.match(src, /errorCount: NLME\.countExportErrors\(errors\)/, file);
+    assert.doesNotMatch(src, /errorCount: errors\.length/, file);
+  }
 });

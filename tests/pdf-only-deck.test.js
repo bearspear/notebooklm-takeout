@@ -1,5 +1,5 @@
 // PDF-only decks (Task 10): a PPTX request for a deck whose menu lists no
-// PowerPoint item is skipped with one Info line. Runs the real sidebar
+// PowerPoint item is skipped with one notice. Runs the real sidebar
 // functions against a stubbed message reply.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -63,13 +63,15 @@ async function run(reply, formats = ['pdf', 'pptx']) {
   }
 }
 
-test('a PDF-only deck: PPTX is skipped once, with one Info line, no retry, no second PDF', async () => {
+test('a PDF-only deck: PPTX is skipped once, with one notice, no retry, no second PDF', async () => {
   const { fetched, warns, sent, error } = await run(d => (d.downloadPreference === 'pptx' ? notOffered : pdfReply));
   assert.equal(error, undefined);
   assert.deepEqual([...fetched.files.map(f => f.path)], ['S.pdf']);
   assert.equal(sent.filter(d => d.downloadPreference === 'pptx').length, 1);
   assert.equal(warns.length, 1);
-  assert.match(warns[0], /^\[Deck\] Info: no PowerPoint version offered/);
+  assert.equal(warns[0].type, 'info');
+  assert.equal(warns[0].title, 'Deck');
+  assert.match(warns[0].message, /^no PowerPoint version offered/);
 });
 
 test('a deck with both formats saves both and warns nothing', async () => {

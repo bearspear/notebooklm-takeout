@@ -1251,6 +1251,20 @@ async function requestCancel() {
   }
 }
 
+// The Studio list is not in the page while one of its items is open, so a scan
+// would show nothing or only part of it
+const STUDIO_ITEM_OPEN_HTML = '<p class="empty-message">An item is open in Studio, which hides this list.<br><span class="hint">Close it, then click Refresh.</span></p>';
+
+async function studioViewerOpen(tabId) {
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.IS_STUDIO_VIEWER_OPEN });
+    return !!response?.open;
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Could not ask whether a Studio item is open:', error.message);
+    return false;
+  }
+}
+
 // Quick pre-flight before artifact downloads and chat exports: warn (don't
 // block) when the selectors they depend on are missing
 async function preflightWarn(tabId, type) {

@@ -655,7 +655,7 @@ function takeoutPanel({ zip = true, fetchFile, cancelAfter = null, notesThrow = 
     scanChatData: async () => ({ messagePairs: [{}], stats: {} }),
     runSourcesJob: batch('sources'), runNotesJob: batch('notes'), runChatJob: batch('chat'), runArtifactsJob: batch('artifacts'),
     withExportShell: (opts, run) => run({
-      tab: { id: 1 }, projectName: 'Book', timestamp: 'T', isCancelled: () => cancelled, progress() {},
+      tab: { id: 1 }, projectName: 'Book', timestamp: 'T', isCancelled: () => cancelled, finishing() {}, progress() {},
       meta: { notebook: 'Book Title', notebook_url: '', notebook_id: '', exporter: 'NotebookLM Takeout 1.8.0', exported: 'EXPORTED-AT' }
     })
   });
