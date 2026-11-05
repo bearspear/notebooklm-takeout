@@ -344,6 +344,12 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
     // Reset DOM tracker and run the pre-export health check
     if (healthType) {
       await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.RESET_DOM_TRACKER });
+      // The Studio list is not in the page while a note is open: the check
+      // would warn, and a takeout would scan no notes and no artifacts
+      if (healthType === 'notes') {
+        await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.NAVIGATE_BACK })
+          .catch(error => console.warn('[NotebookLM Takeout] Could not close the open viewer:', error.message));
+      }
       const healthCheck = await chrome.tabs.sendMessage(tab.id, {
         type: NLME.MSG.CHECK_DOM_HEALTH,
         data: { type: healthType }

@@ -546,6 +546,7 @@ contract with Gemini Notebook, past drift and recipes.
 
 **1.8.3 (Nov 2026)**: infographics download again.
 - Their download link moved to a host the extension did not recognise, so each one failed with "Download was not captured".
+- A takeout started with a note open now closes it first. Before, the notes and artifacts lists were not in the page, so the compatibility warning showed and "Try Anyway" could miss them.
 - A notebook tab left open across an extension update no longer keeps the old download hook.
 - An item right after a PDF-only deck could be saved with that deck's PDF, because the deck's menu stayed open. A false success: re-export any infographic or other downloaded item that follows such a deck.
 

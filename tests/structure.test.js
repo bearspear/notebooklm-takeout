@@ -201,3 +201,14 @@ test('the download hook replaces a stale one, and installs once per takeout-shar
   run(window, { ...NLME });
   assert.notEqual(window.open, installed);
 });
+
+test('an export of notes closes an open note before the health check and the scans', () => {
+  // The Studio list is not in the page while a note is open: the check would
+  // warn, and a takeout scan would find no notes and no artifacts
+  const src = fs.readFileSync(path.join(ROOT, 'sidebar-takeout.js'), 'utf8');
+  const shell = src.slice(src.indexOf('async function withExportShell('));
+  const close = shell.indexOf('NLME.MSG.NAVIGATE_BACK');
+  assert.ok(close > 0, 'withExportShell must close the viewer');
+  assert.ok(close < shell.indexOf('NLME.MSG.CHECK_DOM_HEALTH'));
+  assert.match(shell.slice(0, close), /healthType === 'notes'/);
+});
