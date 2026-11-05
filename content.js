@@ -3147,24 +3147,25 @@
     if (!moreButton) {
       throw new Error('More button not found for this item');
     }
+    // A menu left open (a PDF-only deck's, say) would stay in the page and
+    // its Download item could be clicked for this item
+    if (!(await closeOpenMenus())) {
+      throw new Error('A menu would not close; close it and try again');
+    }
     // URLs intercepted before this moment belong to an earlier item
     const clickedAt = Date.now();
-    console.log('[NotebookLM Takeout] [Download] Clicking More button...');
-    moreButton.click();
-
-    // Wait for menu to appear with adaptive waiting
-    console.log('[NotebookLM Takeout] [Download] Waiting for menu to appear...');
-    await waitForElement('.mat-mdc-menu-panel, .cdk-overlay-pane', 2000);
+    console.log('[NotebookLM Takeout] [Download] Opening the item\'s menu...');
+    const panel = await openMenuForTrigger(moreButton);
 
     // Find download button with multiple selector attempts
-    const downloadButton = await findDownloadButton(downloadPreference, requireFormat);
+    const downloadButton = await findDownloadButton(downloadPreference, requireFormat, panel);
     if (!downloadButton) {
-      // Close menu before throwing error
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      const labels = Array.from(panel.querySelectorAll('.mat-mdc-menu-item, [role="menuitem"]')).map(item => item.textContent || '');
+      // Escape dispatched on document does not close it, and the next item would open a second menu
+      await closeOpenMenus();
       // Only this text crosses the message ({ success: false, error: message }); the side
       // panel (fetchArtifactFiles) matches it exactly. Keep both ends in step.
       // Only when the menu lists a Download item: an empty or stale overlay is a retry
-      const labels = Array.from(document.querySelectorAll('.mat-mdc-menu-item, [role="menuitem"]')).map(item => item.textContent || '');
       if (requireFormat && downloadPreference === 'pptx' && NLME.pickDownloadMenuIndex(labels, 'pdf') !== -1) throw new Error(NLME.FORMAT_NOT_OFFERED);
       throw new Error('Download button not found in menu');
     }
@@ -3213,8 +3214,8 @@
    * @param {'pdf'|'pptx'} preference
    * @param {boolean} exact - no fallback to the PDF item when PowerPoint is not listed
    */
-  async function findDownloadButton(preference = 'pdf', exact = false) {
-    const items = Array.from(document.querySelectorAll('.mat-mdc-menu-item, [role="menuitem"]'));
+  async function findDownloadButton(preference, exact, panel) {
+    const items = Array.from(panel.querySelectorAll('.mat-mdc-menu-item, [role="menuitem"]'));
     const index = NLME.pickDownloadMenuIndex(items.map(item => item.textContent || ''), preference, { exact });
     if (index !== -1) {
       console.log(`[NotebookLM Takeout] [Download] Menu item: "${items[index].textContent.trim()}"`);

@@ -169,3 +169,46 @@ test('manifest grants lh3.google.com, where notebook image URLs redirect', () =>
   assert.equal(manifest.host_permissions.filter(h => /google\.com/.test(h) && !/usercontent/.test(h)).length, 3);
   assert.equal(manifest.host_permissions.length, 6);
 });
+
+test('createTurndownService runs text through relaxBracketEscapes', () => {
+  const vm = require('node:vm');
+  class TurndownService {
+    constructor(options) { this.options = options; }
+    escape(text) { return `escaped(${text})`; }
+  }
+  const sandbox = { globalThis: null, TurndownService, NLME: { relaxBracketEscapes: text => `relaxed(${text})` } };
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'takeout-markdown.js'), 'utf8'), sandbox);
+  assert.equal(sandbox.NLMEMarkdown.createTurndownService().escape('x'), 'relaxed(escaped(x))');
+});
+
+test('the download hook replaces a stale one, and installs once per takeout-shared', () => {
+  const vm = require('node:vm');
+  const src = fs.readFileSync(path.join(ROOT, 'injected.js'), 'utf8');
+  const run = (window, NLME) => vm.runInNewContext(src, Object.assign(Object.create(null), {
+    window, document: { addEventListener() {} }, console, Date, URL, CustomEvent: class {},
+    globalThis: { NLME }
+  }));
+  const NLME = { MSG: {}, createInterceptArm: () => ({ arm() {}, shouldIntercept: () => false }) };
+  const staleOpen = () => 'stale';
+  // A tab left open across an update: the old hook marked itself with `true`
+  const window = { __nlmeDownloadHook: true, open: staleOpen, postMessage() {} };
+  run(window, NLME);
+  const installed = window.open;
+  assert.notEqual(installed, staleOpen);
+  run(window, NLME);
+  assert.equal(window.open, installed);
+  run(window, { ...NLME });
+  assert.notEqual(window.open, installed);
+});
+
+test('an export of notes closes an open note before the health check and the scans', () => {
+  // The Studio list is not in the page while a note is open: the check would
+  // warn, and a takeout scan would find no notes and no artifacts
+  const src = fs.readFileSync(path.join(ROOT, 'sidebar-takeout.js'), 'utf8');
+  const shell = src.slice(src.indexOf('async function withExportShell('));
+  const close = shell.indexOf('NLME.MSG.NAVIGATE_BACK');
+  assert.ok(close > 0, 'withExportShell must close the viewer');
+  assert.ok(close < shell.indexOf('NLME.MSG.CHECK_DOM_HEALTH'));
+  assert.match(shell.slice(0, close), /healthType === 'notes'/);
+});

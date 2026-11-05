@@ -2133,3 +2133,56 @@ test('namer: downloads that are not this extension\'s blobs never read storage',
   assert.deepEqual(st.log, []);
   assert.deepEqual(suggest.calls, []);
 });
+
+test('relaxBracketEscapes frees plain bracketed text, so math viewers do not read \\[ as a formula', () => {
+  const relax = NLME.relaxBracketEscapes;
+  assert.equal(relax('\\[Resolution #1\\] UPON MOTION'), '[Resolution #1] UPON MOTION');
+  assert.equal(relax('see \\[a\\] and \\[b\\_c\\].'), 'see [a] and [b\\_c].');
+  assert.equal(relax('no brackets'), 'no brackets');
+});
+
+test('relaxBracketEscapes keeps the escape wherever the brackets could become Markdown', () => {
+  const relax = NLME.relaxBracketEscapes;
+  for (const text of [
+    '\\[a\\](b)',          // link
+    '\\[a\\]\\[b\\]',      // reference link: the first pair is followed by [
+    '\\[a\\]: url',        // link definition
+    '\\[^1\\]',            // footnote
+    '\\[\\[wiki\\]\\]',    // Obsidian link
+    '\\[ \\] task',        // task list box
+    '\\[x\\] task',
+    '\\[X\\] task',
+    '\\[\\]',              // empty
+    '\\[unclosed',
+    'closed\\]'
+  ]) {
+    assert.equal(relax(text).includes('\\['), text.includes('\\['), text);
+    assert.equal(relax(text).includes('\\]'), text.includes('\\]'), text);
+  }
+  assert.equal(relax('\\[\\[wiki\\]\\]'), '\\[\\[wiki\\]\\]');
+  // Only the last of a run is free of what follows it
+  assert.equal(relax('\\[a\\]\\[b\\]'), '\\[a\\][b]');
+  // An escaped backslash before the bracket stays as it was
+  assert.equal(relax('\\\\\\[a\\]'), '\\\\\\[a\\]');
+});
+
+test('relaxBracketEscapes stays linear on unclosed brackets', () => {
+  const text = '\\[a '.repeat(200000);
+  const start = Date.now();
+  assert.equal(NLME.relaxBracketEscapes(text), text);
+  assert.ok(Date.now() - start < 1000);
+});
+
+test('an infographic Download URL on lh3.google.com counts as a notebook download', () => {
+  const url = 'https://lh3.google.com/notebooklm/ABzcPv0h8c6NkZCA157';
+  assert.equal(NLME.isNotebookDownloadUrl(url), true);
+  assert.equal(NLME.isAllowedDownloadUrl(url), true);
+  const arm = NLME.createInterceptArm(3000);
+  arm.arm(1000);
+  assert.equal(arm.shouldIntercept(url, 1100), true);
+  for (const other of ['https://lh3.google.com/rd-notebooklm/x', 'https://lh3.google.com/photos/x',
+    'http://lh3.google.com/notebooklm/x', 'https://lh3.google.com.evil.com/notebooklm/x', 'https://evil.com/notebooklm/x']) {
+    assert.equal(NLME.isNotebookDownloadUrl(other), false, other);
+    assert.equal(NLME.isAllowedDownloadUrl(other), false, other);
+  }
+});

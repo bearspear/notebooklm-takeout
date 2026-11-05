@@ -544,6 +544,14 @@ contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
 
+**1.8.3 (Nov 2026)**: infographics download again.
+- Their download link moved to a host the extension did not recognise, so each one failed with "Download was not captured".
+- A takeout started with a note open now closes it first. Before, the notes and artifacts lists were not in the page, so the compatibility warning showed and "Try Anyway" could miss them.
+- A notebook tab left open across an extension update no longer keeps the old download hook.
+- An item right after a PDF-only deck could be saved with that deck's PDF, because the deck's menu stayed open. A false success: re-export any infographic or other downloaded item that follows such a deck.
+
+**1.8.2 (Nov 2026)**: bracketed text such as `[Resolution #1]` no longer turns into a math error in Markdown viewers with math turned on.
+
 **1.8.1 (Nov 2026)**: no more duplicate file names across parts.
 - When an export splits into several ZIPs, a note, source or mind map whose name repeats one from an
   earlier part is now numbered (`Name-2`), as it already was inside one part. Unzipping the parts into
