@@ -147,7 +147,44 @@ function parseCols(text) {
   return JSON.parse(serializeCols(o));
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage };
+// The clipboard call can be refused on a page opened from disk; the old copy
+// command often still works there. @returns {Promise<boolean>} whether it copied
+function copyText(text, clipboard, doc) {
+  function fallback() {
+    var area = doc.createElement('textarea');
+    area.value = text;
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    doc.body.appendChild(area);
+    area.select();
+    var ok = false;
+    try { ok = doc.execCommand('copy'); } catch (e) { /* stays false */ }
+    area.remove();
+    return ok;
+  }
+  if (!clipboard) return Promise.resolve(fallback());
+  return clipboard.writeText(text).then(function () { return true; }, fallback);
+}
+
+// Shows the result on the button for a moment. The resting look is saved once,
+// so a click while a result shows does not keep "Copied" for good.
+function showCopyResult(btn, ok, icons, later, cancel) {
+  if (!btn.copyRest) btn.copyRest = { html: btn.innerHTML, label: btn.getAttribute('aria-label'), timer: null };
+  var rest = btn.copyRest;
+  var text = ok ? 'Copied' : 'Copy failed';
+  cancel(rest.timer);
+  btn.innerHTML = ok ? icons.ok : icons.fail;
+  btn.setAttribute('aria-label', text);
+  btn.setAttribute('title', text);
+  rest.timer = later(function () {
+    btn.innerHTML = rest.html;
+    btn.setAttribute('aria-label', rest.label);
+    btn.setAttribute('title', rest.label);
+    btn.copyRest = null;
+  }, 1500);
+}
+
+if (typeof module === 'object' && module.exports) module.exports = { copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage };
 
 if (typeof document !== 'undefined') (function () {
   var D = JSON.parse(document.getElementById('data').textContent);
@@ -164,7 +201,7 @@ if (typeof document !== 'undefined') (function () {
   ];
   var KIND = {}; KINDS.forEach(function (k) { KIND[k[0]] = k; });
   function icon(body, color) { return '<svg viewBox="0 0 24 24"' + (color ? ' style="color:' + color + '"' : '') + '>' + body + '</svg>'; }
-  var CLOSE = '<path d="M6 6l12 12M18 6L6 18"/>', BACK = '<path d="M15 5l-7 7 7 7"/>', COPY = '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M5 16V5a1 1 0 0 1 1-1h10"/>';
+  var CLOSE = '<path d="M6 6l12 12M18 6L6 18"/>', BACK = '<path d="M15 5l-7 7 7 7"/>', COPIED = '<path d="M5 13l4.5 4.5L19 7"/>', COPY = '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M5 16V5a1 1 0 0 1 1-1h10"/>';
   var esc = escHtml;
 
   // Exported text comes from third-party sources, so scripts and handlers never survive
@@ -298,7 +335,7 @@ if (typeof document !== 'undefined') (function () {
     idx.forEach(function (i) {
       var p = D.pairs[i];
       if (p.date !== last) { html += '<div class="date">' + esc(p.date) + '</div>'; last = p.date; }
-      html += '<article id="pair-' + i + '"><div class="q"><div>' + esc(p.q) + '</div></div><div class="answer"><div class="md">' + md(p.a) + '</div><div class="actions"><button class="icon-btn" data-copy="' + i + '" aria-label="Copy answer" title="Copy answer">' + icon(COPY) + '</button></div></div></article>';
+      html += '<article id="pair-' + i + '"><div class="q"><div>' + esc(p.q) + '</div></div><div class="answer"><div class="md">' + md(p.a) + '</div><div class="actions"><button class="icon-btn" data-copy="' + i + '" aria-label="Copy answer" title="Copy answer" aria-live="polite">' + icon(COPY) + '</button></div></div></article>';
     });
     return html;
   }
@@ -399,7 +436,9 @@ if (typeof document !== 'undefined') (function () {
     else if (t.dataset.kind) { filter = filter === t.dataset.kind ? '' : t.dataset.kind; studioList(); }
     else if (t.dataset.copy !== undefined) {
       var box = t.closest('.answer').querySelector('.md');
-      if (navigator.clipboard) navigator.clipboard.writeText(box.innerText).catch(function () {});
+      copyText(box.innerText, navigator.clipboard, document).then(function (ok) {
+        showCopyResult(t, ok, { ok: icon(COPIED, 'var(--green)'), fail: icon(CLOSE, 'var(--pink)') }, setTimeout, clearTimeout);
+      });
     }
   });
   document.addEventListener('input', function (e) {

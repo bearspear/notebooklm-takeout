@@ -544,6 +544,8 @@ contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
 
+**1.8.5 (Nov 2026)**: nested lists stay nested in notes and chat. Sub-bullets used to export at the same level as their parent. The offline viewer's Copy answer button now shows a tick, or a cross if the copy failed.
+
 **1.8.4 (Nov 2026)**: no false `formulas: 0 of 2` audit warning for price ranges. The page draws `$3-$4 million` as math; the export's text was always right.
 
 **1.8.3 (Nov 2026)**: infographics download again.

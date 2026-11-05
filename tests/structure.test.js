@@ -228,3 +228,9 @@ test('countPageContent leaves price ranges drawn as math out of the formula coun
   vm.runInContext(body + '\nthis.count = countPageContent;', ctx);
   assert.equal(ctx.count('').formulas, 2);
 });
+
+test('the Turndown list rule writes items through listItemMarkdown', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'takeout-markdown.js'), 'utf8');
+  const rule = src.slice(src.indexOf("addRule('listsWithWrappers'"), src.indexOf("addRule('tables'"));
+  assert.match(rule, /NLME\.listItemMarkdown\(marker, /);
+});

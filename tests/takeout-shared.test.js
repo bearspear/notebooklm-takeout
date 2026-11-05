@@ -2195,3 +2195,16 @@ test('isPriceRangeFragment spots a price range the page drew as math', () => {
     assert.equal(NLME.isPriceRangeFragment(tex), false, String(tex));
   }
 });
+
+test('listItemMarkdown keeps a nested list inside its item', () => {
+  const item = NLME.listItemMarkdown;
+  assert.equal(item('*', '**Building:** search\n* _Alberta:_ gym\n* _Fatima:_ green'),
+    '* **Building:** search\n  * _Alberta:_ gym\n  * _Fatima:_ green\n');
+  // The inner lines line up with the item's text, whatever the marker's width
+  assert.equal(item('10.', 'one\n* two'), '10. one\n    * two\n');
+  // Two levels down, an already indented line moves with its parent
+  assert.equal(item('*', 'a\n* b\n  * c'), '* a\n  * b\n    * c\n');
+  // A blank line stays empty
+  assert.equal(item('*', 'a\n\nb'), '* a\n\n  b\n');
+  assert.equal(item('1.', 'plain'), '1. plain\n');
+});

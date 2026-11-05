@@ -1214,6 +1214,14 @@
     );
   }
 
+  // One list item's Markdown. Lines after the first hold the item's nested list
+  // or later paragraphs: they indent to the item's text, or a nested list would
+  // come out as siblings of its parent.
+  function listItemMarkdown(marker, content) {
+    const indent = ' '.repeat(marker.length + 1);
+    return `${marker} ${content.replace(/\n(?=.)/g, `\n${indent}`)}\n`;
+  }
+
   // The page reads "$3-$4 million" as math and draws "3-" as a formula. The
   // export's text is still "$3-$4 million", which countMarkdownFormulas rightly
   // takes for prices, so the audit leaves these out of the page's count.
@@ -2477,6 +2485,7 @@ footer { margin-top: 3rem; }
     markWindowedQuote,
     noteHasImages,
     countMarkdownFormulas,
+    listItemMarkdown,
     isPriceRangeFragment,
     relaxBracketEscapes,
     citationCoverage,

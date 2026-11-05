@@ -488,7 +488,7 @@
         items.forEach((li, idx) => {
           const marker = isOrdered ? `${idx + 1}.` : options.bulletListMarker;
           const itemContent = turndownService.turndown(li.innerHTML).trim();
-          markdown += `${marker} ${itemContent}\n`;
+          markdown += NLME.listItemMarkdown(marker, itemContent);
         });
         markdown += '\n';
 

@@ -64,3 +64,42 @@ test('chat keeps 360 at every width above the 850px stacked breakpoint with both
   const edge = app.clampColumns(850, { l: 340, r: 400 });
   assert.equal(850 - 48 - edge.l - edge.r, 360);
 });
+
+function fakeDoc(execResult) {
+  const area = { style: {}, select() {}, remove() {}, value: '' };
+  return { area, body: { appendChild() {} }, createElement: () => area, execCommand: () => execResult };
+}
+
+test('copyText uses the clipboard, and the old copy command when it is refused', async () => {
+  const written = [];
+  const clipboard = { writeText: async text => { written.push(text); } };
+  assert.equal(await app.copyText('a', clipboard, fakeDoc(false)), true);
+  assert.deepEqual(written, ['a']);
+  const refused = { writeText: async () => { throw new Error('denied'); } };
+  assert.equal(await app.copyText('a', refused, fakeDoc(true)), true);
+  assert.equal(await app.copyText('a', undefined, fakeDoc(true)), true);
+  assert.equal(await app.copyText('a', refused, fakeDoc(false)), false);
+});
+
+test('showCopyResult says what happened on the button, then puts it back', () => {
+  const attrs = { 'aria-label': 'Copy answer', title: 'Copy answer' };
+  const btn = {
+    innerHTML: 'copy-icon', style: {},
+    getAttribute: name => attrs[name],
+    setAttribute: (name, value) => { attrs[name] = value; }
+  };
+  let restore;
+  const later = fn => { restore = fn; return 1; };
+  app.showCopyResult(btn, true, { ok: 'tick', fail: 'cross' }, later, () => {});
+  assert.equal(btn.innerHTML, 'tick');
+  assert.equal(attrs['aria-label'], 'Copied');
+  assert.equal(attrs.title, 'Copied');
+  // A second click while it shows must not save "Copied" as the resting label
+  app.showCopyResult(btn, false, { ok: 'tick', fail: 'cross' }, later, () => {});
+  assert.equal(btn.innerHTML, 'cross');
+  assert.equal(attrs.title, 'Copy failed');
+  restore();
+  assert.equal(btn.innerHTML, 'copy-icon');
+  assert.equal(attrs['aria-label'], 'Copy answer');
+  assert.equal(attrs.title, 'Copy answer');
+});
