@@ -462,13 +462,24 @@ const IMAGES_ERROR = { type: 'viewer', message: 'Some images for the offline vie
 // viewer.html for the files captured so far. The side panel reads its own packaged
 // files, which needs no permission. Links are relative to the takeout root.
 // savedImages: the images/ paths that exist; other image links are left out.
+// The notebook's emoji for the viewer's cover; none is not a failure
+async function getNotebookEmoji(tabId) {
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.GET_NOTEBOOK_EMOJI });
+    return response?.emoji || '';
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Could not read the notebook emoji:', error.message);
+    return '';
+  }
+}
+
 async function buildViewerHtml(files, meta, savedImages = new Set()) {
   const [template, app, marked, katex, css] = await Promise.all(NLMEViewer.VIEWER_ASSETS.map(async asset => {
     const response = await fetch(chrome.runtime.getURL(asset));
     if (!response.ok) throw new Error(`${asset}: HTTP ${response.status}`);
     return response.text();
   }));
-  const data = NLMEViewer.buildViewerData(files, { notebook: meta.notebook, exported: meta.exported, savedImages });
+  const data = NLMEViewer.buildViewerData(files, { notebook: meta.notebook, exported: meta.exported, savedImages, emoji: meta.emoji });
   return NLMEViewer.assembleViewer({ template, css, marked, katex, app, data });
 }
 
@@ -805,7 +816,7 @@ async function runFullTakeout() {
     let viewerHtml = null;
     shell.progress('Building the offline viewer...', 1);
     try {
-      viewerHtml = await buildViewerHtml(viewerFiles, shell.meta, savedImages.paths);
+      viewerHtml = await buildViewerHtml(viewerFiles, { ...shell.meta, emoji: await getNotebookEmoji(tabId) }, savedImages.paths);
     } catch (error) {
       console.error('[NotebookLM Takeout] Full Takeout: viewer failed:', error);
       takeoutErrors.push(VIEWER_ERROR);

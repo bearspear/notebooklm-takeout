@@ -184,7 +184,40 @@ function showCopyResult(btn, ok, icons, later, cancel) {
   }, 1500);
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage };
+if (typeof module === 'object' && module.exports) module.exports = { copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind };
+// A source's kind for its icon: the type icon the page showed, which also covers
+// titles with no extension, then the title's extension, then the url. A generic
+// document icon comes after the extension, which may say more ("plan.docx").
+var SOURCE_ICON_KINDS = [
+  [/youtube/, 'youtube'], [/pdf/, 'pdf'], [/audio|mic|music|podcast|call/, 'audio'], [/video|movie/, 'video'],
+  [/image|photo/, 'image'], [/presentation|slides/, 'slides'], [/spreadsheet|sheet/, 'sheet'],
+  [/drive_document|docs/, 'doc'], [/markdown/, 'markdown'], [/web|language|link|public|globe/, 'web']
+];
+var SOURCE_EXT_KINDS = {
+  pdf: 'pdf', mp3: 'audio', m4a: 'audio', wav: 'audio', aac: 'audio', ogg: 'audio', oga: 'audio', opus: 'audio', flac: 'audio', aiff: 'audio', wma: 'audio',
+  mp4: 'video', mov: 'video', webm: 'video', mkv: 'video', avi: 'video', m4v: 'video', mpeg: 'video', mpg: 'video',
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', heic: 'image', heif: 'image', bmp: 'image', tif: 'image', tiff: 'image', svg: 'image', avif: 'image',
+  md: 'markdown', markdown: 'markdown', txt: 'text', text: 'text', rtf: 'text', log: 'text',
+  doc: 'doc', docx: 'doc', odt: 'doc', pages: 'doc', epub: 'doc',
+  ppt: 'slides', pptx: 'slides', odp: 'slides', key: 'slides',
+  xls: 'sheet', xlsx: 'sheet', ods: 'sheet', csv: 'sheet', tsv: 'sheet', numbers: 'sheet',
+  html: 'web', htm: 'web'
+};
+function sourceKind(type, title, url) {
+  var t = String(type || '').toLowerCase();
+  for (var i = 0; i < SOURCE_ICON_KINDS.length; i++) {
+    if (SOURCE_ICON_KINDS[i][0].test(t)) return SOURCE_ICON_KINDS[i][1];
+  }
+  var name = String(title || '').trim();
+  var ext = /\.([a-z0-9]{1,8})$/i.exec(name);
+  var byExt = ext && SOURCE_EXT_KINDS[ext[1].toLowerCase()];
+  if (byExt && Object.prototype.hasOwnProperty.call(SOURCE_EXT_KINDS, ext[1].toLowerCase())) return byExt;
+  if (/^https?:\/\//i.test(name)) return 'web';
+  if (/youtube\.com|youtu\.be/i.test(String(url || ''))) return 'youtube';
+  if (/description|article|text|notes|content_paste/.test(t)) return 'text';
+  return 'document';
+}
+
 
 if (typeof document !== 'undefined') (function () {
   var D = JSON.parse(document.getElementById('data').textContent);
@@ -203,6 +236,26 @@ if (typeof document !== 'undefined') (function () {
   function icon(body, color) { return '<svg viewBox="0 0 24 24"' + (color ? ' style="color:' + color + '"' : '') + '>' + body + '</svg>'; }
   var CLOSE = '<path d="M6 6l12 12M18 6L6 18"/>', BACK = '<path d="M15 5l-7 7 7 7"/>', COPIED = '<path d="M5 13l4.5 4.5L19 7"/>', COPY = '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M5 16V5a1 1 0 0 1 1-1h10"/>';
   var esc = escHtml;
+  var DOC_SHEET = 'M7 3h7l4 4v14H7zM14 3v4h4';
+  var SOURCE_ICONS = {
+    pdf: ['PDF', 'var(--pink)', '<path d="' + DOC_SHEET + '"/><path d="M10 12h5M10 16h5"/>'],
+    audio: ['Audio', 'var(--blue)', '<path d="M5 10v4M9 7v10M13 4v16M17 8v8M21 10v4"/>'],
+    video: ['Video', 'var(--green)', '<rect x="3" y="6" width="13" height="12" rx="3"/><path d="M16 11l5-3v8l-5-3"/>'],
+    image: ['Image', 'var(--green)', '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="M21 16l-5-5-8 8"/>'],
+    web: ['Web page', 'var(--blue)', '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/>'],
+    doc: ['Document', 'var(--blue)', '<path d="' + DOC_SHEET + '"/><path d="M10 12h5M10 15h5M10 18h3"/>'],
+    slides: ['Slides', 'var(--orange)', '<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M12 17v4M8 21h8"/>'],
+    sheet: ['Spreadsheet', 'var(--green)', '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M4 15h16M10 4v16"/>'],
+    markdown: ['Markdown', 'var(--purple)', '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M6 15V9l2.5 3L11 9v6M15 9v6M13 13l2 2 2-2"/>'],
+    text: ['Text', 'var(--muted)', '<path d="M5 6h14M5 10h14M5 14h14M5 18h9"/>'],
+    document: ['Source', 'var(--muted)', '<path d="' + DOC_SHEET + '"/>']
+  };
+  function sourceIcon(s) {
+    var kind = sourceKind(s.type, s.title, s.url);
+    if (kind === 'youtube') return '<i class="yt" title="YouTube"></i>';
+    var look = SOURCE_ICONS[kind];
+    return '<i class="src-ic" title="' + look[0] + '">' + icon(look[2], look[1]) + '</i>';
+  }
 
   // Exported text comes from third-party sources, so scripts and handlers never survive
   function sanitize(html) { return sanitizeHtml(html, new DOMParser()); }
@@ -315,7 +368,7 @@ if (typeof document !== 'undefined') (function () {
       '<input id="srcq" type="search" aria-label="Search sources" placeholder="Search sources" value="' + esc(srcQ) + '"></label><div class="group">' + hits.length + ' of ' + D.sources.length + '</div><div class="scroll">' +
       hits.map(function (i) {
         var s = D.sources[i];
-        return '<button class="src" data-src="' + i + '">' + (s.url ? '<i class="yt"></i>' : icon('<path d="M7 3h7l4 4v14H7zM14 3v4h4"/>', 'var(--muted)')) + '<span>' + esc(s.title) + '</span></button>';
+        return '<button class="src" data-src="' + i + '">' + sourceIcon(s) + '<span>' + esc(s.title) + '</span></button>';
       }).join('') + '</div>';
     applyCols();
   }
@@ -342,7 +395,7 @@ if (typeof document !== 'undefined') (function () {
   function renderChat(q) {
     var low = (q || '').toLowerCase(), idx = [];
     D.pairs.forEach(function (p, i) { if (!low || (p.q + ' ' + p.a).toLowerCase().indexOf(low) > -1) idx.push(i); });
-    var top = low ? '' : '<div class="nb-title">' + esc(D.notebook) + '</div><div class="nb-meta">' + D.sources.length + ' sources</div>' + (D.summary ? '<div class="md">' + md(D.summary) + '</div>' : '');
+    var top = low ? '' : (D.emoji ? '<div class="nb-emoji">' + esc(D.emoji) + '</div>' : '') + '<div class="nb-title">' + esc(D.notebook) + '</div><div class="nb-meta">' + D.sources.length + ' sources</div>' + (D.summary ? '<div class="md">' + md(D.summary) + '</div>' : '');
     var box = $('chat');
     box.innerHTML = top;
     $('chatcount').textContent = low ? idx.length + ' of ' + D.pairs.length : D.sources.length + ' sources';
@@ -375,7 +428,7 @@ if (typeof document !== 'undefined') (function () {
   function dlLinks(a, skip) {
     if (!a.files) return '';
     return '<div class="dl">' + Object.keys(a.files).filter(function (e) { return e !== skip; }).map(function (e) {
-      return '<a href="' + esc(a.files[e]) + '" download>' + esc(e.toUpperCase()) + '</a>'; }).join('') + '</div>';
+      return '<a href="' + esc(a.files[e]) + '" target="_blank" rel="noopener" download>' + esc(e.toUpperCase()) + '</a>'; }).join('') + '</div>';
   }
   function tableHtml(rows) {
     if (!rows || !rows.length) return '<p>Empty table.</p>';
@@ -459,7 +512,7 @@ if (typeof document !== 'undefined') (function () {
     }, 50);
   }, true);
 
-  document.title = D.notebook + ' archive';
+  document.title = (D.emoji ? D.emoji + ' ' : '') + D.notebook + ' archive';
   $('nb').textContent = D.notebook;
   $('stamp').textContent = 'Read-only' + (D.exported ? ' · exported ' + String(D.exported).slice(0, 10) : '');
   sourcesList(); renderChat(''); studioList();

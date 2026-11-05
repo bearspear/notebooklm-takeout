@@ -102,4 +102,48 @@ test('showCopyResult says what happened on the button, then puts it back', () =>
   assert.equal(btn.innerHTML, 'copy-icon');
   assert.equal(attrs['aria-label'], 'Copy answer');
   assert.equal(attrs.title, 'Copy answer');
+test('sourceKind reads every icon name seen on the page', () => {
+  const kind = (type, title = 'x', url = '') => app.sourceKind(type, title, url);
+  assert.equal(kind('video_youtube'), 'youtube');
+  assert.equal(kind('video_audio_call', 'dec18.m4a'), 'audio');
+  assert.equal(kind('drive_pdf'), 'pdf');
+  assert.equal(kind('image'), 'image');
+  assert.equal(kind('markdown'), 'markdown');
+  assert.equal(kind('description'), 'text');
+  assert.equal(kind('article'), 'text');
+});
+
+test('sourceKind reads icon names Google is likely to use next', () => {
+  const kind = type => app.sourceKind(type, 'x', '');
+  assert.equal(kind('web'), 'web');
+  assert.equal(kind('language'), 'web');
+  assert.equal(kind('drive_presentation'), 'slides');
+  assert.equal(kind('drive_spreadsheet'), 'sheet');
+  assert.equal(kind('drive_document'), 'doc');
+  assert.equal(kind('movie'), 'video');
+  assert.equal(kind('mic'), 'audio');
+});
+
+test('sourceKind falls back to the title extension, then the url, then a plain document', () => {
+  const kind = (type, title, url = '') => app.sourceKind(type, title, url);
+  for (const [title, expected] of [
+    ['a.PDF', 'pdf'], ['a.mp3', 'audio'], ['a.m4a', 'audio'], ['a.wav', 'audio'], ['a.mp4', 'video'], ['a.mov', 'video'],
+    ['a.jpeg', 'image'], ['a.png', 'image'], ['a.webp', 'image'], ['a.heic', 'image'], ['a.md', 'markdown'],
+    ['a.txt', 'text'], ['a.rtf', 'text'], ['a.docx', 'doc'], ['a.doc', 'doc'], ['a.pptx', 'slides'],
+    ['a.xlsx', 'sheet'], ['a.csv', 'sheet'], ['a.html', 'web'], ['https://example.com/page', 'web']
+  ]) assert.equal(kind('', title), expected, title);
+  // A generic icon does not hide a more exact extension
+  assert.equal(kind('description', 'plan.docx'), 'doc');
+  assert.equal(kind('', 'a talk', 'https://www.youtube.com/watch?v=x'), 'youtube');
+  assert.equal(kind('', 'no clue'), 'document');
+  assert.equal(kind('document', 'no clue'), 'document');
+  assert.equal(kind('something_new', 'no clue'), 'document');
+  assert.equal(app.sourceKind(undefined, undefined, undefined), 'document');
+});
+
+test('every link the viewer writes itself opens in a new tab', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8');
+  const links = src.split('\n').filter(line => /<a (class|href)=/.test(line));
+  assert.ok(links.length >= 2);
+  for (const line of links) assert.match(line, /target="_blank" rel="noopener"/, line.trim().slice(0, 80));
 });

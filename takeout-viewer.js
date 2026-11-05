@@ -307,7 +307,7 @@
         : v.plainImages && !v.metaImages ? withSummary(v.meta, v.plain) : v.meta;
       const [meta] = front(v.meta === undefined ? v.plain : v.meta);
       const body = front(text)[1];
-      sources.push({ title: meta.title || baseName(base), url: meta.youtube_url || '', md: dropH1(body.trimStart()) });
+      sources.push({ title: meta.title || baseName(base), url: meta.youtube_url || '', type: meta.source_type || '', md: dropH1(body.trimStart()) });
     }
     return sources.sort((a, b) => {
       const x = a.title.toLowerCase(), y = b.title.toLowerCase();
@@ -420,12 +420,12 @@
     return out;
   }
 
-  function buildViewerData(allFiles, { notebook = '', exported = '', mediaBase = '', savedImages = null } = {}) {
+  function buildViewerData(allFiles, { notebook = '', exported = '', mediaBase = '', savedImages = null, emoji = '' } = {}) {
     const files = viewerText(allFiles, savedImages);
     const cites = createCites();
     const { summary, pairs } = loadChat(files, cites);
     return {
-      notebook, exported, summary,
+      notebook, emoji, exported, summary,
       sources: loadSources(files),
       studio: loadNotes(files, cites).concat(loadArtifacts(files, mediaBase)),
       pairs,

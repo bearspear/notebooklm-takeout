@@ -2217,3 +2217,13 @@ test('a notice is listed in errors.md but is not counted as an error', () => {
   assert.match(report, /^## INFO \(1\)$/m);
   assert.match(report, /^- Deck: no PowerPoint version offered/m);
 });
+
+test('notebookEmoji takes the emoji from the cover, without its picker text', () => {
+  assert.equal(NLME.notebookEmoji('♾️ \n   \n   Search results\n   No emoji found\n  Recently used\n Loading'), '♾️');
+  assert.equal(NLME.notebookEmoji('  👨‍👩‍👧‍👦 \n Search results'), '👨‍👩‍👧‍👦');
+  assert.equal(NLME.notebookEmoji('🇨🇦'), '🇨🇦');
+  assert.equal(NLME.notebookEmoji('Search results'), '');
+  assert.equal(NLME.notebookEmoji('<b>'), '');
+  assert.equal(NLME.notebookEmoji(''), '');
+  assert.equal(NLME.notebookEmoji(null), '');
+});

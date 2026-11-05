@@ -393,7 +393,7 @@ variant: base
 ```
 
 `kind` is `note`, `source`, `report`, `chat` and so on; `variant` is `base`, `code-blocks`
-or `with-images`. YouTube sources also carry `youtube_url`, and the chat has `messages` (the
+or `with-images`. YouTube sources also carry `youtube_url`, sources carry `source_type` (the type icon the page shows, such as `drive_pdf`), and the chat has `messages` (the
 number of question/answer pairs). Empty values are left out.
 
 ## Health check (🩺)

@@ -273,6 +273,12 @@
         sendResponse({ success: true });
       }
     },
+    [NLME.MSG.GET_NOTEBOOK_EMOJI]: {
+      async: false,
+      run(message, sender, sendResponse) {
+        sendResponse({ emoji: NLME.notebookEmoji(document.querySelector(NLME.NOTEBOOK_EMOJI_SELECTOR)?.textContent) });
+      }
+    },
     [NLME.MSG.GET_PROJECT_NAME]: {
       async: false,
       run(message, sender, sendResponse) {

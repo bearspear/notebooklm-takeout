@@ -272,3 +272,19 @@ test('artifact and takeout manifests count errors, not notices', () => {
     assert.doesNotMatch(src, /errorCount: errors\.length/, file);
   }
 });
+
+test('a source file records the type the page shows, and leaves out the scan default', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'sidebar-sources.js'), 'utf8');
+  assert.match(src, /source_type: sourceType/);
+  assert.match(src, /sourceFrontMatter\(meta, \{ title: source\.title, variant, youtubeUrl: source\.youtubeUrl, sourceType: source\.sourceType \}\)/);
+  assert.match(src, /sourceType: source\.type === 'document' \? null : source\.type \|\| null/);
+});
+
+test('Full Takeout gives the viewer the notebook emoji, shown on the cover and the tab', () => {
+  const panel = fs.readFileSync(path.join(ROOT, 'sidebar-takeout.js'), 'utf8');
+  assert.match(panel, /emoji: meta\.emoji/);
+  assert.match(panel, /emoji: await getNotebookEmoji\(tabId\)/);
+  const app = fs.readFileSync(path.join(ROOT, 'viewer', 'viewer-app.js'), 'utf8');
+  assert.match(app, /class="nb-emoji">' \+ esc\(D\.emoji\)/);
+  assert.match(app, /document\.title = \(D\.emoji \? D\.emoji \+ ' ' : ''\)/);
+});

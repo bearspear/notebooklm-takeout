@@ -1064,6 +1064,15 @@ Found while checking real exports after #8; the export bugs below predate it.
   (`isPriceRangeFragment`). The file's text was right all along.
 - **Turndown's `\[` is display math to MathJax.** `[Resolution #1]` became an error in Markdown Viewer, so
   bracket pairs that cannot become Markdown stay plain (`relaxBracketEscapes`).
+- **Source types:** the page's `.source-item-source-icon` text is the reliable type, since titles may have no
+  extension. Seen Nov 2026 across 8 notebooks: `drive_pdf`, `image`, `video_youtube`, `video_audio_call`
+  (uploaded audio), `markdown`, `description`, `article`. Written as `source_type`; `sourceKind` in
+  `viewer/viewer-app.js` maps it for the viewer, then falls back to the extension and the url.
+- **Viewer links open in a new tab.** The sanitizer does it for Markdown links; every `<a>` the viewer writes
+  itself needs `target="_blank"` too. `download` is unreliable on a page opened from disk, so it cannot be
+  relied on to keep the viewer open.
+- **Notebook emoji:** `.cover-emoji` holds it as text, plus its picker's words, so `NLME.notebookEmoji` keeps
+  the first word. It stays in the page wherever the chat is scrolled.
 - **Testing an update:** toggle the extension off and on, THEN refresh the notebook tab. The reload icon left
   page scripts stale for hours, and the side panel updating too made it look like the fix had failed.
   Check a new `NLME` function in the page's console to confirm.
