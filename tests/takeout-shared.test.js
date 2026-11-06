@@ -2461,3 +2461,35 @@ test('generatedActionLabel says what the action leaves out', () => {
   assert.equal(label([note, quiz, cards]), "Export 1 item · 2 can't be exported");
   assert.equal(label([quiz]), "1 can't be exported");
 });
+
+test('bulkDeletePlan skips untitled items and titles shared by two Studio items', () => {
+  const dupA = { kind: 'note', label: 'Dup', combinedIndex: 0 };
+  const dupB = { kind: 'artifact', label: 'Dup', combinedIndex: 1 };
+  const solo = { kind: 'artifact', label: 'Solo', combinedIndex: 2 };
+  const blank = { kind: 'note', label: 'Untitled note', untitled: true, combinedIndex: 3 };
+  const srcNote = { kind: 'source-note', label: 'Dup', sourceIndex: 4 };
+  const all = [dupA, dupB, solo, blank, srcNote];
+
+  const plan = NLME.bulkDeletePlan([dupB, solo, blank, srcNote], all);
+  assert.deepEqual(plan.deletable, [solo, srcNote]);
+  assert.equal(plan.skippedUntitled, 1);
+  assert.equal(plan.skippedDuplicate, 1);
+});
+
+test('bulkDeletePlan treats a title as shared even when only one copy is ticked, and ignores outer spaces', () => {
+  const a = { kind: 'note', label: 'Dup', combinedIndex: 0 };
+  const b = { kind: 'note', label: ' Dup ', combinedIndex: 1 };
+  assert.deepEqual(NLME.bulkDeletePlan([a], [a, b]).deletable, []);
+});
+
+test('bulkDeletePlan leaves a Sources-panel note with a shared title deletable: it goes by its index', () => {
+  const a = { kind: 'source-note', label: 'Dup', sourceIndex: 1 };
+  const b = { kind: 'source-note', label: 'Dup', sourceIndex: 2 };
+  assert.deepEqual(NLME.bulkDeletePlan([a, b], [a, b]).deletable, [a, b]);
+});
+
+test('bulkDeleteSkipText names each kind of skip', () => {
+  assert.equal(NLME.bulkDeleteSkipText({ skippedUntitled: 0, skippedDuplicate: 0 }), '');
+  assert.equal(NLME.bulkDeleteSkipText({ skippedUntitled: 2, skippedDuplicate: 0 }), '2 untitled item(s)');
+  assert.equal(NLME.bulkDeleteSkipText({ skippedUntitled: 2, skippedDuplicate: 1 }), '2 untitled item(s) and 1 item(s) with a shared title');
+});

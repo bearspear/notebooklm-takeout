@@ -1653,8 +1653,9 @@ not Citation detail 'none') or on `obsidianNames`.
   dialog whose `.cdk-overlay-pane` is the last pane in `.cdk-overlay-container`, never to a snack bar or
   tooltip pane), so a confirm dialog the delete opened does not stay open and a dialog that existed before
   is never touched.
-- **Delete Selected count.** `isStudioItemUntitled` is shared by the button label and the confirm in
-  `handleStudioBulkDelete`; untitled Studio items are not counted (Sources-panel notes are).
+- **Delete Selected count.** `NLME.bulkDeletePlan` is shared by the button label and the confirm in
+  `handleStudioBulkDelete`; untitled Studio items and Studio items with a shared title are not counted
+  (Sources-panel notes are).
 - **Folder-mode sizes.** `downloadUrlTo` returns the download id; `downloadSizeWhenDone(id)` polls
   `chrome.downloads.search({ id })` (500 ms, 120 s cap, never rejects) through the pure
   `NLME.downloadSizeStatus`. `saveFiles` folder mode returns `sizes` (promises); `runArtifactsJob` sets
@@ -1680,9 +1681,10 @@ chat history for context — the fix often introduces a different regression.
 
 Exports are fixed (Nov 2026): notes, reports, tables and mind maps resolve with
 `NLME.pickByIndexThenTitle` (scanned index while its title matches, else title).
-`deleteStudioItem` / bulk delete still resolve by label, so deleting the second of two
-same-titled items hits the first. A fix covering delete was tried in June and **reverted at
-the user's request** — re-do only after talking with them.
+`deleteStudioItem` resolves by label in bulk, so deleting the second of two same-titled items
+would hit the first. A fix covering delete was tried in June and **reverted at the user's
+request**. In 1.9.1, with the owner's OK, `NLME.bulkDeletePlan` skips Studio items with a shared
+title in Delete Selected; a row delete checks position and title. `content.js` is unchanged.
 
 Related (Milestone 3c Resume): job-record keys are `type\0title`, plus `#n` for the nth duplicate. If
 the first of two same-titled items is deleted, the survivor becomes the unsuffixed key, so a Resume may

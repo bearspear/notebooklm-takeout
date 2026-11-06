@@ -190,13 +190,6 @@ function isStudioItemDeletable(item) {
   return !!item;
 }
 
-// An untitled Studio item only has a made-up label ("Item 3"): deleting by it
-// could hit a real item with that title, so a bulk delete skips it. The bulk
-// button's count and the confirm both use this.
-function isStudioItemUntitled(item) {
-  return !!item && item.untitled === true && item.kind !== 'source-note';
-}
-
 // One delete request for a Generated item; throws on failure. Bulk delete passes
 // useIndex false for Studio items: by label only, a stale index could hit another item.
 async function sendStudioDelete(item, { useIndex = true } = {}) {
@@ -215,7 +208,7 @@ async function sendStudioDelete(item, { useIndex = true } = {}) {
 function updateStudioBulkButtonsState(controller = _studioListController) {
   const selected = controller ? controller.selectedItems() : [];
   const deletableN = selected.filter(isStudioItemDeletable).length;
-  const deleteCount = selected.filter(item => isStudioItemDeletable(item) && !isStudioItemUntitled(item)).length;
+  const deleteCount = NLME.bulkDeletePlan(selected.filter(isStudioItemDeletable), _studioItems).deletable.length;
   const plan = NLME.generatedExportPlan(selected);
   const n = plan.artifacts.length + plan.notes.length;
   setTabAction('studio', { label: NLME.generatedActionLabel(plan), disabled: n === 0, onClick: exportSelectedGenerated });
@@ -328,14 +321,15 @@ async function handleStudioDeleteRow(item, btn) {
 async function handleStudioBulkDelete() {
   // Only what is selected (and so visible) is deleted; the dialog names that count.
   const selectedItems = _studioListController ? _studioListController.selectedItems() : [];
-  const skippedUntitled = selectedItems.filter(isStudioItemUntitled).length;
-  const deletable = selectedItems.filter(item => isStudioItemDeletable(item) && !isStudioItemUntitled(item));
+  const deletePlan = NLME.bulkDeletePlan(selectedItems.filter(isStudioItemDeletable), _studioItems);
+  const { deletable } = deletePlan;
+  const skipText = NLME.bulkDeleteSkipText(deletePlan);
   if (deletable.length === 0) {
-    if (skippedUntitled > 0) showToast(`Skipped ${skippedUntitled} untitled item(s): delete them one by one`, 'warning');
+    if (skipText) showToast(`Skipped ${skipText}: delete them one by one`, 'warning');
     return;
   }
 
-  const skippedNote = skippedUntitled > 0 ? `\n\n${skippedUntitled} untitled item(s) will be skipped; delete those one by one.` : '';
+  const skippedNote = skipText ? `\n\n${skipText} will be skipped; delete those one by one.` : '';
   if (!confirm(`Delete ${deletable.length} item(s)? This cannot be undone.${skippedNote}`)) return;
 
   const bulkBtn = document.getElementById('studio-delete-selected-btn');
@@ -365,8 +359,8 @@ async function handleStudioBulkDelete() {
     }
   }
 
-  const skippedText = skippedUntitled > 0 ? `, skipped ${skippedUntitled} untitled` : '';
-  showToast(`Deleted ${okCount}/${queue.length} generated item(s)${skippedText}`, okCount === queue.length && skippedUntitled === 0 ? 'success' : 'warning');
+  const skippedText = skipText ? `, skipped ${skipText}` : '';
+  showToast(`Deleted ${okCount}/${queue.length} generated item(s)${skippedText}`, okCount === queue.length && !skipText ? 'success' : 'warning');
   if (queue.some(item => item.kind !== 'artifact')) setTabCount('notes', null); // recounted when Notes rescans
   _studioSignature = null; // always a redraw
   await scanStudioPage();

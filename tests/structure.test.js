@@ -402,7 +402,7 @@ test('Generated keeps the delete guards', () => {
   const send = fnSource('sidebar-generated.js', 'sendStudioDelete');
   assert.match(send, /useIndex \? \{ label: item\.label, combinedIndex: item\.combinedIndex \} : \{ label: item\.label \}/);
   assert.match(fnSource('sidebar-generated.js', 'handleStudioBulkDelete'), /useIndex: false/);
-  assert.match(fnSource('sidebar-generated.js', 'handleStudioBulkDelete'), /!isStudioItemUntitled\(item\)/);
+  assert.match(fnSource('sidebar-generated.js', 'handleStudioBulkDelete'), /NLME\.bulkDeletePlan\(/);
   assert.match(generated, /confirm\(`Delete "\$\{item\.label\}"\? This cannot be undone\.`\)/);
   assert.match(generated, /confirm\(`Delete \$\{deletable\.length\} item\(s\)\? This cannot be undone\.\$\{skippedNote\}`\)/);
   // Hidden with its tab; off during a job

@@ -265,7 +265,9 @@ was exported so far is kept) and skips the remaining categories. The root index 
 Every row on the **Generated** tab has **Delete**, and **Delete Selected (N)** sits beside the export
 button. Delete asks you first and then confirms Gemini Notebook's own dialog if it shows one. This
 includes the notes in the Sources panel: the tab removes them through the panel's "Remove note" menu
-item. Delete Selected removes the Sources-panel notes last, from the bottom of the list up.
+item. Delete Selected removes the Sources-panel notes last, from the bottom of the list up. It skips
+untitled items and Studio items that share a title with another item, and says so first: delete those
+with their row's button.
 
 ### Cancelling
 

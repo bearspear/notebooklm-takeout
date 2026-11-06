@@ -1719,6 +1719,32 @@
   }
 
   // The Generated action's label for a generatedExportPlan
+  // Delete Selected resolves a Studio item by its label alone, so the first of two
+  // same-titled items would go whichever was ticked. Such items are skipped here,
+  // like untitled ones, whose made-up label ("Item 3") could hit a real item. A row
+  // delete checks position and title. Sources-panel notes go by their own index, so
+  // a shared title does not touch them.
+  function bulkDeletePlan(selected = [], allItems = []) {
+    const isStudio = item => item.kind !== 'source-note';
+    const labelOf = item => String(item.label || '').trim();
+    const counts = new Map();
+    allItems.filter(isStudio).forEach(item => counts.set(labelOf(item), (counts.get(labelOf(item)) || 0) + 1));
+    const plan = { deletable: [], skippedUntitled: 0, skippedDuplicate: 0 };
+    for (const item of selected) {
+      if (isStudio(item) && item.untitled === true) plan.skippedUntitled++;
+      else if (isStudio(item) && counts.get(labelOf(item)) > 1) plan.skippedDuplicate++;
+      else plan.deletable.push(item);
+    }
+    return plan;
+  }
+
+  function bulkDeleteSkipText({ skippedUntitled = 0, skippedDuplicate = 0 } = {}) {
+    const parts = [];
+    if (skippedUntitled > 0) parts.push(`${skippedUntitled} untitled item(s)`);
+    if (skippedDuplicate > 0) parts.push(`${skippedDuplicate} item(s) with a shared title`);
+    return parts.join(' and ');
+  }
+
   function generatedActionLabel({ artifacts = [], notes = [], skipped = [] } = {}) {
     const n = artifacts.length + notes.length;
     if (skipped.length === 0) return actionLabel(n, 'item');
@@ -2634,6 +2660,8 @@ footer { margin-top: 3rem; }
     generatedExportMessage,
     generatedExportOutcome,
     generatedActionLabel,
+    bulkDeletePlan,
+    bulkDeleteSkipText,
     generatedExportPlan,
     generatedSignature,
     listStateKey,
