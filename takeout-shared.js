@@ -53,8 +53,8 @@
     return detail === 'titles' || detail === 'none' ? detail : 'quotes';
   }
 
-  // Full Takeout's own ZIP choice (the checkbox next to its button): takeoutZip when it has
-  // been set (a boolean), else the "Always use ZIP" setting (autoZip).
+  // Where the export sheet's Save as starts: takeoutZip when it has been set (a boolean),
+  // else the "Always use ZIP" setting (autoZip).
   function takeoutZipChoice(settings) {
     if (settings && typeof settings.takeoutZip === 'boolean') return settings.takeoutZip;
     return !!(settings && settings.autoZip);
@@ -1127,6 +1127,8 @@
     return variants;
   }
 
+  const PRESETS = ['archive', 'ai', 'custom'];
+
   // What a preset sets for one export. custom: the Custom preset's remembered
   // { citationDetail, obsidianNames, images }. An unknown preset is Archive.
   function presetOverrides(preset, custom = {}) {
@@ -1203,6 +1205,49 @@
   function formatEstimate(seconds) {
     if (!Number.isFinite(seconds) || seconds < 30) return 'under 30 sec';
     return `about ${Math.max(1, Math.round(seconds / 60))} min`;
+  }
+
+  // The export sheet's estimate. counts holds what the run takes: a key that is there
+  // with no usable number is not known yet, counts as 0 and is named; an absent key is
+  // not part of the run. With nothing known there is no number: a short time would
+  // be a guess.
+  const ESTIMATE_NAMES = [['sources', 'sources'], ['notes', 'notes'], ['generated', 'generated items'], ['chat', 'chat']];
+  function estimateLine(counts, citationDetail) {
+    const asked = ESTIMATE_NAMES.filter(([key]) => counts && key in counts);
+    const unknown = asked.filter(([key]) => !(Number.isFinite(counts[key]) && counts[key] >= 0)).map(([, name]) => name);
+    if (asked.length === unknown.length) return 'Estimated time: not known yet';
+    const line = `Estimated time: ${formatEstimate(estimateSeconds(counts, citationDetail))}`;
+    if (unknown.length === 0) return line;
+    const last = unknown.pop();
+    return `${line}, not counting ${unknown.length ? `${unknown.join(', ')} and ` : ''}${last}`;
+  }
+
+  // What Export everything counts, from Home's counts (null: not known) and the loaded
+  // chat, if any. Generated's list holds the notes too, so its own items are the rest.
+  function homeEstimateCounts(tabCounts, chatCount = null) {
+    const known = n => (Number.isFinite(n) ? n : null);
+    const { sources, notes, studio } = tabCounts || {};
+    const bothKnown = known(notes) !== null && known(studio) !== null;
+    return { sources: known(sources), notes: known(notes), generated: bothKnown ? Math.max(0, studio - notes) : null, chat: known(chatCount) };
+  }
+
+  // The export sheet's state when it opens: the default preset, Custom's remembered
+  // values and the default save.
+  function sheetChoice(settings = {}) {
+    return {
+      preset: PRESETS.includes(settings.exportPreset) ? settings.exportPreset : 'archive',
+      citationDetail: settings.citationDetail === undefined ? 'quotes' : settings.citationDetail,
+      obsidianNames: !!settings.obsidianNames,
+      images: settings.customImages !== false,
+      zip: takeoutZipChoice(settings)
+    };
+  }
+
+  // What the sheet's state runs: `overrides` for withRunSettings, `zip` for the job. A
+  // choice is for this run: nothing here or in the sheet writes settings.
+  function sheetOverrides(choice = {}, settings = {}) {
+    const { preset, citationDetail, obsidianNames, images, zip } = { ...sheetChoice(settings), ...choice };
+    return { overrides: presetOverrides(preset, { citationDetail, obsidianNames, images }), zip: !!zip };
   }
 
   // A code fence the quote cannot close early: longer than its longest
@@ -1592,8 +1637,9 @@
     return `nlme.job.${notebookId}`;
   }
 
-  // overrides: the run's (withRunSettings), for a Resume; none outside a run.
-  function newJobRecord({ id, kind, label, notebookId, keysByCategory, now, overrides = null }) {
+  // overrides: the run's (withRunSettings), for a Resume; none outside a run. zip: the
+  // run's save choice, for a job that has one (see jobRecordZip).
+  function newJobRecord({ id, kind, label, notebookId, keysByCategory, now, overrides = null, zip }) {
     const remaining = {};
     const failed = {};
     for (const [category, keys] of Object.entries(keysByCategory || {})) {
@@ -1602,7 +1648,7 @@
     }
     // total: how many keys the job started with (the banner's "stopped at N of total")
     const total = Object.values(remaining).reduce((sum, keys) => sum + keys.length, 0);
-    return { id, kind, label, notebookId, startedAt: now, updatedAt: now, total, remaining, failed, ...(overrides ? { overrides } : {}) };
+    return { id, kind, label, notebookId, startedAt: now, updatedAt: now, total, remaining, failed, ...(overrides ? { overrides } : {}), ...(typeof zip === 'boolean' ? { zip } : {}) };
   }
 
   // A new record with `key` done: removed from remaining, and from failed unless
@@ -1669,6 +1715,12 @@
     return record && record.kind === 'takeout' ? runOverrides(settings) : {};
   }
 
+  // The save choice a Resume's artifacts run on. undefined (a record from before 1.9.3,
+  // or a job without one) leaves downloadAllArtifacts on its default.
+  function jobRecordZip(record) {
+    return record && typeof record.zip === 'boolean' ? record.zip : undefined;
+  }
+
   // matchResumeItems that will not call a key gone on thin evidence. A partial
   // scan (a list not drawn yet, the previous notebook's page) must not clear
   // items that still exist, so:
@@ -1691,12 +1743,12 @@
     return { matched: m.matched, missing, unknown };
   }
 
-  // The banner's "An earlier <this> stopped at": a takeout's label already
-  // names it; the others are an export.
+  // The banner's "An earlier <this> stopped at". A takeout goes by the button's name,
+  // also in a record that still has the old label; the others are an export.
   function resumeBannerLabel(record) {
     const label = String((record && record.label) || '');
     if (!label) return 'export';
-    return record.kind === 'takeout' ? label : `${label} export`;
+    return record.kind === 'takeout' ? 'Export everything' : `${label} export`;
   }
 
   // The banner's wording. A record with nothing remaining and only failed keys
@@ -2722,8 +2774,8 @@ footer { margin-top: 3rem; }
   });
 
   // The ⚙️ settings as shipped. The side panel starts from these and
-  // "Reset to defaults" returns to them. takeoutZip is Full Takeout's own ZIP
-  // tick (on its tab, not in ⚙️): unset until the user ticks it. exportPreset:
+  // "Reset to defaults" returns to them. takeoutZip is the export sheet's
+  // starting Save as, unset unless an earlier version stored it. exportPreset:
   // 'archive', 'ai' or 'custom'; customImages is Custom's image copies, whose
   // citations and names are citationDetail and obsidianNames.
   const DEFAULT_SETTINGS = Object.freeze({
@@ -2751,8 +2803,8 @@ footer { margin-top: 3rem; }
     customImages: true
   });
 
-  // A fresh, editable copy of the defaults. Keeps only the Full Takeout ZIP
-  // choice from `current`, since that tick is not one of the ⚙️ options.
+  // A fresh, editable copy of the defaults. Keeps only Export everything's ZIP
+  // choice from `current`, since that choice is not one of the ⚙️ options.
   function resetSettings(current) {
     const fresh = { ...DEFAULT_SETTINGS };
     if (current && current.takeoutZip !== undefined) fresh.takeoutZip = current.takeoutZip;
@@ -2805,6 +2857,7 @@ footer { margin-top: 3rem; }
     jobRecordMode,
     jobRecordUsable,
     jobRecordOverrides,
+    jobRecordZip,
     planResume,
     resumeBannerLabel,
     resumeBannerView,
@@ -2871,6 +2924,10 @@ footer { margin-top: 3rem; }
     applyRunSettings,
     estimateSeconds,
     formatEstimate,
+    estimateLine,
+    homeEstimateCounts,
+    sheetChoice,
+    sheetOverrides,
     isAllowedDownloadUrl,
     isAllowedImageUrl,
     imageFetchUrl,

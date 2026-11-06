@@ -769,7 +769,7 @@ test('resumeBannerView words a stopped export and a finished one with failures',
     text: 'An earlier Notes export finished with 2 failed.', actionLabel: 'Retry (2)', failedOnly: true });
   const takeout = NLME.newJobRecord({ id: 't-1', kind: 'takeout', label: 'Full Takeout', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1 });
   assert.equal(NLME.resumeBannerView(NLME.markJobItems(takeout, 'notes', ['a'], { failed: true, now: 2 })).text,
-    'An earlier Full Takeout finished with 1 failed.');
+    'An earlier Export everything finished with 1 failed.');
 });
 
 test('groupedSourcesMarkdown writes one line per source with every number anchored', () => {
@@ -1826,7 +1826,8 @@ test('groupErrorsForPanel lists panel-only resume errors in full', () => {
 
 test('resumeBannerText says export unless the label is a takeout', () => {
   assert.equal(NLME.resumeBannerLabel({ kind: 'notes', label: 'Notes' }), 'Notes export');
-  assert.equal(NLME.resumeBannerLabel({ kind: 'takeout', label: 'Full Takeout' }), 'Full Takeout');
+  assert.equal(NLME.resumeBannerLabel({ kind: 'takeout', label: 'Export everything' }), 'Export everything');
+  assert.equal(NLME.resumeBannerLabel({ kind: 'takeout', label: 'Full Takeout' }), 'Export everything', 'a record from before 1.9.3');
   assert.equal(NLME.resumeBannerLabel({}), 'export');
 });
 
@@ -2984,10 +2985,10 @@ test('startJobRecord stores the overrides of the run, and an update leaves them'
   assert.equal('overrides' in store[key], false);
 });
 
-test('Full Takeout runs under the preset, and reads its settings directly', () => {
-  const core = fs.readFileSync(path.join(__dirname, '..', 'sidebar-core.js'), 'utf8');
-  assert.match(core, /runExclusive\('Full Takeout', \(\) => withRunSettings\(NLME\.runOverrides\(settings\), runFullTakeout\)\)/);
-  assert.equal([...core.matchAll(/[^.]\brunFullTakeout\b/g)].length, 1);
+test('Export everything runs on the sheet\'s choice, and reads its settings directly', () => {
+  assert.match(fnSource('sidebar-takeout.js', 'openExportEverythingSheet'), /runExclusive\('Export everything', \(\) => withRunSettings\(overrides, \(\) => runFullTakeout\(\{ zip \}\)\)\)/);
+  const src = fs.readdirSync(path.join(__dirname, '..')).filter(f => /^sidebar-.*\.js$/.test(f)).map(f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8')).join('\n');
+  assert.equal([...src.matchAll(/[^.]\brunFullTakeout\(\{ zip \}\)/g)].length, 1);
   const takeout = fnSource('sidebar-takeout.js', 'runFullTakeout');
   assert.doesNotMatch(takeout, /takeoutVariantSettings|variantSettings/);
   assert.doesNotMatch(takeout, /withRunSettings/);
@@ -3013,4 +3014,152 @@ test('loadSettings migrates the preset from what was stored, and writes nothing'
   const migrated = await load({ citationDetail: 'titles' });
   assert.equal(migrated.settings.customImages, true);
   assert.deepEqual(migrated.sets, []);
+});
+
+// ---- The export sheet ----
+
+test('the sheet opens on the default preset and the remembered Custom values', () => {
+  const stored = { ...NLME.DEFAULT_SETTINGS, exportPreset: 'ai', citationDetail: 'none', obsidianNames: true, customImages: false, takeoutZip: true };
+  assert.deepEqual(NLME.sheetChoice(stored), { preset: 'ai', citationDetail: 'none', obsidianNames: true, images: false, zip: true });
+  assert.deepEqual(NLME.sheetChoice(NLME.DEFAULT_SETTINGS), { preset: 'archive', citationDetail: 'quotes', obsidianNames: false, images: true, zip: false });
+  assert.equal(NLME.sheetChoice({ autoZip: true }).zip, true, 'takeoutZipChoice is the start');
+  assert.equal(NLME.sheetChoice({ exportPreset: 'nonsense' }).preset, 'archive');
+});
+
+test('sheetOverrides: left alone, the sheet runs exactly the default', () => {
+  const all = [
+    NLME.DEFAULT_SETTINGS,
+    { ...NLME.DEFAULT_SETTINGS, exportPreset: 'ai', takeoutZip: true },
+    { ...NLME.DEFAULT_SETTINGS, exportPreset: 'custom', citationDetail: 'titles', obsidianNames: true, customImages: false },
+    { ...NLME.DEFAULT_SETTINGS, exportPreset: 'custom', citationDetail: 'something-old' }
+  ];
+  for (const stored of all) {
+    const run = NLME.sheetOverrides(NLME.sheetChoice(stored), stored);
+    assert.deepEqual(run.overrides, NLME.runOverrides(stored));
+    assert.equal(run.zip, NLME.takeoutZipChoice(stored));
+  }
+});
+
+test('sheetOverrides: what each choice runs', () => {
+  const stored = { ...NLME.DEFAULT_SETTINGS, citationDetail: 'none', obsidianNames: true, customImages: false };
+  const start = NLME.sheetChoice(stored);
+  assert.deepEqual(NLME.sheetOverrides({ ...start, preset: 'archive' }, stored).overrides, NLME.presetOverrides('archive'));
+  assert.deepEqual(NLME.sheetOverrides({ ...start, preset: 'ai' }, stored).overrides, NLME.presetOverrides('ai'));
+  assert.deepEqual(NLME.sheetOverrides({ ...start, preset: 'custom', citationDetail: 'titles', obsidianNames: false, images: true }, stored).overrides,
+    NLME.presetOverrides('custom', { citationDetail: 'titles', obsidianNames: false, images: true }));
+  assert.equal(NLME.sheetOverrides({ ...start, zip: true }, stored).zip, true);
+  assert.equal(NLME.sheetOverrides({ ...start, zip: false }, { ...stored, takeoutZip: true }).zip, false);
+});
+
+test('sheetOverrides leaves the settings alone: a choice is for one run', () => {
+  const stored = Object.freeze({ ...NLME.DEFAULT_SETTINGS, exportPreset: 'custom', citationDetail: 'titles' });
+  const choice = { ...NLME.sheetChoice(stored), preset: 'ai', zip: true };
+  NLME.sheetOverrides(choice, stored);
+  assert.equal(stored.exportPreset, 'custom');
+  assert.equal(stored.takeoutZip, undefined);
+});
+
+test('sheetOverrides gives the keys a run may set, so nothing else reaches a job', () => {
+  const { overrides } = NLME.sheetOverrides({ preset: 'custom', citationDetail: 'none', obsidianNames: false, images: false, zip: true, theme: 'dark' }, {});
+  assert.deepEqual(Object.keys(overrides).sort(), ['citationDetail', 'exportNoteWithImages', 'exportSourceWithImages', 'obsidianNames']);
+});
+
+test('estimateLine says what it left out', () => {
+  assert.equal(NLME.estimateLine({ sources: 30, notes: 100, chat: null }, 'quotes'), 'Estimated time: about 13 min, not counting chat');
+  assert.equal(NLME.estimateLine({ sources: 30, notes: 100, chat: 10 }, 'titles'), 'Estimated time: about 2 min');
+  assert.equal(NLME.estimateLine({ sources: 3, notes: null, generated: null, chat: null }, 'quotes'), 'Estimated time: under 30 sec, not counting notes, generated items and chat');
+  assert.equal(NLME.estimateLine({ sources: null, notes: 500, chat: undefined }, 'quotes'), 'Estimated time: about 58 min, not counting sources and chat');
+});
+
+test('estimateLine counts only what the run holds: a key that is absent is not missing', () => {
+  assert.equal(NLME.estimateLine({ notes: 100 }, 'quotes'), 'Estimated time: about 12 min');
+  assert.equal(NLME.estimateLine({ generated: 1 }, 'quotes'), 'Estimated time: under 30 sec');
+});
+
+test('estimateLine shows no number when nothing is known', () => {
+  for (const counts of [undefined, null, {}, { sources: null, notes: null, generated: null, chat: null }, { notes: NaN }, { chat: -1 }]) {
+    const line = NLME.estimateLine(counts, 'quotes');
+    assert.equal(line, 'Estimated time: not known yet');
+  }
+});
+
+test('estimateLine follows the citations', () => {
+  const counts = { notes: 200 };
+  assert.notEqual(NLME.estimateLine(counts, 'quotes'), NLME.estimateLine(counts, 'titles'));
+});
+
+test('homeEstimateCounts: Generated counts what is not a note, and chat only once loaded', () => {
+  assert.deepEqual(NLME.homeEstimateCounts({ sources: 24, notes: 149, studio: 158 }, 219), { sources: 24, notes: 149, generated: 9, chat: 219 });
+  assert.deepEqual(NLME.homeEstimateCounts({ sources: 24, notes: 149, studio: 158 }), { sources: 24, notes: 149, generated: 9, chat: null });
+  assert.deepEqual(NLME.homeEstimateCounts({ sources: 24, notes: null, studio: 158 }), { sources: 24, notes: null, generated: null, chat: null });
+  assert.deepEqual(NLME.homeEstimateCounts({ sources: null, notes: 5 }), { sources: null, notes: 5, generated: null, chat: null });
+  assert.deepEqual(NLME.homeEstimateCounts({ notes: 9, studio: 3 }, 0), { sources: null, notes: 9, generated: 0, chat: 0 });
+  assert.deepEqual(NLME.homeEstimateCounts(undefined), { sources: null, notes: null, generated: null, chat: null });
+});
+
+test('a job record keeps the save choice of its run, and an old one has none', () => {
+  const base = { id: 'j', kind: 'takeout', label: 'L', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1 };
+  assert.equal(NLME.jobRecordZip(NLME.newJobRecord({ ...base, zip: true })), true);
+  assert.equal(NLME.jobRecordZip(NLME.newJobRecord({ ...base, zip: false })), false);
+  const old = NLME.newJobRecord(base);
+  assert.equal('zip' in old, false);
+  assert.equal(NLME.jobRecordZip(old), undefined);
+  assert.equal(NLME.jobRecordZip({ ...old, zip: 'yes' }), undefined);
+  assert.equal(NLME.jobRecordZip(null), undefined);
+  assert.equal(NLME.jobRecordZip(JSON.parse(JSON.stringify(NLME.newJobRecord({ ...base, zip: false })))), false);
+});
+
+test('the takeout Retry keeps the save choice of the run, and so does the Retry after it', async () => {
+  const seen = [];
+  const { sandbox } = panel({ code: `
+    const TAKEOUT_RETRY_STEPS = [{ name: 'Notes' }];
+    const runChain = fn => fn();
+    const runRetryChain = async (items, tabId, verb, steps, zip) => { seen(zip); return { steps: [{}], notRun: [] }; };
+    const showTakeoutResults = (panel, failed, tabId, zip) => { this.shown = takeoutRetry(failed, tabId, () => {}, zip); };
+    ${fnSource('sidebar-takeout.js', 'takeoutRetry')}
+  `, extra: {
+    seen: zip => seen.push(zip),
+    runExclusive: (name, fn) => fn(),
+    NLME: { ...NLME, combineRetryOutcomes: () => ({ remaining: { Notes: ['b'] } }) }
+  } });
+  await sandbox.takeoutRetry({ Notes: ['a'] }, 1, () => {}, false).run();
+  await sandbox.shown.run();
+  assert.deepEqual(seen, [false, false]);
+});
+
+test('the Artifacts step of a chain takes the save choice; undefined leaves the default', async () => {
+  const calls = [];
+  const ctx = { downloadAllArtifacts: async (...args) => { calls.push(args); }, exportSources() {}, exportNotesAsMarkdown() {} };
+  vm.createContext(ctx);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'sidebar-takeout.js'), 'utf8');
+  const at = src.indexOf('const TAKEOUT_RETRY_STEPS');
+  vm.runInContext(`${src.slice(at, src.indexOf('];', at) + 2)}; this.steps = TAKEOUT_RETRY_STEPS;`, ctx);
+  const artifacts = ctx.steps.find(step => step.name === 'Artifacts');
+  await artifacts.run(['a'], 7, false);
+  await artifacts.run(['a'], 7, undefined);
+  assert.equal(calls[0][2].zip, false);
+  assert.equal(calls[0][2].updateRecord, true);
+  assert.equal(calls[1][2].zip, undefined);
+});
+
+test('startJobRecord stores the save choice beside the overrides, and an update leaves it', async () => {
+  const store = {};
+  const { sandbox } = panel({ code: fnSource('sidebar-core.js', 'startJobRecord'), extra: {
+    NLME: { ...NLME, ...require('../takeout-job.js') },
+    jobItemKeys: (category, items) => items,
+    chrome: { storage: { local: {
+      get: async key => (key in store ? { [key]: store[key] } : {}),
+      set: async value => { Object.assign(store, JSON.parse(JSON.stringify(value))); },
+      remove: async () => {}
+    } } }
+  } });
+  const shell = { tab: { url: 'https://notebooklm.google.com/notebook/abc' } };
+  const key = NLME.jobRecordKey('abc');
+  await sandbox.startJobRecord(shell, 'takeout', 'Export everything', { notes: ['a', 'b'] }, { zip: false });
+  assert.equal(store[key].zip, false);
+  await sandbox.startJobRecord(shell, 'takeout', 'Retry', { notes: ['a'] }, { update: true, zip: true });
+  assert.equal(store[key].zip, false);
+  delete store[key];
+  await sandbox.startJobRecord(shell, 'notes', 'Notes', { notes: ['a'] });
+  assert.equal('zip' in store[key], false);
 });

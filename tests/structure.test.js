@@ -46,6 +46,12 @@ test('classic scripts declare each top-level name once', () => {
   assert.deepEqual(problems, [], `Duplicate top-level declarations:\n  ${problems.join('\n  ')}`);
 });
 
+test('sidebar.html loads the export sheet right after the core', () => {
+  const scripts = sidebarScripts();
+  assert.ok(scripts.includes('sidebar-sheet.js'));
+  assert.ok(scripts.indexOf('sidebar-sheet.js') > scripts.indexOf('sidebar-core.js'));
+});
+
 test('every non-IIFE sidebar script yields top-level names', () => {
   // Guards the scan above: a file the regex cannot read would pass it silently
   const empty = sidebarScripts()
@@ -378,7 +384,7 @@ function generatedChain() {
 test('a Generated export runs artifacts, then notes, as fresh exports on the scanned tab', async () => {
   const { ctx, calls } = generatedChain();
   const { steps, notRun } = await ctx.run({ Artifacts: ['a1'], Notes: ['n1'] });
-  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['artifacts', 7, ['a1']], ['notes', ['n1'], { tabId: 7 }]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['artifacts', 7, ['a1'], {}], ['notes', ['n1'], { tabId: 7 }]]);
   assert.deepEqual([steps.length, notRun.length], [2, 0]);
 });
 
@@ -428,7 +434,7 @@ test('the first paint is Home: no tab active, no action bar, Back hidden', () =>
   assert.match(html, /<div id="action-bar" class="action-bar" hidden>/);
   assert.match(html, /<button id="back-btn"[^>]* aria-label="Back to Home" hidden>/);
   assert.ok(html.indexOf('id="home-view"') < html.indexOf('class="tabs"'), 'Home comes before the tabs');
-  for (const id of ['full-takeout-btn', 'takeout-zip-checkbox', 'resume-banner']) {
+  for (const id of ['full-takeout-btn', 'resume-banner']) {
     const at = html.indexOf(`id="${id}"`);
     assert.ok(at > html.indexOf('id="home-view"') && at < html.indexOf('class="tabs"'), `${id} is on Home`);
   }
@@ -505,4 +511,61 @@ test('a failed scan never reads as an empty list', async () => {
   await assert.rejects(scanGeneratedItems(1), /boom/);
   answers = { s: { items: [{ kind: 'artifact' }] }, n: undefined };
   assert.equal((await scanGeneratedItems(1)).length, 1); // a failed notes side-scan lists Studio items only
+});
+
+test('the export sheet is a labelled modal outside what it covers, with native radios', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8');
+  const start = html.indexOf('id="export-sheet"');
+  assert.ok(start > 0, 'export sheet markup');
+  const sheet = html.slice(start, html.indexOf('<script', start));
+  assert.match(sheet, /role="dialog"/);
+  assert.match(sheet, /aria-modal="true"/);
+  assert.match(sheet, /aria-labelledby="export-sheet-title"/);
+  assert.match(sheet, /id="export-sheet-title"/);
+  for (const preset of ['archive', 'ai', 'custom']) assert.match(sheet, new RegExp(`<input type="radio" name="sheet-preset" value="${preset}"`));
+  for (const copy of ['Full quotes and image copies', 'Source titles only, no image copies', 'Choose citations and file options', 'Start export']) assert.ok(sheet.includes(copy), copy);
+  // Settings' own wording for the three citation choices
+  for (const option of ['Full quotes (slower)', 'Source titles only (fast)', 'No citations (plain text, fast)']) {
+    assert.ok(sheet.includes(option), option);
+    assert.ok(html.slice(0, start).includes(option), `${option} in Settings`);
+  }
+  // A modal covers the panel: .container goes inert under it, so it must be outside
+  const before = html.slice(0, html.lastIndexOf('<div', start));
+  const depth = before.match(/<div\b/g).length - before.match(/<\/div>/g).length;
+  assert.equal(depth, 0, 'the sheet sits at the top of body');
+});
+
+test('the retired ZIP tick is gone, with its reader', () => {
+  const files = ['sidebar.html', 'styles.css', 'AGENT.md', 'README.md', ...sidebarScripts()];
+  for (const file of files) {
+    const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    assert.doesNotMatch(src, /takeout-zip-checkbox|takeoutZipEnabled|\.takeout-zip\b|class="takeout-zip"/, file);
+  }
+});
+
+test('every export reaches its job through the sheet or the run settings, under the lock', () => {
+  const read = file => fs.readFileSync(path.join(ROOT, file), 'utf8');
+  // A list's action opens the sheet; the job itself is the sheet's start
+  for (const [file, name] of [['sidebar-notes.js', 'exportSelectedNotes'], ['sidebar-sources.js', 'exportSelectedSources'], ['sidebar-generated.js', 'exportSelectedGenerated'], ['sidebar-chat.js', 'openChatExportSheet'], ['sidebar-takeout.js', 'openExportEverythingSheet']]) {
+    const src = read(file);
+    const at = src.search(new RegExp(`^(async )?function ${name}\\(`, 'm'));
+    assert.ok(at >= 0, name);
+    const body = src.slice(at, src.indexOf('\n}\n', at));
+    assert.match(body, /openExportSheet\(\{/, name);
+    assert.match(body, /runExclusive\([^]*withRunSettings\(overrides/, name);
+  }
+  // Row downloads have no sheet: the default preset, Custom's values included
+  assert.match(read('sidebar-notes.js'), /runExclusive\('Note export', \(\) => withRunSettings\(NLME\.runOverrides\(settings\)/);
+  assert.match(read('sidebar-sources.js'), /runExclusive\('Sources export', \(\) => withRunSettings\(NLME\.runOverrides\(settings\), \(\) => exportSources\(\[source\], \{ record: false \}\)\)\)/);
+  assert.match(read('sidebar-generated.js'), /runExclusive\('Generated download', \(\) => withRunSettings\(NLME\.runOverrides\(settings\), \(\) => handleStudioDownloadRow\(item, downloadBtn\)\)\)/);
+  assert.doesNotMatch(read('sidebar-notes.js') + read('sidebar-sources.js') + read('sidebar-generated.js'), /presetOverrides/);
+});
+
+test('a notebook switch closes the sheet, and Settings and Health Check do too', () => {
+  const core = fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8');
+  const switched = core.slice(core.indexOf('function resetChatPanel('), core.indexOf('\n}\n', core.indexOf('function resetChatPanel(')));
+  assert.match(switched, /closeExportSheet\(\{ switched: true \}\)/);
+  assert.match(core, /'settings-btn'\)\.addEventListener\('click', \(\) => \{\s+closeExportSheet\(\);/);
+  const health = fs.readFileSync(path.join(ROOT, 'sidebar-health.js'), 'utf8');
+  assert.match(health.slice(health.indexOf('function runHealthCheck(')), /^[^]*?closeExportSheet\(\);/);
 });

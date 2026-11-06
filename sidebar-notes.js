@@ -65,7 +65,7 @@ let _notesScanSeq = 0;
 // Single-note export from a row button: loose .md files, no ZIP
 async function handleNoteRowExport(note) {
   // JOB_BUSY: runExclusive has already shown the "still running" toast
-  await runExclusive('Note export', async () => {
+  await runExclusive('Note export', () => withRunSettings(NLME.runOverrides(settings), async () => {
     try {
       await exportSingleNote(note);
       showToast(`Exported "${note.title}"`, 'success');
@@ -73,7 +73,7 @@ async function handleNoteRowExport(note) {
       console.error('[NotebookLM Takeout] Note export failed:', error);
       showToast(`Failed to export ${note.title}: ${error.message || error}`, 'error');
     }
-  });
+  }));
 }
 
 // Render notes list with filter toolbar and checkboxes
@@ -142,16 +142,26 @@ function renderNotesList(notes) {
 
 }
 
-// The Notes action: exports what the current list has selected
-async function exportSelectedNotes() {
-  const selected = _notesListController ? _notesListController.selectedItems() : [];
-
-  if (selected.length === 0) {
+// The Notes action: opens the sheet for the selection. Start exports what the list
+// has selected then: a rescan may have redrawn it under the sheet.
+function exportSelectedNotes() {
+  const n = _notesListController ? _notesListController.selectedCount() : 0;
+  if (n === 0) {
     showToast('Please select at least one note', 'error');
     return;
   }
-
-  await runExclusive('Notes export', () => exportNotesAsMarkdown(selected));
+  openExportSheet({
+    title: NLME.actionLabel(n, 'note'),
+    counts: { notes: n },
+    start: ({ overrides }) => runExclusive('Notes export', () => withRunSettings(overrides, async () => {
+      const selected = _notesListController ? _notesListController.selectedItems() : [];
+      if (selected.length === 0) {
+        showToast('Nothing is selected now, so nothing was exported', 'warning');
+        return;
+      }
+      await exportNotesAsMarkdown(selected);
+    }))
+  });
 }
 
 // Notes export (Milestone 3a): the shared export shell around runNotesJob.

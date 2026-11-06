@@ -776,7 +776,8 @@ const ARTIFACT_ZIP_MAX_BYTES = 500 * 1024 * 1024;
 // <Notebook>-artifacts-<ts>.zip, or -partN.zip parts past the size cap; ZIP off: Downloads/<Notebook>/, one item
 // per call. Either way: <type folder>/<stem>.<ext>, _index.md, errors.md,
 // manifest.json. Returns withExportShell's outcome, like exportNotesAsMarkdown.
-// zip: default the "Always use ZIP" setting; its Retry keeps this run's choice.
+// zip: the export sheet's Save as (default the "Always use ZIP" setting, for a Resume of
+// a record without one); its job record and its Retry keep this run's choice.
 async function downloadAllArtifacts(tabId, items, { updateRecord = false, zip = !!settings.autoZip } = {}) {
   await preflightWarn(tabId, 'artifacts');
   startExportTiming();
@@ -784,7 +785,7 @@ async function downloadAllArtifacts(tabId, items, { updateRecord = false, zip = 
   return withExportShell({ label: 'artifacts', overlayMessage: 'Preparing to download artifacts...', tabId }, async shell => {
     const folder = zip ? null : (shell.projectName || 'NotebookLM');
     const { result, zips, savedOutside } = await withJobRecord(shell, 'artifacts', 'Artifacts', 'artifacts', items,
-      tracker => runArtifactsJob(shell, items, { folder, tracker }), { update: updateRecord });
+      tracker => runArtifactsJob(shell, items, { folder, tracker }), { update: updateRecord, zip });
 
     return shell.finish({
       kind: 'artifacts',

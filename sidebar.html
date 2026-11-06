@@ -40,7 +40,6 @@
 
       <div class="home-export">
         <button id="full-takeout-btn" class="btn btn-primary" title="Export everything: all sources, notes, chat and artifacts of this notebook in one run"><span data-icon="box"></span> Export everything</button>
-        <label class="takeout-zip" title="Save the export as one ZIP per category (unchecked: a folder in Downloads)"><input type="checkbox" id="takeout-zip-checkbox"> ZIP</label>
       </div>
 
       <div id="home-notice" class="home-notice" role="status" hidden></div>
@@ -379,6 +378,46 @@
     </div>
   </div>
 
+  <div id="export-sheet" class="export-sheet" hidden>
+    <div id="export-sheet-scrim" class="export-sheet-scrim"></div>
+    <div id="export-sheet-panel" class="export-sheet-panel" role="dialog" aria-modal="true" aria-labelledby="export-sheet-title" tabindex="-1">
+      <div class="export-sheet-head">
+        <h2 id="export-sheet-title"></h2>
+        <button id="sheet-close" class="header-icon-btn" type="button" title="Close" aria-label="Close"><span data-icon="close"></span></button>
+      </div>
+      <div id="export-sheet-body" class="export-sheet-body">
+        <fieldset class="sheet-group">
+          <legend>Preset</legend>
+          <label class="sheet-option"><input type="radio" name="sheet-preset" value="archive"><span><strong>Archive</strong><small>Full quotes and image copies</small></span></label>
+          <label class="sheet-option"><input type="radio" name="sheet-preset" value="ai"><span><strong>AI-ready</strong><small>Source titles only, no image copies</small></span></label>
+          <label class="sheet-option"><input type="radio" name="sheet-preset" value="custom"><span><strong>Custom</strong><small>Choose citations and file options</small></span></label>
+        </fieldset>
+        <div id="sheet-custom" class="sheet-group" hidden>
+          <label class="sheet-label" for="sheet-citations">Citations</label>
+          <select id="sheet-citations" class="sheet-select">
+            <option value="quotes">Full quotes (slower)</option>
+            <option value="titles">Source titles only (fast)</option>
+            <option value="none">No citations (plain text, fast)</option>
+          </select>
+          <label class="sheet-check"><input type="checkbox" id="sheet-images"> Image copies</label>
+          <label class="sheet-check"><input type="checkbox" id="sheet-obsidian"> Obsidian-friendly file names</label>
+        </div>
+        <fieldset id="sheet-save" class="sheet-group" hidden>
+          <legend>Save as</legend>
+          <div class="sheet-pair">
+            <label class="sheet-option"><input type="radio" name="sheet-save" value="folder"><span>Folder</span></label>
+            <label class="sheet-option"><input type="radio" name="sheet-save" value="zip"><span>ZIP</span></label>
+          </div>
+        </fieldset>
+      </div>
+      <div class="export-sheet-foot">
+        <p id="sheet-estimate" class="sheet-estimate" aria-live="polite"></p>
+        <p id="sheet-blocked" class="sheet-blocked" role="status"></p>
+        <button id="sheet-start" class="btn btn-primary" type="button">Start export</button>
+      </div>
+    </div>
+  </div>
+
   <script src="jszip.min.js"></script>
   <script src="turndown.min.js"></script>
   <script src="takeout-shared.js"></script>
@@ -388,6 +427,7 @@
   <script src="sidebar-list.js"></script>
   <script src="sidebar-results.js"></script>
   <script src="sidebar-core.js"></script>
+  <script src="sidebar-sheet.js"></script>
   <script src="sidebar-artifacts.js"></script>
   <script src="sidebar-notes.js"></script>
   <script src="sidebar-sources.js"></script>

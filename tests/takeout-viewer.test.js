@@ -649,8 +649,7 @@ function takeoutPanel({ zip = true, fetchFile, cancelAfter = null, notesThrow = 
     return { result: { exported: 1, failed: 0, cancelled: cancelAfter === name }, errors: [], auditOk: true };
   };
   Object.assign(sandbox, {
-    settings: { ...NLME.DEFAULT_SETTINGS }, exportTimer: { merge() {} }, lastChatScanTiming: null, ARTIFACT_ZIP_MAX_BYTES: zipMaxBytes,
-    document: { getElementById: () => ({ checked: zip }) },
+    settings: { ...NLME.DEFAULT_SETTINGS, takeoutZip: zip }, exportTimer: { merge() {} }, lastChatScanTiming: null, ARTIFACT_ZIP_MAX_BYTES: zipMaxBytes,
     isNotebookUrl: () => true, ensureContentScriptLoaded: async () => {}, startExportTiming() {}, stampJobKeys() {},
     showToast() {}, timingSummary: () => '', showResults: panel => log.panels.push(panel),
     startJobRecord: async () => null, newWritten: () => ({ zips: [], count: 0, multi: false, parts: 0 }),

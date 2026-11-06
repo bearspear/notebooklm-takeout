@@ -456,6 +456,17 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
 
 // ---- Full Takeout (Milestone 3a) ----
 
+// Home's Export everything: the sheet, then the run on what it chose. Each count is
+// what Home knows; chat is known only once loaded.
+function openExportEverythingSheet() {
+  openExportSheet({
+    title: 'Export everything',
+    counts: NLME.homeEstimateCounts(_tabCounts, window._currentChatData?.messagePairs?.length),
+    offerSaveAs: true,
+    start: ({ overrides, zip }) => runExclusive('Export everything', () => withRunSettings(overrides, () => runFullTakeout({ zip })))
+  });
+}
+
 const VIEWER_FILE = 'viewer.html';
 const VIEWER_ERROR = { type: 'viewer', message: 'The offline viewer could not be built' };
 const IMAGES_ERROR = { type: 'viewer', message: 'Some images for the offline viewer could not be saved' };
@@ -528,13 +539,6 @@ async function saveTakeoutImages(images, { root, folder, zipNameFor }) {
   return { paths, zips, failed };
 }
 
-// The ZIP setting: the checkbox next to Export everything on Home, else the saved
-// choice (takeoutZip, falling back to autoZip).
-function takeoutZipEnabled() {
-  const checkbox = document.getElementById('takeout-zip-checkbox');
-  return checkbox ? checkbox.checked : NLME.takeoutZipChoice(settings);
-}
-
 // The files at a takeout's root. viewerHtml null: no viewer, and nothing names one.
 function takeoutRootFiles({ meta, summary, errors, partial, viewerHtml }) {
   const viewerFile = viewerHtml === null ? null : VIEWER_FILE;
@@ -581,11 +585,11 @@ function takeoutRootFiles({ meta, summary, errors, partial, viewerHtml }) {
  * <root>/images/, _index.md, viewer.html, manifest.json and errors.md (root = sanitized
  * notebook name). A category written in several batches has part-N/ folders.
  *
- * - ZIP on (takeoutZipEnabled): each category's batches go to
+ * - zip true: each category's batches go to
  *   <Notebook>-takeout-<category>-<ts>[-PARTIAL][-partNofM|-partN].zip, images to
  *   <Notebook>-takeout-images-<ts>[-PARTIAL][-partNofM].zip, the root files to
  *   <Notebook>-takeout-index-<ts>.zip; unzipped into one folder they form one tree.
- * - ZIP off: everything goes to Downloads/<Notebook> takeout <ts>/; artifacts
+ * - zip false: everything goes to Downloads/<Notebook> takeout <ts>/; artifacts
  *   run in folder mode (CDN media straight to disk).
  *
  * Every category is scanned first (0 items: 'empty', nothing written; a scan
@@ -618,9 +622,12 @@ function takeoutRootFiles({ meta, summary, errors, partial, viewerHtml }) {
  * takeout's job record (updateRecord) without replacing it.
  *
  * It reads `settings` directly and wraps nothing itself: the caller runs it through
- * withRunSettings, which is what turns the image copies on (NLME.runOverrides).
+ * withRunSettings, which is what turns the image copies on under Archive. zip: the
+ * export sheet's Save as, for this run only.
+ *
+ * @param {{ zip?: boolean }} [options]
  */
-async function runFullTakeout() {
+async function runFullTakeout({ zip = NLME.takeoutZipChoice(settings) } = {}) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!isNotebookUrl(tab?.url)) {
     showToast('Please open NotebookLM first', 'error');
@@ -636,10 +643,10 @@ async function runFullTakeout() {
   }
 
   startExportTiming();
-  const zipMode = takeoutZipEnabled();
+  const zipMode = zip;
   const citationMode = NLME.chatCitationMode(settings);
 
-  await withExportShell({ label: 'takeout', healthType: 'notes', overlayMessage: 'Preparing Full Takeout...', tabId: tab.id }, async shell => {
+  await withExportShell({ label: 'takeout', healthType: 'notes', overlayMessage: 'Preparing to export everything...', tabId: tab.id }, async shell => {
     const tabId = shell.tab.id;
     const root = NLME.fileStem(shell.projectName, { obsidian: !!settings.obsidianNames });
     // Obsidian-friendly names also cover the folder (its name is part of every link path)
@@ -737,11 +744,11 @@ async function runFullTakeout() {
       const c = categories.find(cat => cat.name === name);
       return !c.status && c.items ? c.items : [];
     };
-    const tracker = stopRest ? null : await startJobRecord(shell, 'takeout', 'Full Takeout', {
+    const tracker = stopRest ? null : await startJobRecord(shell, 'takeout', 'Export everything', {
       sources: recordedItems('Sources'),
       notes: recordedItems('Notes'),
       artifacts: recordedItems('Artifacts')
-    });
+    }, { zip: zipMode });
     let uncleanEnd = false; // a runner was cancelled or stopped
 
     // 2. One runner per category, in order; a cancel skips the rest
@@ -902,7 +909,7 @@ async function runFullTakeout() {
     const failedNotes = failedOf('Notes');
     const failedArtifacts = failedOf('Artifacts');
     showTakeoutResults({ message, level, saved, errors },
-      { Sources: failedSources, Notes: failedNotes, Artifacts: failedArtifacts }, tabId);
+      { Sources: failedSources, Notes: failedNotes, Artifacts: failedArtifacts }, tabId, zipMode);
   });
 }
 
@@ -912,13 +919,14 @@ async function runFullTakeout() {
 const TAKEOUT_RETRY_STEPS = [
   { name: 'Sources', run: (items, tabId) => exportSources(items, { tabId, updateRecord: true }) },
   { name: 'Notes', run: (items, tabId) => exportNotesAsMarkdown(items, { tabId, updateRecord: true }) },
-  { name: 'Artifacts', run: (items, tabId) => downloadAllArtifacts(tabId, items, { updateRecord: true }) }
+  { name: 'Artifacts', run: (items, tabId, zip) => downloadAllArtifacts(tabId, items, { updateRecord: true, zip }) }
 ];
 
 // Show a takeout-level results panel with "Retry N failed" for `failed`
 // ({ Sources: [...], Notes: [...], Artifacts: [...] }; chat is never retried).
-function showTakeoutResults(panel, failed, tabId) {
-  const shown = { ...panel, retry: takeoutRetry(failed, tabId, () => showResults({ ...shown, notify: false })) };
+// zip: the run's save choice, for the Artifacts step of its Retry.
+function showTakeoutResults(panel, failed, tabId, zip) {
+  const shown = { ...panel, retry: takeoutRetry(failed, tabId, () => showResults({ ...shown, notify: false }), zip) };
   showResults(shown);
 }
 
@@ -942,14 +950,15 @@ async function runChain(fn) {
  * The steps shared by the takeout Retry and Resume, in TAKEOUT_RETRY_STEPS order
  * (chainSteps: the Generated export's own steps), each an ordinary tab export of
  * `itemsByName[step.name]` on `tabId`. Empty
- * categories are skipped. A cancel (the step's own, or the chain flag set between
+ * categories are skipped. zip: the run's save choice, which the Artifacts step
+ * takes; undefined leaves it on its default. A cancel (the step's own, or the chain flag set between
  * steps), a declined health-check dialog or an aborted step ends the chain: later
  * categories do not run. Call it inside runChain.
  *
  * @returns {{ steps: object[], notRun: object[] }} the inputs of
  *   NLME.combineRetryOutcomes
  */
-async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TAKEOUT_RETRY_STEPS) {
+async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TAKEOUT_RETRY_STEPS, zip) {
   const steps = [];
   const notRun = [];
   let stopped = false;
@@ -960,7 +969,7 @@ async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TA
     if (stopped) { notRun.push({ name: step.name, failedItems: items }); continue; }
     let out;
     try {
-      out = await step.run(items, tabId);
+      out = await step.run(items, tabId, zip);
     } catch (error) {
       console.error(`[NotebookLM Takeout] ${verb} ${step.name} failed:`, error);
       showToast('Export failed. Please try again.', 'error');
@@ -997,14 +1006,14 @@ async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TA
  *
  * @returns {{ count: number, run: () => Promise<any> }|null}
  */
-function takeoutRetry(failed, tabId, restore) {
+function takeoutRetry(failed, tabId, restore, zip) {
   const count = TAKEOUT_RETRY_STEPS.reduce((sum, step) => sum + (failed[step.name] || []).length, 0);
   if (count === 0) return null;
   const rerun = rememberRunSettings();
   return {
     count,
     run: () => runExclusive('Retry failed', () => rerun(async () => {
-      const { steps, notRun } = await runChain(() => runRetryChain(failed, tabId, 'Retry'));
+      const { steps, notRun } = await runChain(() => runRetryChain(failed, tabId, 'Retry', TAKEOUT_RETRY_STEPS, zip));
       if (steps.length === 0) {
         restore(); // the first step never ran: keep the panel and its Retry
         return;
@@ -1016,7 +1025,7 @@ function takeoutRetry(failed, tabId, restore) {
         lines: combined.lines,
         saved: combined.saved,
         errors: combined.errors
-      }, combined.remaining, tabId);
+      }, combined.remaining, tabId, zip);
     }))
   };
 }
@@ -1164,7 +1173,8 @@ function resumeJob(record) {
     if (chainCancelRequested) { showToast('Resume cancelled', 'info'); return; }
     await clearMissingFromRecord(live, missingByCategory);
 
-    const { steps, notRun } = await runRetryChain(itemsByName, tabId, 'Resume');
+    const zip = NLME.jobRecordZip(live);
+    const { steps, notRun } = await runRetryChain(itemsByName, tabId, 'Resume', TAKEOUT_RETRY_STEPS, zip);
     if (steps.length === 0 && notRun.length === 0 && extraErrors.length === 0) {
       showToast('Nothing left to resume', 'info');
       return;
@@ -1181,6 +1191,6 @@ function resumeJob(record) {
       lines: combined.lines,
       saved: combined.saved,
       errors: combined.errors
-    }, combined.remaining, tabId);
+    }, combined.remaining, tabId, zip);
   })));
 }

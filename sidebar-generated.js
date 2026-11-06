@@ -184,7 +184,7 @@ function renderStudioList(items) {
     if (downloadBtn) {
       // The item now: a rescan may replace _studioItems while the job lock is awaited
       const item = _studioItems[parseInt(downloadBtn.dataset.idx, 10)];
-      runExclusive('Generated download', () => handleStudioDownloadRow(item, downloadBtn));
+      runExclusive('Generated download', () => withRunSettings(NLME.runOverrides(settings), () => handleStudioDownloadRow(item, downloadBtn)));
       return;
     }
     const deleteBtn = e.target.closest('.studio-delete-btn');
@@ -234,12 +234,26 @@ function updateStudioBulkButtonsState(controller = _studioListController) {
 // The two sides of a Generated export, in this order. Each is the ordinary export
 // with its own job record, on the tab the list was scanned on.
 const GENERATED_EXPORT_STEPS = [
-  { name: 'Artifacts', run: (items, tabId) => downloadAllArtifacts(tabId, items) },
+  { name: 'Artifacts', run: (items, tabId, zip) => downloadAllArtifacts(tabId, items, { zip }) },
   { name: 'Notes', run: (items, tabId) => exportNotesAsMarkdown(items, { tabId }) }
 ];
 
-// The Generated action: exports what the current list has selected. It runs as a
-// chain, so a Cancel (or a declined health check) in the first side stops the
+// The Generated action: opens the sheet, whose title says what goes and what cannot.
+// Save as is for the artifacts: a selection of notes has nothing to choose.
+function exportSelectedGenerated() {
+  const plan = NLME.generatedExportPlan(_studioListController ? _studioListController.selectedItems() : []);
+  const n = plan.artifacts.length + plan.notes.length;
+  if (n === 0) return;
+  openExportSheet({
+    title: NLME.generatedActionLabel(plan),
+    counts: { generated: n },
+    offerSaveAs: plan.artifacts.length > 0,
+    start: ({ overrides, zip }) => runExclusive('Generated export', () => withRunSettings(overrides, () => runGeneratedExport(zip)))
+  });
+}
+
+// Exports what the current list has selected now: a rescan may have redrawn it under
+// the sheet. It runs as a chain, so a Cancel (or a declined health check) in the first side stops the
 // second, and each side's results survive the other: with both sides there is one
 // combined panel. Its Retry covers items that failed and a side that did not run.
 // Unstarted items are in no failedItems: artifacts a Cancel left are in the job
@@ -247,12 +261,15 @@ const GENERATED_EXPORT_STEPS = [
 // neither (jobRecordMode). The headline counts all of it. Items the export cannot
 // take always reach that panel, as a warning, even with one side:
 // NLME.generatedExportOutcome.
-function exportSelectedGenerated() {
+function runGeneratedExport(zip) {
   const plan = NLME.generatedExportPlan(_studioListController ? _studioListController.selectedItems() : []);
-  if (plan.artifacts.length + plan.notes.length === 0) return;
+  if (plan.artifacts.length + plan.notes.length === 0) {
+    showToast('Nothing is selected now, so nothing was exported', 'warning');
+    return;
+  }
   const tabId = _studioTabId;
-  return runExclusive('Generated export', () => runChain(async () => {
-    const { steps, notRun } = await runRetryChain({ Artifacts: plan.artifacts, Notes: plan.notes }, tabId, 'Export', GENERATED_EXPORT_STEPS);
+  return runChain(async () => {
+    const { steps, notRun } = await runRetryChain({ Artifacts: plan.artifacts, Notes: plan.notes }, tabId, 'Export', GENERATED_EXPORT_STEPS, zip);
     // Nothing ran (declined, tab closed: already said), or one side ran alone with
     // nothing left out: its own panel stands
     const leftOut = plan.skipped.length > 0;
@@ -264,8 +281,8 @@ function exportSelectedGenerated() {
       lines: outcome.lines,
       saved: outcome.saved,
       errors: outcome.errors
-    }, outcome.remaining, tabId);
-  }));
+    }, outcome.remaining, tabId, zip);
+  });
 }
 
 function setStudioRowStatus(btn, state) {

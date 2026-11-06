@@ -242,20 +242,30 @@ function renderSourcesList(sources, skippedNotes = 0) {
     const btn = e.target.closest('.download-single-btn');
     if (!btn) return;
     const source = sources[parseInt(btn.dataset.index, 10)];
-    if (source) await runExclusive('Sources export', () => exportSources([source], { record: false }));
+    if (source) await runExclusive('Sources export', () => withRunSettings(NLME.runOverrides(settings), () => exportSources([source], { record: false })));
   });
 }
 
-// The Sources action: exports what the current list has selected
-async function exportSelectedSources() {
-  const selected = _sourcesListController ? _sourcesListController.selectedItems() : [];
-
-  if (selected.length === 0) {
+// The Sources action: opens the sheet for the selection. Start exports what the list
+// has selected then: a rescan may have redrawn it under the sheet.
+function exportSelectedSources() {
+  const n = _sourcesListController ? _sourcesListController.selectedCount() : 0;
+  if (n === 0) {
     showToast('No sources selected', 'warning');
     return;
   }
-
-  await runExclusive('Sources export', () => exportSources(selected));
+  openExportSheet({
+    title: NLME.actionLabel(n, 'source'),
+    counts: { sources: n },
+    start: ({ overrides }) => runExclusive('Sources export', () => withRunSettings(overrides, async () => {
+      const selected = _sourcesListController ? _sourcesListController.selectedItems() : [];
+      if (selected.length === 0) {
+        showToast('Nothing is selected now, so nothing was exported', 'warning');
+        return;
+      }
+      await exportSources(selected);
+    }))
+  });
 }
 
 // Sources export (Milestone 3a): the shared export shell around

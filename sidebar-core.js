@@ -272,8 +272,7 @@ function disableExportButtons() {
   const exportButtons = [
     'action-btn',
     'scan-chat-btn',
-    'full-takeout-btn',
-    'takeout-zip-checkbox'
+    'full-takeout-btn'
   ];
 
   exportButtons.forEach(id => {
@@ -289,8 +288,7 @@ function enableExportButtons() {
   const exportButtons = [
     'action-btn',
     'scan-chat-btn',
-    'full-takeout-btn',
-    'takeout-zip-checkbox'
+    'full-takeout-btn'
   ];
 
   exportButtons.forEach(id => {
@@ -398,7 +396,6 @@ try {
 // Show `settings` in the Settings panel (on load and after Reset to defaults)
 function applySettingsToUi() {
   document.getElementById('auto-zip-checkbox').checked = settings.autoZip;
-  document.getElementById('takeout-zip-checkbox').checked = NLME.takeoutZipChoice(settings);
   document.getElementById('show-notifications-checkbox').checked = settings.showNotifications;
   document.getElementById('refresh-interval-input').value = settings.refreshInterval;
 
@@ -555,6 +552,7 @@ function setupEventListeners() {
   });
 
   document.getElementById('settings-btn').addEventListener('click', () => {
+    closeExportSheet();
     document.getElementById('settings-panel').style.display = 'block';
   });
 
@@ -579,20 +577,9 @@ function setupEventListeners() {
     if (settingsStored) saveSettings();
   });
 
-  // Full Takeout: the whole notebook in one run (sidebar-takeout.js)
-  document.getElementById('full-takeout-btn')?.addEventListener('click', () => runExclusive('Full Takeout', () => withRunSettings(NLME.runOverrides(settings), runFullTakeout)));
-  // Its ZIP choice is saved on its own (settings.takeoutZip); the settings panel need not be open
-  document.getElementById('takeout-zip-checkbox')?.addEventListener('change', (e) => {
-    const before = settings.takeoutZip;
-    settings.takeoutZip = e.target.checked;
-    writeSettings({
-      undo: () => {
-        if (before === undefined) delete settings.takeoutZip;
-        else settings.takeoutZip = before;
-        e.target.checked = NLME.takeoutZipChoice(settings);
-      }
-    });
-  });
+  // Export everything: the whole notebook in one run (sidebar-takeout.js)
+  document.getElementById('full-takeout-btn')?.addEventListener('click', openExportEverythingSheet);
+  setupExportSheet();
 
   // Health check panel
   // The health check hovers real citations, so it must never run during an
@@ -853,6 +840,7 @@ function paintHomeRow(tab) {
 // starts or ends, and a scan changes what it knows. Rows stay usable during a job, as
 // the tabs do. Export everything waits out a settle: the notebook is half switched.
 function syncHomeControls() {
+  syncExportSheet();
   NLME.PANEL_TABS.forEach(paintHomeRow);
   document.querySelectorAll('.home-row').forEach(row => { row.disabled = !homeNotebookOpen; });
   const exportBtn = document.getElementById('full-takeout-btn');
@@ -1028,6 +1016,7 @@ let lastPanelNotebookId = '';
 // count, and the Generated list, which a rescan leaves up and whose Delete must
 // not reach the new notebook: they belong to the notebook that was scanned.
 function resetChatPanel() {
+  closeExportSheet({ switched: true }); // first: its Start would reach the new notebook
   window._currentChatData = null;
   const chatResults = document.getElementById('chat-scan-results');
   if (chatResults) chatResults.innerHTML = '<p class="empty-message">Click "Load chat" to load your conversation history.</p>';
@@ -1748,12 +1737,13 @@ async function runExclusive(name, fn) {
     return JOB_BUSY;
   }
   document.body.classList.add('job-running');
+  syncExportSheet();
   hideResumeBanner(); // its numbers go stale while a job writes the record
   // Disable (not just dim) the tab controls so keyboard activation is
   // blocked too. Mark them: a scan may replace a control with a clone (the
   // chat Export button), and the clone must be re-enabled too, so restore
   // by the mark, not by the original element.
-  Array.from(document.querySelectorAll('.tab-content button, .tab-content input, .tab-content select, #action-btn, #studio-delete-selected-btn, #full-takeout-btn, #takeout-zip-checkbox'))
+  Array.from(document.querySelectorAll('.tab-content button, .tab-content input, .tab-content select, #action-btn, #studio-delete-selected-btn, #full-takeout-btn'))
     .filter(el => !el.disabled && el.id !== 'cancel-download-btn')
     .forEach(el => { el.disabled = true; el.setAttribute('data-job-disabled', ''); });
   try {
@@ -2023,14 +2013,15 @@ function stampJobKeys(category, items) {
  * @param {'notes'|'sources'|'artifacts'|'takeout'} kind
  * @param {string} label
  * @param {{ [category: string]: object[] }} itemsByCategory the items to export, by category
- * @param {{ update?: boolean }} [options] update: a retry or resume (also taken
+ * @param {{ update?: boolean, zip?: boolean }} [options] zip: the run's save choice,
+ *   kept in a new record for a Resume. update: a retry or resume (also taken
  *   by a fresh export when the notebook's stored record is another kind's with
  *   items left, NLME.jobRecordMode). It never
  *   creates or replaces a record: it loads the notebook's existing one (none:
  *   returns null) and marks its items done or failed on it, only for keys the
  *   record holds, and writes nothing until one changes.
  */
-async function startJobRecord(shell, kind, label, itemsByCategory, { update = false } = {}) {
+async function startJobRecord(shell, kind, label, itemsByCategory, { update = false, zip } = {}) {
   try {
     const notebookId = NLME.notebookIdFromUrl(shell.tab && shell.tab.url);
     if (!notebookId) return null;
@@ -2054,7 +2045,7 @@ async function startJobRecord(shell, kind, label, itemsByCategory, { update = fa
       record = stored;
     } else {
       const now = Date.now();
-      record = NLME.newJobRecord({ id: `${kind}-${now}`, kind, label, notebookId, keysByCategory, now, overrides: currentRunOverrides });
+      record = NLME.newJobRecord({ id: `${kind}-${now}`, kind, label, notebookId, keysByCategory, now, overrides: currentRunOverrides, zip });
       if (NLME.jobRecordFinished(record)) return null;
     }
     const recorder = NLME.createJobRecorder({ storage: chrome.storage.local, record });
@@ -2080,10 +2071,10 @@ async function startJobRecord(shell, kind, label, itemsByCategory, { update = fa
 // { result }. Clean = not cancelled or stopped; a throw leaves the record.
 // update (options.updateRecord of the exports, set by every retry and by resume):
 // see startJobRecord. record false: no record at all (single-item row exports).
-async function withJobRecord(shell, kind, label, category, items, run, { update = false, record = true } = {}) {
+async function withJobRecord(shell, kind, label, category, items, run, { update = false, record = true, zip } = {}) {
   // record false: a one-shot row export (a single source's download) must not
   // replace or clear a pending record
-  const tracker = record ? await startJobRecord(shell, kind, label, { [category]: items }, { update }) : null;
+  const tracker = record ? await startJobRecord(shell, kind, label, { [category]: items }, { update, zip }) : null;
   let out;
   try {
     out = await run(tracker);

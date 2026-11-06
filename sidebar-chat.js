@@ -140,7 +140,17 @@ function renderChatSummary(chatData) {
   setTabAction('chat', {
     label: NLME.actionLabel(chatData.messagePairs.length, 'message'),
     disabled: false,
-    onClick: () => runExclusive('Chat export', () => exportChat(chatData))
+    onClick: () => openChatExportSheet(chatData)
+  });
+}
+
+// The Chat action: the sheet, then the loaded chat on what it chose
+function openChatExportSheet(chatData) {
+  const n = chatData.messagePairs.length;
+  openExportSheet({
+    title: NLME.actionLabel(n, 'message'),
+    counts: { chat: n },
+    start: ({ overrides }) => runExclusive('Chat export', () => withRunSettings(overrides, () => exportChat(chatData)))
   });
 }
 
