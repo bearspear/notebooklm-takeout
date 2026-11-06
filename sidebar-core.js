@@ -492,8 +492,9 @@ async function writeSettings({ undo = null } = {}) {
       return false;
     }
   }
-  // No load during a job: it would replace the settings the job runs on
-  if (!currentRunOverrides && await retrySettingsLoad()) showToast('Your saved settings are back. Please make that change again.', 'warning');
+  // No load during a job, nor once one holds the lock: it would replace the settings
+  // the job runs on, or land just after withRunSettings swapped them in
+  if (!jobLock.current() && !currentRunOverrides && await retrySettingsLoad()) showToast('Your saved settings are back. Please make that change again.', 'warning');
   else showToast(SETTINGS_UNREAD_MESSAGE, 'warning');
   return false;
 }

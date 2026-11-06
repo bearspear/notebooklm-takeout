@@ -2703,6 +2703,7 @@ function panel({ settings = NLME.resetSettings(), stored = true, fields = {}, ex
     showToast: text => toasts.push(text),
     updateChatCitationInfo() {}, applyTheme() {},
     retrySettingsLoad: async () => { throw new Error('a job must not reload settings'); },
+    jobLock: { current: () => null },
     document: { getElementById: id => ({ checked: !!fields[id], value: fields[id] === undefined ? '' : fields[id] }) },
     chrome: { storage: { local: { set: async value => { writes.push(JSON.parse(JSON.stringify(value.settings))); } } } },
     ...extra
@@ -2749,21 +2750,24 @@ test('withRunSettings restores after a throw, sync or async', async () => {
 
 test('a nested run keeps the saved settings of the outer one', async () => {
   const { sandbox, writes } = panel({ fields: { 'citation-detail-select': 'quotes' } });
-  await sandbox.withRunSettings({ citationDetail: 'titles' }, async () => {
+  // customImages: no Settings field writes it, so only the restore can bring it back
+  await sandbox.withRunSettings({ citationDetail: 'titles', customImages: false }, async () => {
     await sandbox.withRunSettings({ obsidianNames: true }, async () => {
       assert.equal(sandbox.current().citationDetail, 'titles');
       assert.equal(sandbox.current().obsidianNames, true);
-      assert.deepEqual({ ...sandbox.overrides() }, { citationDetail: 'titles', obsidianNames: true });
+      assert.deepEqual({ ...sandbox.overrides() }, { citationDetail: 'titles', customImages: false, obsidianNames: true });
+      assert.equal(sandbox.realSettings().citationDetail, 'quotes');
+      assert.equal(sandbox.realSettings().obsidianNames, false);
       await sandbox.saveSettings();
-      assert.equal(writes.at(-1).citationDetail, 'quotes');
-      assert.equal(writes.at(-1).obsidianNames, false);
+      assert.equal(writes.at(-1).customImages, true);
     });
     await assert.rejects(sandbox.withRunSettings({ citationDetail: 'none' }, async () => { throw new Error('inner'); }), /inner/);
     assert.equal(sandbox.current().citationDetail, 'titles');
     assert.equal(sandbox.current().obsidianNames, false);
-    assert.deepEqual({ ...sandbox.overrides() }, { citationDetail: 'titles' });
+    assert.deepEqual({ ...sandbox.overrides() }, { citationDetail: 'titles', customImages: false });
   });
   assert.equal(sandbox.current().citationDetail, 'quotes');
+  assert.equal(sandbox.current().customImages, true);
   assert.equal(sandbox.overrides(), null);
 });
 
@@ -2811,6 +2815,49 @@ test('the failed-load write block holds during a run, and no load runs under the
   });
   assert.deepEqual(writes, []);
   assert.deepEqual(toasts, ['unread']);
+});
+
+test('a blocked write loads again only when no job holds the lock', async () => {
+  const blocked = lock => {
+    const made = { loads: 0 };
+    made.panel = panel({ stored: false, extra: {
+      jobLock: { current: () => lock },
+      retrySettingsLoad: async () => { made.loads++; return false; }
+    } });
+    return made;
+  };
+  // Held, with the run not begun yet: a load started here would land under the swap
+  const held = blocked('Full Takeout');
+  await held.panel.sandbox.writeSettings();
+  assert.equal(held.loads, 0);
+  assert.deepEqual(held.panel.toasts, ['unread']);
+  const free = blocked(null);
+  await free.panel.sandbox.writeSettings();
+  assert.equal(free.loads, 1);
+});
+
+test('a theme change during a job goes by the real settings, not the job\'s', async () => {
+  const theme = [];
+  const { sandbox } = panel({
+    settings: { ...NLME.resetSettings(), theme: 'dark' },
+    code: fnSource('sidebar-core.js', 'applyTheme'),
+    extra: {
+      localStorage: { setItem() {} },
+      document: { documentElement: { setAttribute: (name, value) => theme.push(value), removeAttribute: () => theme.push(null) } }
+    }
+  });
+  await sandbox.withRunSettings({ theme: 'light' }, async () => sandbox.applyTheme());
+  assert.deepEqual(theme, ['dark']);
+});
+
+test('the chat citation line goes by the real settings, not the job\'s', async () => {
+  const line = { textContent: '' };
+  const { sandbox } = panel({
+    code: fnSource('sidebar-core.js', 'updateChatCitationInfo'),
+    extra: { document: { getElementById: () => line } }
+  });
+  await sandbox.withRunSettings({ citationDetail: 'titles' }, async () => sandbox.updateChatCitationInfo());
+  assert.match(line.textContent, /^Citations: Full quotes/);
 });
 
 test('retryFor keeps the run options after the run ended', async () => {
