@@ -2572,9 +2572,9 @@ test('loadWithRetry: tries once more, and says whether a load succeeded', async 
 
 test('presets', () => {
   assert.deepEqual(NLME.presetOverrides('archive'), { citationDetail: 'quotes', obsidianNames: false, exportNoteWithImages: true, exportSourceWithImages: true });
-  assert.deepEqual(NLME.presetOverrides('ai'), { citationDetail: 'titles', obsidianNames: false, exportNoteWithImages: false, exportSourceWithImages: false });
+  assert.deepEqual(NLME.presetOverrides('ai'), { citationDetail: 'titles', obsidianNames: false, exportNoteWithImages: false, exportSourceWithImages: false, exportSourcePlusMetaWithImages: false });
   assert.deepEqual(NLME.presetOverrides('custom', { citationDetail: 'none', obsidianNames: true, images: false }),
-    { citationDetail: 'none', obsidianNames: true, exportNoteWithImages: false, exportSourceWithImages: false });
+    { citationDetail: 'none', obsidianNames: true, exportNoteWithImages: false, exportSourceWithImages: false, exportSourcePlusMetaWithImages: false });
 });
 
 test('old settings keep their meaning', () => {
@@ -2640,7 +2640,7 @@ test('runOverrides follows the preset, with the stored values as Custom', () => 
   assert.deepEqual(NLME.runOverrides({ ...stored, exportPreset: 'archive' }), NLME.presetOverrides('archive'));
   assert.deepEqual(NLME.runOverrides({ ...stored, exportPreset: 'ai' }), NLME.presetOverrides('ai'));
   assert.deepEqual(NLME.runOverrides({ ...stored, exportPreset: 'custom' }),
-    { citationDetail: 'none', obsidianNames: true, exportNoteWithImages: false, exportSourceWithImages: false });
+    { citationDetail: 'none', obsidianNames: true, exportNoteWithImages: false, exportSourceWithImages: false, exportSourcePlusMetaWithImages: false });
   assert.deepEqual(NLME.runOverrides(NLME.DEFAULT_SETTINGS), NLME.presetOverrides('archive'));
 });
 
@@ -3119,7 +3119,7 @@ test('sheetOverrides leaves the settings alone: a choice is for one run', () => 
 
 test('sheetOverrides gives the keys a run may set, so nothing else reaches a job', () => {
   const { overrides } = NLME.sheetOverrides({ preset: 'custom', citationDetail: 'none', obsidianNames: false, images: false, zip: true, theme: 'dark' }, {});
-  assert.deepEqual(Object.keys(overrides).sort(), ['citationDetail', 'exportNoteWithImages', 'exportSourceWithImages', 'obsidianNames']);
+  assert.deepEqual(Object.keys(overrides).sort(), ['citationDetail', 'exportNoteWithImages', 'exportSourcePlusMetaWithImages', 'exportSourceWithImages', 'obsidianNames']);
 });
 
 test('estimateLine says what it left out', () => {
@@ -3323,4 +3323,78 @@ test('resultsToast does not read as a success on a partial or failed run', () =>
   assert.equal(NLME.resultsToast('success'), 'Export finished');
   assert.notEqual(NLME.resultsToast('warning'), 'Export finished');
   assert.notEqual(NLME.resultsToast('error'), 'Export finished');
+});
+
+// ---- Phase 4 review ----
+
+test('a preset without image copies turns the metadata image version off, and only then', () => {
+  const key = 'exportSourcePlusMetaWithImages';
+  assert.equal(NLME.presetOverrides('ai')[key], false);
+  assert.equal(NLME.presetOverrides('custom', { images: false })[key], false);
+  assert.ok(!(key in NLME.presetOverrides('archive')), 'Archive leaves the stored value alone');
+  assert.ok(!(key in NLME.presetOverrides('custom', { images: true })), 'so does Custom with images');
+  const { run, persistable } = NLME.applyRunSettings({ [key]: true }, NLME.presetOverrides('ai'));
+  assert.equal(run[key], false);
+  assert.equal(persistable(run)[key], true, 'the stored value comes back');
+  assert.equal(NLME.sourceVariants({ exportSourceBase: true, exportSourcePlusMeta: true, ...run }, { hasImages: true }).some(v => v.images), false);
+});
+
+test('a takeout with a failed category scan has no count to show', () => {
+  assert.equal(NLME.takeoutCount([{ exported: 3, selected: 3, status: 'done' }, { exported: 0, selected: 0, status: 'failed' }]), null);
+  assert.deepEqual(NLME.takeoutCount([{ exported: 3, selected: 3, status: 'done' }, { exported: 0, selected: 2, status: 'failed' }]), { done: 3, total: 5 });
+  assert.deepEqual(NLME.takeoutCount([{ exported: 3, selected: 3, status: 'done' }, { exported: 0, selected: 0, status: 'empty' }]), { done: 3, total: 3 });
+});
+
+test('a resume with items it could not check or take has no count to show', () => {
+  const ok = { name: 'Notes', level: 'success', exported: 3, selected: 3, failedItems: [] };
+  const extra = type => [{ type, title: 'Notes', message: 'm' }];
+  assert.equal(NLME.combineRetryOutcomes({ steps: [ok], verb: 'Resume', extraErrors: extra('scan_failed') }).count, null);
+  assert.equal(NLME.combineRetryOutcomes({ steps: [ok], verb: 'Resume', extraErrors: extra('not_ready') }).count, null);
+  assert.deepEqual(NLME.combineRetryOutcomes({ steps: [ok], verb: 'Resume', extraErrors: extra('not_found') }).count, { done: 3, total: 3 });
+});
+
+test('restCounts adds up what is left by estimate key', () => {
+  assert.deepEqual(NLME.restCounts([['Sources', 2], ['Notes', 3], ['Chat', 4], ['Artifacts', 5]]), { sources: 2, notes: 3, chat: 4, generated: 5 });
+  assert.deepEqual(NLME.restCounts([['Notes', 2], ['Notes', 3]]), { notes: 5 });
+});
+
+test('honestTimeLeft never promises less than the work left takes', () => {
+  assert.equal(NLME.honestTimeLeft(2, 10, 2, { notes: 8 }, 'quotes'), null);
+  assert.equal(NLME.honestTimeLeft(5, 10, 50, undefined, 'quotes'), 50);
+  assert.equal(NLME.honestTimeLeft(5, 10, 5, { notes: 5 }, 'quotes'), 35);
+  assert.equal(NLME.honestTimeLeft(5, 10, 500, { notes: 5 }, 'quotes'), 500);
+  assert.equal(NLME.honestTimeLeft(5, 10, 5, { notes: 5 }, 'titles'), 5);
+});
+
+test('on the 552-item takeout the time left stays near the truth and does not jump', () => {
+  const plan = [['Sources', 142, 2], ['Notes', 171, 7], ['Chat', 193, 5], ['Artifacts', 46, 4]];
+  const all = plan.reduce((sum, [, n, rate]) => sum + n * rate, 0);
+  let clock = 0;
+  let done = 0;
+  let shown = null;
+  let shownAt = null;
+  plan.forEach(([, n, rate], i) => {
+    for (let k = 0; k < n; k++) {
+      clock += rate;
+      done++;
+      const rest = NLME.restCounts([[plan[i][0], n - k - 1], ...plan.slice(i + 1).map(([name, count]) => [name, count])]);
+      const fresh = NLME.honestTimeLeft(done, 552, clock, rest, 'quotes');
+      const before = shown;
+      shown = NLME.calmTimeLeft(shown, fresh, shownAt === null ? 0 : clock - shownAt);
+      shownAt = clock;
+      if (done < 10 || done > 540) continue;
+      const truth = all - clock;
+      assert.ok(shown >= truth * 0.9, `item ${done}: ${shown} for ${truth}`);
+      assert.ok(shown <= truth * 1.6, `item ${done}: ${shown} for ${truth}`);
+      if (before !== null) assert.ok(Math.abs(shown - before) <= 60, `item ${done} jumped from ${before} to ${shown}`);
+    }
+  });
+  const atItem142 = NLME.honestTimeLeft(142, 552, 284, NLME.restCounts([['Notes', 171], ['Chat', 193], ['Artifacts', 46]]), 'quotes');
+  assert.equal(NLME.formatEstimate(atItem142), 'about 39 min');
+});
+
+test('Reset keeps what Default save shows, from a stored autoZip too', () => {
+  assert.equal(NLME.resetSettings({ ...NLME.DEFAULT_SETTINGS, autoZip: true }).takeoutZip, true);
+  assert.equal(NLME.resetSettings({ ...NLME.DEFAULT_SETTINGS, autoZip: true, takeoutZip: false }).takeoutZip, false);
+  assert.equal(NLME.resetSettings({ ...NLME.DEFAULT_SETTINGS }).takeoutZip, undefined);
 });

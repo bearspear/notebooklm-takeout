@@ -350,10 +350,10 @@ are disabled and a second click shows "… is still running".
 |---|---|---|
 | Show download notifications | on | In-panel toast when a single download finishes (the extension sends no system notifications) |
 | Default preset | Archive | Where the export sheet starts, and what the row download buttons use |
-| Default save | Folder | Where **Save as** in the export sheet starts. If you used "Always use ZIP for batch downloads" before 1.9.3, it starts on ZIP |
+| Default save | Folder | Where **Save as** in the export sheet starts. If you used "Always use ZIP for batch downloads" before 1.9.3 and had never turned off the ZIP checkbox on Export everything, it starts on ZIP |
 | Theme | Auto | Auto (match the browser), Light or Dark |
 | Slide deck format | PDF | PDF or PowerPoint |
-| Source versions | base + metadata | Any mix of: base, with AI summary & topics. The metadata version can include images. Image copies of the base version come from the preset |
+| Source versions | base + metadata | Any mix of: base, with AI summary & topics. The metadata version can include images. Image copies of the base version come from the preset; AI-ready, and Custom with Image copies off, leave out the metadata version's images too |
 | Citations (Custom only) | Full quotes | Shown when Default preset is Custom. Notes and chat. "Source titles only" skips reading each citation's popup: much faster, every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. |
 | Image copies (Custom only) | on | Shown when Default preset is Custom. Also writes a `-with-images` version of each note, source and chat that has images |
 | Citation style | Links | "Footnotes (Obsidian, Typora, …)" writes `[^n]` markers and one footnote definition per source instead of `<sup>` links (see below). Notes and chat, "Full quotes" or "Source titles only"; the code-blocks version keeps links. |
@@ -366,7 +366,7 @@ are disabled and a second click shows "… is still running".
 The chat export uses the note version settings.
 
 **Reset to defaults** (bottom of Settings) puts every option above except Default save back to the values
-in this table, after a confirm. It keeps Default save, the citation cache and saved exports to resume.
+in this table, after a confirm. It keeps Default save as it shows, the citation cache and saved exports to resume.
 
 ### Footnote citations and Obsidian-friendly names
 
@@ -585,7 +585,7 @@ contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
 
-**1.9.3 (Nov 2026)**: every export starts from a sheet: Archive, AI-ready or Custom, and where to save, with the estimated time. A choice is for that export and its Retry and Resume. While an export runs, one calm view takes the place of the list: how many items are done, the time left, the current item and Cancel. Results take the same place, with Retry and **Done**, which goes back to where you started with your filter and selection intact. Settings keeps only defaults: **Default preset** and **Default save**. Citations, image copies and Obsidian names show there under Custom, and the old citation, image-copy and "Always use ZIP" rows are gone. An existing "Always use ZIP" still sets where Save as starts. Row downloads and Retry refuse, and say so, if the tab has moved to another notebook.
+**1.9.3 (Nov 2026)**: every export starts from a sheet: Archive, AI-ready or Custom, and where to save, with the estimated time. A choice is for that export and its Retry and Resume. While an export runs, one calm view takes the place of the list: how many items are done, the time left, the current item and Cancel. Results take the same place, with Retry and **Done**, which goes back to where you started with your filter and selection intact. Settings keeps only defaults: **Default preset** and **Default save**. Citations, image copies and Obsidian names show there under Custom, and the old citation, image-copy and "Always use ZIP" rows are gone. An existing "Always use ZIP" still sets where Save as starts. Row downloads and Retry refuse, and say so, if the tab has moved to another notebook. **Under Archive, the default, tab and row exports now write `-with-images` files too, take longer, and don't reuse cached quotes, and the Chat tab's export becomes a ZIP with images.** Export everything already did. AI-ready or Custom with Image copies off avoids this.
 
 **1.9.2 (Nov 2026)**: a new notebook opens on a Home screen. **Export everything** (the Full Takeout, with its ZIP checkbox) sits at the top, with a row for Sources, Notes, Generated and Chat showing what each holds. A back arrow returns to Home, and reopening the panel on the same notebook returns to the last list. The Resume card moved onto Home, so a notebook with an export to resume opens there.
 

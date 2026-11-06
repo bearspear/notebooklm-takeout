@@ -398,7 +398,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
         chrome.tabs.sendMessage(tabId, { type: NLME.MSG.UPDATE_EXPORT_OVERLAY, hideCancel: true }).catch(() => {});
       },
       progress(text, count) {
-        const percent = count ? setProgressCount(count.done, count.total) : progressRun?.percent ?? 0;
+        const percent = count ? setProgressCount(count.done, count.total, count.rest) : progressRun?.percent ?? 0;
         paintProgressText(count?.item || text);
         chrome.tabs.sendMessage(tabId, {
           type: NLME.MSG.UPDATE_EXPORT_OVERLAY,
@@ -761,12 +761,14 @@ async function runFullTakeout({ zip = NLME.takeoutZipChoice(settings) } = {}) {
         c.items = null;
         continue;
       }
+      const later = categories.slice(categories.indexOf(c) + 1).filter(l => !l.status);
       const catShell = {
         ...shell,
         progress: (text, count) => shell.progress(`${c.name}: ${text}`, count && {
           done: itemsBefore + Math.min(count.done, c.selected),
           total: itemsTotal,
-          item: count.item && `${c.name}: ${count.item}`
+          item: count.item && `${c.name}: ${count.item}`,
+          rest: NLME.restCounts([[c.name, Math.max(0, c.selected - count.done)], ...later.map(l => [l.name, l.selected])])
         })
       };
       // Filled by the runner as each package is saved: read after a throw too,
@@ -986,7 +988,7 @@ async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TA
   const notRun = [];
   let stopped = false;
   const total = chainSteps.reduce((sum, step) => sum + (itemsByName[step.name] || []).length, 0);
-  chainProgress = { base: 0, total };
+  chainProgress = { base: 0, total, step: null, later: [] };
   holdStepResults = true;
   heldStepResults = null;
   try {
@@ -996,6 +998,8 @@ async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TA
       if (chainCancelRequested) stopped = true;
       if (!stopped && steps.length > 0 && !await chainTabOnRunNotebook(tabId)) stopped = true;
       if (stopped) { notRun.push({ name: step.name, failedItems: items }); continue; }
+      chainProgress.step = step.name;
+      chainProgress.later = chainSteps.slice(chainSteps.indexOf(step) + 1).map(s => [s.name, (itemsByName[s.name] || []).length]);
       let out;
       try {
         out = await step.run(items, tabId, zip);
@@ -1047,8 +1051,9 @@ function takeoutRetry(failed, tabId, restore, zip) {
   const rerun = rememberRunSettings();
   return {
     count,
-    run: () => runExclusive('Retry', () => rerun(async () => {
-      const { steps, notRun } = await runChain(() => runRetryChain(failed, tabId, 'Retry', TAKEOUT_RETRY_STEPS, zip));
+    // Inside the chain, which holds the view: the dock goes straight to these results
+    run: () => runExclusive('Retry', () => rerun(() => runChain(async () => {
+      const { steps, notRun } = await runRetryChain(failed, tabId, 'Retry', TAKEOUT_RETRY_STEPS, zip);
       if (steps.length === 0) {
         restore(); // the first step never ran: keep the panel and its Retry
         return;
@@ -1062,7 +1067,7 @@ function takeoutRetry(failed, tabId, restore, zip) {
         saved: combined.saved,
         errors: combined.errors
       }, combined.remaining, tabId, zip);
-    }))
+    })))
   };
 }
 

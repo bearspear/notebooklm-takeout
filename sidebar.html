@@ -116,7 +116,7 @@
 
     <!-- One view in the list's place while an export runs, and its results after: see setDock -->
     <div id="download-progress" class="download-progress" style="display: none;">
-      <h3 id="progress-title" class="progress-title">Export</h3>
+      <h3 id="progress-title" class="progress-title" tabindex="-1">Export</h3>
       <p id="progress-count" class="progress-count"></p>
       <div class="progress-bar">
         <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
@@ -251,7 +251,7 @@
 
         <div class="setting-group">
           <label style="font-weight: 500; display: block; margin-bottom: 8px;">Export Versions (select which file types to create)</label>
-          <p class="setting-help" style="margin-top: 0; margin-bottom: 12px;">Choose which combinations of source files to export. At least one version must be selected. Image copies of the base version come from the preset.</p>
+          <p class="setting-help" style="margin-top: 0; margin-bottom: 12px;">Choose which combinations of source files to export. At least one version must be selected. Image copies of the base version come from the preset. AI-ready, and Custom with Image copies off, leave out the metadata version's images too.</p>
 
           <div class="version-option">
             <label class="version-parent">
@@ -297,7 +297,7 @@
             <input type="checkbox" id="reuse-citations-checkbox" checked>
             <span>Reuse citation quotes from earlier exports (faster re-exports)</span>
           </label>
-          <p class="setting-help">When a note or chat answer has not changed since an earlier full-quote export, its citation quotes are read from a local cache instead of hovering every marker again. Not used when an "images" version is exported. If a source was edited, clear the cache.</p>
+          <p class="setting-help">When a note or chat answer has not changed since an earlier full-quote export, its citation quotes are read from a local cache instead of hovering every marker again. Not used when an "images" version is exported, which includes every note and chat export under Archive; AI-ready or Custom without Image copies uses it. If a source was edited, clear the cache.</p>
           <button id="clear-citation-cache-btn" class="btn btn-secondary btn-small" type="button">Clear citation cache</button>
         </div>
 

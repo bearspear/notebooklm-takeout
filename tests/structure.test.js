@@ -513,6 +513,17 @@ test('the progress view keeps its ids, and only its text is a live region', () =
   assert.match(view, /Keep this notebook tab visible\. Chrome slows hidden tabs\./);
 });
 
+test('the view under the dock cannot be moved, so no hidden scan starts', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8');
+  for (const hidden of ['body.docked .tabs', 'body.docked #back-btn']) assert.ok(css.includes(hidden), hidden);
+});
+
+test('a chain shows its combined results before it lets the view go', () => {
+  const retry = fnSource('sidebar-takeout.js', 'takeoutRetry');
+  assert.ok(retry.indexOf('showTakeoutResults(') < retry.lastIndexOf('})'));
+  assert.match(retry, /runChain\(async \(\) => \{[^]*restore\(\);[^]*showTakeoutResults\(/);
+});
+
 test('every Retry goes through the one check of the run\'s notebook', () => {
   const results = fs.readFileSync(path.join(ROOT, 'sidebar-results.js'), 'utf8');
   assert.match(results, /if \(await retryMayStart\(\)\) await retry\.run\(\);/);

@@ -889,6 +889,8 @@ body {
 /* Progress: one view in the list's place while an export runs. Results take the same
    place after it. Neither destroys the list: see setDock (sidebar-results.js). */
 body.docked #home-view,
+body.docked .tabs,
+body.docked #back-btn,
 body.docked .tab-content.active,
 body.docked #action-bar {
   display: none;

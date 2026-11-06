@@ -16,7 +16,8 @@ let dockRun = null;
 
 // A chain (runChain) keeps the progress view up between its exports. chainProgress:
 // where the running chain has got to, { base, total }, so "N of M" counts over all of
-// it. While its steps run, each one's outcome waits in heldStepResults instead of
+// it, and step and later: this step's name and [name, items] of the ones after it, for
+// the time left. While its steps run, each one's outcome waits in heldStepResults instead of
 // showing: the chain ends in one panel, or in the one step's own.
 let chainHolds = 0;
 let chainProgress = null;
@@ -39,9 +40,9 @@ function setDock(mode) {
 
 // What the keyboard lands on while the view is docked: Cancel is gone in the final save
 function dockFocusTarget() {
-  return dockMode === 'results'
-    ? document.querySelector('#results-panel .results-done')
-    : document.getElementById('cancel-download-btn');
+  if (dockMode === 'results') return document.querySelector('#results-panel .results-done');
+  const cancel = document.getElementById('cancel-download-btn');
+  return cancel.hidden ? document.getElementById('progress-title') : cancel;
 }
 
 // The element holding the focus has just been hidden: give it to the view that took over
@@ -128,9 +129,11 @@ function showProgressView({ title = jobLock.current() || 'Export', text = 'Prepa
  *
  * @param {number} done items finished, in this export
  * @param {number} total items in this export
+ * @param {object} [rest] NLME.restCounts of what is left of a takeout; a chain works
+ *   out its own
  * @returns {number} the bar's percent
  */
-function setProgressCount(done, total) {
+function setProgressCount(done, total, rest) {
   const run = progressRun;
   if (!run) return 0;
   const now = Date.now();
@@ -140,7 +143,9 @@ function setProgressCount(done, total) {
   if (run.startedAt === null) run.startedAt = now;
   if (run.done !== before) {
     const waited = run.leftAt === null ? 0 : (now - run.leftAt) / 1000;
-    run.left = NLME.calmTimeLeft(run.left, NLME.timeLeft(run.done, run.total, (now - run.startedAt) / 1000), waited);
+    const left = chainProgress ? NLME.restCounts([[chainProgress.step, total - done], ...chainProgress.later]) : rest;
+    const fresh = NLME.honestTimeLeft(run.done, run.total, (now - run.startedAt) / 1000, left, settings.citationDetail);
+    run.left = NLME.calmTimeLeft(run.left, fresh, waited);
     run.leftAt = now;
   }
   paintProgressCount();
@@ -152,6 +157,7 @@ function setProgressFinishing() {
   if (!progressRun) return;
   progressRun.finishing = true;
   paintProgressCount();
+  keepDockFocus();
 }
 
 // Off, unless a chain is keeping it for its next export
@@ -211,12 +217,12 @@ function showResults(options = {}) {
 
   panel.innerHTML = `
     ${countHtml}
-    <p class="results-message results-${esc(level)}">${esc(message || '')}</p>
+    <p id="results-message" class="results-message results-${esc(level)}">${esc(message || '')}</p>
     ${linesHtml}
     ${savedHtml}
     <div class="results-actions">
       ${retryHtml}
-      <button type="button" class="btn btn-secondary results-done">Done</button>
+      <button type="button" class="btn btn-secondary results-done" aria-describedby="results-message">Done</button>
     </div>
     ${groupsHtml}`;
   clearTimeout(progressRun?.textTimer);

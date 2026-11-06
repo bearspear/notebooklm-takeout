@@ -453,11 +453,13 @@
     const done = steps.reduce((sum, s) => sum + (s.exported || 0), 0);
     const ranTotal = steps.reduce((sum, s) => sum + (s.selected ?? (s.exported || 0) + (s.failedItems || []).length), 0);
     const notRunTotal = notRun.reduce((sum, n) => sum + (n.failedItems || []).length, 0);
+    // Items that could not be checked or taken are in neither side of the sum
+    const uncounted = extraErrors.some(e => ['scan_failed', 'not_ready'].includes(e.type));
 
     return {
       message,
       level,
-      count: { done, total: ranTotal + notRunTotal },
+      count: uncounted ? null : { done, total: ranTotal + notRunTotal },
       lines: steps.map(s => `${s.name}: ${s.message}`),
       saved: steps.flatMap(s => s.saved || []),
       errors: [...steps.flatMap(s => prefixExportErrors(s.name, s.errors)), ...extraErrors],
@@ -1135,17 +1137,19 @@
   const PRESETS = ['archive', 'ai', 'custom'];
 
   // What a preset sets for one export. custom: the Custom preset's remembered
-  // { citationDetail, obsidianNames, images }. An unknown preset is Archive.
+  // { citationDetail, obsidianNames, images }. An unknown preset is Archive. No image
+  // copies means none at all: the metadata version's too. With image copies on, that
+  // version stays the person's own setting, so its key is left out.
   function presetOverrides(preset, custom = {}) {
     const fixed = (citationDetail, images) => ({ citationDetail, obsidianNames: false, exportNoteWithImages: images, exportSourceWithImages: images });
-    if (preset === 'ai') return fixed('titles', false);
+    const noImages = { exportNoteWithImages: false, exportSourceWithImages: false, exportSourcePlusMetaWithImages: false };
+    if (preset === 'ai') return { ...fixed('titles', false), ...noImages };
     if (preset !== 'custom') return fixed('quotes', true);
     const images = custom.images !== false;
     return {
       citationDetail: custom.citationDetail === undefined ? 'quotes' : custom.citationDetail,
       obsidianNames: !!custom.obsidianNames,
-      exportNoteWithImages: images,
-      exportSourceWithImages: images
+      ...(images ? { exportNoteWithImages: true, exportSourceWithImages: true } : noImages)
     };
   }
 
@@ -1235,6 +1239,25 @@
     return (elapsedSeconds / done) * (total - done);
   }
 
+  // What is left, by estimate key. parts: [category or chain step name, items]
+  const ESTIMATE_KEYS = { Sources: 'sources', Notes: 'notes', Chat: 'chat', Artifacts: 'generated' };
+  function restCounts(parts = []) {
+    const rest = {};
+    for (const [name, n] of parts) {
+      const key = ESTIMATE_KEYS[name];
+      rest[key] = (rest[key] || 0) + n;
+    }
+    return rest;
+  }
+
+  // Seconds left, at least what the work left is expected to take. A run's pace so far
+  // says little about what follows it: 142 sources at 2 s would promise 14 min with 39
+  // min of notes and chat to go. rest: restCounts, or nothing when the run is one kind.
+  function honestTimeLeft(done, total, elapsedSeconds, rest, citationDetail) {
+    const pace = timeLeft(done, total, elapsedSeconds);
+    return pace === null ? null : Math.max(pace, estimateSeconds(rest, citationDetail));
+  }
+
   // The time to show next. shown: the last time shown; fresh: timeLeft now; waited:
   // seconds since. The shown time counts down by itself and moves a quarter of the way
   // to a fresh figure that disagrees, so one slow or fast item cannot throw it about.
@@ -1266,8 +1289,10 @@
     return lastAt === null ? 0 : Math.max(0, lastAt + minMs - now);
   }
 
-  // A takeout's "N of M", from its categories
+  // A takeout's "N of M", from its categories. null when a scan failed before it found
+  // anything: that category's items are in neither number, so "3 of 3" would be false.
   function takeoutCount(categories = []) {
+    if (categories.some(c => c.status === 'failed' && !c.selected)) return null;
     return {
       done: categories.reduce((sum, c) => sum + (c.exported || 0), 0),
       total: categories.reduce((sum, c) => sum + (c.selected || 0), 0)
@@ -2888,11 +2913,11 @@ footer { margin-top: 3rem; }
     customImages: true
   });
 
-  // A fresh, editable copy of the defaults. Keeps only Export everything's ZIP
-  // choice from `current`, since that choice is not one of the ⚙️ options.
+  // A fresh, editable copy of the defaults. Keeps only what Default save shows, a
+  // stored autoZip included, since Reset takes autoZip itself back to false.
   function resetSettings(current) {
     const fresh = { ...DEFAULT_SETTINGS };
-    if (current && current.takeoutZip !== undefined) fresh.takeoutZip = current.takeoutZip;
+    if (current && (current.takeoutZip !== undefined || current.autoZip)) fresh.takeoutZip = takeoutZipChoice(current);
     return fresh;
   }
 
@@ -3015,6 +3040,8 @@ footer { margin-top: 3rem; }
     rowRefused,
     retryRefused,
     timeLeft,
+    restCounts,
+    honestTimeLeft,
     calmTimeLeft,
     progressLeftLine,
     progressFigures,

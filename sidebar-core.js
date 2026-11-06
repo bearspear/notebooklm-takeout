@@ -569,7 +569,7 @@ function setupEventListeners() {
 
   document.getElementById('reset-settings-btn')?.addEventListener('click', async () => {
     if (jobLock.current()) { showToast(`${jobLock.current()} is still running`, 'warning'); return; }
-    if (!confirm('Reset all settings to their defaults? The citation cache and saved exports to resume are kept.')) return;
+    if (!confirm('Reset all settings to their defaults? Default save, the citation cache and saved exports to resume are kept.')) return;
     settings = NLME.resetSettings(settings);
     applySettingsToUi();
     syncVersionChildStates();
