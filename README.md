@@ -129,7 +129,7 @@ The quoted passage from the source…
 
 1. **Chat** tab → **Load chat** (scrolls to load the whole history and opens collapsed
    citation groups). The note above the button says this moves your place in the chat.
-2. Chat follows the **Citation detail** setting (the line above the list shows the current level):
+2. Choose the citations in the export sheet: the preset sets them, and Custom lets you pick.
    Full quotes adds the quoted passage for every citation (slower: it reads each citation's
    popup), Source titles only keeps the [n] links without quotes, No citations removes the
    [n] markers and the Sources section.
@@ -298,7 +298,10 @@ with their row's button.
 ### Cancelling
 
 Long exports show an overlay on the notebook page with progress and a **Cancel Export**
-button; the side panel's progress area has a Cancel button too. Cancelling stops within one
+button; the side panel's progress view has a **Cancel** button too. The progress view takes the
+place of the list while the export runs: how many items are done, the time left once there is a
+pace to go by, and the current item. The list comes back afterwards as you left it. Cancel goes
+away during Export everything's final save, which always runs to the end. Cancelling stops within one
 citation. Everything exported so far is saved as `…-PARTIAL.zip`, with `errors.md` when
 anything failed (a note in it records the cancellation), and the message says how many items
 were exported (e.g. "Cancelled: exported 4 of 10 notes"). For Export everything see
@@ -306,11 +309,14 @@ were exported (e.g. "Cancelled: exported 4 of 10 notes"). For Export everything 
 
 ### Results and Retry
 
-When an export ends, its outcome stays in a results panel under the progress area until you
-start another export or click **Dismiss**: what was exported, the ZIP names (or the Downloads
-folder) it was saved to, and the errors grouped by kind (collapsed; the first 20 of each, the
-rest are in `errors.md`). If items failed, **Retry N failed** exports just those again.
-(Chat exports have no Retry: re-export the chat.)
+When an export ends, its outcome takes the same place and stays until you click **Done** or start
+another export: how many items were exported, a plain line on how it went, the ZIP names (or the
+Downloads folder) it was saved to, and under that the errors grouped by kind (collapsed; the first
+20 of each, the rest are in `errors.md`). If items failed, **Retry N failed** exports just those
+again. It refuses if the tab has moved to another notebook: open the notebook the export ran on.
+(Chat exports have no Retry: re-export the chat.) **Done** goes back to where you started the
+export. If you switch notebooks meanwhile, the results stay, marked with their notebook's name,
+and Done goes to Home.
 
 ### Resume an unfinished export
 
@@ -326,7 +332,7 @@ while you are on a list, you stay there and a dot on the back arrow says it is w
 
 **Resume** looks the left-over and failed items up again in the notebook (by type and title,
 so a renamed or deleted item is not guessed at), then exports them as an ordinary new export:
-Sources, then Notes, then Artifacts, ending in one results panel. Items that are no longer in
+Sources, then Notes, then Artifacts, ending in one set of results. Items that are no longer in
 the notebook are listed there as "no longer in the notebook" and dropped from the banner;
 items that fail again stay in it. If the page looks only partly loaded (a list not drawn yet),
 those items are reported as "could not be checked" and stay in the banner instead of being
@@ -343,22 +349,24 @@ are disabled and a second click shows "… is still running".
 | Setting | Default | |
 |---|---|---|
 | Show download notifications | on | In-panel toast when a single download finishes (the extension sends no system notifications) |
-| Always use ZIP for batch downloads | off | The starting value of **Save as** in the export sheet, unless an earlier version saved Export everything's own ZIP choice |
+| Default preset | Archive | Where the export sheet starts, and what the row download buttons use |
+| Default save | Folder | Where **Save as** in the export sheet starts. If you used "Always use ZIP for batch downloads" before 1.9.3, it starts on ZIP |
 | Theme | Auto | Auto (match the browser), Light or Dark |
 | Slide deck format | PDF | PDF or PowerPoint |
-| Source versions | base + metadata | Any mix of: base, with AI summary & topics, each optionally with images |
-| Citation detail (notes and chat) | Full quotes | "Source titles only" skips reading each citation's popup: much faster, every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. |
+| Source versions | base + metadata | Any mix of: base, with AI summary & topics. The metadata version can include images. Image copies of the base version come from the preset |
+| Citations (Custom only) | Full quotes | Shown when Default preset is Custom. Notes and chat. "Source titles only" skips reading each citation's popup: much faster, every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. |
+| Image copies (Custom only) | on | Shown when Default preset is Custom. Also writes a `-with-images` version of each note, source and chat that has images |
 | Citation style | Links | "Footnotes (Obsidian, Typora, …)" writes `[^n]` markers and one footnote definition per source instead of `<sup>` links (see below). Notes and chat, "Full quotes" or "Source titles only"; the code-blocks version keeps links. |
-| Obsidian-friendly file names | off | Strips `[ ] # ^ \| \ : * ? " < >` from note, source, chat and artifact file names and names single downloads `note - Title` and `mind-map - Title` instead of `[NOTE]_Title` and `[mind-map]_Title` (see below) |
+| Obsidian-friendly file names (Custom only) | off | Shown when Default preset is Custom. Strips `[ ] # ^ \| \ : * ? " < >` from note, source, chat and artifact file names and names single downloads `note - Title` and `mind-map - Title` instead of `[NOTE]_Title` and `[mind-map]_Title` (see below) |
 | Reuse citation quotes from earlier exports | on | Notes and chat answers that have not changed since an earlier full-quote export take their citation quotes from a local cache instead of hovering every marker again (much faster re-exports). Not used for "Source titles only", "No citations" or image versions; only complete reads are stored. **Clear citation cache** empties it, for example after you edit a source. The cache needs the "unlimitedStorage" permission (no install warning), so reused quotes are kept for up to 20 notebooks. The `_audit.md` and `_index.md` show "Citations from cache: N of M items" when it was used. |
-| Note versions | base + code blocks | Base always; code-block quotes and an image version are added only when a note has quotes or images |
+| Note versions | base + code blocks | Base always; code-block quotes are added only when a note has quotes. Image copies come from the preset |
 | Sources / notes per ZIP | 25 | Batch size for large exports |
 | Clean OCR artifacts from citations | on | Strips `~~~`, `:~:` and similar noise |
 
 The chat export uses the note version settings.
 
-**Reset to defaults** (bottom of Settings) puts every option above back to the values in this table,
-after a confirm. It keeps the citation cache, Export everything's own ZIP choice and saved exports to resume.
+**Reset to defaults** (bottom of Settings) puts every option above except Default save back to the values
+in this table, after a confirm. It keeps Default save, the citation cache and saved exports to resume.
 
 ### Footnote citations and Obsidian-friendly names
 
@@ -576,6 +584,8 @@ python3 -I tools/validate_export.py NEW.zip --baseline OLD.zip --allow '\$[^$\n]
 contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
+
+**1.9.3 (Nov 2026)**: every export starts from a sheet: Archive, AI-ready or Custom, and where to save, with the estimated time. A choice is for that export and its Retry and Resume. While an export runs, one calm view takes the place of the list: how many items are done, the time left, the current item and Cancel. Results take the same place, with Retry and **Done**, which goes back to where you started with your filter and selection intact. Settings keeps only defaults: **Default preset** and **Default save**. Citations, image copies and Obsidian names show there under Custom, and the old citation, image-copy and "Always use ZIP" rows are gone. An existing "Always use ZIP" still sets where Save as starts. Row downloads and Retry refuse, and say so, if the tab has moved to another notebook.
 
 **1.9.2 (Nov 2026)**: a new notebook opens on a Home screen. **Export everything** (the Full Takeout, with its ZIP checkbox) sits at the top, with a row for Sources, Notes, Generated and Chat showing what each holds. A back arrow returns to Home, and reopening the panel on the same notebook returns to the last list. The Resume card moved onto Home, so a notebook with an export to resume opens there.
 

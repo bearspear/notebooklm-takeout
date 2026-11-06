@@ -242,7 +242,7 @@ function renderSourcesList(sources, skippedNotes = 0) {
     const btn = e.target.closest('.download-single-btn');
     if (!btn) return;
     const source = sources[parseInt(btn.dataset.index, 10)];
-    if (source) await runExclusive('Sources export', () => withRunSettings(NLME.runOverrides(settings), () => exportSources([source], { record: false })));
+    if (source) await runRowExport('Sources export', () => exportSources([source], { record: false }));
   });
 }
 
@@ -348,7 +348,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
     },
     packageBatch: async (sources, info) => {
       packaged += sources.length;
-      shell.progress(`Creating ZIP ${info.batchIndex}/${info.totalBatches}...`, 1);
+      shell.progress(`Creating ZIP ${info.batchIndex}/${info.totalBatches}...`);
       // Every part gets an _audit.md for its own sources (what was added since
       // the previous part); the last part (an errors-only ZIP too: the outcome
       // toast may point at it) adds the run-wide totals as a second section.
@@ -393,7 +393,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
       const batchStart = (batchIndex - 1) * perZip;
       const batchSize = Math.min(perZip, total - batchStart);
       shell.progress(`Batch ${batchIndex}/${totalBatches}: Extracting ${done - batchStart + 1}/${batchSize}: ${item.title}`,
-        (done + 1) / total);
+        { done, total, item: item.title });
       console.log(`[NotebookLM Takeout] Extracting source: "${item.title}"`);
     }
   }).finally(endImageSession);

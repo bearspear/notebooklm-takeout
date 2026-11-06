@@ -184,7 +184,7 @@ function renderStudioList(items) {
     if (downloadBtn) {
       // The item now: a rescan may replace _studioItems while the job lock is awaited
       const item = _studioItems[parseInt(downloadBtn.dataset.idx, 10)];
-      runExclusive('Generated download', () => withRunSettings(NLME.runOverrides(settings), () => handleStudioDownloadRow(item, downloadBtn)));
+      runRowExport('Generated download', () => handleStudioDownloadRow(item, downloadBtn));
       return;
     }
     const deleteBtn = e.target.closest('.studio-delete-btn');
@@ -273,10 +273,14 @@ function runGeneratedExport(zip) {
     // Nothing ran (declined, tab closed: already said), or one side ran alone with
     // nothing left out: its own panel stands
     const leftOut = plan.skipped.length > 0;
-    if (steps.length === 0 || (steps.length === 1 && notRun.length === 0 && !leftOut)) return;
+    if (steps.length === 0 || (steps.length === 1 && notRun.length === 0 && !leftOut)) {
+      showHeldStepResults();
+      return;
+    }
     const outcome = NLME.generatedExportOutcome({ steps, notRun, total: plan.artifacts.length + plan.notes.length, skipped: plan.skipped });
     showTakeoutResults({
       message: outcome.message,
+      count: outcome.count,
       level: outcome.level,
       lines: outcome.lines,
       saved: outcome.saved,

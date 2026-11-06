@@ -393,22 +393,32 @@ try {
   if (early) document.documentElement.setAttribute('data-theme', early);
 } catch (e) { /* storage blocked */ }
 
-// Show `settings` in the Settings panel (on load and after Reset to defaults)
+// Custom's three rows show only under Custom, which is the only time they are read:
+// a hidden row never writes, so Archive and back keeps Custom's values.
+function paintExportDefaults() {
+  const settings = realSettings();
+  document.getElementById('default-preset-select').value = NLME.sheetChoice(settings).preset;
+  document.getElementById('default-save-select').value = NLME.takeoutZipChoice(settings) ? 'zip' : 'folder';
+  document.getElementById('citation-detail-select').value = settings.citationDetail;
+  document.getElementById('custom-images-checkbox').checked = settings.customImages !== false;
+  document.getElementById('obsidian-names-checkbox').checked = settings.obsidianNames === true;
+  document.getElementById('custom-defaults').hidden = settings.exportPreset !== 'custom';
+}
+
+// Show the person's settings in the Settings panel (on load and after Reset to defaults)
 function applySettingsToUi() {
-  document.getElementById('auto-zip-checkbox').checked = settings.autoZip;
+  const settings = realSettings();
   document.getElementById('show-notifications-checkbox').checked = settings.showNotifications;
   document.getElementById('refresh-interval-input').value = settings.refreshInterval;
 
   // Source version checkboxes
   document.getElementById('export-source-base-checkbox').checked = settings.exportSourceBase;
   document.getElementById('export-source-plus-meta-checkbox').checked = settings.exportSourcePlusMeta;
-  document.getElementById('export-source-with-images-checkbox').checked = settings.exportSourceWithImages;
   document.getElementById('export-source-plus-meta-with-images-checkbox').checked = settings.exportSourcePlusMetaWithImages;
 
   // Note version checkboxes
   document.getElementById('export-note-base-checkbox').checked = settings.exportNoteBase;
   document.getElementById('export-note-code-blocks-checkbox').checked = settings.exportNoteCodeBlocks;
-  document.getElementById('export-note-with-images-checkbox').checked = settings.exportNoteWithImages;
 
   // Sync legacy settings for chat export compatibility
 
@@ -421,22 +431,18 @@ function applySettingsToUi() {
 
   // Interface
   document.getElementById('slides-format-select').value = settings.slidesFormat;
-  document.getElementById('citation-detail-select').value = settings.citationDetail;
   document.getElementById('reuse-citations-checkbox').checked = settings.reuseCitations !== false;
   document.getElementById('citation-style-select').value = settings.citationStyle === 'footnotes' ? 'footnotes' : 'links';
-  document.getElementById('obsidian-names-checkbox').checked = settings.obsidianNames === true;
   document.getElementById('theme-select').value = NLME.themeValue(settings.theme);
+  paintExportDefaults();
   applyTheme();
-  updateChatCitationInfo();
 }
 
 // An "images" version is only offered while its parent version is ticked
 // (the same rule the parent checkboxes' change handlers apply)
 function syncVersionChildStates() {
   [
-    ['export-source-base-checkbox', 'export-source-with-images-checkbox'],
-    ['export-source-plus-meta-checkbox', 'export-source-plus-meta-with-images-checkbox'],
-    ['export-note-base-checkbox', 'export-note-with-images-checkbox']
+    ['export-source-plus-meta-checkbox', 'export-source-plus-meta-with-images-checkbox']
   ].forEach(([parentId, childId]) => {
     const parent = document.getElementById(parentId);
     const child = document.getElementById(childId);
@@ -444,14 +450,6 @@ function syncVersionChildStates() {
     child.disabled = !parent.checked;
     if (!parent.checked) child.checked = false;
   });
-}
-
-// The Chat tab's one-line reminder of the Citation detail it will export with
-function updateChatCitationInfo() {
-  const el = document.getElementById('chat-citation-info');
-  if (!el) return;
-  const label = { quotes: 'Full quotes', titles: 'Source titles only', none: 'No citations' }[NLME.chatCitationMode(realSettings())];
-  el.textContent = `Citations: ${label} · change in Settings`;
 }
 
 // One more try at storage after a failed load. The values held meanwhile go, so a
@@ -475,7 +473,7 @@ async function retrySettingsLoad() {
 // The one write of `settings`, false when it did not happen. Blocked until a load
 // has worked. A blocked write tries the load again, so storage coming back lifts
 // the block: the stored settings return, and the change has to be made again.
-// undo: puts the change back when storage refuses the write.
+// undo: puts the change back when it was not stored and no stored settings replaced it.
 async function writeSettings({ undo = null } = {}) {
   const settings = realSettings();
   if (settingsStored) {
@@ -491,27 +489,44 @@ async function writeSettings({ undo = null } = {}) {
   }
   // No load during a job, nor once one holds the lock: it would replace the settings
   // the job runs on, or land just after withRunSettings swapped them in
-  if (!jobLock.current() && !currentRunOverrides && await retrySettingsLoad()) showToast('Your saved settings are back. Please make that change again.', 'warning');
-  else showToast(SETTINGS_UNREAD_MESSAGE, 'warning');
+  if (!jobLock.current() && !currentRunOverrides && await retrySettingsLoad()) {
+    showToast('Your saved settings are back. Please make that change again.', 'warning');
+  } else {
+    if (undo) undo();
+    showToast(SETTINGS_UNREAD_MESSAGE, 'warning');
+  }
   return false;
 }
 
 async function saveSettings() {
   const settings = realSettings(); // during a job, not the job's copy
-  settings.autoZip = document.getElementById('auto-zip-checkbox').checked;
+  // What the next export starts on: a change that was not stored must not look stored
+  const { exportPreset, takeoutZip } = settings;
+  const undo = () => {
+    Object.assign(realSettings(), { exportPreset, takeoutZip });
+    paintExportDefaults();
+  };
+  settings.exportPreset = document.getElementById('default-preset-select').value;
+  settings.takeoutZip = document.getElementById('default-save-select').value === 'zip';
+  // Custom's values only while Custom's rows show, so they outlive any other preset
+  if (settings.exportPreset === 'custom') {
+    settings.citationDetail = ['titles', 'none'].includes(document.getElementById('citation-detail-select').value)
+      ? document.getElementById('citation-detail-select').value : 'quotes';
+    settings.customImages = document.getElementById('custom-images-checkbox').checked;
+    settings.obsidianNames = document.getElementById('obsidian-names-checkbox').checked;
+  }
+  document.getElementById('custom-defaults').hidden = settings.exportPreset !== 'custom';
   settings.showNotifications = document.getElementById('show-notifications-checkbox').checked;
   settings.refreshInterval = parseInt(document.getElementById('refresh-interval-input').value) || 10;
 
   // Source version selections
   settings.exportSourceBase = document.getElementById('export-source-base-checkbox').checked;
   settings.exportSourcePlusMeta = document.getElementById('export-source-plus-meta-checkbox').checked;
-  settings.exportSourceWithImages = document.getElementById('export-source-with-images-checkbox').checked;
   settings.exportSourcePlusMetaWithImages = document.getElementById('export-source-plus-meta-with-images-checkbox').checked;
 
   // Note version selections
   settings.exportNoteBase = document.getElementById('export-note-base-checkbox').checked;
   settings.exportNoteCodeBlocks = document.getElementById('export-note-code-blocks-checkbox').checked;
-  settings.exportNoteWithImages = document.getElementById('export-note-with-images-checkbox').checked;
 
   // Sync legacy settings for chat export compatibility
 
@@ -524,16 +539,12 @@ async function saveSettings() {
 
   // Interface
   settings.slidesFormat = document.getElementById('slides-format-select').value === 'pptx' ? 'pptx' : 'pdf';
-  settings.citationDetail = ['titles', 'none'].includes(document.getElementById('citation-detail-select').value)
-    ? document.getElementById('citation-detail-select').value : 'quotes';
   settings.reuseCitations = document.getElementById('reuse-citations-checkbox').checked;
   settings.citationStyle = document.getElementById('citation-style-select').value === 'footnotes' ? 'footnotes' : 'links';
-  settings.obsidianNames = document.getElementById('obsidian-names-checkbox').checked;
   settings.theme = NLME.themeValue(document.getElementById('theme-select').value);
   applyTheme();
-  updateChatCitationInfo();
 
-  await writeSettings();
+  await writeSettings({ undo });
 }
 
 function setupEventListeners() {
@@ -608,7 +619,6 @@ function setupEventListeners() {
   // Source version checkboxes - parent/child relationships
   // Parent checkboxes control whether child "include images" checkboxes are enabled
   const sourceParentChildPairs = [
-    { parent: 'export-source-base-checkbox', child: 'export-source-with-images-checkbox' },
     { parent: 'export-source-plus-meta-checkbox', child: 'export-source-plus-meta-with-images-checkbox' }
   ];
 
@@ -640,45 +650,6 @@ function setupEventListeners() {
           parentCheckbox.checked = true;
           updateSourceChildState(parent, child);
           showToast('At least one source version must be selected', 'error');
-        }
-      });
-    }
-  });
-
-  // Note version checkboxes - parent/child relationships
-  // Parent checkboxes control whether child "include images" checkboxes are enabled
-  const noteParentChildPairs = [
-    { parent: 'export-note-base-checkbox', child: 'export-note-with-images-checkbox' }
-  ];
-
-  // Function to update child checkbox state based on parent
-  function updateNoteChildState(parentId, childId) {
-    const parent = document.getElementById(parentId);
-    const child = document.getElementById(childId);
-    if (parent && child) {
-      child.disabled = !parent.checked;
-      if (!parent.checked) {
-        child.checked = false;
-      }
-    }
-  }
-
-  // Initialize child states and add event listeners
-  noteParentChildPairs.forEach(({ parent, child }) => {
-    updateNoteChildState(parent, child);
-
-    const parentCheckbox = document.getElementById(parent);
-    if (parentCheckbox && !parentCheckbox.disabled) {
-      parentCheckbox.addEventListener('change', () => {
-        updateNoteChildState(parent, child);
-
-        // Ensure at least one parent version is selected
-        const baseChecked = document.getElementById('export-note-base-checkbox').checked;
-        const codeBlocksChecked = document.getElementById('export-note-code-blocks-checkbox').checked;
-        if (!baseChecked && !codeBlocksChecked) {
-          parentCheckbox.checked = true;
-          updateNoteChildState(parent, child);
-          showToast('At least one note version must be selected', 'error');
         }
       });
     }
@@ -732,7 +703,7 @@ async function openTab(tab, options) {
 // ---- The panel's views: Home (#home-view) or one tab ----
 // Home has no active tab, so openPanelTab() is '' there and everything keyed on the
 // open tab (the action bar, rescans, auto-refresh) leaves Home alone. Progress and
-// results sit outside the views, so a job's panels show in every view.
+// results sit outside the views and hide whichever is open (setDock).
 const PANEL_VIEW_KEY = 'nlme.panelView';
 let panelView = 'home';
 
@@ -751,11 +722,10 @@ function savePanelView(view) {
 
 // Where the keyboard goes: Back returns to the row it left, a row to its tab
 function focusView(view, leftView) {
-  const target = view === 'home'
-    ? document.querySelector(`.home-row[data-home-tab="${leftView}"]:not(:disabled)`)
-      || document.querySelector('.home-row:not(:disabled)')
-      || document.getElementById('rescan-btn')
-    : document.querySelector('.tab-btn.active');
+  const home = () => document.querySelector(`.home-row[data-home-tab="${leftView}"]:not(:disabled)`)
+    || document.querySelector('.home-row:not(:disabled)')
+    || document.getElementById('rescan-btn');
+  const target = dockMode ? dockFocusTarget() : view === 'home' ? home() : document.querySelector('.tab-btn.active');
   target?.focus({ preventScroll: true });
 }
 
@@ -1018,6 +988,7 @@ let lastPanelNotebookId = '';
 function resetChatPanel() {
   closeExportSheet({ switched: true }); // first: its Start would reach the new notebook
   releasePageLoad(); // the panel has caught up with the tab; the caller's settle takes over
+  resultsLeftNotebook();
   window._currentChatData = null;
   const chatResults = document.getElementById('chat-scan-results');
   if (chatResults) chatResults.innerHTML = '<p class="empty-message">Click "Load chat" to load your conversation history.</p>';
@@ -1258,6 +1229,7 @@ async function discardJobRecord(record) {
 // runs a refresh of its own: `complete`, the tab going back to the panel's notebook
 // (releasePageLoad), another tab, a notebook switch (resetChatPanel), or a stall.
 const PAGE_LOAD_HOLD_MS = 15000;
+const TAB_MOVING_MESSAGE = 'This tab is moving to another notebook. Wait for it to open, then try again.';
 let pageLoadHold = null;
 
 function holdForPageLoad() {
@@ -1306,7 +1278,7 @@ function notePageMove({ url, status }) {
 async function tabStillOnPanelNotebook() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!isNotebookUrl(tab?.url) || !NLME.tabLeftPanelNotebook(tab.url, lastPanelNotebookId)) return true;
-  showToast('This tab is moving to another notebook. Wait for it to open, then try again.', 'warning');
+  showToast(TAB_MOVING_MESSAGE, 'warning');
   return false;
 }
 
@@ -1841,7 +1813,37 @@ async function runExclusive(name, fn) {
   }
 }
 
-// The results panel's "Retry N failed": re-runs `exportFn` on the items that
+// false, and says so, when a row must not start: the tab has moved to another notebook,
+// or is loading one. Tab events can lag behind the tab, so this looks at the tab.
+async function rowMayStart() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!NLME.rowRefused({ url: tab?.url, panelNotebookId: lastPanelNotebookId, held: !!pageLoadHold })) return true;
+  showToast(TAB_MOVING_MESSAGE, 'warning');
+  return false;
+}
+
+// A row's download, on the default preset: no sheet. Checks inside the lock, where
+// the tab it reads is the one the job gets.
+function runRowExport(name, fn) {
+  return runExclusive(name, async () => {
+    if (await rowMayStart()) return withRunSettings(NLME.runOverrides(settings), fn);
+  });
+}
+
+// false, and says so, when the Retry of the results showing would run on another
+// notebook. The run's notebook comes from its export shell (dockRun): a Retry's
+// items and tab id belong to it, whatever the panel shows now.
+async function retryMayStart() {
+  if (!dockRun) return true;
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  let runTab = null;
+  try { runTab = await chrome.tabs.get(dockRun.tabId); } catch (_) { /* closed: the shell says so */ }
+  if (!NLME.retryRefused({ notebookId: dockRun.id, activeUrl: active?.url, runTabUrl: runTab?.url })) return true;
+  showToast('Open the notebook this export ran on to retry it', 'warning');
+  return false;
+}
+
+// The results' "Retry N failed": re-runs `exportFn` on the items that
 // failed, under the job lock (a busy lock only shows its toast; the panel
 // stays). null when nothing failed. It keeps the job's run settings.
 function retryFor(failedItems, jobName, exportFn) {

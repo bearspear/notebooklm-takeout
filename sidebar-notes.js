@@ -65,7 +65,7 @@ let _notesScanSeq = 0;
 // Single-note export from a row button: loose .md files, no ZIP
 async function handleNoteRowExport(note) {
   // JOB_BUSY: runExclusive has already shown the "still running" toast
-  await runExclusive('Note export', () => withRunSettings(NLME.runOverrides(settings), async () => {
+  await runRowExport('Note export', async () => {
     try {
       await exportSingleNote(note);
       showToast(`Exported "${note.title}"`, 'success');
@@ -73,7 +73,7 @@ async function handleNoteRowExport(note) {
       console.error('[NotebookLM Takeout] Note export failed:', error);
       showToast(`Failed to export ${note.title}: ${error.message || error}`, 'error');
     }
-  }));
+  });
 }
 
 // Render notes list with filter toolbar and checkboxes
@@ -254,7 +254,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
     },
     packageBatch: async (notes, info) => {
       packaged += notes.length;
-      shell.progress(`Creating ZIP ${info.batchIndex}/${info.totalBatches}...`, 1);
+      shell.progress(`Creating ZIP ${info.batchIndex}/${info.totalBatches}...`);
       // Every part gets an _audit.md for its own items (what was added since
       // the previous part); the last part (an errors-only ZIP too: the outcome
       // toast may point at it) adds the run-wide totals as a second section.
@@ -301,7 +301,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
       const batchStart = (batchIndex - 1) * perZip;
       const batchSize = Math.min(perZip, total - batchStart);
       shell.progress(`Batch ${batchIndex}/${totalBatches}: Processing ${done - batchStart + 1}/${batchSize}: ${item.title}`,
-        (done + 1) / total);
+        { done, total, item: item.title });
       console.log(`[NotebookLM Takeout] Processing note ${done + 1}/${total}:`, item.title, 'index:', item.index);
     }
   }).finally(endImageSession);

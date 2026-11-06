@@ -2696,13 +2696,14 @@ function fnSource(file, name) {
 
 // The run state and saved-settings functions of sidebar-core.js. fields: values of
 // the Settings panel, by element id. Anything else in `extra` is added to the sandbox.
-function panel({ settings = NLME.resetSettings(), stored = true, fields = {}, extra = {}, code = '' } = {}) {
+function panel({ settings = NLME.resetSettings(), stored = true, fields: given = {}, extra = {}, code = '' } = {}) {
+  const fields = { 'default-preset-select': 'custom', 'default-save-select': 'folder', 'custom-images-checkbox': true, ...given };
   const writes = [];
   const toasts = [];
   const sandbox = {
     NLME, console: { warn() {}, error() {}, log() {} }, Promise,
     showToast: text => toasts.push(text),
-    updateChatCitationInfo() {}, applyTheme() {},
+    applyTheme() {},
     retrySettingsLoad: async () => { throw new Error('a job must not reload settings'); },
     jobLock: { current: () => null },
     document: { getElementById: id => ({ checked: !!fields[id], value: fields[id] === undefined ? '' : fields[id] }) },
@@ -2717,7 +2718,7 @@ function panel({ settings = NLME.resetSettings(), stored = true, fields = {}, ex
     let currentRunOverrides = null;
     let runRestore = null;
     let runEdits = null;
-    ${['realSettings', 'withRunSettings', 'rememberRunSettings', 'writeSettings', 'saveSettings', 'retryFor'].map(n => fnSource('sidebar-core.js', n)).join('\n')}
+    ${['realSettings', 'withRunSettings', 'rememberRunSettings', 'writeSettings', 'saveSettings', 'paintExportDefaults', 'retryFor'].map(n => fnSource('sidebar-core.js', n)).join('\n')}
     ${code}
     this.current = () => settings;
     this.overrides = () => currentRunOverrides;
@@ -2750,8 +2751,8 @@ test('withRunSettings restores after a throw, sync or async', async () => {
 });
 
 test('a nested run keeps the saved settings of the outer one', async () => {
-  const { sandbox, writes } = panel({ fields: { 'citation-detail-select': 'quotes' } });
-  // customImages: no Settings field writes it, so only the restore can bring it back
+  const { sandbox, writes } = panel({ fields: { 'default-preset-select': 'archive' } });
+  // customImages: outside Custom no field writes it, so only the restore can bring it back
   await sandbox.withRunSettings({ citationDetail: 'titles', customImages: false }, async () => {
     await sandbox.withRunSettings({ obsidianNames: true }, async () => {
       assert.equal(sandbox.current().citationDetail, 'titles');
@@ -2851,14 +2852,71 @@ test('a theme change during a job goes by the real settings, not the job\'s', as
   assert.deepEqual(theme, ['dark']);
 });
 
-test('the chat citation line goes by the real settings, not the job\'s', async () => {
-  const line = { textContent: '' };
+test('Settings shows the real defaults during a job, not the job\'s', async () => {
+  const shown = {};
   const { sandbox } = panel({
-    code: fnSource('sidebar-core.js', 'updateChatCitationInfo'),
-    extra: { document: { getElementById: () => line } }
+    settings: { ...NLME.resetSettings(), exportPreset: 'custom', citationDetail: 'none' },
+    extra: { document: { getElementById: id => (shown[id] = shown[id] || {}) } }
   });
-  await sandbox.withRunSettings({ citationDetail: 'titles' }, async () => sandbox.updateChatCitationInfo());
-  assert.match(line.textContent, /^Citations: Full quotes/);
+  await sandbox.withRunSettings({ citationDetail: 'titles', obsidianNames: true }, async () => sandbox.paintExportDefaults());
+  assert.equal(shown['citation-detail-select'].value, 'none');
+  assert.equal(shown['obsidian-names-checkbox'].checked, false);
+  assert.equal(shown['default-preset-select'].value, 'custom');
+  assert.equal(shown['custom-defaults'].hidden, false);
+});
+
+test('Default preset and Default save are written, and Custom keeps its values under another preset', async () => {
+  const custom = { citationDetail: 'none', obsidianNames: true, customImages: false };
+  // The hidden rows hold something else: they must not be read
+  const fields = { 'default-preset-select': 'archive', 'default-save-select': 'zip', 'citation-detail-select': 'titles', 'obsidian-names-checkbox': false, 'custom-images-checkbox': true };
+  const { sandbox, writes } = panel({ settings: { ...NLME.resetSettings(), ...custom, exportPreset: 'custom' }, fields });
+  await sandbox.saveSettings();
+  assert.equal(writes[0].exportPreset, 'archive');
+  assert.equal(writes[0].takeoutZip, true);
+  for (const [key, value] of Object.entries(custom)) assert.equal(writes[0][key], value, key);
+});
+
+test('saving leaves the retired image-copy and ZIP values as stored, for a downgrade', async () => {
+  const old = { exportNoteWithImages: true, exportSourceWithImages: true, autoZip: true };
+  const { writes } = await (async () => {
+    const made = panel({ settings: { ...NLME.resetSettings(), ...old } });
+    await made.sandbox.saveSettings();
+    return made;
+  })();
+  for (const [key, value] of Object.entries(old)) assert.equal(writes[0][key], value, key);
+});
+
+test('a default that could not be stored is put back, in memory and on screen', async () => {
+  const shown = {};
+  const elements = id => (shown[id] = shown[id] || { value: { 'default-preset-select': 'ai', 'default-save-select': 'zip' }[id] ?? '', checked: false });
+  // Refused by storage
+  const refused = panel({
+    settings: { ...NLME.resetSettings(), exportPreset: 'archive' },
+    extra: { document: { getElementById: elements }, chrome: { storage: { local: { set: async () => { throw new Error('refused'); } } } } }
+  });
+  await refused.sandbox.saveSettings();
+  assert.equal(refused.sandbox.current().exportPreset, 'archive');
+  assert.equal(refused.sandbox.current().takeoutZip, undefined);
+  assert.equal(shown['default-preset-select'].value, 'archive');
+  assert.equal(shown['default-save-select'].value, 'folder');
+  // Blocked after a failed load
+  shown['default-preset-select'].value = 'ai';
+  const blocked = panel({
+    stored: false, settings: { ...NLME.resetSettings(), exportPreset: 'archive' },
+    extra: { document: { getElementById: elements }, retrySettingsLoad: async () => false }
+  });
+  await blocked.sandbox.saveSettings();
+  assert.equal(blocked.sandbox.current().exportPreset, 'archive');
+  assert.equal(shown['default-preset-select'].value, 'archive');
+  assert.deepEqual(blocked.writes, []);
+  // A load that came back has put the stored settings in place: nothing to undo
+  shown['default-preset-select'].value = 'ai';
+  const back = panel({
+    stored: false, code: 'this.setSettings = value => { settings = value; };',
+    extra: { document: { getElementById: elements }, retrySettingsLoad: async () => { back.sandbox.setSettings({ ...NLME.resetSettings(), exportPreset: 'custom' }); return true; } }
+  });
+  await back.sandbox.saveSettings();
+  assert.equal(back.sandbox.current().exportPreset, 'custom');
 });
 
 test('retryFor keeps the run options after the run ended', async () => {
@@ -3172,4 +3230,97 @@ test('startJobRecord stores the save choice beside the overrides, and an update 
   delete store[key];
   await sandbox.startJobRecord(shell, 'notes', 'Notes', { notes: ['a'] });
   assert.equal('zip' in store[key], false);
+});
+
+// ---- Calm progress (1.9.3) ----
+
+test('timeLeft waits for three items, then scales', () => {
+  assert.equal(NLME.timeLeft(2, 10, 20), null);
+  assert.equal(NLME.timeLeft(5, 10, 50), 50);
+  assert.equal(NLME.timeLeft(10, 10, 100), 0);
+});
+
+test('timeLeft has no answer without a usable count or clock', () => {
+  assert.equal(NLME.timeLeft(3, 0, 10), null);
+  assert.equal(NLME.timeLeft(3, 10, NaN), null);
+  assert.equal(NLME.timeLeft(12, 10, 100), 0);
+});
+
+test('progressFigures stays under the end until the job is over', () => {
+  assert.deepEqual(NLME.progressFigures(0, 40), { count: '0 of 40', percent: 0 });
+  assert.deepEqual(NLME.progressFigures(10, 40), { count: '10 of 40', percent: 25 });
+  assert.deepEqual(NLME.progressFigures(40, 40), { count: '39 of 40', percent: 99 });
+  assert.deepEqual(NLME.progressFigures(99, 40), { count: '39 of 40', percent: 99 });
+  assert.deepEqual(NLME.progressFigures(1, 1), { count: '0 of 1', percent: 99 });
+  assert.deepEqual(NLME.progressFigures(0, 0), { count: '', percent: 0 });
+  assert.deepEqual(NLME.progressFigures(0, undefined), { count: '', percent: 0 });
+});
+
+test('calmTimeLeft counts down and moves only part of the way to a new figure', () => {
+  assert.equal(NLME.calmTimeLeft(null, 100, 0), 100);
+  assert.equal(NLME.calmTimeLeft(100, null, 5), null);
+  assert.equal(NLME.calmTimeLeft(100, 95, 5), 95, 'on course: the plain countdown');
+  const rose = NLME.calmTimeLeft(100, 1000, 5);
+  assert.ok(rose > 95 && rose < 400, `a slow item does not throw the time back: ${rose}`);
+  const fell = NLME.calmTimeLeft(1000, 100, 5);
+  assert.ok(fell > 700 && fell < 995, `a fast run of items does not collapse it: ${fell}`);
+  assert.ok(NLME.calmTimeLeft(10, 0, 60) >= 0);
+});
+
+test('progressLeftLine never says 0 left', () => {
+  assert.equal(NLME.progressLeftLine(3, 10, null), '');
+  assert.equal(NLME.progressLeftLine(3, 10, 300), 'about 5 min left');
+  assert.equal(NLME.progressLeftLine(9, 10, 2), 'under 30 sec left');
+  assert.equal(NLME.progressLeftLine(9, 10, 0), 'under 30 sec left');
+  assert.equal(NLME.progressLeftLine(10, 10, 0), 'Finishing');
+  assert.equal(NLME.progressLeftLine(3, 10, 300, { finishing: true }), 'Finishing');
+  assert.equal(NLME.progressLeftLine(0, 0, null), '');
+});
+
+test('announceDelay holds a live region to one change in each period', () => {
+  assert.equal(NLME.announceDelay(null, 1000, 4000), 0);
+  assert.equal(NLME.announceDelay(1000, 5000, 4000), 0);
+  assert.equal(NLME.announceDelay(1000, 2000, 4000), 3000);
+});
+
+test('rowRefused turns a row away from a moved tab or a load in progress', () => {
+  const A = 'https://notebook.google.com/notebook/aaaa';
+  const B = 'https://notebook.google.com/notebook/bbbb';
+  assert.equal(NLME.rowRefused({ url: A, panelNotebookId: 'aaaa', held: false }), false);
+  assert.equal(NLME.rowRefused({ url: B, panelNotebookId: 'aaaa', held: false }), true);
+  assert.equal(NLME.rowRefused({ url: A, panelNotebookId: 'aaaa', held: true }), true);
+  assert.equal(NLME.rowRefused({ url: 'https://example.com/', panelNotebookId: 'aaaa', held: false }), false);
+});
+
+test('retryRefused compares the run with both the tab in front and its own tab', () => {
+  const A = 'https://notebook.google.com/notebook/aaaa';
+  const B = 'https://notebook.google.com/notebook/bbbb';
+  const X = 'https://example.com/';
+  assert.equal(NLME.retryRefused({ notebookId: 'aaaa', activeUrl: A, runTabUrl: A }), false);
+  assert.equal(NLME.retryRefused({ notebookId: 'aaaa', activeUrl: B, runTabUrl: A }), true, 'another notebook in front');
+  assert.equal(NLME.retryRefused({ notebookId: 'aaaa', activeUrl: X, runTabUrl: B }), true, 'its own tab moved');
+  assert.equal(NLME.retryRefused({ notebookId: 'aaaa', activeUrl: X, runTabUrl: A }), false, 'another site in front');
+  assert.equal(NLME.retryRefused({ notebookId: 'aaaa', activeUrl: A, runTabUrl: undefined }), false, 'closed tab: the shell says so');
+  assert.equal(NLME.retryRefused({ notebookId: '', activeUrl: B, runTabUrl: B }), false, 'no run on record');
+});
+
+test('combined outcomes carry the count for the results view', () => {
+  const ok = { name: 'Notes', message: 'm', level: 'success', saved: [], errors: [], exported: 3, selected: 4, failedItems: [{}] };
+  const c = NLME.combineRetryOutcomes({ steps: [ok], notRun: [{ name: 'Artifacts', failedItems: [{}, {}] }] });
+  assert.deepEqual(c.count, { done: 3, total: 6 });
+  const noSelected = NLME.combineRetryOutcomes({ steps: [{ name: 'Notes', level: 'success', exported: 2, failedItems: [{}] }] });
+  assert.deepEqual(noSelected.count, { done: 2, total: 3 });
+  const skipped = NLME.generatedExportOutcome({ steps: [ok], total: 4, skipped: [{ label: 'Quiz' }] });
+  assert.deepEqual(skipped.count, { done: 3, total: 5 });
+  assert.equal(skipped.level, 'warning');
+});
+
+test('a takeout count adds up its categories', () => {
+  assert.deepEqual(NLME.takeoutCount([{ exported: 3, selected: 4 }, { exported: 0, selected: 0 }, { selected: 2 }]), { done: 3, total: 6 });
+});
+
+test('resultsToast does not read as a success on a partial or failed run', () => {
+  assert.equal(NLME.resultsToast('success'), 'Export finished');
+  assert.notEqual(NLME.resultsToast('warning'), 'Export finished');
+  assert.notEqual(NLME.resultsToast('error'), 'Export finished');
 });

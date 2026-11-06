@@ -265,11 +265,13 @@ test('a citation popup is closed by mouseleave, not Escape, which does nothing t
 test('Full Takeout takes Cancel away before its final save, and gives it back', () => {
   const src = fs.readFileSync(path.join(ROOT, 'sidebar-takeout.js'), 'utf8');
   const finishing = src.indexOf('shell.finishing()');
-  assert.ok(finishing > 0 && finishing < src.indexOf("shell.progress('Saving images...', 1)"));
+  assert.ok(finishing > 0 && finishing < src.indexOf("shell.progress('Saving images...')"));
   const shell = src.slice(src.indexOf('async function withExportShell('), src.indexOf('// ---- Full Takeout (Milestone 3a)'));
   assert.match(shell, /finishing\(\) \{/);
   const cleanup = shell.slice(shell.indexOf('finally'));
   assert.match(cleanup, /cancelBtn\.disabled = false/);
+  assert.match(cleanup, /cancelBtn\.hidden = false/);
+  assert.match(shell.slice(shell.indexOf('finishing() {')), /cancelBtn\.hidden = true/);
 });
 
 test('artifact and takeout manifests count errors, not notices', () => {
@@ -364,7 +366,9 @@ function generatedChain() {
   const calls = [];
   const ctx = vmModule.createContext({ calls, console, showToast() {}, TAKEOUT_RETRY_STEPS: [] });
   vmModule.runInContext(`
-    let chainActive = false, chainCancelRequested = false;
+    let chainActive = false, chainCancelRequested = false, chainHolds = 0, chainProgress = null, holdStepResults = false, heldStepResults = null;
+    const hideProgressView = () => {};
+    const chainTabOnRunNotebook = async () => true;
     const ok = message => ({ result: { failedItems: [] }, message, level: 'success', saved: [], errors: [] });
     this.cancelAfterArtifacts = false;
     const downloadAllArtifacts = async (...args) => {
@@ -479,6 +483,42 @@ test('a refused settings write says so, undoes what asked to, and never rejects'
   assert.deepEqual(toasts, ['Could not save settings', 'Could not save settings']);
 });
 
+test('the retired Settings controls and the chat citation line are gone, with their readers', () => {
+  const pages = ['sidebar.html', 'styles.css', 'sidebar-core.js', 'sidebar-chat.js', 'sidebar-takeout.js', 'sidebar-results.js']
+    .map(file => fs.readFileSync(path.join(ROOT, file), 'utf8')).join('\n');
+  for (const gone of ['auto-zip-checkbox', 'export-note-with-images-checkbox', 'export-source-with-images-checkbox', 'chat-citation-info', 'updateChatCitationInfo', 'hideResults', 'results-dismiss']) {
+    assert.ok(!pages.includes(gone), gone);
+  }
+});
+
+test('Default preset and Default save reach settings through saveSettings only', () => {
+  const save = fnSource('sidebar-core.js', 'saveSettings');
+  assert.match(save, /settings\.exportPreset = document\.getElementById\('default-preset-select'\)\.value/);
+  assert.match(save, /settings\.takeoutZip = document\.getElementById\('default-save-select'\)\.value === 'zip'/);
+  assert.match(save, /await writeSettings\(\{ undo \}\)/);
+  assert.doesNotMatch(save, /autoZip|exportNoteWithImages|exportSourceWithImages/);
+  assert.doesNotMatch(fnSource('sidebar-core.js', 'applySettingsToUi'), /autoZip|exportNoteWithImages|exportSourceWithImages/);
+});
+
+test('Artifacts with no sheet choice take the default save', () => {
+  assert.match(fs.readFileSync(path.join(ROOT, 'sidebar-artifacts.js'), 'utf8'), /async function downloadAllArtifacts\(tabId, items, \{ updateRecord = false, zip = NLME\.takeoutZipChoice\(settings\) \} = \{\}\)/);
+});
+
+test('the progress view keeps its ids, and only its text is a live region', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8');
+  const view = html.slice(html.indexOf('id="download-progress"'), html.indexOf('id="results-panel"'));
+  for (const id of ['progress-fill', 'progress-text', 'progress-count', 'progress-left', 'cancel-download-btn']) assert.ok(view.includes(`id="${id}"`), id);
+  assert.equal([...view.matchAll(/aria-live/g)].length, 1);
+  assert.match(view, /id="progress-text"[^>]*aria-live="polite"/);
+  assert.match(view, /Keep this notebook tab visible\. Chrome slows hidden tabs\./);
+});
+
+test('every Retry goes through the one check of the run\'s notebook', () => {
+  const results = fs.readFileSync(path.join(ROOT, 'sidebar-results.js'), 'utf8');
+  assert.match(results, /if \(await retryMayStart\(\)\) await retry\.run\(\);/);
+  assert.equal([...results.matchAll(/retry\.run\(/g)].length, 1);
+});
+
 test('Full Takeout, Resume, Home and Generated all ask for the strict notes scan', () => {
   const takeout = fs.readFileSync(path.join(ROOT, 'sidebar-takeout.js'), 'utf8');
   assert.equal([...takeout.matchAll(/scanNotesData\(tabId, \{ strict: true \}\)/g)].length, 2);
@@ -555,9 +595,10 @@ test('every export reaches its job through the sheet or the run settings, under 
     assert.match(body, /runExclusive\([^]*withRunSettings\(overrides/, name);
   }
   // Row downloads have no sheet: the default preset, Custom's values included
-  assert.match(read('sidebar-notes.js'), /runExclusive\('Note export', \(\) => withRunSettings\(NLME\.runOverrides\(settings\)/);
-  assert.match(read('sidebar-sources.js'), /runExclusive\('Sources export', \(\) => withRunSettings\(NLME\.runOverrides\(settings\), \(\) => exportSources\(\[source\], \{ record: false \}\)\)\)/);
-  assert.match(read('sidebar-generated.js'), /runExclusive\('Generated download', \(\) => withRunSettings\(NLME\.runOverrides\(settings\), \(\) => handleStudioDownloadRow\(item, downloadBtn\)\)\)/);
+  assert.match(fnSource('sidebar-core.js', 'runRowExport'), /runExclusive\(name, async \(\) => \{\s+if \(await rowMayStart\(\)\) return withRunSettings\(NLME\.runOverrides\(settings\), fn\);/);
+  assert.match(read('sidebar-notes.js'), /runRowExport\('Note export', /);
+  assert.match(read('sidebar-sources.js'), /runRowExport\('Sources export', \(\) => exportSources\(\[source\], \{ record: false \}\)\)/);
+  assert.match(read('sidebar-generated.js'), /runRowExport\('Generated download', \(\) => handleStudioDownloadRow\(item, downloadBtn\)\)/);
   assert.doesNotMatch(read('sidebar-notes.js') + read('sidebar-sources.js') + read('sidebar-generated.js'), /presetOverrides/);
 });
 

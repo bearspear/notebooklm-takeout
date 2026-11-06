@@ -46,15 +46,15 @@
     return ICON_TO_TYPE[icon] || icon || 'Unknown';
   }
 
-  // Chat (the Chat tab and Full Takeout) follows the one Citation detail setting, the same
+  // Chat (the Chat tab and Full Takeout) follows the run's citationDetail, the same
   // one notes use: 'quotes' (default), 'titles' or 'none'. A missing or unknown value is 'quotes'.
   function chatCitationMode(settings) {
     const detail = settings && settings.citationDetail;
     return detail === 'titles' || detail === 'none' ? detail : 'quotes';
   }
 
-  // Where the export sheet's Save as starts: takeoutZip when it has been set (a boolean),
-  // else the "Always use ZIP" setting (autoZip).
+  // Where the export sheet's Save as starts: Settings' Default save (takeoutZip) when it
+  // has been set, else what an earlier version stored as "Always use ZIP" (autoZip).
   function takeoutZipChoice(settings) {
     if (settings && typeof settings.takeoutZip === 'boolean') return settings.takeoutZip;
     return !!(settings && settings.autoZip);
@@ -425,7 +425,7 @@
   }
 
   // Full Takeout's "Retry N failed" runs one export per category (Sources,
-  // Notes, Artifacts) and ends in ONE results panel. steps: each retried
+  // Notes, Artifacts) and ends in ONE outcome. steps: each retried
   // category's outcome { name, message, level, saved, errors, failedItems };
   // notRun: categories a cancel or a declined dialog kept from running
   // { name, failedItems } (their items still failed). Returns the panel's
@@ -450,9 +450,14 @@
       : `${verb} finished`;
     if (remainingCount > 0) message += ` \u2014 ${remainingCount} still failed`;
 
+    const done = steps.reduce((sum, s) => sum + (s.exported || 0), 0);
+    const ranTotal = steps.reduce((sum, s) => sum + (s.selected ?? (s.exported || 0) + (s.failedItems || []).length), 0);
+    const notRunTotal = notRun.reduce((sum, n) => sum + (n.failedItems || []).length, 0);
+
     return {
       message,
       level,
+      count: { done, total: ranTotal + notRunTotal },
       lines: steps.map(s => `${s.name}: ${s.message}`),
       saved: steps.flatMap(s => s.saved || []),
       errors: [...steps.flatMap(s => prefixExportErrors(s.name, s.errors)), ...extraErrors],
@@ -465,7 +470,7 @@
   // from the notebook, artifact not ready, scan failed / incomplete.
   const PANEL_ONLY_ERROR_TYPES = ['not_found', 'not_ready', 'scan_failed'];
 
-  // The results panel's error list: groups by error type in first-seen
+  // The results view's error list: groups by error type in first-seen
   // order, at most perGroup entries each; `more` entries are in errors.md.
   function groupErrorsForPanel(errors = [], { perGroup = 20 } = {}) {
     const groups = new Map();
@@ -1222,6 +1227,60 @@
     return `${line}, not counting ${unknown.length ? `${unknown.join(', ')} and ` : ''}${last}`;
   }
 
+  // Seconds left at the pace so far, null until three items have set a pace. A takeout's
+  // categories run at different paces: calmTimeLeft keeps that from showing.
+  function timeLeft(done, total, elapsedSeconds) {
+    if (!(total > 0) || done < 3 || !Number.isFinite(elapsedSeconds)) return null;
+    if (done >= total) return 0;
+    return (elapsedSeconds / done) * (total - done);
+  }
+
+  // The time to show next. shown: the last time shown; fresh: timeLeft now; waited:
+  // seconds since. The shown time counts down by itself and moves a quarter of the way
+  // to a fresh figure that disagrees, so one slow or fast item cannot throw it about.
+  function calmTimeLeft(shown, fresh, waited) {
+    if (fresh === null) return null;
+    if (shown === null) return fresh;
+    const expected = Math.max(0, shown - waited);
+    return expected + (fresh - expected) * 0.25;
+  }
+
+  // The line under the bar. Nothing until there is a time; with no items left the
+  // rest is the save, whose length is not known, so it never reads as "0 left".
+  function progressLeftLine(done, total, seconds, { finishing = false } = {}) {
+    if (finishing || (total > 0 && done >= total)) return 'Finishing';
+    return seconds === null ? '' : `${formatEstimate(seconds)} left`;
+  }
+
+  // "N of M" and the bar. Only the results say M of M: the last item is not the end,
+  // since the save comes after it.
+  function progressFigures(done, total) {
+    if (!(total > 0)) return { count: '', percent: 0 };
+    const shown = Math.min(Math.max(0, done), total - 1);
+    return { count: `${shown} of ${total}`, percent: Math.min(99, (Math.max(0, done) / total) * 100) };
+  }
+
+  // How long a change to a live region waits, so a screen reader gets one every
+  // minMs: 0 means now. lastAt: when the last one went out, null for never.
+  function announceDelay(lastAt, now, minMs) {
+    return lastAt === null ? 0 : Math.max(0, lastAt + minMs - now);
+  }
+
+  // A takeout's "N of M", from its categories
+  function takeoutCount(categories = []) {
+    return {
+      done: categories.reduce((sum, c) => sum + (c.exported || 0), 0),
+      total: categories.reduce((sum, c) => sum + (c.selected || 0), 0)
+    };
+  }
+
+  // The short toast that points at the results
+  function resultsToast(level) {
+    if (level === 'error') return 'Export failed: see the results';
+    if (level === 'warning') return 'Export did not finish cleanly: see the results';
+    return 'Export finished';
+  }
+
   // What Export everything counts, from Home's counts (null: not known) and the loaded
   // chat, if any. Generated's list holds the notes too, so its own items are the rest.
   function homeEstimateCounts(tabCounts, chatCount = null) {
@@ -1237,6 +1296,19 @@
   function tabLeftPanelNotebook(url, panelId) {
     const id = notebookIdFromUrl(url);
     return !!id && id !== panelId;
+  }
+
+  // A row's download must not start: the tab has moved on, or a page is loading in it
+  function rowRefused({ url, panelNotebookId, held }) {
+    return !!held || tabLeftPanelNotebook(url, panelNotebookId);
+  }
+
+  // A Retry must not start: another notebook is in front, or the run's own tab, which
+  // it would run on, shows one. Another site in front is fine, and a closed tab is the
+  // export shell's to report.
+  function retryRefused({ notebookId, activeUrl, runTabUrl }) {
+    if (!notebookId) return false;
+    return tabLeftPanelNotebook(activeUrl, notebookId) || tabLeftPanelNotebook(runTabUrl, notebookId);
   }
 
   // The export sheet's state when it opens: the default preset, Custom's remembered
@@ -1920,7 +1992,11 @@
   // someone may delete the notebook after reading it. They stay out of `remaining`.
   function generatedExportOutcome({ steps = [], notRun = [], total = 0, skipped = [] } = {}) {
     const combined = combineRetryOutcomes({ steps, notRun });
-    const outcome = { ...combined, message: generatedExportMessage({ steps, notRun, total, skipped }) };
+    const outcome = {
+      ...combined,
+      message: generatedExportMessage({ steps, notRun, total, skipped }),
+      count: { done: combined.count.done, total: total + skipped.length }
+    };
     if (skipped.length) {
       outcome.lines = [...combined.lines, `Can't be exported (${skipped.length}): ${skipped.map(item => item.label).join(', ')}`];
       if (outcome.level === 'success' || outcome.level === 'info') outcome.level = 'warning';
@@ -2782,8 +2858,9 @@ footer { margin-top: 3rem; }
   });
 
   // The ⚙️ settings as shipped. The side panel starts from these and
-  // "Reset to defaults" returns to them. takeoutZip is the export sheet's
-  // starting Save as, unset unless an earlier version stored it. exportPreset:
+  // "Reset to defaults" returns to them. takeoutZip is Settings' Default save,
+  // the export sheet's starting Save as; while unset, a stored autoZip decides
+  // (takeoutZipChoice), and no control writes autoZip any more. exportPreset:
   // 'archive', 'ai' or 'custom'; customImages is Custom's image copies, whose
   // citations and names are citationDetail and obsidianNames.
   const DEFAULT_SETTINGS = Object.freeze({
@@ -2935,6 +3012,15 @@ footer { margin-top: 3rem; }
     estimateLine,
     homeEstimateCounts,
     tabLeftPanelNotebook,
+    rowRefused,
+    retryRefused,
+    timeLeft,
+    calmTimeLeft,
+    progressLeftLine,
+    progressFigures,
+    announceDelay,
+    takeoutCount,
+    resultsToast,
     sheetChoice,
     sheetOverrides,
     isAllowedDownloadUrl,

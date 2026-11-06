@@ -80,8 +80,6 @@
 
     <div class="tab-content" data-tab-content="chat">
       <section id="chat-section" class="section">
-        <p id="chat-citation-info" class="info-text chat-citation-info">Citations: Full quotes · change in Settings</p>
-
         <div class="chat-load">
           <p class="info-text">Takeout scrolls your chat panel to the top to load every message. Your place in the chat will move.</p>
           <button id="scan-chat-btn" class="btn btn-secondary">
@@ -116,17 +114,17 @@
       </button>
     </div>
 
+    <!-- One view in the list's place while an export runs, and its results after: see setDock -->
     <div id="download-progress" class="download-progress" style="display: none;">
-      <div class="progress-header">
-        <h3>Download Progress</h3>
-        <button id="cancel-download-btn" class="btn-icon-small" title="Cancel" aria-label="Cancel download">
-          <span data-icon="close"></span>
-        </button>
-      </div>
+      <h3 id="progress-title" class="progress-title">Export</h3>
+      <p id="progress-count" class="progress-count"></p>
       <div class="progress-bar">
         <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
       </div>
-      <p id="progress-text" class="progress-text">Starting...</p>
+      <p id="progress-left" class="progress-left"></p>
+      <p id="progress-text" class="progress-text" aria-live="polite">Starting...</p>
+      <p class="progress-note">Keep this notebook tab visible. Chrome slows hidden tabs.</p>
+      <button id="cancel-download-btn" class="btn btn-secondary" type="button" title="Stop the export. What is done so far is saved.">Cancel</button>
     </div>
 
     <div id="results-panel" class="results-panel" style="display: none;" role="status" aria-live="polite"></div>
@@ -141,6 +139,58 @@
       </button>
     </div>
     <div class="settings-content">
+      <!-- What the export sheet starts on, and what row downloads use -->
+      <div class="setting-section">
+        <h3 class="setting-section-title">Export Defaults</h3>
+
+        <div class="setting-group">
+          <label for="default-preset-select">Default preset</label>
+          <select id="default-preset-select" class="number-input">
+            <option value="archive">Archive</option>
+            <option value="ai">AI-ready</option>
+            <option value="custom">Custom</option>
+          </select>
+          <p class="setting-help">Where the export sheet starts, and what the download button on a row uses. Archive: full quotes and image copies. AI-ready: source titles only, no image copies.</p>
+        </div>
+
+        <div id="custom-defaults" hidden>
+          <div class="setting-group">
+            <label for="citation-detail-select">Citations</label>
+            <select id="citation-detail-select" class="number-input">
+              <option value="quotes">Full quotes (slower)</option>
+              <option value="titles">Source titles only (fast)</option>
+              <option value="none">No citations (plain text, fast)</option>
+            </select>
+            <p class="setting-help">For notes and chat. "Source titles only" skips reading each citation's popup: every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. Both are much faster for large exports.</p>
+          </div>
+
+          <div class="setting-group">
+            <label class="toggle-setting">
+              <input type="checkbox" id="custom-images-checkbox">
+              <span>Image copies</span>
+            </label>
+            <p class="setting-help">Also writes a -with-images version of each note, source and chat that has images (embedded base64).</p>
+          </div>
+
+          <div class="setting-group">
+            <label class="toggle-setting">
+              <input type="checkbox" id="obsidian-names-checkbox">
+              <span>Obsidian-friendly file names</span>
+            </label>
+            <p class="setting-help">Removes characters that break Obsidian links ([ ] # ^ | \ : * ? " &lt; &gt;) from note, source and artifact file names, and names single downloads "note - Title" and "mind-map - Title" instead of "[NOTE]_Title".</p>
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <label for="default-save-select">Default save</label>
+          <select id="default-save-select" class="number-input">
+            <option value="folder">Folder</option>
+            <option value="zip">ZIP</option>
+          </select>
+          <p class="setting-help">Where the sheet's Save as starts, for Export everything and the artifacts in a Generated export. You can change it for each export.</p>
+        </div>
+      </div>
+
       <!-- General Settings -->
       <div class="setting-section">
         <h3 class="setting-section-title">General</h3>
@@ -187,13 +237,6 @@
         <h3 class="setting-section-title">Export Format</h3>
 
         <div class="setting-group">
-          <label>
-            <input type="checkbox" id="auto-zip-checkbox">
-            <span>Always use ZIP for batch downloads</span>
-          </label>
-        </div>
-
-        <div class="setting-group">
           <label for="slides-format-select">Slide deck format</label>
           <select id="slides-format-select" class="number-input">
             <option value="pdf">PDF</option>
@@ -208,16 +251,12 @@
 
         <div class="setting-group">
           <label style="font-weight: 500; display: block; margin-bottom: 8px;">Export Versions (select which file types to create)</label>
-          <p class="setting-help" style="margin-top: 0; margin-bottom: 12px;">Choose which combinations of source files to export. At least one version must be selected.</p>
+          <p class="setting-help" style="margin-top: 0; margin-bottom: 12px;">Choose which combinations of source files to export. At least one version must be selected. Image copies of the base version come from the preset.</p>
 
           <div class="version-option">
             <label class="version-parent">
               <input type="checkbox" id="export-source-base-checkbox" checked disabled>
               <span>Base version (text-only, no metadata)</span>
-            </label>
-            <label class="version-child">
-              <input type="checkbox" id="export-source-with-images-checkbox">
-              <span>Include images (embedded base64)</span>
             </label>
           </div>
 
@@ -245,30 +284,12 @@
         <h3 class="setting-section-title">Note Options</h3>
 
         <div class="setting-group">
-          <label for="citation-detail-select">Citation detail (notes and chat)</label>
-          <select id="citation-detail-select" class="number-input">
-            <option value="quotes">Full quotes (slower)</option>
-            <option value="titles">Source titles only (fast)</option>
-            <option value="none">No citations (plain text, fast)</option>
-          </select>
-          <p class="setting-help">Applies to notes and to the chat export (the Chat tab and Export everything). "Source titles only" skips reading each citation's popup: every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. Both are much faster for large exports.</p>
-        </div>
-
-        <div class="setting-group">
           <label for="citation-style-select">Citation style</label>
           <select id="citation-style-select" class="number-input">
             <option value="links">Links (default)</option>
             <option value="footnotes">Footnotes (Obsidian, Typora, …)</option>
           </select>
           <p class="setting-help">Links writes each [n] as a link to its source, with the quote in the Sources section (works in any viewer). Footnotes writes [^n] markers with a footnote definition per source, which Obsidian, Typora and other Markdown apps show as real footnotes. Applies to notes and chat with "Full quotes" or "Source titles only"; the "code blocks" version keeps links. In combined files the footnotes are numbered per note (1-1, 2-1, …). Opt-in: please check how your Markdown app shows them.</p>
-        </div>
-
-        <div class="setting-group">
-          <label class="toggle-setting">
-            <input type="checkbox" id="obsidian-names-checkbox">
-            <span>Obsidian-friendly file names</span>
-          </label>
-          <p class="setting-help">Removes characters that break Obsidian links ([ ] # ^ | \ : * ? " &lt; &gt;) from note, source and artifact file names, and names single downloads "note - Title" and "mind-map - Title" instead of "[NOTE]_Title". Off by default; the usual file names are unchanged.</p>
         </div>
 
         <div class="setting-group">
@@ -282,16 +303,12 @@
 
         <div class="setting-group">
           <label style="font-weight: 500; display: block; margin-bottom: 8px;">Export Versions (select which file types to create)</label>
-          <p class="setting-help" style="margin-top: 0; margin-bottom: 12px;">Choose which combinations of note files to export. At least one version must be selected.</p>
+          <p class="setting-help" style="margin-top: 0; margin-bottom: 12px;">Choose which combinations of note files to export. At least one version must be selected. Image copies come from the preset.</p>
 
           <div class="version-option">
             <label class="version-parent">
               <input type="checkbox" id="export-note-base-checkbox" checked disabled>
               <span>Base version (markdown citations)</span>
-            </label>
-            <label class="version-child">
-              <input type="checkbox" id="export-note-with-images-checkbox">
-              <span>Include images (embedded base64)</span>
             </label>
           </div>
 
@@ -327,7 +344,7 @@
       <div class="setting-section">
         <div class="setting-group">
           <button id="reset-settings-btn" class="btn btn-secondary btn-small" type="button">Reset to defaults</button>
-          <p class="setting-help">Puts every setting on this panel back to how it shipped. The citation cache, Export everything's own ZIP choice and saved exports to resume are kept.</p>
+          <p class="setting-help">Puts every setting on this panel except Default save back to how it shipped. Default save, the citation cache and saved exports to resume are kept.</p>
         </div>
       </div>
     </div>

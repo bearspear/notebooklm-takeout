@@ -88,7 +88,6 @@ async function scanChatPage() {
  * Render chat scan results summary
  */
 function renderChatSummary(chatData) {
-  updateChatCitationInfo();
   const chatResults = document.getElementById('chat-scan-results');
 
   if (chatData.messagePairs.length === 0) {
@@ -156,7 +155,7 @@ function openChatExportSheet(chatData) {
 
 // Chat export (Milestone 3a): the shared export shell around runChatJob.
 // One package: a single Markdown file, or a ZIP from buildChatFiles.
-// Citations follow the Citation detail setting (NLME.chatCitationMode).
+// Citations follow the run's citationDetail (NLME.chatCitationMode).
 async function exportChat(chatData) {
   startExportTiming();
   exportTimer.merge(lastChatScanTiming);
@@ -216,7 +215,7 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
     extractOne: (pair, ctx) => extractChatPair(shell, pair, ctx, { citationMode, total: messagePairs.length, variantSettings }),
     packageBatch: async (messages, info) => {
       console.log(`[NotebookLM Takeout] Processing complete: ${messages.length} messages`);
-      shell.progress('Creating export...', 1);
+      shell.progress('Creating export...');
       auditDoc = buildChatAuditDoc(chatData, messages, citationMode);
       const { files, single } = buildChatFiles(messages, {
         meta: shell.meta,
@@ -238,7 +237,7 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
     },
     isCancelled: shell.isCancelled,
     onProgress: ({ done, total }) => {
-      shell.progress(`Processing message ${done + 1}/${total}`, (done + 1) / total);
+      shell.progress(`Processing message ${done + 1}/${total}`, { done, total });
       console.log(`[NotebookLM Takeout] Message ${done + 1}: Processing...`);
     }
   }).finally(endImageSession);
@@ -377,7 +376,7 @@ async function readChatPair(shell, pair, ctx, { citationMode = 'quotes', total, 
     // Extract full citation details ('quotes' mode)
     if (citationMode === 'quotes' && messageSources.size > 0) {
       console.log(`[NotebookLM Takeout] Message ${n}: Extracting full citation details for ${messageSources.size} sources...`);
-      shell.progress(`Message ${n}/${total}: Extracting ${messageSources.size} quotes (this may take a minute)...`, n / total);
+      shell.progress(`Message ${n}/${total}: Extracting ${messageSources.size} quotes (this may take a minute)...`, { done: n - 1, total });
 
       try {
         // Get source indices to extract

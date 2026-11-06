@@ -776,9 +776,9 @@ const ARTIFACT_ZIP_MAX_BYTES = 500 * 1024 * 1024;
 // <Notebook>-artifacts-<ts>.zip, or -partN.zip parts past the size cap; ZIP off: Downloads/<Notebook>/, one item
 // per call. Either way: <type folder>/<stem>.<ext>, _index.md, errors.md,
 // manifest.json. Returns withExportShell's outcome, like exportNotesAsMarkdown.
-// zip: the export sheet's Save as (default the "Always use ZIP" setting, for a Resume of
-// a record without one); its job record and its Retry keep this run's choice.
-async function downloadAllArtifacts(tabId, items, { updateRecord = false, zip = !!settings.autoZip } = {}) {
+// zip: the export sheet's Save as (default NLME.takeoutZipChoice, for a Resume of a record
+// without one); its job record and its Retry keep this run's choice.
+async function downloadAllArtifacts(tabId, items, { updateRecord = false, zip = NLME.takeoutZipChoice(settings) } = {}) {
   await preflightWarn(tabId, 'artifacts');
   startExportTiming();
 
@@ -887,7 +887,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
     packageBatch: async (results, info) => {
       if (zipMode) {
         const files = results.flatMap(r => r.files);
-        shell.progress(info.multi ? `Creating ZIP part ${info.batchIndex}...` : 'Creating ZIP...', 1);
+        shell.progress(info.multi ? `Creating ZIP part ${info.batchIndex}...` : 'Creating ZIP...');
         // Each part gets its own root files, listing that part's files only
         files.push(...artifactsRootFiles(files, results.map(r => r.item), {
           meta: shell.meta, info, part: info.batchIndex, totalParts: info.multi ? null : 1
@@ -903,7 +903,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
       if (tracker) tracker.commit();
       if (info.isLast) {
         if (pendingSizes.length) {
-          shell.progress('Reading file sizes...', 1);
+          shell.progress('Reading file sizes...');
           // A cancel must not hold the job for the sizes (up to 120 s): they stay null
           let sizesDone = false;
           await Promise.race([
@@ -922,7 +922,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
     },
     isCancelled: shell.isCancelled,
     onProgress: ({ done, total, item }) => {
-      shell.progress(`Downloading ${done + 1}/${total}: ${item.label}`, (done + 1) / total);
+      shell.progress(`Downloading ${done + 1}/${total}: ${item.label}`, { done, total, item: item.label });
     }
   });
 
