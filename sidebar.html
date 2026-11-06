@@ -194,6 +194,15 @@
         <h3 class="setting-section-title">General</h3>
 
         <div class="setting-group">
+          <label for="theme-select">Theme</label>
+          <select id="theme-select" class="number-input">
+            <option value="auto">Auto (match the browser)</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+
+        <div class="setting-group">
           <label>
             <input type="checkbox" id="show-notifications-checkbox" checked>
             <span>Show download notifications</span>
@@ -308,15 +317,6 @@
             <option value="footnotes">Footnotes (Obsidian, Typora, …)</option>
           </select>
           <p class="setting-help">Links writes each [n] as a link to its source, with the quote in the Sources section (works in any viewer). Footnotes writes [^n] markers with a footnote definition per source, which Obsidian, Typora and other Markdown apps show as real footnotes. Applies to notes and chat with "Full quotes" or "Source titles only"; the "code blocks" version keeps links. In combined files the footnotes are numbered per note (1-1, 2-1, …). Opt-in: please check how your Markdown app shows them.</p>
-        </div>
-
-        <div class="setting-group">
-          <label for="theme-select">Theme</label>
-          <select id="theme-select" class="number-input">
-            <option value="auto">Auto (match the browser)</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
         </div>
 
         <div class="setting-group">
