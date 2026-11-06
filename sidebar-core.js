@@ -1055,6 +1055,7 @@ function setTabCount(tab, count) {
   const el = document.querySelector(`.tab-btn[data-tab="${tab}"] .tab-count`);
   if (!el) return;
   el.textContent = count == null ? '' : Number(count).toLocaleString('en-US');
+  el.title = el.textContent; // a narrow panel can clip the count
   el.hidden = count == null;
 }
 
