@@ -458,7 +458,8 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
 
 // Home's Export everything: the sheet, then the run on what it chose. Each count is
 // what Home knows; chat is known only once loaded.
-function openExportEverythingSheet() {
+async function openExportEverythingSheet() {
+  if (!await tabStillOnPanelNotebook()) return;
   openExportSheet({
     title: 'Export everything',
     counts: NLME.homeEstimateCounts(_tabCounts, window._currentChatData?.messagePairs?.length),

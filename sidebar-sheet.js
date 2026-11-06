@@ -47,7 +47,8 @@ function syncExportSheet() {
 }
 
 /**
- * Open the sheet, unless a job runs or no notebook is open.
+ * Open the sheet, unless a job runs, no notebook is open, or Settings or Health Check
+ * shows.
  *
  * @param {object} options
  * @param {string} options.title
@@ -66,6 +67,11 @@ function openExportSheet({ title, counts, offerSaveAs = false, start }) {
   }
   if (!homeNotebookOpen) {
     showToast('Please open NotebookLM first', 'error');
+    return false;
+  }
+  // They are not modal: a keyboard reaches the buttons behind them
+  if (['settings-panel', 'health-check-panel'].some(id => getComputedStyle(document.getElementById(id)).display !== 'none')) {
+    showToast('Close this panel to export', 'warning');
     return false;
   }
   _sheet = { opener: document.activeElement, counts, start, choice: NLME.sheetChoice(realSettings()), startLostFocus: false };
@@ -100,15 +106,15 @@ function closeExportSheet({ switched = false } = {}) {
   returnSheetFocus(switched ? null : opener);
 }
 
-// Close first, then the job. No await before `start`, so the lock is taken in this
-// click: a second click finds the sheet closed.
+// Close first, then the job: a second click finds the sheet closed. The one wait before
+// `start` is the last look at the tab, which tab events can lag behind.
 async function startExportSheet() {
   if (!_sheet || sheetBlockedReason()) return;
   const { opener, choice, start } = _sheet;
   const run = NLME.sheetOverrides(choice, realSettings());
   closeExportSheet();
   try {
-    await start(run);
+    if (await tabStillOnPanelNotebook()) await start(run);
   } catch (error) {
     console.error('[NotebookLM Takeout] Export failed:', error);
     showToast('Export failed. Please try again.', 'error');

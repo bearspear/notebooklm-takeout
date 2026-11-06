@@ -1231,6 +1231,14 @@
     return { sources: known(sources), notes: known(notes), generated: bothKnown ? Math.max(0, studio - notes) : null, chat: known(chatCount) };
   }
 
+  // True when a tab's URL names another notebook than the one the panel shows. A URL
+  // with no notebook id is not "another notebook": other checks cover being off a
+  // notebook. panelId '' means the panel holds none, so any notebook differs.
+  function tabLeftPanelNotebook(url, panelId) {
+    const id = notebookIdFromUrl(url);
+    return !!id && id !== panelId;
+  }
+
   // The export sheet's state when it opens: the default preset, Custom's remembered
   // values and the default save.
   function sheetChoice(settings = {}) {
@@ -2926,6 +2934,7 @@ footer { margin-top: 3rem; }
     formatEstimate,
     estimateLine,
     homeEstimateCounts,
+    tabLeftPanelNotebook,
     sheetChoice,
     sheetOverrides,
     isAllowedDownloadUrl,

@@ -1017,6 +1017,7 @@ let lastPanelNotebookId = '';
 // not reach the new notebook: they belong to the notebook that was scanned.
 function resetChatPanel() {
   closeExportSheet({ switched: true }); // first: its Start would reach the new notebook
+  releasePageLoad(); // the panel has caught up with the tab; the caller's settle takes over
   window._currentChatData = null;
   const chatResults = document.getElementById('chat-scan-results');
   if (chatResults) chatResults.innerHTML = '<p class="empty-message">Click "Load chat" to load your conversation history.</p>';
@@ -1251,11 +1252,70 @@ async function discardJobRecord(record) {
   }
 }
 
+// A full page load reports its URL at once and `complete` much later, or never. Until
+// then the panel still shows the old notebook, so its Export everything and list
+// action stay off: the hold is one more settle wait, plus the action. Every way out
+// runs a refresh of its own: `complete`, the tab going back to the panel's notebook
+// (releasePageLoad), another tab, a notebook switch (resetChatPanel), or a stall.
+const PAGE_LOAD_HOLD_MS = 15000;
+let pageLoadHold = null;
+
+function holdForPageLoad() {
+  releasePageLoad();
+  const hold = { timer: setTimeout(() => endStalledPageLoad(hold), PAGE_LOAD_HOLD_MS) };
+  pageLoadHold = hold;
+  settleWaits++;
+  syncHomeControls();
+  applyAction();
+}
+
+function releasePageLoad() {
+  if (!pageLoadHold) return;
+  clearTimeout(pageLoadHold.timer);
+  pageLoadHold = null;
+  settleWaits--;
+  syncHomeControls();
+  applyAction();
+}
+
+// No `complete` came: go by the URL, so the panel names what the tab shows
+async function endStalledPageLoad(hold) {
+  if (pageLoadHold !== hold) return;
+  releasePageLoad();
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await refreshForTab(tab, { settleMs: PAGE_SETTLE_MS });
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Refresh after a stalled load failed:', error);
+  }
+}
+
+// The active tab reported a new URL. Synchronous: the sheet must not outlive this event
+function notePageMove({ url, status }) {
+  if (!isNotebookUrl(url) || !NLME.tabLeftPanelNotebook(url, lastPanelNotebookId)) {
+    releasePageLoad();
+    return;
+  }
+  closeExportSheet({ switched: true });
+  if (status === 'loading') holdForPageLoad();
+}
+
+// false, and says so, when the active tab shows another notebook than the panel: a
+// start now would read one notebook under the other's name. For the moment an export
+// begins, whatever the tab events have told the panel so far.
+async function tabStillOnPanelNotebook() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!isNotebookUrl(tab?.url) || !NLME.tabLeftPanelNotebook(tab.url, lastPanelNotebookId)) return true;
+  showToast('This tab is moving to another notebook. Wait for it to open, then try again.', 'warning');
+  return false;
+}
+
 async function handleTabChange(activeInfo) {
   // onActivated fires for every window; this panel belongs to one
   let active = null;
   try { [active] = await chrome.tabs.query({ active: true, currentWindow: true }); } catch (_) { /* judged below */ }
   if (active?.id !== activeInfo.tabId) return;
+  releasePageLoad(); // the load it waited for is in a tab left behind
   currentTabId = activeInfo.tabId;
   await checkStatus();
   let tab = null;
@@ -1267,17 +1327,24 @@ async function handleTabUpdate(tabId, changeInfo, tab) {
   // Only update if this is the active tab
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (activeTab && activeTab.id === tabId) {
+    if (changeInfo.url) notePageMove(changeInfo);
     if (changeInfo.status === 'complete') {
       await checkStatus();
       _homeZeroConfirmed.clear(); // an empty list read while loading proves nothing
       // A new notebook's page reports complete before it has drawn its lists
       const id = isNotebookUrl(tab?.url) ? NLME.notebookIdFromUrl(tab.url) : '';
-      await refreshForTab(tab, id && id !== lastPanelNotebookId ? { settleMs: PAGE_SETTLE_MS } : {});
+      const moved = !!id && id !== lastPanelNotebookId;
+      if (!moved) releasePageLoad(); // before the refresh, which a hold would turn away
+      const refreshed = refreshForTab(tab, moved ? { settleMs: PAGE_SETTLE_MS } : {});
+      releasePageLoad(); // a switch took the hold over; a job puts the switch off
+      await refreshed;
     } else if (changeInfo.url && !changeInfo.status) {
       // In-app navigation (history API): a URL change with no status. A full
       // load reports {status: 'loading', url} first and is handled by 'complete'.
       await checkStatus();
       await refreshForTab(tab, { settleMs: PAGE_SETTLE_MS, sameNotebookScan: false });
+    } else if (changeInfo.url) {
+      await checkStatus();
     }
   }
 }
@@ -1413,7 +1480,7 @@ function applyAction() {
   bar.hidden = !_action;
   if (!_action) return;
   btn.innerHTML = `${icon('download')} ${NLME.escapeHtml(_action.label)}`;
-  btn.disabled = !!_action.disabled || !!jobLock.current();
+  btn.disabled = !!_action.disabled || !!jobLock.current() || !!pageLoadHold;
   btn.style.opacity = btn.disabled ? '0.5' : '1';
 }
 

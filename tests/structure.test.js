@@ -561,6 +561,27 @@ test('every export reaches its job through the sheet or the run settings, under 
   assert.doesNotMatch(read('sidebar-notes.js') + read('sidebar-sources.js') + read('sidebar-generated.js'), /presetOverrides/);
 });
 
+test('an export rechecks the tab at Start and at the Export everything click', () => {
+  const read = file => fs.readFileSync(path.join(ROOT, file), 'utf8');
+  assert.match(read('sidebar-sheet.js'), /if \(await tabStillOnPanelNotebook\(\)\) await start\(run\);/);
+  const takeout = read('sidebar-takeout.js');
+  const at = takeout.indexOf('async function openExportEverythingSheet(');
+  assert.ok(at >= 0);
+  assert.ok(takeout.indexOf('tabStillOnPanelNotebook', at) < takeout.indexOf('openExportSheet({', at));
+});
+
+test('a full page load holds the export buttons, and every way out lets go', () => {
+  const core = fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8');
+  const fn = name => {
+    const start = core.search(new RegExp(`^(async )?function ${name}\\(`, 'm'));
+    return core.slice(start, core.indexOf('\n}\n', start));
+  };
+  assert.match(fn('handleTabUpdate'), /if \(changeInfo\.url\) notePageMove\(changeInfo\);/);
+  assert.match(fn('applyAction'), /!!pageLoadHold/);
+  for (const name of ['handleTabChange', 'resetChatPanel', 'handleTabUpdate', 'notePageMove', 'endStalledPageLoad']) assert.match(fn(name), /releasePageLoad\(\)/, name);
+  assert.match(fn('holdForPageLoad'), /setTimeout\(\(\) => endStalledPageLoad\(hold\), PAGE_LOAD_HOLD_MS\)/);
+});
+
 test('a notebook switch closes the sheet, and Settings and Health Check do too', () => {
   const core = fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8');
   const switched = core.slice(core.indexOf('function resetChatPanel('), core.indexOf('\n}\n', core.indexOf('function resetChatPanel(')));

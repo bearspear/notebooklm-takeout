@@ -3097,6 +3097,16 @@ test('homeEstimateCounts: Generated counts what is not a note, and chat only onc
   assert.deepEqual(NLME.homeEstimateCounts(undefined), { sources: null, notes: null, generated: null, chat: null });
 });
 
+test('tabLeftPanelNotebook: only another notebook counts', () => {
+  const url = id => `https://notebooklm.google.com/notebook/${id}?authuser=1`;
+  assert.equal(NLME.tabLeftPanelNotebook(url('bbb'), 'aaa'), true);
+  assert.equal(NLME.tabLeftPanelNotebook(url('aaa'), 'aaa'), false);
+  assert.equal(NLME.tabLeftPanelNotebook(url('aaa'), ''), true, 'a panel that holds none');
+  for (const other of ['https://notebooklm.google.com/', 'https://example.com/', 'chrome://newtab/', '', undefined, null]) {
+    assert.equal(NLME.tabLeftPanelNotebook(other, 'aaa'), false, String(other));
+  }
+});
+
 test('a job record keeps the save choice of its run, and an old one has none', () => {
   const base = { id: 'j', kind: 'takeout', label: 'L', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1 };
   assert.equal(NLME.jobRecordZip(NLME.newJobRecord({ ...base, zip: true })), true);

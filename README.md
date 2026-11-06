@@ -185,6 +185,8 @@ The sheet shows the estimated time for what you chose; a number it does not know
 ("not counting chat"). Export everything, and Generated with artifacts selected, also offer
 **Save as**, a folder or a ZIP. Sources, notes and chat always go to ZIPs (or a single file).
 What you choose applies to this export and to its Retry and Resume. It does not change your defaults.
+On a Retry or Resume, Save as covers the artifacts only. Either one writes new files, as an ordinary
+export of those items: it never joins the folder of the export it continues.
 Press Escape or click outside the sheet to close it.
 
 ### Export everything
