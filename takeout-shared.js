@@ -1127,11 +1127,82 @@
     return variants;
   }
 
-  // Settings for a Full Takeout's notes, sources and chat: a takeout always
-  // writes the with-images versions (for items that have images), whatever
-  // the user ticked for tab exports. The input is not changed.
-  function takeoutVariantSettings(settings = {}) {
-    return { ...settings, exportNoteWithImages: true, exportSourceWithImages: true };
+  // What a preset sets for one export. custom: the Custom preset's remembered
+  // { citationDetail, obsidianNames, images }. An unknown preset is Archive.
+  function presetOverrides(preset, custom = {}) {
+    const fixed = (citationDetail, images) => ({ citationDetail, obsidianNames: false, exportNoteWithImages: images, exportSourceWithImages: images });
+    if (preset === 'ai') return fixed('titles', false);
+    if (preset !== 'custom') return fixed('quotes', true);
+    const images = custom.images !== false;
+    return {
+      citationDetail: custom.citationDetail === undefined ? 'quotes' : custom.citationDetail,
+      obsidianNames: !!custom.obsidianNames,
+      exportNoteWithImages: images,
+      exportSourceWithImages: images
+    };
+  }
+
+  // The preset for raw stored settings that have none (from before 1.9.3).
+  // Archive forces quotes and plain names, so anyone who changed either goes to
+  // Custom, whose remembered values are those same stored settings.
+  function migratePreset(stored) {
+    const { citationDetail, obsidianNames } = stored || {};
+    return obsidianNames || (citationDetail !== undefined && citationDetail !== 'quotes') ? 'custom' : 'archive';
+  }
+
+  // The overrides of `settings.exportPreset`. The one way from settings to a
+  // run's overrides.
+  function runOverrides(settings = {}) {
+    return presetOverrides(settings.exportPreset, {
+      citationDetail: settings.citationDetail,
+      obsidianNames: settings.obsidianNames,
+      images: settings.customImages
+    });
+  }
+
+  // run: `settings` with the overrides on top, for one job. persistable(current):
+  // `current` with the overridden keys back at their saved values, so a run value
+  // never reaches storage. The input is not changed.
+  function applyRunSettings(settings = {}, overrides = {}) {
+    const saved = { ...settings };
+    const persistable = current => {
+      const real = { ...current };
+      for (const key of Object.keys(overrides)) {
+        if (key in saved) real[key] = saved[key];
+        else delete real[key];
+      }
+      return real;
+    };
+    return { run: { ...settings, ...overrides }, persistable };
+  }
+
+  // Seconds per item, from one Full Takeout of 552 items in about 45 minutes. A
+  // cached run is faster: citations read before are not hovered again.
+  const ESTIMATE_SECONDS = {
+    notes: { quotes: 7, titles: 0.3, none: 0.1 },
+    chat: { quotes: 5, titles: 0.2, none: 0.1 },
+    sources: 2,
+    generated: 4
+  };
+
+  // An export's expected length. counts: { notes, chat, sources, generated }; a count
+  // missing or unknown is 0. A citation detail other than titles or none reads quotes.
+  function estimateSeconds(counts, citationDetail) {
+    const detail = citationDetail === 'titles' || citationDetail === 'none' ? citationDetail : 'quotes';
+    const count = name => {
+      const n = counts && counts[name];
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    };
+    return count('notes') * ESTIMATE_SECONDS.notes[detail]
+      + count('chat') * ESTIMATE_SECONDS.chat[detail]
+      + count('sources') * ESTIMATE_SECONDS.sources
+      + count('generated') * ESTIMATE_SECONDS.generated;
+  }
+
+  // 'under 30 sec' or 'about N min'. A time that is not a positive number reads short.
+  function formatEstimate(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 30) return 'under 30 sec';
+    return `about ${Math.max(1, Math.round(seconds / 60))} min`;
   }
 
   // A code fence the quote cannot close early: longer than its longest
@@ -1521,7 +1592,8 @@
     return `nlme.job.${notebookId}`;
   }
 
-  function newJobRecord({ id, kind, label, notebookId, keysByCategory, now }) {
+  // overrides: the run's (withRunSettings), for a Resume; none outside a run.
+  function newJobRecord({ id, kind, label, notebookId, keysByCategory, now, overrides = null }) {
     const remaining = {};
     const failed = {};
     for (const [category, keys] of Object.entries(keysByCategory || {})) {
@@ -1530,7 +1602,7 @@
     }
     // total: how many keys the job started with (the banner's "stopped at N of total")
     const total = Object.values(remaining).reduce((sum, keys) => sum + keys.length, 0);
-    return { id, kind, label, notebookId, startedAt: now, updatedAt: now, total, remaining, failed };
+    return { id, kind, label, notebookId, startedAt: now, updatedAt: now, total, remaining, failed, ...(overrides ? { overrides } : {}) };
   }
 
   // A new record with `key` done: removed from remaining, and from failed unless
@@ -1586,6 +1658,15 @@
     return !!record && typeof record === 'object' && !!notebookId && record.notebookId === notebookId
       && typeof record.id === 'string' && arrays(record.remaining) && arrays(record.failed)
       && jobRemainingCount(record) > 0;
+  }
+
+  // The overrides a Resume runs on: what the person chose when the job started, not
+  // today's default. A record from before 1.9.3 has none and runs on today's settings;
+  // a takeout's still runs through the preset, so it keeps its image copies.
+  function jobRecordOverrides(record, settings) {
+    const held = record && record.overrides;
+    if (held && typeof held === 'object' && !Array.isArray(held)) return held;
+    return record && record.kind === 'takeout' ? runOverrides(settings) : {};
   }
 
   // matchResumeItems that will not call a key gone on thin evidence. A partial
@@ -2642,7 +2723,9 @@ footer { margin-top: 3rem; }
 
   // The ⚙️ settings as shipped. The side panel starts from these and
   // "Reset to defaults" returns to them. takeoutZip is Full Takeout's own ZIP
-  // tick (on its tab, not in ⚙️): unset until the user ticks it.
+  // tick (on its tab, not in ⚙️): unset until the user ticks it. exportPreset:
+  // 'archive', 'ai' or 'custom'; customImages is Custom's image copies, whose
+  // citations and names are citationDetail and obsidianNames.
   const DEFAULT_SETTINGS = Object.freeze({
     autoZip: false,
     takeoutZip: undefined,
@@ -2663,7 +2746,9 @@ footer { margin-top: 3rem; }
     reuseCitations: true,
     citationStyle: 'links',
     obsidianNames: false,
-    theme: 'auto'
+    theme: 'auto',
+    exportPreset: 'archive',
+    customImages: true
   });
 
   // A fresh, editable copy of the defaults. Keeps only the Full Takeout ZIP
@@ -2719,6 +2804,7 @@ footer { margin-top: 3rem; }
     jobRecordFinished,
     jobRecordMode,
     jobRecordUsable,
+    jobRecordOverrides,
     planResume,
     resumeBannerLabel,
     resumeBannerView,
@@ -2779,7 +2865,12 @@ footer { margin-top: 3rem; }
     toBlockquote,
     noteVariants,
     sourceVariants,
-    takeoutVariantSettings,
+    presetOverrides,
+    migratePreset,
+    runOverrides,
+    applyRunSettings,
+    estimateSeconds,
+    formatEstimate,
     isAllowedDownloadUrl,
     isAllowedImageUrl,
     imageFetchUrl,

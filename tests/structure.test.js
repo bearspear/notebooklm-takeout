@@ -462,7 +462,7 @@ test('a refused settings write says so, undoes what asked to, and never rejects'
   const toasts = [];
   let undone = 0;
   const sandbox = {
-    settingsStored: true, settings: {}, console: { warn() {} }, showToast: text => toasts.push(text),
+    settingsStored: true, realSettings: () => ({}), console: { warn() {} }, showToast: text => toasts.push(text),
     chrome: { storage: { local: { set: async () => { throw new Error('refused'); } } } }
   };
   vm.createContext(sandbox);

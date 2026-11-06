@@ -616,6 +616,9 @@ function takeoutRootFiles({ meta, summary, errors, partial, viewerHtml }) {
  * ordinary tab export of those items (own ZIPs or folders) on the tab the takeout
  * ran on; it does not rewrite the takeout or its index. It marks its items on the
  * takeout's job record (updateRecord) without replacing it.
+ *
+ * It reads `settings` directly and wraps nothing itself: the caller runs it through
+ * withRunSettings, which is what turns the image copies on (NLME.runOverrides).
  */
 async function runFullTakeout() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -635,8 +638,6 @@ async function runFullTakeout() {
   startExportTiming();
   const zipMode = takeoutZipEnabled();
   const citationMode = NLME.chatCitationMode(settings);
-  // A takeout always includes the with-images versions, whatever the tab exports tick
-  const variantSettings = NLME.takeoutVariantSettings(settings);
 
   await withExportShell({ label: 'takeout', healthType: 'notes', overlayMessage: 'Preparing Full Takeout...', tabId: tab.id }, async shell => {
     const tabId = shell.tab.id;
@@ -655,7 +656,7 @@ async function runFullTakeout() {
           return sources;
         },
         // itemDir '': the category folder is already sources/ (notes/), no second one inside it
-        run: (catShell, items, target) => runSourcesJob(catShell, items, { ...target, variantSettings, itemDir: '' })
+        run: (catShell, items, target) => runSourcesJob(catShell, items, { ...target, itemDir: '' })
       },
       {
         name: 'Notes', folder: 'notes',
@@ -664,7 +665,7 @@ async function runFullTakeout() {
           stampJobKeys('notes', notes);
           return notes;
         },
-        run: (catShell, items, target) => runNotesJob(catShell, items, { ...target, variantSettings, itemDir: '' })
+        run: (catShell, items, target) => runNotesJob(catShell, items, { ...target, itemDir: '' })
       },
       {
         name: 'Chat', folder: 'chat',
@@ -678,7 +679,7 @@ async function runFullTakeout() {
         // Messages that could not be read are not "none in notebook": the
         // job still runs and writes them to errors.md
         isEmpty: chatData => NLME.chatScanIsEmpty(chatData),
-        run: (catShell, chatData, target) => runChatJob(catShell, chatData, { ...target, citationMode, forceZip: true, variantSettings })
+        run: (catShell, chatData, target) => runChatJob(catShell, chatData, { ...target, citationMode, forceZip: true })
       },
       {
         name: 'Artifacts', folder: 'artifacts',
@@ -999,9 +1000,10 @@ async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TA
 function takeoutRetry(failed, tabId, restore) {
   const count = TAKEOUT_RETRY_STEPS.reduce((sum, step) => sum + (failed[step.name] || []).length, 0);
   if (count === 0) return null;
+  const rerun = rememberRunSettings();
   return {
     count,
-    run: () => runExclusive('Retry failed', async () => {
+    run: () => runExclusive('Retry failed', () => rerun(async () => {
       const { steps, notRun } = await runChain(() => runRetryChain(failed, tabId, 'Retry'));
       if (steps.length === 0) {
         restore(); // the first step never ran: keep the panel and its Retry
@@ -1015,7 +1017,7 @@ function takeoutRetry(failed, tabId, restore) {
         saved: combined.saved,
         errors: combined.errors
       }, combined.remaining, tabId);
-    })
+    }))
   };
 }
 
@@ -1074,7 +1076,7 @@ async function clearMissingFromRecord(record, missingByCategory) {
  * writes back into the original takeout's files. One combined results panel.
  */
 function resumeJob(record) {
-  return runExclusive('Resume', () => runChain(async () => {
+  return runExclusive('Resume', () => withRunSettings(NLME.jobRecordOverrides(record, settings), () => runChain(async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab || !isNotebookUrl(tab.url) || NLME.notebookIdFromUrl(tab.url) !== record.notebookId) {
       showToast('Open the notebook this export was running on to resume it', 'warning');
@@ -1180,5 +1182,5 @@ function resumeJob(record) {
       saved: combined.saved,
       errors: combined.errors
     }, combined.remaining, tabId);
-  }));
+  })));
 }

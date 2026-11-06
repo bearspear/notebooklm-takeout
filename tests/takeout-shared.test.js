@@ -822,23 +822,6 @@ test('uniqueStems without taken is unchanged', () => {
   assert.deepEqual(NLME.uniqueStems(['A']), ['A']);
 });
 
-test('takeoutVariantSettings turns on image versions and keeps the rest', () => {
-  const s = { exportNoteWithImages: false, exportSourceWithImages: false, exportSourcePlusMetaWithImages: false, exportNoteCodeBlocks: true };
-  const t = NLME.takeoutVariantSettings(s);
-  assert.equal(t.exportNoteWithImages, true);
-  assert.equal(t.exportSourceWithImages, true);
-  assert.equal(t.exportSourcePlusMetaWithImages, false);
-  assert.equal(t.exportNoteCodeBlocks, true);
-  assert.equal(s.exportNoteWithImages, false); // input not mutated
-});
-
-test('takeoutVariantSettings makes the variant sets include the image versions', () => {
-  const t = NLME.takeoutVariantSettings({});
-  assert.deepEqual(NLME.noteVariants(t, { hasImages: true }).map(v => v.suffix), ['', '-with-images']);
-  assert.deepEqual(NLME.sourceVariants(t, { hasImages: true }).map(v => v.suffix), ['', '-with-images']);
-  assert.deepEqual(NLME.noteVariants(t, { hasImages: false }).map(v => v.suffix), ['']);
-});
-
 test('uniqueStems keeps reserved names free for package files', () => {
   assert.deepEqual(NLME.uniqueStems(['errors', 'Errors', 'Combined Notes'], [], ['errors', 'combined-notes']),
     ['errors-2', 'Errors-3', 'Combined-Notes-2']);
@@ -1998,6 +1981,8 @@ test('DEFAULT_SETTINGS pins the shipped defaults and cannot be changed', () => {
   assert.equal(d.reuseCitations, true);
   assert.equal(d.citationStyle, 'links');
   assert.equal(d.obsidianNames, false);
+  assert.equal(d.exportPreset, 'archive');
+  assert.equal(d.customImages, true);
   assert.ok('takeoutZip' in d);
   assert.equal(d.takeoutZip, undefined);
 });
@@ -2580,4 +2565,405 @@ test('loadWithRetry: tries once more, and says whether a load succeeded', async 
   calls = 0;
   assert.equal(await NLME.loadWithRetry(async () => { calls++; throw new Error('down'); }, { sleep, waitMs: 500 }), false);
   assert.equal(calls, 2);
+});
+
+// ---- Presets, run settings and the estimate ----
+
+test('presets', () => {
+  assert.deepEqual(NLME.presetOverrides('archive'), { citationDetail: 'quotes', obsidianNames: false, exportNoteWithImages: true, exportSourceWithImages: true });
+  assert.deepEqual(NLME.presetOverrides('ai'), { citationDetail: 'titles', obsidianNames: false, exportNoteWithImages: false, exportSourceWithImages: false });
+  assert.deepEqual(NLME.presetOverrides('custom', { citationDetail: 'none', obsidianNames: true, images: false }),
+    { citationDetail: 'none', obsidianNames: true, exportNoteWithImages: false, exportSourceWithImages: false });
+});
+
+test('old settings keep their meaning', () => {
+  assert.equal(NLME.migratePreset({}), 'archive');
+  assert.equal(NLME.migratePreset({ citationDetail: 'quotes' }), 'archive');
+  assert.equal(NLME.migratePreset({ citationDetail: 'titles' }), 'custom');
+  assert.equal(NLME.migratePreset({ obsidianNames: true }), 'custom');
+});
+
+test('migratePreset: only a non-default citation detail or Obsidian names leave Archive', () => {
+  assert.equal(NLME.migratePreset({ citationDetail: 'none' }), 'custom');
+  assert.equal(NLME.migratePreset({ citationDetail: 'quotes', obsidianNames: false, exportNoteWithImages: false }), 'archive');
+  assert.equal(NLME.migratePreset(undefined), 'archive');
+});
+
+test('run overrides never reach saved settings', () => {
+  const saved = { citationDetail: 'quotes', refreshInterval: 10 };
+  const { run, persistable } = NLME.applyRunSettings(saved, { citationDetail: 'titles' });
+  assert.equal(run.citationDetail, 'titles');
+  assert.deepEqual(persistable({ ...run, refreshInterval: 30 }), { citationDetail: 'quotes', refreshInterval: 30 });
+});
+
+test('applyRunSettings leaves its input alone and drops a key the saved settings never had', () => {
+  const saved = { refreshInterval: 10 };
+  const { run, persistable } = NLME.applyRunSettings(saved, { exportNoteWithImages: true });
+  assert.equal(saved.exportNoteWithImages, undefined);
+  assert.equal(run.exportNoteWithImages, true);
+  assert.deepEqual(persistable(run), { refreshInterval: 10 });
+});
+
+test('estimate', () => {
+  const counts = { notes: 171, chat: 193, sources: 142, generated: 46 };
+  assert.equal(NLME.formatEstimate(NLME.estimateSeconds(counts, 'quotes')), 'about 44 min');
+  assert.equal(NLME.formatEstimate(20), 'under 30 sec');
+  assert.equal(NLME.formatEstimate(60), 'about 1 min');
+});
+
+test('estimateSeconds uses the rate of the citation detail', () => {
+  const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-9, `${a} is not ${b}`);
+  close(NLME.estimateSeconds({ notes: 10, chat: 10 }, 'titles'), 10 * 0.3 + 10 * 0.2);
+  close(NLME.estimateSeconds({ notes: 10, chat: 10 }, 'none'), 10 * 0.1 + 10 * 0.1);
+  close(NLME.estimateSeconds({ sources: 10, generated: 10 }, 'none'), 10 * 2 + 10 * 4);
+  close(NLME.estimateSeconds({ notes: 1, chat: 1 }, 'something-new'), 7 + 5);
+  close(NLME.estimateSeconds({ notes: 1, chat: 1 }), 7 + 5);
+});
+
+test('estimateSeconds counts an unknown or missing count as 0', () => {
+  assert.equal(NLME.estimateSeconds({}, 'quotes'), 0);
+  assert.equal(NLME.estimateSeconds(undefined, 'quotes'), 0);
+  assert.equal(NLME.estimateSeconds({ notes: null, chat: undefined, sources: NaN, generated: -4 }, 'quotes'), 0);
+  assert.equal(NLME.estimateSeconds({ notes: 'many', sources: 1 }, 'quotes'), 2);
+});
+
+test('formatEstimate never says a negative or NaN time', () => {
+  for (const s of [NaN, undefined, null, -5, Infinity, -Infinity]) assert.equal(NLME.formatEstimate(s), 'under 30 sec');
+  assert.equal(NLME.formatEstimate(29), 'under 30 sec');
+  assert.equal(NLME.formatEstimate(30), 'about 1 min');
+  assert.equal(NLME.formatEstimate(2630), 'about 44 min');
+});
+
+test('runOverrides follows the preset, with the stored values as Custom', () => {
+  const stored = { citationDetail: 'none', obsidianNames: true, customImages: false };
+  assert.deepEqual(NLME.runOverrides({ ...stored, exportPreset: 'archive' }), NLME.presetOverrides('archive'));
+  assert.deepEqual(NLME.runOverrides({ ...stored, exportPreset: 'ai' }), NLME.presetOverrides('ai'));
+  assert.deepEqual(NLME.runOverrides({ ...stored, exportPreset: 'custom' }),
+    { citationDetail: 'none', obsidianNames: true, exportNoteWithImages: false, exportSourceWithImages: false });
+  assert.deepEqual(NLME.runOverrides(NLME.DEFAULT_SETTINGS), NLME.presetOverrides('archive'));
+});
+
+test('a migrated titles user gets the Full Takeout of today: their citations, image copies on', () => {
+  const stored = { citationDetail: 'titles' };
+  const settings = { ...NLME.DEFAULT_SETTINGS, ...stored, exportPreset: NLME.migratePreset(stored) };
+  assert.deepEqual(NLME.runOverrides(settings),
+    { citationDetail: 'titles', obsidianNames: false, exportNoteWithImages: true, exportSourceWithImages: true });
+});
+
+test('a job record round-trips its overrides through storage', () => {
+  const overrides = NLME.presetOverrides('ai');
+  const record = NLME.newJobRecord({ id: 'j', kind: 'takeout', label: 'L', notebookId: 'nb', keysByCategory: { notes: ['a', 'b'] }, now: 1, overrides });
+  const stored = JSON.parse(JSON.stringify(NLME.markJobItems(record, 'notes', ['a'], { now: 2 })));
+  assert.deepEqual(stored.overrides, overrides);
+  assert.equal(NLME.jobRecordUsable(stored, 'nb'), true);
+  assert.deepEqual(NLME.jobRecordOverrides(stored, { exportPreset: 'archive' }), overrides);
+});
+
+test('a record of a job that had no overrides holds none', () => {
+  const record = NLME.newJobRecord({ id: 'j', kind: 'notes', label: 'L', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1 });
+  assert.equal('overrides' in record, false);
+});
+
+test('an old record stays usable and resumes on the settings of today, a takeout with its image copies', () => {
+  const old = NLME.newJobRecord({ id: 'j', kind: 'notes', label: 'L', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1 });
+  assert.equal(NLME.jobRecordUsable(old, 'nb'), true);
+  assert.deepEqual(NLME.jobRecordOverrides(old, NLME.DEFAULT_SETTINGS), {});
+  const takeout = { ...old, kind: 'takeout' };
+  assert.equal(NLME.jobRecordUsable(takeout, 'nb'), true);
+  assert.deepEqual(NLME.jobRecordOverrides(takeout, NLME.DEFAULT_SETTINGS), NLME.presetOverrides('archive'));
+  const titles = { ...NLME.DEFAULT_SETTINGS, citationDetail: 'titles', exportPreset: 'custom' };
+  assert.deepEqual(NLME.jobRecordOverrides(takeout, titles).citationDetail, 'titles');
+  assert.equal(NLME.jobRecordOverrides(takeout, titles).exportNoteWithImages, true);
+});
+
+test('a record holding something else as overrides counts as an old one', () => {
+  const old = { kind: 'notes' };
+  for (const overrides of [null, 'titles', ['titles'], 3]) assert.deepEqual(NLME.jobRecordOverrides({ ...old, overrides }, NLME.DEFAULT_SETTINGS), {});
+});
+
+// The panel's own code, in a sandbox: withRunSettings and everything that goes through it
+const vm = require('node:vm');
+const fs = require('node:fs');
+const path = require('node:path');
+
+function fnSource(file, name) {
+  const src = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+  const start = src.search(new RegExp(`^(async )?function ${name}\\(`, 'm'));
+  assert.ok(start >= 0, `${name} not found in ${file}`);
+  return src.slice(start, src.indexOf('\n}\n', start) + 3);
+}
+
+// The run state and saved-settings functions of sidebar-core.js. fields: values of
+// the Settings panel, by element id. Anything else in `extra` is added to the sandbox.
+function panel({ settings = NLME.resetSettings(), stored = true, fields = {}, extra = {}, code = '' } = {}) {
+  const writes = [];
+  const toasts = [];
+  const sandbox = {
+    NLME, console: { warn() {}, error() {}, log() {} }, Promise,
+    showToast: text => toasts.push(text),
+    updateChatCitationInfo() {}, applyTheme() {},
+    retrySettingsLoad: async () => { throw new Error('a job must not reload settings'); },
+    document: { getElementById: id => ({ checked: !!fields[id], value: fields[id] === undefined ? '' : fields[id] }) },
+    chrome: { storage: { local: { set: async value => { writes.push(JSON.parse(JSON.stringify(value.settings))); } } } },
+    ...extra
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(`
+    let settings = ${JSON.stringify(settings)};
+    let settingsStored = ${stored};
+    const SETTINGS_UNREAD_MESSAGE = 'unread';
+    let currentRunOverrides = null;
+    let runRestore = null;
+    let runEdits = null;
+    ${['realSettings', 'withRunSettings', 'rememberRunSettings', 'writeSettings', 'saveSettings', 'retryFor'].map(n => fnSource('sidebar-core.js', n)).join('\n')}
+    ${code}
+    this.current = () => settings;
+    this.overrides = () => currentRunOverrides;
+  `, sandbox);
+  return { sandbox, writes, toasts };
+}
+
+const titlesRun = { citationDetail: 'titles', exportNoteWithImages: false };
+
+test('withRunSettings swaps the settings for the whole job, async work included', async () => {
+  const { sandbox } = panel();
+  assert.equal(sandbox.overrides(), null);
+  const seen = await sandbox.withRunSettings(titlesRun, async () => {
+    const before = sandbox.current().citationDetail;
+    await new Promise(resolve => setTimeout(resolve, 1));
+    return [before, sandbox.current().citationDetail, { ...sandbox.overrides() }];
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(seen)), ['titles', 'titles', titlesRun]);
+  assert.equal(sandbox.current().citationDetail, 'quotes');
+  assert.equal(sandbox.overrides(), null);
+});
+
+test('withRunSettings restores after a throw, sync or async', async () => {
+  const { sandbox } = panel();
+  await assert.rejects(sandbox.withRunSettings(titlesRun, async () => { throw new Error('boom'); }), /boom/);
+  assert.equal(sandbox.current().citationDetail, 'quotes');
+  await assert.rejects(sandbox.withRunSettings(titlesRun, () => { throw new Error('bang'); }), /bang/);
+  assert.equal(sandbox.current().citationDetail, 'quotes');
+  assert.equal(sandbox.overrides(), null);
+});
+
+test('a nested run keeps the saved settings of the outer one', async () => {
+  const { sandbox, writes } = panel({ fields: { 'citation-detail-select': 'quotes' } });
+  await sandbox.withRunSettings({ citationDetail: 'titles' }, async () => {
+    await sandbox.withRunSettings({ obsidianNames: true }, async () => {
+      assert.equal(sandbox.current().citationDetail, 'titles');
+      assert.equal(sandbox.current().obsidianNames, true);
+      assert.deepEqual({ ...sandbox.overrides() }, { citationDetail: 'titles', obsidianNames: true });
+      await sandbox.saveSettings();
+      assert.equal(writes.at(-1).citationDetail, 'quotes');
+      assert.equal(writes.at(-1).obsidianNames, false);
+    });
+    await assert.rejects(sandbox.withRunSettings({ citationDetail: 'none' }, async () => { throw new Error('inner'); }), /inner/);
+    assert.equal(sandbox.current().citationDetail, 'titles');
+    assert.equal(sandbox.current().obsidianNames, false);
+    assert.deepEqual({ ...sandbox.overrides() }, { citationDetail: 'titles' });
+  });
+  assert.equal(sandbox.current().citationDetail, 'quotes');
+  assert.equal(sandbox.overrides(), null);
+});
+
+test('a save during a run stores the real settings, not the run values', async () => {
+  const { sandbox, writes } = panel({ settings: { ...NLME.resetSettings(), exportNoteWithImages: false }, fields: { 'citation-detail-select': 'quotes' } });
+  await sandbox.withRunSettings(NLME.presetOverrides('archive'), async () => {
+    await sandbox.saveSettings();
+    assert.equal(sandbox.current().exportNoteWithImages, true);
+  });
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].exportNoteWithImages, false);
+  assert.equal(writes[0].exportSourceWithImages, false);
+});
+
+test('a setting changed during a job is written at once and takes effect after the job', async () => {
+  const fields = { 'citation-detail-select': 'none', 'clean-ocr-artifacts-checkbox': false, 'refresh-interval-input': '30' };
+  const { sandbox, writes } = panel({ fields });
+  await sandbox.withRunSettings({ citationDetail: 'titles' }, async () => {
+    await sandbox.saveSettings();
+    // The job keeps its own: an overridden setting and a plain one
+    assert.equal(sandbox.current().citationDetail, 'titles');
+    assert.equal(sandbox.current().cleanOCRArtifacts, true);
+    assert.equal(sandbox.current().refreshInterval, 10);
+    assert.equal(writes[0].citationDetail, 'none');
+    assert.equal(writes[0].cleanOCRArtifacts, false);
+    assert.equal(writes[0].refreshInterval, 30);
+  });
+  assert.equal(sandbox.current().citationDetail, 'none');
+  assert.equal(sandbox.current().cleanOCRArtifacts, false);
+  assert.equal(sandbox.current().refreshInterval, 30);
+});
+
+test('a change to the value the job runs on still reaches storage', async () => {
+  const { sandbox, writes } = panel({ fields: { 'citation-detail-select': 'titles' } });
+  await sandbox.withRunSettings({ citationDetail: 'titles' }, () => sandbox.saveSettings());
+  assert.equal(writes[0].citationDetail, 'titles');
+  assert.equal(sandbox.current().citationDetail, 'titles');
+});
+
+test('the failed-load write block holds during a run, and no load runs under the job', async () => {
+  const { sandbox, writes, toasts } = panel({ stored: false, fields: { 'citation-detail-select': 'none' } });
+  await sandbox.withRunSettings({ citationDetail: 'titles' }, async () => {
+    await sandbox.saveSettings();
+    assert.equal(sandbox.current().citationDetail, 'titles');
+  });
+  assert.deepEqual(writes, []);
+  assert.deepEqual(toasts, ['unread']);
+});
+
+test('retryFor keeps the run options after the run ended', async () => {
+  const seen = [];
+  const { sandbox } = panel({ extra: { runExclusive: (name, fn) => fn() } });
+  const exportFn = async () => seen.push(sandbox.current().citationDetail);
+  const retry = await sandbox.withRunSettings({ citationDetail: 'titles' }, async () => sandbox.retryFor([1], 'Job', exportFn));
+  assert.equal(sandbox.current().citationDetail, 'quotes');
+  await retry.run();
+  assert.deepEqual(seen, ['titles']);
+  assert.equal(sandbox.current().citationDetail, 'quotes');
+  assert.equal(sandbox.overrides(), null);
+});
+
+test('retryFor outside a run runs on the settings of the moment', async () => {
+  const seen = [];
+  const { sandbox } = panel({ extra: { runExclusive: (name, fn) => fn() } });
+  await sandbox.retryFor([1], 'Job', async () => seen.push(sandbox.overrides())).run();
+  assert.deepEqual(seen, [null]);
+});
+
+test('a Retry refused by a busy lock changes nothing', async () => {
+  const { sandbox } = panel({ extra: { runExclusive: async () => 'busy' } });
+  const retry = await sandbox.withRunSettings({ citationDetail: 'titles' }, async () => sandbox.retryFor([1], 'Job', async () => {}));
+  assert.equal(await retry.run(), 'busy');
+  assert.equal(sandbox.current().citationDetail, 'quotes');
+});
+
+const TAKEOUT_RETRY = `
+  const TAKEOUT_RETRY_STEPS = [{ name: 'Notes' }];
+  const runChain = fn => fn();
+  const runRetryChain = async () => { this.seen = [settings.citationDetail, settings.exportNoteWithImages, currentRunOverrides && { ...currentRunOverrides }]; return { steps: [{}], notRun: [] }; };
+  const showTakeoutResults = (panel, failed, tabId) => { this.shown = takeoutRetry(failed, tabId, () => {}); };
+  ${fnSource('sidebar-takeout.js', 'takeoutRetry')}
+`;
+
+test('the takeout Retry keeps the run options, and so does the Retry after it', async () => {
+  const { sandbox } = panel({ code: TAKEOUT_RETRY, extra: {
+    runExclusive: (name, fn) => fn(),
+    NLME: { ...NLME, combineRetryOutcomes: () => ({ remaining: { Notes: ['b'] } }) }
+  } });
+  const overrides = NLME.presetOverrides('archive');
+  const retry = await sandbox.withRunSettings(overrides, async () => sandbox.takeoutRetry({ Notes: ['a'] }, 1, () => {}));
+  await retry.run();
+  assert.equal(sandbox.seen[0], 'quotes');
+  assert.equal(sandbox.seen[1], true);
+  assert.deepEqual({ ...sandbox.seen[2] }, overrides);
+  assert.equal(sandbox.current().exportNoteWithImages, false);
+  sandbox.seen = null;
+  await sandbox.shown.run(); // built inside the Retry
+  assert.equal(sandbox.seen[1], true);
+  assert.equal(sandbox.current().exportNoteWithImages, false);
+});
+
+test('a Generated Retry outside a run stays on Settings', async () => {
+  const { sandbox } = panel({ code: TAKEOUT_RETRY, extra: {
+    runExclusive: (name, fn) => fn(),
+    NLME: { ...NLME, combineRetryOutcomes: () => ({ remaining: {} }) }
+  } });
+  await sandbox.takeoutRetry({ Notes: ['a'] }, 1, () => {}).run();
+  assert.equal(sandbox.seen[1], false);
+  assert.equal(sandbox.seen[2], null);
+});
+
+// resumeJob up to its first await: the record, then the settings the chain runs on
+function resumeRun(settings) {
+  return panel({ settings, code: `
+    const runChain = fn => fn();
+    const isNotebookUrl = () => true;
+    ${fnSource('sidebar-takeout.js', 'resumeJob')}
+  `, extra: {
+    runExclusive: (name, fn) => fn(),
+    chrome: { tabs: { query: async () => [] } }
+  } });
+}
+
+async function settingsOnResume(sandbox, record) {
+  let seen = null;
+  sandbox.chrome.tabs.query = async () => {
+    seen = { ...sandbox.current() };
+    return [];
+  };
+  await sandbox.resumeJob(record);
+  return seen;
+}
+
+test('Resume runs on the overrides in the record, not on the default of today', async () => {
+  const { sandbox } = resumeRun({ ...NLME.resetSettings(), exportPreset: 'archive' });
+  const record = NLME.newJobRecord({ id: 'j', kind: 'takeout', label: 'L', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1, overrides: NLME.presetOverrides('ai') });
+  const seen = await settingsOnResume(sandbox, record);
+  assert.equal(seen.citationDetail, 'titles');
+  assert.equal(seen.exportNoteWithImages, false);
+  assert.equal(sandbox.overrides(), null);
+});
+
+test('Resume of an old takeout record keeps its image copies, an old notes record stays on Settings', async () => {
+  const { sandbox } = resumeRun(NLME.resetSettings());
+  const old = NLME.newJobRecord({ id: 'j', kind: 'takeout', label: 'L', notebookId: 'nb', keysByCategory: { notes: ['a'] }, now: 1 });
+  assert.equal((await settingsOnResume(sandbox, old)).exportNoteWithImages, true);
+  assert.equal((await settingsOnResume(sandbox, { ...old, kind: 'notes' })).exportNoteWithImages, false);
+  assert.equal(sandbox.current().exportNoteWithImages, false);
+});
+
+test('startJobRecord stores the overrides of the run, and an update leaves them', async () => {
+  const store = {};
+  const { sandbox } = panel({ code: fnSource('sidebar-core.js', 'startJobRecord'), extra: {
+    NLME: require('../takeout-job.js'), // createJobRecorder
+    jobItemKeys: (category, items) => items,
+    chrome: { storage: { local: {
+      get: async key => (key in store ? { [key]: store[key] } : {}),
+      set: async value => { Object.assign(store, JSON.parse(JSON.stringify(value))); },
+      remove: async () => {}
+    } } }
+  } });
+  const shell = { tab: { url: 'https://notebooklm.google.com/notebook/abc' } };
+  const overrides = NLME.presetOverrides('ai');
+  await sandbox.withRunSettings(overrides, () => sandbox.startJobRecord(shell, 'takeout', 'Full Takeout', { notes: ['a', 'b'] }));
+  const key = NLME.jobRecordKey('abc');
+  assert.deepEqual(store[key].overrides, overrides);
+  await sandbox.withRunSettings({ citationDetail: 'none' }, () => sandbox.startJobRecord(shell, 'takeout', 'Retry', { notes: ['a'] }, { update: true }));
+  assert.deepEqual(store[key].overrides, overrides);
+  delete store[key];
+  await sandbox.startJobRecord(shell, 'notes', 'Notes', { notes: ['a'] });
+  assert.equal('overrides' in store[key], false);
+});
+
+test('Full Takeout runs under the preset, and reads its settings directly', () => {
+  const core = fs.readFileSync(path.join(__dirname, '..', 'sidebar-core.js'), 'utf8');
+  assert.match(core, /runExclusive\('Full Takeout', \(\) => withRunSettings\(NLME\.runOverrides\(settings\), runFullTakeout\)\)/);
+  assert.equal([...core.matchAll(/[^.]\brunFullTakeout\b/g)].length, 1);
+  const takeout = fnSource('sidebar-takeout.js', 'runFullTakeout');
+  assert.doesNotMatch(takeout, /takeoutVariantSettings|variantSettings/);
+  assert.doesNotMatch(takeout, /withRunSettings/);
+  assert.equal(NLME.takeoutVariantSettings, undefined);
+});
+
+test('loadSettings migrates the preset from what was stored, and writes nothing', async () => {
+  const load = stored => {
+    const sets = [];
+    const sandbox = {
+      NLME, applySettingsToUi() {},
+      chrome: { storage: { local: { get: async () => ({ settings: stored }), set: async value => sets.push(value) } } }
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(`let settings = NLME.resetSettings(); ${fnSource('sidebar-core.js', 'loadSettings')}; this.current = () => settings;`, sandbox);
+    return sandbox.loadSettings().then(() => ({ settings: sandbox.current(), sets }));
+  };
+  assert.equal((await load({ citationDetail: 'titles' })).settings.exportPreset, 'custom');
+  assert.equal((await load({ obsidianNames: true })).settings.exportPreset, 'custom');
+  assert.equal((await load({ citationDetail: 'quotes' })).settings.exportPreset, 'archive');
+  assert.equal((await load({ citationDetail: 'titles', exportPreset: 'ai' })).settings.exportPreset, 'ai');
+  assert.equal((await load({ citationDetail: 'titles', exportPreset: 'archive' })).settings.exportPreset, 'archive');
+  const migrated = await load({ citationDetail: 'titles' });
+  assert.equal(migrated.settings.customImages, true);
+  assert.deepEqual(migrated.sets, []);
 });

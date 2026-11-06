@@ -197,6 +197,13 @@ const SETTINGS_UNREAD_MESSAGE = 'Your saved settings could not be read. Using de
 // Shipped defaults live in NLME.DEFAULT_SETTINGS (takeout-shared.js); stored
 // settings are merged over them in loadSettings.
 let settings = NLME.resetSettings();
+// A job's own settings (withRunSettings). While one runs, `settings` is the job's
+// copy and realSettings() is what the person has. currentRunOverrides is null
+// outside a run. runRestore: job values -> real ones. runEdits: the real settings,
+// once something in the job asked for them.
+let currentRunOverrides = null;
+let runRestore = null;
+let runEdits = null;
 
 document.addEventListener('DOMContentLoaded', () => {
   init();
@@ -322,17 +329,61 @@ async function loadSettings() {
       migrated.exportSourceWithImages = stored.settings.exportWithImagesVersion;
     }
 
+    // Only when none is stored: reaches storage with the next save, not from here
+    if (!('exportPreset' in stored.settings)) migrated.exportPreset = NLME.migratePreset(stored.settings);
+
     settings = migrated;
   }
 
   applySettingsToUi();
 }
 
+// The person's settings, whatever job runs. Everything that changes or stores
+// settings goes through this, so a job's values never reach storage and a change
+// made during a job leaves the job's values alone.
+function realSettings() {
+  if (!runRestore) return settings;
+  if (!runEdits) runEdits = runRestore(settings);
+  return runEdits;
+}
+
+// Runs the job `fn` on `settings` with `overrides` on top, async work included, and
+// restores in the finally. A run inside a run adds to the outer one; the real settings
+// stay the first ones. A change made in Settings meanwhile is stored at once and
+// takes effect here, when the job ends. Call it inside runExclusive, so a job refused
+// by the lock swaps nothing.
+async function withRunSettings(overrides, fn) {
+  const outerOverrides = currentRunOverrides;
+  const outerRestore = runRestore;
+  const { run, persistable } = NLME.applyRunSettings(settings, overrides);
+  settings = run;
+  currentRunOverrides = { ...outerOverrides, ...overrides };
+  runRestore = outerRestore ? current => outerRestore(persistable(current)) : persistable;
+  try {
+    return await fn();
+  } finally {
+    settings = persistable(settings);
+    currentRunOverrides = outerOverrides;
+    runRestore = outerRestore;
+    if (!runRestore) {
+      if (runEdits) settings = runEdits;
+      runEdits = null;
+    }
+  }
+}
+
+// Holds on to the running job's overrides: `rerun(fn)` runs fn on them later, when
+// the job has ended (a Retry). Outside a run, fn just runs.
+function rememberRunSettings() {
+  const overrides = currentRunOverrides;
+  return fn => (overrides ? withRunSettings(overrides, fn) : fn());
+}
+
 // Set or remove data-theme on <html> from settings.theme ('auto' follows the
 // OS through the CSS media query). The choice is also kept in localStorage so
 // the next open can apply it before settings load (no flash of the wrong theme).
 function applyTheme() {
-  const attr = NLME.themeAttr(settings.theme);
+  const attr = NLME.themeAttr(realSettings().theme);
   if (attr) document.documentElement.setAttribute('data-theme', attr);
   else document.documentElement.removeAttribute('data-theme');
   try { localStorage.setItem('nlme-theme', attr || 'auto'); } catch (e) { /* storage blocked */ }
@@ -402,7 +453,7 @@ function syncVersionChildStates() {
 function updateChatCitationInfo() {
   const el = document.getElementById('chat-citation-info');
   if (!el) return;
-  const label = { quotes: 'Full quotes', titles: 'Source titles only', none: 'No citations' }[NLME.chatCitationMode(settings)];
+  const label = { quotes: 'Full quotes', titles: 'Source titles only', none: 'No citations' }[NLME.chatCitationMode(realSettings())];
   el.textContent = `Citations: ${label} · change in Settings`;
 }
 
@@ -429,6 +480,7 @@ async function retrySettingsLoad() {
 // the block: the stored settings return, and the change has to be made again.
 // undo: puts the change back when storage refuses the write.
 async function writeSettings({ undo = null } = {}) {
+  const settings = realSettings();
   if (settingsStored) {
     try {
       await chrome.storage.local.set({ settings });
@@ -440,12 +492,14 @@ async function writeSettings({ undo = null } = {}) {
       return false;
     }
   }
-  if (await retrySettingsLoad()) showToast('Your saved settings are back. Please make that change again.', 'warning');
+  // No load during a job: it would replace the settings the job runs on
+  if (!currentRunOverrides && await retrySettingsLoad()) showToast('Your saved settings are back. Please make that change again.', 'warning');
   else showToast(SETTINGS_UNREAD_MESSAGE, 'warning');
   return false;
 }
 
 async function saveSettings() {
+  const settings = realSettings(); // during a job, not the job's copy
   settings.autoZip = document.getElementById('auto-zip-checkbox').checked;
   settings.showNotifications = document.getElementById('show-notifications-checkbox').checked;
   settings.refreshInterval = parseInt(document.getElementById('refresh-interval-input').value) || 10;
@@ -525,7 +579,7 @@ function setupEventListeners() {
   });
 
   // Full Takeout: the whole notebook in one run (sidebar-takeout.js)
-  document.getElementById('full-takeout-btn')?.addEventListener('click', () => runExclusive('Full Takeout', runFullTakeout));
+  document.getElementById('full-takeout-btn')?.addEventListener('click', () => runExclusive('Full Takeout', () => withRunSettings(NLME.runOverrides(settings), runFullTakeout)));
   // Its ZIP choice is saved on its own (settings.takeoutZip); the settings panel need not be open
   document.getElementById('takeout-zip-checkbox')?.addEventListener('change', (e) => {
     const before = settings.takeoutZip;
@@ -1731,12 +1785,13 @@ async function runExclusive(name, fn) {
 
 // The results panel's "Retry N failed": re-runs `exportFn` on the items that
 // failed, under the job lock (a busy lock only shows its toast; the panel
-// stays). null when nothing failed.
+// stays). null when nothing failed. It keeps the job's run settings.
 function retryFor(failedItems, jobName, exportFn) {
   if (!failedItems || failedItems.length === 0) return null;
+  const rerun = rememberRunSettings();
   return {
     count: failedItems.length,
-    run: () => runExclusive(jobName, () => exportFn(failedItems))
+    run: () => runExclusive(jobName, () => rerun(() => exportFn(failedItems)))
   };
 }
 
@@ -1998,7 +2053,7 @@ async function startJobRecord(shell, kind, label, itemsByCategory, { update = fa
       record = stored;
     } else {
       const now = Date.now();
-      record = NLME.newJobRecord({ id: `${kind}-${now}`, kind, label, notebookId, keysByCategory, now });
+      record = NLME.newJobRecord({ id: `${kind}-${now}`, kind, label, notebookId, keysByCategory, now, overrides: currentRunOverrides });
       if (NLME.jobRecordFinished(record)) return null;
     }
     const recorder = NLME.createJobRecorder({ storage: chrome.storage.local, record });
@@ -2045,10 +2100,10 @@ async function withJobRecord(shell, kind, label, category, items, run, { update 
  * <Notebook>-<kind>-<ts>.zip, paths as the builders return them. Full
  * Takeout passes pathPrefix '<root>/<category>/', zipKind
  * 'takeout-<category>' and, with ZIP off, the takeout's Downloads folder.
- * It also passes variantSettings (NLME.takeoutVariantSettings: the settings
- * the notes, sources and chat paths read their variants from, default the
- * global `settings`) and itemDir '' (note and source files go straight in the
- * category folder, not in a notes/ or sources/ folder inside it).
+ * It also passes itemDir '' (note and source files go straight in the category
+ * folder, not in a notes/ or sources/ folder inside it). variantSettings: the
+ * settings the notes, sources and chat paths read their variants from, default
+ * the global `settings`, which in a Full Takeout are the run's (withRunSettings).
  *
  * @typedef {{ pathPrefix?: string, zipKind?: string, folder?: string|null,
  *   variantSettings?: object, itemDir?: string, written?: Written,
