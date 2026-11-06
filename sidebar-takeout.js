@@ -528,7 +528,7 @@ async function saveTakeoutImages(images, { root, folder, zipNameFor }) {
   return { paths, zips, failed };
 }
 
-// The ZIP setting: the checkbox next to the Full Takeout button, else the saved
+// The ZIP setting: the checkbox next to Export everything on Home, else the saved
 // choice (takeoutZip, falling back to autoZip).
 function takeoutZipEnabled() {
   const checkbox = document.getElementById('takeout-zip-checkbox');

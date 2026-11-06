@@ -2493,3 +2493,45 @@ test('bulkDeleteSkipText names each kind of skip', () => {
   assert.equal(NLME.bulkDeleteSkipText({ skippedUntitled: 2, skippedDuplicate: 0 }), '2 untitled item(s)');
   assert.equal(NLME.bulkDeleteSkipText({ skippedUntitled: 2, skippedDuplicate: 1 }), '2 untitled item(s) and 1 item(s) with a shared title');
 });
+
+test('openingView: Home on a new notebook, last list within one', () => {
+  assert.equal(NLME.openingView(null, 'a'), 'home');
+  assert.equal(NLME.openingView({ notebookId: 'b', view: 'notes' }, 'a'), 'home');
+  assert.equal(NLME.openingView({ notebookId: 'a', view: 'notes' }, 'a'), 'notes');
+  assert.equal(NLME.openingView({ notebookId: 'a', view: 'artifacts' }, 'a'), 'home'); // a retired tab
+});
+
+test('openingView: every list reopens, anything unknown means Home', () => {
+  for (const view of ['sources', 'notes', 'studio', 'chat']) {
+    assert.equal(NLME.openingView({ notebookId: 'a', view }, 'a'), view);
+  }
+  assert.equal(NLME.openingView({ notebookId: 'a', view: 'home' }, 'a'), 'home');
+  assert.equal(NLME.openingView({ notebookId: 'a', view: 'constructor' }, 'a'), 'home');
+  assert.equal(NLME.openingView({ notebookId: 'a' }, 'a'), 'home');
+  assert.equal(NLME.openingView('notes', 'a'), 'home');
+  assert.equal(NLME.openingView({ notebookId: '', view: 'notes' }, ''), 'home'); // not on a notebook
+});
+
+test('panelOpenView: a resumable export opens Home whatever was stored', () => {
+  const stored = { notebookId: 'a', view: 'notes' };
+  assert.equal(NLME.panelOpenView(stored, 'a', false), 'notes');
+  assert.equal(NLME.panelOpenView(stored, 'a', true), 'home');
+  assert.equal(NLME.panelOpenView(null, 'a', true), 'home');
+});
+
+test('latest gate: a slower older scan is dropped', () => {
+  const gate = NLME.createLatestGate();
+  const first = gate.begin();
+  const second = gate.begin();
+  assert.equal(gate.isLatest(first), false);
+  assert.equal(gate.isLatest(second), true);
+});
+
+test('homeCountText: an unknown count never reads as a number, Chat offers Load', () => {
+  assert.equal(NLME.homeCountText('sources', null), '—');
+  assert.equal(NLME.homeCountText('studio', undefined), '—');
+  assert.equal(NLME.homeCountText('notes', 0), '0');
+  assert.equal(NLME.homeCountText('notes', 1234), '1,234');
+  assert.equal(NLME.homeCountText('chat', null), 'Load');
+  assert.equal(NLME.homeCountText('chat', 12), '12');
+});

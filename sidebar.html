@@ -13,6 +13,7 @@
 <body class="sidebar-mode">
   <div class="container">
     <header class="panel-header">
+      <button id="back-btn" class="header-icon-btn back-btn" type="button" title="Back to Home" aria-label="Back to Home" hidden><span data-icon="back"></span><span id="back-resume-dot" class="back-resume-dot" hidden></span></button>
       <span id="notebook-name" class="notebook-name" title="Open a notebook">Open a notebook</span>
       <div id="status" class="status">
         <span class="status-dot"></span>
@@ -24,11 +25,6 @@
 
     <a id="open-notebook-link" class="btn-link open-notebook-link" href="https://notebook.google.com" target="_blank" rel="noopener" hidden>Open Gemini Notebook</a>
 
-    <div class="takeout-row">
-      <button id="full-takeout-btn" class="btn btn-primary btn-small" title="Export all sources, notes, chat and artifacts of this notebook in one run"><span data-icon="box"></span> Full Takeout</button>
-      <label class="takeout-zip" title="Save the takeout as one ZIP per category (unchecked: a folder in Downloads)"><input type="checkbox" id="takeout-zip-checkbox"> ZIP</label>
-    </div>
-
     <div id="dom-warning-banner" class="warning-banner" style="display: none;">
       <div class="warning-icon">!</div>
       <div class="warning-content">
@@ -38,8 +34,27 @@
       <button id="dismiss-warning-btn" class="btn-icon-small" title="Dismiss" aria-label="Dismiss"><span data-icon="close"></span></button>
     </div>
 
-    <div class="tabs">
-      <button class="tab-btn active" data-tab="sources">Sources <span class="tab-count" hidden></span></button>
+    <!-- Home is what shows before the script runs: no tab is active, no action bar -->
+    <div id="home-view" class="home-view">
+      <div id="resume-banner" class="resume-banner" style="display: none;" role="status"></div>
+
+      <div class="home-export">
+        <button id="full-takeout-btn" class="btn btn-primary" title="Export everything: all sources, notes, chat and artifacts of this notebook in one run"><span data-icon="box"></span> Export everything</button>
+        <label class="takeout-zip" title="Save the export as one ZIP per category (unchecked: a folder in Downloads)"><input type="checkbox" id="takeout-zip-checkbox"> ZIP</label>
+      </div>
+
+      <div id="home-notice" class="home-notice" role="status" hidden></div>
+
+      <div class="home-rows">
+        <button type="button" class="home-row" data-home-tab="sources"><span data-icon="doc"></span><span class="home-label">Sources</span><span class="home-count">&mdash;</span><span data-icon="next"></span></button>
+        <button type="button" class="home-row" data-home-tab="notes"><span data-icon="note"></span><span class="home-label">Notes</span><span class="home-count">&mdash;</span><span data-icon="next"></span></button>
+        <button type="button" class="home-row" data-home-tab="studio"><span data-icon="spark"></span><span class="home-label">Generated</span><span class="home-count">&mdash;</span><span data-icon="next"></span></button>
+        <button type="button" class="home-row" data-home-tab="chat"><span data-icon="chat"></span><span class="home-label">Chat</span><span class="home-count">Load</span><span data-icon="next"></span></button>
+      </div>
+    </div>
+
+    <div class="tabs" hidden>
+      <button class="tab-btn" data-tab="sources">Sources <span class="tab-count" hidden></span></button>
       <button class="tab-btn" data-tab="notes">Notes <span class="tab-count" hidden></span></button>
       <button class="tab-btn" data-tab="studio">Generated <span class="tab-count" hidden></span></button>
       <button class="tab-btn" data-tab="chat">Chat <span class="tab-count" hidden></span></button>
@@ -53,7 +68,7 @@
       </section>
     </div>
 
-    <div class="tab-content active" data-tab-content="sources">
+    <div class="tab-content" data-tab-content="sources">
       <section id="sources-section" class="section">
         <div id="sources-scan-results" class="scan-results">
           <p class="scanning">Scanning...</p>
@@ -111,8 +126,6 @@
       </div>
       <p id="progress-text" class="progress-text">Starting...</p>
     </div>
-
-    <div id="resume-banner" class="resume-banner" style="display: none;" role="status"></div>
 
     <div id="results-panel" class="results-panel" style="display: none;" role="status" aria-live="polite"></div>
 
@@ -236,7 +249,7 @@
             <option value="titles">Source titles only (fast)</option>
             <option value="none">No citations (plain text, fast)</option>
           </select>
-          <p class="setting-help">Applies to notes and to the chat export (the Chat tab and Full Takeout). "Source titles only" skips reading each citation's popup: every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. Both are much faster for large exports.</p>
+          <p class="setting-help">Applies to notes and to the chat export (the Chat tab and Export everything). "Source titles only" skips reading each citation's popup: every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. Both are much faster for large exports.</p>
         </div>
 
         <div class="setting-group">
@@ -312,7 +325,7 @@
       <div class="setting-section">
         <div class="setting-group">
           <button id="reset-settings-btn" class="btn btn-secondary btn-small" type="button">Reset to defaults</button>
-          <p class="setting-help">Puts every setting on this panel back to how it shipped. The citation cache, Full Takeout's own ZIP choice and saved exports to resume are kept.</p>
+          <p class="setting-help">Puts every setting on this panel back to how it shipped. The citation cache, Export everything's own ZIP choice and saved exports to resume are kept.</p>
         </div>
       </div>
     </div>

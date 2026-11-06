@@ -356,6 +356,16 @@
     };
   }
 
+  // Only the newest of several overlapping runs may act: each takes a token, and
+  // a run that finds its token is no longer the latest stops.
+  function createLatestGate() {
+    let latest = 0;
+    return {
+      begin() { return ++latest; },
+      isLatest(token) { return token === latest; }
+    };
+  }
+
   // In-app navigation settle (side panel): each settle wait takes a token; only
   // the newest token is current, so an older wait that finishes later can tell
   // that a newer navigation replaced it and does nothing. A settle for a switched
@@ -1416,6 +1426,29 @@
   function notebookIdFromUrl(url) {
     const m = String(url || '').match(/\/notebook\/([^/?#]+)/);
     return m ? m[1] : '';
+  }
+
+  // The panel's list tabs, in order. A view is 'home' or one of these.
+  const PANEL_TABS = ['sources', 'notes', 'studio', 'chat'];
+
+  // The view the panel opens on: the last list only when it was this notebook's.
+  // A stored value of any other shape, or a tab that no longer exists, means Home.
+  function openingView(stored, notebookId) {
+    if (!stored || !notebookId || stored.notebookId !== notebookId) return 'home';
+    return PANEL_TABS.includes(stored.view) ? stored.view : 'home';
+  }
+
+  // openingView, unless the notebook has an export to resume: Resume is on Home,
+  // and a panel reopened on a list would never show it
+  function panelOpenView(stored, notebookId, resumable) {
+    return resumable ? 'home' : openingView(stored, notebookId);
+  }
+
+  // A Home row's count. null is not known yet (it never reads as a number); Chat
+  // is never scanned from Home, so it offers Load until the Chat tab has loaded.
+  function homeCountText(tab, count) {
+    if (count == null) return tab === 'chat' ? 'Load' : '\u2014';
+    return Number(count).toLocaleString('en-US');
   }
 
   // The side panel header's text: the notebook's name on a notebook page, else
@@ -2633,6 +2666,10 @@ footer { margin-top: 3rem; }
     categoryIndexFrontMatter,
     uniqueStems,
     notebookIdFromUrl,
+    PANEL_TABS,
+    openingView,
+    panelOpenView,
+    homeCountText,
     headerName,
     listItemKeys,
     jobRecordKey,
@@ -2744,6 +2781,7 @@ footer { margin-top: 3rem; }
     groupErrorsForPanel,
     createJobLock,
     createSettleGate,
+    createLatestGate,
     createPhaseTimer,
     formatTimingSummary,
     cleanOcrArtifacts,

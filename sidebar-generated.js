@@ -34,6 +34,35 @@ function forgetStudioList() {
   if (resultsEl) resultsEl.innerHTML = '<p class="scanning">Scanning generated items...</p>';
 }
 
+// The Generated list's items, no UI (the list, and its count on Home, so the two
+// cannot differ): SCAN_STUDIO_ITEMS plus the notes in the Sources panel's "Notes"
+// group, which are not in the Studio list. If that extra scan fails, the Studio
+// items still render.
+async function scanGeneratedItems(tabId) {
+  const response = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.SCAN_STUDIO_ITEMS });
+  const items = [...(response?.items || [])];
+
+  let notes = [];
+  try {
+    notes = await scanNotesData(tabId);
+    stampJobKeys('notes', notes);
+    for (const note of notes) {
+      if (note.elementType !== 'source-note') continue;
+      items.push({
+        kind: 'source-note',
+        label: note.title,
+        type: note.type || 'Note (Sources panel)',
+        sourceIndex: note.sourceIndex,
+        jobKey: note._listKey
+      });
+    }
+  } catch (noteError) {
+    console.warn('[NotebookLM Takeout] Sources-panel notes scan failed; listing Studio items only:', noteError);
+  }
+  NLME.stampGeneratedJobKeys(items, notes);
+  return items;
+}
+
 async function scanStudioPage() {
   const resultsEl = document.getElementById('studio-scan-results');
   if (!resultsEl) return;
@@ -62,29 +91,7 @@ async function scanStudioPage() {
       setTabCount('studio', null);
       return;
     }
-    const response = await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.SCAN_STUDIO_ITEMS });
-    const items = [...(response?.items || [])];
-
-    // Notes in the Sources panel's "Notes" group are not in the Studio list. If this
-    // extra scan fails, the Studio items still render.
-    let notes = [];
-    try {
-      notes = await scanNotesData(tab.id);
-      stampJobKeys('notes', notes);
-      for (const note of notes) {
-        if (note.elementType !== 'source-note') continue;
-        items.push({
-          kind: 'source-note',
-          label: note.title,
-          type: note.type || 'Note (Sources panel)',
-          sourceIndex: note.sourceIndex,
-          jobKey: note._listKey
-        });
-      }
-    } catch (noteError) {
-      console.warn('[NotebookLM Takeout] Sources-panel notes scan failed; listing Studio items only:', noteError);
-    }
-    NLME.stampGeneratedJobKeys(items, notes);
+    const items = await scanGeneratedItems(tab.id);
 
     if (seq !== _studioScanSeq) return;
     const signature = NLME.generatedSignature(tab, items);

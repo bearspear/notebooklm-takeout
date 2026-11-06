@@ -420,3 +420,33 @@ test('the panel has one tab per list, in order, and nothing left of the Artifact
   const text = files.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
   assert.doesNotMatch(text, /\bscanPage\b|dropArtifactsList|updateArtifactsDownloadBtn|applyStudioTabVisibility|show-studio-tab-checkbox|download-all-btn|studio-download-selected-btn|"zip-checkbox|'zip-checkbox|artifact-count|export-controls/);
 });
+
+test('the first paint is Home: no tab active, no action bar, Back hidden', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8');
+  assert.doesNotMatch(html, /tab-btn active|tab-content active/);
+  assert.match(html, /<div class="tabs" hidden>/);
+  assert.match(html, /<div id="action-bar" class="action-bar" hidden>/);
+  assert.match(html, /<button id="back-btn"[^>]* aria-label="Back to Home" hidden>/);
+  assert.ok(html.indexOf('id="home-view"') < html.indexOf('class="tabs"'), 'Home comes before the tabs');
+  for (const id of ['full-takeout-btn', 'takeout-zip-checkbox', 'resume-banner']) {
+    const at = html.indexOf(`id="${id}"`);
+    assert.ok(at > html.indexOf('id="home-view"') && at < html.indexOf('class="tabs"'), `${id} is on Home`);
+  }
+  // A job's panels show in every view: outside Home and outside every tab
+  const lastTab = html.lastIndexOf('data-tab-content=');
+  for (const id of ['download-progress', 'results-panel']) assert.ok(html.indexOf(`id="${id}"`) > lastTab, id);
+  assert.doesNotMatch(html + fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8'), /takeout-row/);
+});
+
+test('Home counts with the lists\' own data and never scans the chat', () => {
+  const core = fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8');
+  const scans = core.slice(core.indexOf('const HOME_SCANS'), core.indexOf('const homeGate'));
+  for (const name of ['scanSourcesData', 'scanNotesData', 'scanGeneratedItems']) assert.ok(scans.includes(name), name);
+  assert.doesNotMatch(scans, /scanArtifactsData|scanChat/); // artifacts only: not the Generated list
+  assert.match(fnSource('sidebar-generated.js', 'scanStudioPage'), /await scanGeneratedItems\(tab\.id\)/);
+  const refresh = fnSource('sidebar-core.js', 'refreshHome');
+  assert.doesNotMatch(refresh, /scanChat|scrollTo|\.click\(/);
+  assert.match(refresh, /jobLock\.current\(\)/);
+  assert.match(refresh, /settleWaits/);
+  assert.match(fnSource('sidebar-core.js', 'setTabCount'), /home-row/);
+});
