@@ -420,3 +420,89 @@ test('the panel has one tab per list, in order, and nothing left of the Artifact
   const text = files.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
   assert.doesNotMatch(text, /\bscanPage\b|dropArtifactsList|updateArtifactsDownloadBtn|applyStudioTabVisibility|show-studio-tab-checkbox|download-all-btn|studio-download-selected-btn|"zip-checkbox|'zip-checkbox|artifact-count|export-controls/);
 });
+
+test('the first paint is Home: no tab active, no action bar, Back hidden', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8');
+  assert.doesNotMatch(html, /tab-btn active|tab-content active/);
+  assert.match(html, /<div class="tabs" hidden>/);
+  assert.match(html, /<div id="action-bar" class="action-bar" hidden>/);
+  assert.match(html, /<button id="back-btn"[^>]* aria-label="Back to Home" hidden>/);
+  assert.ok(html.indexOf('id="home-view"') < html.indexOf('class="tabs"'), 'Home comes before the tabs');
+  for (const id of ['full-takeout-btn', 'takeout-zip-checkbox', 'resume-banner']) {
+    const at = html.indexOf(`id="${id}"`);
+    assert.ok(at > html.indexOf('id="home-view"') && at < html.indexOf('class="tabs"'), `${id} is on Home`);
+  }
+  // A job's panels show in every view: outside Home and outside every tab
+  const lastTab = html.lastIndexOf('data-tab-content=');
+  for (const id of ['download-progress', 'results-panel']) assert.ok(html.indexOf(`id="${id}"`) > lastTab, id);
+  assert.doesNotMatch(html + fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8'), /takeout-row/);
+});
+
+test('Home counts with the lists\' own data and never scans the chat', () => {
+  const core = fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8');
+  const scans = core.slice(core.indexOf('const HOME_SCANS'), core.indexOf('const homeGate'));
+  for (const name of ['scanSourcesData', 'scanNotesData', 'scanGeneratedItems']) assert.ok(scans.includes(name), name);
+  assert.doesNotMatch(scans, /scanArtifactsData|scanChat/); // artifacts only: not the Generated list
+  assert.match(fnSource('sidebar-generated.js', 'scanStudioPage'), /await scanGeneratedItems\(tab\.id\)/);
+  const refresh = fnSource('sidebar-core.js', 'refreshHome') + fnSource('sidebar-core.js', 'readHomeCounts');
+  assert.doesNotMatch(refresh, /scanChat|scrollTo|\.click\(/);
+  assert.match(refresh, /jobLock\.current\(\)/);
+  assert.match(refresh, /settleWaits/);
+  assert.match(fnSource('sidebar-core.js', 'setTabCount'), /paintHomeRow\(tab\)/);
+});
+
+test('settings reach storage through one guarded write', () => {
+  const core = fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8');
+  assert.equal([...core.matchAll(/storage\.local\.set\(\{ settings \}\)/g)].length, 1);
+  assert.match(fnSource('sidebar-core.js', 'writeSettings'), /if \(settingsStored\) \{\s+try \{\s+await chrome\.storage\.local\.set\(\{ settings \}\)/);
+});
+
+test('a refused settings write says so, undoes what asked to, and never rejects', async () => {
+  const vm = require('node:vm');
+  const toasts = [];
+  let undone = 0;
+  const sandbox = {
+    settingsStored: true, settings: {}, console: { warn() {} }, showToast: text => toasts.push(text),
+    chrome: { storage: { local: { set: async () => { throw new Error('refused'); } } } }
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(fnSource('sidebar-core.js', 'writeSettings'), sandbox);
+  assert.equal(await sandbox.writeSettings({ undo: () => { undone++; } }), false);
+  assert.equal(await sandbox.writeSettings(), false);
+  assert.equal(undone, 1);
+  assert.deepEqual(toasts, ['Could not save settings', 'Could not save settings']);
+});
+
+test('Full Takeout, Resume, Home and Generated all ask for the strict notes scan', () => {
+  const takeout = fs.readFileSync(path.join(ROOT, 'sidebar-takeout.js'), 'utf8');
+  assert.equal([...takeout.matchAll(/scanNotesData\(tabId, \{ strict: true \}\)/g)].length, 2);
+  assert.doesNotMatch(takeout, /scanNotesData\(tabId\)/);
+  assert.match(fnSource('sidebar-generated.js', 'scanGeneratedItems'), /scanNotesData\(tabId, \{ strict: true \}\)/);
+  assert.match(fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8'), /scanNotesData\(tabId, \{ strict: true \}\)/);
+});
+
+test('a failed scan never reads as an empty list', async () => {
+  const vm = require('node:vm');
+  let answers = {};
+  const sandbox = {
+    NLME: { MSG: { SCAN_NOTES: 'n', SCAN_STUDIO_ITEMS: 's' }, stampGeneratedJobKeys() {} },
+    chrome: { tabs: { sendMessage: async (id, m) => answers[m.type] } },
+    ensureContentScriptLoaded: async () => {}, stampJobKeys() {}, console: { warn() {} }
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(fnSource('sidebar-notes.js', 'scanNotesData') + fnSource('sidebar-generated.js', 'scanGeneratedItems'), sandbox);
+  const { scanNotesData, scanGeneratedItems } = sandbox;
+  answers = { n: undefined };
+  assert.equal((await scanNotesData(1)).length, 0); // the default the Notes tab keeps
+  await assert.rejects(scanNotesData(1, { strict: true }), /No response/);
+  answers = { n: { error: 'boom' } };
+  await assert.rejects(scanNotesData(1, { strict: true }), /boom/);
+  answers = { n: { notes: [] } };
+  assert.equal((await scanNotesData(1, { strict: true })).length, 0); // a real empty list
+  answers = { s: undefined };
+  await assert.rejects(scanGeneratedItems(1), /No response/);
+  answers = { s: { items: [], error: 'boom' } };
+  await assert.rejects(scanGeneratedItems(1), /boom/);
+  answers = { s: { items: [{ kind: 'artifact' }] }, n: undefined };
+  assert.equal((await scanGeneratedItems(1)).length, 1); // a failed notes side-scan lists Studio items only
+});

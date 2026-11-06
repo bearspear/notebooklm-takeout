@@ -528,7 +528,7 @@ async function saveTakeoutImages(images, { root, folder, zipNameFor }) {
   return { paths, zips, failed };
 }
 
-// The ZIP setting: the checkbox next to the Full Takeout button, else the saved
+// The ZIP setting: the checkbox next to Export everything on Home, else the saved
 // choice (takeoutZip, falling back to autoZip).
 function takeoutZipEnabled() {
   const checkbox = document.getElementById('takeout-zip-checkbox');
@@ -660,7 +660,7 @@ async function runFullTakeout() {
       {
         name: 'Notes', folder: 'notes',
         scan: async () => {
-          const notes = await scanNotesData(tabId);
+          const notes = await scanNotesData(tabId, { strict: true });
           stampJobKeys('notes', notes);
           return notes;
         },
@@ -1026,7 +1026,7 @@ const RESUME_CATEGORIES = [
   { category: 'sources', name: 'Sources', scan: async tabId => (await scanSourcesData(tabId)).sources },
   // Studio notes and the Sources panel's notes are drawn separately: a key is gone
   // only if the scan shows its own region (see NLME.planResume)
-  { category: 'notes', name: 'Notes', scan: tabId => scanNotesData(tabId), regionOfType: type => (type === 'Note (Sources panel)' ? 'sources-panel' : 'studio') },
+  { category: 'notes', name: 'Notes', scan: tabId => scanNotesData(tabId, { strict: true }), regionOfType: type => (type === 'Note (Sources panel)' ? 'sources-panel' : 'studio') },
   { category: 'artifacts', name: 'Artifacts', scan: tabId => scanArtifactsData(tabId) }
 ];
 

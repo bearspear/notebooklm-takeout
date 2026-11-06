@@ -85,8 +85,8 @@ function hideResults() {
 }
 
 /**
- * Show the "earlier export stopped" banner above the results panel (its own
- * element, so a new results panel does not wipe it).
+ * Show the "earlier export stopped" banner on Home (its own element, so a new
+ * results panel does not wipe it). On a list, the Back button carries a dot.
  *
  * @param {object} record the job record (NLME.resumeBannerView words it)
  * @param {object} handlers
@@ -113,6 +113,7 @@ function showResumeBanner(record, { onResume, onDiscard, running = false } = {})
       <button type="button" class="btn btn-secondary resume-discard">Discard</button>
     </div>`;
   banner.style.display = 'block';
+  setResumeIndicator(true, record.id);
 
   const resumeBtn = banner.querySelector('.resume-go');
   const discardBtn = banner.querySelector('.resume-discard');
@@ -145,4 +146,5 @@ function hideResumeBanner() {
   if (!banner) return;
   banner.style.display = 'none';
   banner.innerHTML = '';
+  setResumeIndicator(false);
 }
