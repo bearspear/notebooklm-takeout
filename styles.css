@@ -953,13 +953,20 @@ body {
   display: none;
 }
 
+/* The count wraps to a second line, which overflow hides, when there is no room:
+   it drops whole, the label is never cut, and the tab stays 33px high */
 .tab-btn {
+  display: flex;
   flex: 1 1 auto;
-  min-width: 0;
-  padding: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  column-gap: 4px;
+  height: 33px;
+  min-width: min-content;
+  padding: 0 8px;
   overflow: hidden;
+  line-height: 31px;
   white-space: nowrap;
-  text-overflow: ellipsis;
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
@@ -968,12 +975,6 @@ body {
   color: var(--muted);
   transition: all 0.2s ease;
 }
-
-/* Room for each label plus its padding: at 320px with big counts only the count gives way */
-.tab-btn[data-tab="sources"] { min-width: 5.5em; }
-.tab-btn[data-tab="notes"] { min-width: 4.5em; }
-.tab-btn[data-tab="studio"] { min-width: 6.5em; }
-.tab-btn[data-tab="chat"] { min-width: 3.5em; }
 
 .tab-btn:hover {
   color: var(--accent);
@@ -986,7 +987,6 @@ body {
 
 /* The number of items found, on the tab label */
 .tab-count {
-  margin-left: 4px;
   font-size: 11.5px;
   font-weight: 400;
   color: var(--muted);

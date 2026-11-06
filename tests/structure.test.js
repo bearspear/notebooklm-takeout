@@ -454,7 +454,23 @@ test('Home counts with the lists\' own data and never scans the chat', () => {
 test('settings reach storage through one guarded write', () => {
   const core = fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8');
   assert.equal([...core.matchAll(/storage\.local\.set\(\{ settings \}\)/g)].length, 1);
-  assert.match(fnSource('sidebar-core.js', 'writeSettings'), /if \(settingsStored\) \{\s+await chrome\.storage\.local\.set\(\{ settings \}\)/);
+  assert.match(fnSource('sidebar-core.js', 'writeSettings'), /if \(settingsStored\) \{\s+try \{\s+await chrome\.storage\.local\.set\(\{ settings \}\)/);
+});
+
+test('a refused settings write says so, undoes what asked to, and never rejects', async () => {
+  const vm = require('node:vm');
+  const toasts = [];
+  let undone = 0;
+  const sandbox = {
+    settingsStored: true, settings: {}, console: { warn() {} }, showToast: text => toasts.push(text),
+    chrome: { storage: { local: { set: async () => { throw new Error('refused'); } } } }
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(fnSource('sidebar-core.js', 'writeSettings'), sandbox);
+  assert.equal(await sandbox.writeSettings({ undo: () => { undone++; } }), false);
+  assert.equal(await sandbox.writeSettings(), false);
+  assert.equal(undone, 1);
+  assert.deepEqual(toasts, ['Could not save settings', 'Could not save settings']);
 });
 
 test('Full Takeout keeps the plain notes scan; Home and Generated ask for the strict one', () => {

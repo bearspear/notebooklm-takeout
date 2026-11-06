@@ -406,22 +406,42 @@ function updateChatCitationInfo() {
   el.textContent = `Citations: ${label} · change in Settings`;
 }
 
-// The one write of `settings`, false when it did not happen. Blocked until a load
-// has worked. A blocked write tries the load again, so storage coming back lifts
-// the block: the stored settings return, and the change has to be made again.
-async function writeSettings() {
-  if (settingsStored) {
-    await chrome.storage.local.set({ settings });
-    return true;
-  }
+// One more try at storage after a failed load. The values held meanwhile go, so a
+// key missing from storage comes from the defaults, not from a change that was never
+// saved. Fails with them still in place.
+async function retrySettingsLoad() {
+  const held = settings;
+  settings = NLME.resetSettings();
   try {
     await loadSettings();
     settingsStored = true;
-    showToast('Your saved settings are back. Please make that change again.', 'warning');
+    syncVersionChildStates();
+    return true;
   } catch (error) {
+    settings = held;
     console.warn('[NotebookLM Takeout] Settings still cannot be read:', error);
-    showToast(SETTINGS_UNREAD_MESSAGE, 'warning');
+    return false;
   }
+}
+
+// The one write of `settings`, false when it did not happen. Blocked until a load
+// has worked. A blocked write tries the load again, so storage coming back lifts
+// the block: the stored settings return, and the change has to be made again.
+// undo: puts the change back when storage refuses the write.
+async function writeSettings({ undo = null } = {}) {
+  if (settingsStored) {
+    try {
+      await chrome.storage.local.set({ settings });
+      return true;
+    } catch (error) {
+      console.warn('[NotebookLM Takeout] Could not save settings:', error);
+      if (undo) undo();
+      showToast('Could not save settings', 'warning');
+      return false;
+    }
+  }
+  if (await retrySettingsLoad()) showToast('Your saved settings are back. Please make that change again.', 'warning');
+  else showToast(SETTINGS_UNREAD_MESSAGE, 'warning');
   return false;
 }
 
@@ -500,15 +520,23 @@ function setupEventListeners() {
 
   document.getElementById('close-settings-btn').addEventListener('click', () => {
     document.getElementById('settings-panel').style.display = 'none';
-    saveSettings();
+    // While writes are blocked there is nothing to save: each change already said so
+    if (settingsStored) saveSettings();
   });
 
   // Full Takeout: the whole notebook in one run (sidebar-takeout.js)
   document.getElementById('full-takeout-btn')?.addEventListener('click', () => runExclusive('Full Takeout', runFullTakeout));
   // Its ZIP choice is saved on its own (settings.takeoutZip); the settings panel need not be open
   document.getElementById('takeout-zip-checkbox')?.addEventListener('change', (e) => {
+    const before = settings.takeoutZip;
     settings.takeoutZip = e.target.checked;
-    writeSettings().catch(e2 => console.warn('[NotebookLM Takeout] Could not save the takeout ZIP choice:', e2));
+    writeSettings({
+      undo: () => {
+        if (before === undefined) delete settings.takeoutZip;
+        else settings.takeoutZip = before;
+        e.target.checked = NLME.takeoutZipChoice(settings);
+      }
+    });
   });
 
   // Health check panel
@@ -795,7 +823,7 @@ async function refreshHome({ force = false } = {}) {
     homeForceOwed = homeForceOwed || force;
     return;
   }
-  if (!force && !homeForceOwed && homeCountsKnown() && !homeItemOpen) return;
+  if (!force && !homeForceOwed && homeCountsKnown() && !homeItemOpen && !homeReadFailed) return;
   homeForceOwed = false;
   homeRereading = false;
   lastHomeRead = Date.now();
@@ -859,10 +887,10 @@ async function readHomeCounts(token, attempt) {
 }
 
 // Read Home again though every count is known: the page may have changed while the
-// panel looked elsewhere. Rapid events do one read.
+// panel looked elsewhere. Rapid events do one read, a hidden panel none.
 function refreshHomeFresh() {
   if (panelView !== 'home' || jobLock.current()) return;
-  return refreshHome({ force: Date.now() - lastHomeRead >= HOME_READ_THROTTLE_MS });
+  return refreshHome({ force: !document.hidden && Date.now() - lastHomeRead >= HOME_READ_THROTTLE_MS });
 }
 
 // The person came back to the panel's window. Only Home reads: a list and its
@@ -1372,7 +1400,7 @@ function setTabCount(tab, count) {
   const el = document.querySelector(`.tab-btn[data-tab="${tab}"] .tab-count`);
   if (el) {
     el.textContent = count == null ? '' : Number(count).toLocaleString('en-US');
-    el.title = el.textContent; // a narrow panel can clip the count
+    el.title = el.textContent; // a narrow panel drops the count from the label
     el.hidden = count == null;
   }
   paintHomeRow(tab);
@@ -1665,7 +1693,6 @@ async function runExclusive(name, fn) {
     return JOB_BUSY;
   }
   document.body.classList.add('job-running');
-  if (!settingsStored) showToast(SETTINGS_UNREAD_MESSAGE, 'warning'); // the job runs on defaults
   hideResumeBanner(); // its numbers go stale while a job writes the record
   // Disable (not just dim) the tab controls so keyboard activation is
   // blocked too. Mark them: a scan may replace a control with a clone (the
@@ -1675,6 +1702,8 @@ async function runExclusive(name, fn) {
     .filter(el => !el.disabled && el.id !== 'cancel-download-btn')
     .forEach(el => { el.disabled = true; el.setAttribute('data-job-disabled', ''); });
   try {
+    // Storage may be back: a job should not run on defaults when it need not
+    if (!settingsStored && !await retrySettingsLoad()) showToast(SETTINGS_UNREAD_MESSAGE, 'warning');
     // Remember the job's tab: Cancel must reach it even after a tab switch
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
