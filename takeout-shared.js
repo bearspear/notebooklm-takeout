@@ -1645,6 +1645,150 @@
     return `${shown} of ${total} shown · ${selected} selected`;
   }
 
+  // The action bar's label: "Export 12 notes", "Select notes to export" at 0.
+  // The plural adds an s; thousands get separators.
+  function actionLabel(count, unit, verb = 'Export') {
+    const n = Math.max(0, Math.floor(Number(count) || 0));
+    if (n === 0) return `Select ${unit}s to ${verb.toLowerCase()}`;
+    return `${verb} ${n.toLocaleString('en-US')} ${unit}${n === 1 ? '' : 's'}`;
+  }
+
+  // Why a Generated row has nothing to download, '' when it can. The one rule for
+  // the row's Download button and generatedExportPlan. With no More button (moreIndex
+  // -1) the row must not be tried: a strict title match would download another
+  // item of the same title and report success.
+  function studioItemUnavailableReason(item) {
+    if (!item || item.kind !== 'artifact') return '';
+    if (!item.downloadable) return `${item.type} export not supported yet`;
+    return item.moreIndex >= 0 ? '' : 'Not ready to download yet';
+  }
+
+  function isStudioItemUnavailable(item) {
+    return !!studioItemUnavailableReason(item);
+  }
+
+  // A job record holds the keys Resume's fresh scans give (scanArtifactsData,
+  // scanNotesData), never the merged list's: each row keeps them as jobKey, and
+  // generatedExportPlan hands them on. Artifacts are in the same order as
+  // scanArtifactsData. A Studio note takes the key of its entry in `notes`, stamped
+  // by the caller (the labels of untitled rows differ); with no notes scan, one
+  // computed from the row. Source notes come with theirs.
+  function stampGeneratedJobKeys(items, notes) {
+    const stamp = list => {
+      const keys = listItemKeys(list, { titleOf: item => item.label, typeOf: item => item.type });
+      list.forEach((item, i) => { item.jobKey = keys[i]; });
+    };
+    stamp(items.filter(item => item.kind === 'artifact'));
+    const studioNotes = items.filter(item => item.kind === 'note');
+    stamp(studioNotes);
+    const scanned = new Map(notes.map(note => [note.index, note]));
+    for (const item of studioNotes) {
+      const key = scanned.get(item.kindIndex)?._listKey;
+      if (key) item.jobKey = key;
+    }
+  }
+
+  // The headline of a Generated export's combined panel: what was left out of the
+  // whole selection, so it counts unstarted items too, which no failedItems holds,
+  // and the items the export cannot take. steps: runRetryChain's, with exported and
+  // stopped. total: items sent to export. skipped: generatedExportPlan's.
+  function generatedExportMessage({ steps = [], notRun = [], total = 0, skipped = [] } = {}) {
+    const exported = steps.reduce((sum, step) => sum + (step.exported || 0), 0);
+    const left = total - exported;
+    const all = total + skipped.length;
+    const head = notRun.length
+      ? `Export stopped before ${notRun.map(n => n.name.toLowerCase()).join(' and ')}`
+      : steps.some(step => step.stopped) ? 'Export stopped' : 'Export finished';
+    if (left <= 0 && skipped.length === 0) return head;
+    if (left <= 0) return `${head} — ${skipped.length} of ${all} items can't be exported`;
+    const rest = skipped.length ? `, ${skipped.length} of them can't be exported` : '';
+    return `${head} — ${left + skipped.length} of ${all} items not exported${rest}`;
+  }
+
+  // The combined panel of a Generated export: combineRetryOutcomes plus the headline
+  // above. Skipped items name their titles and make it a warning, never a success:
+  // someone may delete the notebook after reading it. They stay out of `remaining`.
+  function generatedExportOutcome({ steps = [], notRun = [], total = 0, skipped = [] } = {}) {
+    const combined = combineRetryOutcomes({ steps, notRun });
+    const outcome = { ...combined, message: generatedExportMessage({ steps, notRun, total, skipped }) };
+    if (skipped.length) {
+      outcome.lines = [...combined.lines, `Can't be exported (${skipped.length}): ${skipped.map(item => item.label).join(', ')}`];
+      if (outcome.level === 'success' || outcome.level === 'info') outcome.level = 'warning';
+    }
+    return outcome;
+  }
+
+  // The Generated action's label for a generatedExportPlan
+  // Delete Selected resolves a Studio item by its label alone, so the first of two
+  // same-titled items would go whichever was ticked. Such items are skipped here,
+  // like untitled ones, whose made-up label ("Item 3") could hit a real item. A row
+  // delete checks position and title. Sources-panel notes go by their own index, so
+  // a shared title does not touch them.
+  function bulkDeletePlan(selected = [], allItems = []) {
+    const isStudio = item => item.kind !== 'source-note';
+    const labelOf = item => String(item.label || '').trim();
+    const counts = new Map();
+    allItems.filter(isStudio).forEach(item => counts.set(labelOf(item), (counts.get(labelOf(item)) || 0) + 1));
+    const plan = { deletable: [], skippedUntitled: 0, skippedDuplicate: 0 };
+    for (const item of selected) {
+      if (isStudio(item) && item.untitled === true) plan.skippedUntitled++;
+      else if (isStudio(item) && counts.get(labelOf(item)) > 1) plan.skippedDuplicate++;
+      else plan.deletable.push(item);
+    }
+    return plan;
+  }
+
+  function bulkDeleteSkipText({ skippedUntitled = 0, skippedDuplicate = 0 } = {}) {
+    const parts = [];
+    if (skippedUntitled > 0) parts.push(`${skippedUntitled} untitled item(s)`);
+    if (skippedDuplicate > 0) parts.push(`${skippedDuplicate} item(s) with a shared title`);
+    return parts.join(' and ');
+  }
+
+  function generatedActionLabel({ artifacts = [], notes = [], skipped = [] } = {}) {
+    const n = artifacts.length + notes.length;
+    if (skipped.length === 0) return actionLabel(n, 'item');
+    const left = `${skipped.length} can't be exported`;
+    return n === 0 ? left : `${actionLabel(n, 'item')} · ${left}`;
+  }
+
+  // The Generated list's selection as the two exports it becomes: artifacts in the
+  // scanArtifactsData shape, notes in the exportSingleNote shape. skipped: what
+  // cannot be exported (studioItemUnavailableReason); those stay selectable for
+  // delete. item.jobKey (see stampGeneratedJobKeys) travels as the non-enumerable _listKey jobItemKeys reads, so a job record holds the keys a
+  // fresh scan of that category gives, whatever else is in the merged list.
+  function generatedExportPlan(items) {
+    const plan = { artifacts: [], notes: [], skipped: [] };
+    const keyed = (out, item) => {
+      if (typeof item.jobKey === 'string') Object.defineProperty(out, '_listKey', { value: item.jobKey, configurable: true, writable: true });
+      return out;
+    };
+    for (const item of items || []) {
+      if (!item) continue;
+      if (isStudioItemUnavailable(item)) {
+        plan.skipped.push(item);
+      } else if (item.kind === 'artifact') {
+        plan.artifacts.push(keyed({ index: item.moreIndex, label: item.label, type: item.type, details: item.details, disabled: false }, item));
+      } else if (item.kind === 'note') {
+        plan.notes.push(keyed({ index: item.kindIndex, title: item.label, type: item.type }, item));
+      } else if (item.kind === 'source-note') {
+        plan.notes.push(keyed({ index: -1, sourceIndex: item.sourceIndex, title: item.label, type: item.type }, item));
+      } else {
+        plan.skipped.push(item);
+      }
+    }
+    return plan;
+  }
+
+  // Everything the Generated rows are drawn from and act on (and the page their
+  // buttons talk to); equal signatures need no redraw
+  function generatedSignature(tab, items) {
+    return JSON.stringify([tab.id, tab.url, items.map(item => [
+      item.kind, item.label, item.type, item.details || '', item.combinedIndex, item.kindIndex, item.moreIndex,
+      item.sourceIndex, !!item.downloadable, !!item.untitled, item.jobKey
+    ])]);
+  }
+
   function listStateKey(notebookId, tab) {
     return `nlme.list.${notebookId}.${tab}`;
   }
@@ -2445,7 +2589,6 @@ footer { margin-top: 3rem; }
     sourcesPerZip: 25,
     notesPerZip: 25,
     cleanOCRArtifacts: true,
-    showStudioTab: false,
     slidesFormat: 'pdf',
     citationDetail: 'quotes',
     reuseCitations: true,
@@ -2510,6 +2653,17 @@ footer { margin-top: 3rem; }
     listView,
     pruneSelection,
     listSummary,
+    actionLabel,
+    studioItemUnavailableReason,
+    isStudioItemUnavailable,
+    stampGeneratedJobKeys,
+    generatedExportMessage,
+    generatedExportOutcome,
+    generatedActionLabel,
+    bulkDeletePlan,
+    bulkDeleteSkipText,
+    generatedExportPlan,
+    generatedSignature,
     listStateKey,
     pruneListStates,
     restoreListState,

@@ -116,26 +116,38 @@ async function embedAndReportImages(markdown, item, earlierFailures, warn, jobWa
 async function scanSourcesPage() {
   console.log('[NotebookLM Takeout] Scanning sources page...');
 
+  const seq = ++_sourcesScanSeq;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (seq !== _sourcesScanSeq) return;
 
   if (!isNotebookUrl(tab?.url)) {
+    dropSourcesList();
+    const resultsDiv = document.getElementById('sources-scan-results');
+    if (resultsDiv) resultsDiv.innerHTML = NOTEBOOK_PROMPT_HTML;
+    setTabCount('sources', null);
     showToast('Please open NotebookLM first', 'error');
     return;
   }
 
   try {
     const { sources, skippedNotes } = await scanSourcesData(tab.id);
+    if (seq !== _sourcesScanSeq) return;
 
     console.log(`[NotebookLM Takeout] Found ${sources.length} sources`);
 
     renderSourcesList(sources, skippedNotes);
   } catch (error) {
-    if (error instanceof ScanError) {
-      showToast(`Scan failed: ${error.message}`, 'error');
-      return;
+    if (seq !== _sourcesScanSeq) return;
+    const scanError = error instanceof ScanError;
+    if (!scanError) console.error('[NotebookLM Takeout] Scan error:', error);
+    const message = scanError ? `Scan failed: ${error.message}` : 'Failed to scan sources';
+    showToast(message, 'error');
+    // A list already drawn stays; otherwise "Scanning..." would stay for good
+    if (!_sourcesListController) {
+      const resultsDiv = document.getElementById('sources-scan-results');
+      if (resultsDiv) resultsDiv.innerHTML = `<p class="error-message">${escapeHtml(message)}</p>`;
+      setTabCount('sources', null);
     }
-    console.error('[NotebookLM Takeout] Scan error:', error);
-    showToast('Failed to scan sources', 'error');
   }
 }
 // ========== SOURCES EXPORT FUNCTIONS ==========
@@ -156,6 +168,17 @@ async function scanSourcesData(tabId) {
 
 // The Sources tab's list controller (sidebar-list.js); replaced on every redraw
 let _sourcesListController = null;
+// The newest scan: an older one still waiting on the page must not draw
+let _sourcesScanSeq = 0;
+
+// The list is gone, and with it the action its selection drove
+function dropSourcesList() {
+  if (_sourcesListController) {
+    _sourcesListController.destroy();
+    _sourcesListController = null;
+  }
+  idleTabAction('sources');
+}
 
 /**
  * Render the list of sources: filter toolbar, checkboxes (all selected at first)
@@ -163,15 +186,13 @@ let _sourcesListController = null;
  */
 function renderSourcesList(sources, skippedNotes = 0) {
   const resultsDiv = document.getElementById('sources-scan-results');
-  const countBadge = document.getElementById('sources-count');
-  const exportBtn = document.getElementById('export-sources-btn');
 
   if (_sourcesListController) {
     _sourcesListController.destroy();
     _sourcesListController = null;
   }
 
-  countBadge.textContent = sources.length;
+  setTabCount('sources', sources.length);
 
   // Notes shown in NotebookLM's Sources panel are exported from the Notes tab
   const notesHint = skippedNotes > 0
@@ -180,7 +201,7 @@ function renderSourcesList(sources, skippedNotes = 0) {
 
   if (sources.length === 0) {
     resultsDiv.innerHTML = notesHint + '<p class="empty-message">No sources found. Add source materials to your notebook.</p>';
-    exportBtn.style.display = 'none';
+    idleTabAction('sources');
     return;
   }
 
@@ -198,9 +219,6 @@ function renderSourcesList(sources, skippedNotes = 0) {
       `;
   };
 
-  // Show export button
-  exportBtn.style.display = 'block';
-
   _sourcesListController = createListController({
     tab: 'sources',
     container: listEl,
@@ -211,7 +229,11 @@ function renderSourcesList(sources, skippedNotes = 0) {
     rowHtml,
     onChange: controller => {
       const n = controller.selectedCount();
-      setButtonLabel(exportBtn, n > 0 ? `Export Selected Sources (${n})` : 'Export Selected Sources');
+      setTabAction('sources', {
+        label: NLME.actionLabel(n, 'source'),
+        disabled: n === 0,
+        onClick: exportSelectedSources
+      });
     }
   });
 
@@ -222,21 +244,18 @@ function renderSourcesList(sources, skippedNotes = 0) {
     const source = sources[parseInt(btn.dataset.index, 10)];
     if (source) await runExclusive('Sources export', () => exportSources([source], { record: false }));
   });
+}
 
-  // The button is static markup: bind once, read the current controller on click
-  if (!exportBtn.dataset.bound) {
-    exportBtn.dataset.bound = '1';
-    exportBtn.addEventListener('click', async () => {
-      const selected = _sourcesListController ? _sourcesListController.selectedItems() : [];
+// The Sources action: exports what the current list has selected
+async function exportSelectedSources() {
+  const selected = _sourcesListController ? _sourcesListController.selectedItems() : [];
 
-      if (selected.length === 0) {
-        showToast('No sources selected', 'warning');
-        return;
-      }
-
-      await runExclusive('Sources export', () => exportSources(selected));
-    });
+  if (selected.length === 0) {
+    showToast('No sources selected', 'warning');
+    return;
   }
+
+  await runExclusive('Sources export', () => exportSources(selected));
 }
 
 // Sources export (Milestone 3a): the shared export shell around

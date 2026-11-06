@@ -1,4 +1,4 @@
-// NotebookLM Takeout - Sidebar: Artifacts tab (artifact files, scan, Download Selected, Download All, data-table converters)
+// NotebookLM Takeout - Sidebar: artifacts (artifact files, scan data, the artifact export, data-table converters; the list is the Generated tab)
 // Classic script, loads after sidebar-core.js. Shared helpers live in sidebar-core.js.
 
 /**
@@ -226,8 +226,8 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
   return { success: true, files: files.length };
 }
 
-// Studio artifacts from SCAN_STUDIO_ITEMS, no UI (Artifacts tab, Full
-// Takeout). disabled: a type that cannot be exported yet.
+// Studio artifacts from SCAN_STUDIO_ITEMS, no UI (Full Takeout,
+// Resume). disabled: a type that cannot be exported yet.
 // @returns {Promise<Array<{ index, label, type, details, disabled }>>}
 async function scanArtifactsData(tabId) {
   await ensureContentScriptLoaded(tabId);
@@ -241,213 +241,6 @@ async function scanArtifactsData(tabId) {
       details: item.details,
       disabled: !item.downloadable
     }));
-}
-
-// The Artifacts tab's list controller (sidebar-list.js) and what it was built from.
-// startAutoRefresh calls scanPage every few seconds: when the scan finds the same
-// items the list is left alone, so typing in the filter box is never interrupted.
-let _artifactsListController = null;
-let _artifactsSignature = null;
-
-function dropArtifactsList() {
-  if (_artifactsListController) {
-    _artifactsListController.destroy();
-    _artifactsListController = null;
-  }
-  _artifactsSignature = null;
-}
-
-// Everything the rows are drawn from (and the page their buttons talk to); equal
-// signatures need no redraw
-function artifactsSignature(tab, items) {
-  const keys = NLME.listItemKeys(items, { titleOf: i => i.label, typeOf: i => i.type });
-  return JSON.stringify([tab.id, tab.url, items.map((item, i) => [keys[i], item.index, !!item.disabled, item.details || ''])]);
-}
-
-// "Download Selected (K)": disabled at K = 0
-function updateArtifactsDownloadBtn(controller = _artifactsListController) {
-  const btn = document.getElementById('download-all-btn');
-  if (!btn || !controller) return;
-  const n = controller.selectedCount();
-  btn.disabled = n === 0;
-  setButtonLabel(btn, `Download Selected (${n})`);
-}
-
-async function scanPage() {
-  const resultsEl = document.getElementById('scan-results');
-  const countBadge = document.getElementById('artifact-count');
-  // A live list is not blanked while rescanning: the redraw (if any) happens below
-  const listLive = !!_artifactsListController && !!resultsEl.querySelector('.artifacts-list');
-  if (!listLive) {
-    resultsEl.innerHTML = '<p class="scanning">Scanning...</p>';
-    countBadge.textContent = '0';
-  }
-
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-    if (!isNotebookUrl(tab?.url)) {
-      dropArtifactsList();
-      resultsEl.innerHTML = '<p class="error">Please open NotebookLM first</p>';
-      countBadge.textContent = '0';
-      return;
-    }
-
-    const items = await scanArtifactsData(tab.id);
-
-    if (await studioViewerOpen(tab.id)) {
-      dropArtifactsList();
-      resultsEl.innerHTML = STUDIO_ITEM_OPEN_HTML;
-      countBadge.textContent = '0';
-      return;
-    }
-
-    if (items.length === 0) {
-      dropArtifactsList();
-      resultsEl.innerHTML = '<p class="empty-message">No downloadable artifacts found.<br><span class="hint">Make sure you have generated content in Studio.</span></p>';
-      countBadge.textContent = '0';
-      return;
-    }
-
-    const signature = artifactsSignature(tab, items);
-    if (listLive && signature === _artifactsSignature && resultsEl.querySelector('.artifacts-list')) {
-      return; // unchanged: keep the list, its focus, caret, scroll and selection
-    }
-
-    const enabledItems = items.filter(i => !i.disabled);
-    countBadge.textContent = enabledItems.length;
-
-    // A redraw must not cost the user their place: keep the Zip choice, the scroll
-    // position and, if they are typing in the filter box, focus and caret
-    const zipChecked = document.getElementById('zip-checkbox')?.checked ?? !!settings.autoZip;
-    const scrollTop = resultsEl.scrollTop;
-    const active = document.activeElement;
-    const searchHadFocus = !!active && active.classList && active.classList.contains('list-search') && resultsEl.contains(active);
-    const caret = searchHadFocus ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null;
-
-    dropArtifactsList();
-    resultsEl.innerHTML = `
-      <div class="artifacts-list"></div>
-      <div class="download-all-controls">
-        <button id="download-all-btn" class="btn btn-primary" disabled>
-          ${icon('download')}
-          Download Selected (0)
-        </button>
-        <label class="zip-checkbox">
-          <input type="checkbox" id="zip-checkbox" ${zipChecked ? 'checked' : ''}> Zip
-        </label>
-      </div>
-    `;
-    const listEl = resultsEl.querySelector('.artifacts-list');
-
-    const rowHtml = (item, idx) => `
-        <div class="scan-item-icon">
-          ${getIconForType(item.type)}
-        </div>
-        <div class="scan-item-info">
-          <strong>${escapeHtml(item.label)}</strong>
-          <small>${escapeHtml(item.type)}${item.details ? ' · ' + escapeHtml(item.details) : ''}</small>
-        </div>
-        <button class="btn-icon download-single-btn" data-index="${escapeHtml(String(item.index))}" data-item-idx="${idx}" ${item.disabled ? `disabled title="${escapeHtml(item.type)} export not supported yet"` :`title="Download ${escapeHtml(item.label)}"`} aria-label="Download ${escapeHtml(item.label)}">
-          ${icon('download')}
-          <span class="download-status"></span>
-        </button>
-      `;
-
-    _artifactsListController = createListController({
-      tab: 'artifacts',
-      container: listEl,
-      items,
-      titleOf: item => item.label,
-      typeOf: item => item.type,
-      defaultSelected: 'all',
-      canSelect: item => !item.disabled,
-      rowHtml,
-      onChange: controller => updateArtifactsDownloadBtn(controller)
-    });
-    _artifactsSignature = signature;
-
-    resultsEl.scrollTop = scrollTop;
-    if (caret) {
-      const search = listEl.querySelector('.list-search');
-      if (search) {
-        search.focus({ preventScroll: true });
-        try { search.setSelectionRange(caret[0], caret[1], caret[2] || 'none'); } catch (_) { /* not a text field */ }
-      }
-    }
-
-    // Add click handlers for individual download buttons with status feedback
-    listEl.querySelectorAll('button[data-index]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const idx = parseInt(btn.dataset.index);
-        const itemIdx = parseInt(btn.dataset.itemIdx);
-        const item = items[itemIdx];
-        const statusSpan = btn.querySelector('.download-status');
-
-        // Disable button and show downloading status
-        btn.disabled = true;
-        if (statusSpan) {
-          statusSpan.innerHTML = icon('refresh');
-          statusSpan.className = 'download-status downloading';
-        }
-
-        try {
-          const outcome = await runExclusive('Artifact download', () => triggerItemDownload(tab.id, idx, item.label, item.type));
-          if (outcome === JOB_BUSY) {
-            // Refused: another job is running; nothing was downloaded
-            if (statusSpan) { statusSpan.textContent = ''; statusSpan.className = 'download-status'; }
-            btn.disabled = false;
-            return;
-          }
-
-          // Show success status
-          if (statusSpan) {
-            statusSpan.innerHTML = icon('check');
-            statusSpan.className = 'download-status success';
-          }
-
-          // Re-enable button after delay
-          setTimeout(() => {
-            btn.disabled = false;
-            if (statusSpan) {
-              statusSpan.textContent = '';
-              statusSpan.className = 'download-status';
-            }
-          }, 3000);
-
-        } catch (error) {
-          // Show error status
-          if (statusSpan) {
-            statusSpan.innerHTML = icon('close');
-            statusSpan.className = 'download-status error';
-          }
-
-          // Re-enable button after delay
-          setTimeout(() => {
-            btn.disabled = false;
-            if (statusSpan) {
-              statusSpan.textContent = '';
-              statusSpan.className = 'download-status';
-            }
-          }, 3000);
-        }
-      });
-    });
-
-    // Add handler for Download Selected button
-    const downloadAllBtn = document.getElementById('download-all-btn');
-    downloadAllBtn.addEventListener('click', async () => {
-      const selected = _artifactsListController ? _artifactsListController.selectedItems() : [];
-      if (selected.length === 0) return;
-      await runExclusive('Download All', () => downloadAllArtifacts(tab.id, selected));
-    });
-    updateArtifactsDownloadBtn();
-
-  } catch (error) {
-    console.error('Scan failed:', error);
-    dropArtifactsList();
-    resultsEl.innerHTML = `<p class="error">Scan failed: ${escapeHtml(error.message)}</p>`;
-  }
 }
 
 function convertTableToCSV(htmlContent) {
@@ -979,36 +772,30 @@ async function triggerItemDownload(tabId, itemIndex, artifactName, artifactType)
 // after each item; a part may pass the cap by one item.
 const ARTIFACT_ZIP_MAX_BYTES = 500 * 1024 * 1024;
 
-// Download All (Milestone 3a): every artifact on the job runner. ZIP on:
+// Artifacts export (Milestone 3a): the given artifacts on the job runner. ZIP on:
 // <Notebook>-artifacts-<ts>.zip, or -partN.zip parts past the size cap; ZIP off: Downloads/<Notebook>/, one item
 // per call. Either way: <type folder>/<stem>.<ext>, _index.md, errors.md,
 // manifest.json. Returns withExportShell's outcome, like exportNotesAsMarkdown.
-async function downloadAllArtifacts(tabId, items, { updateRecord = false } = {}) {
+// zip: default the "Always use ZIP" setting; its Retry keeps this run's choice.
+async function downloadAllArtifacts(tabId, items, { updateRecord = false, zip = !!settings.autoZip } = {}) {
   await preflightWarn(tabId, 'artifacts');
-  const zipEnabled = document.getElementById('zip-checkbox')?.checked || false;
-  const downloadBtn = document.getElementById('download-all-btn');
-  if (downloadBtn) downloadBtn.disabled = true;
   startExportTiming();
 
-  try {
-    return await withExportShell({ label: 'artifacts', overlayMessage: 'Preparing to download artifacts...', tabId }, async shell => {
-      const folder = zipEnabled ? null : (shell.projectName || 'NotebookLM');
-      const { result, zips, savedOutside } = await withJobRecord(shell, 'artifacts', 'Artifacts', 'artifacts', items,
-        tracker => runArtifactsJob(shell, items, { folder, tracker }), { update: updateRecord });
+  return withExportShell({ label: 'artifacts', overlayMessage: 'Preparing to download artifacts...', tabId }, async shell => {
+    const folder = zip ? null : (shell.projectName || 'NotebookLM');
+    const { result, zips, savedOutside } = await withJobRecord(shell, 'artifacts', 'Artifacts', 'artifacts', items,
+      tracker => runArtifactsJob(shell, items, { folder, tracker }), { update: updateRecord });
 
-      return shell.finish({
-        kind: 'artifacts',
-        selected: items.length,
-        result,
-        errorNote: savedOutside > 0 ? `${savedOutside} saved separately to Downloads, see errors.md` : undefined,
-        // ZIP mode: the ZIP names; folder mode: the folder, once it holds a file
-        saved: folder ? (result.exported > 0 || result.errors.length > 0 ? [folder] : []) : zips,
-        retry: retryFor(result.failedItems, 'Download All', failed => downloadAllArtifacts(shell.tab.id, failed, { updateRecord: true }))
-      });
+    return shell.finish({
+      kind: 'artifacts',
+      selected: items.length,
+      result,
+      errorNote: savedOutside > 0 ? `${savedOutside} saved separately to Downloads, see errors.md` : undefined,
+      // ZIP mode: the ZIP names; folder mode: the folder, once it holds a file
+      saved: folder ? (result.exported > 0 || result.errors.length > 0 ? [folder] : []) : zips,
+      retry: retryFor(result.failedItems, 'Artifacts export', failed => downloadAllArtifacts(shell.tab.id, failed, { updateRecord: true, zip }))
     });
-  } finally {
-    updateArtifactsDownloadBtn(); // enabled again only if something is still selected
-  }
+  });
 }
 
 /**

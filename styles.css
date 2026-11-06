@@ -150,13 +150,6 @@ body {
   margin: 0;
 }
 
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-
 .btn-small {
   padding: 6px 12px;
   font-size: 12px;
@@ -197,21 +190,6 @@ body {
 .artifact-title {
   flex: 1;
   font-weight: 500;
-}
-
-.artifact-count {
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 10px;
-  min-width: 20px;
-  text-align: center;
-}
-
-.artifact-group.empty .artifact-count {
-  background: var(--muted);
 }
 
 .artifact-list {
@@ -502,18 +480,6 @@ body {
   margin: 4px 0 12px;
 }
 
-/* Download All Controls */
-.download-all-controls {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 12px;
-}
-
-.download-all-controls .btn-primary {
-  flex: 1;
-}
-
 /* Full Takeout button with its own ZIP choice, under the header */
 .takeout-row {
   display: flex;
@@ -536,21 +502,6 @@ body {
   width: 14px;
   height: 14px;
   margin: 0;
-}
-
-.zip-checkbox {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.zip-checkbox input {
-  cursor: pointer;
-  width: 14px;
-  height: 14px;
 }
 
 /* Spinner Animation */
@@ -583,23 +534,6 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-}
-
-.sidebar-mode #artifacts-section {
-  flex: 1;
-  overflow-y: auto;
-}
-
-/* Count Badge */
-.count-badge {
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 10px;
-  min-width: 20px;
-  text-align: center;
 }
 
 /* Scan Item Icons */
@@ -881,27 +815,21 @@ body {
   max-height: none; /* Remove max-height for sidebar */
 }
 
-/* Download all controls in sidebar */
-.download-all-controls {
-  position: sticky;
-  bottom: 0;
-  background: var(--bg);
-  padding: 12px 0 0;
-  margin-top: 8px;
-  border-top: 1px solid var(--line);
-}
-
 /* Tab Navigation */
 .tabs {
   display: flex;
-  gap: 8px;
-  padding: 12px 16px;
+  padding: 12px 0;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
 
 .tab-btn {
-  padding: 8px 16px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
@@ -911,6 +839,12 @@ body {
   transition: all 0.2s ease;
 }
 
+/* Room for each label plus its padding: at 320px with big counts only the count gives way */
+.tab-btn[data-tab="sources"] { min-width: 5.5em; }
+.tab-btn[data-tab="notes"] { min-width: 4.5em; }
+.tab-btn[data-tab="studio"] { min-width: 6.5em; }
+.tab-btn[data-tab="chat"] { min-width: 3.5em; }
+
 .tab-btn:hover {
   color: var(--accent);
 }
@@ -918,6 +852,18 @@ body {
 .tab-btn.active {
   color: var(--accent);
   border-bottom-color: var(--accent);
+}
+
+/* The number of items found, on the tab label */
+.tab-count {
+  margin-left: 4px;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.tab-count[hidden] {
+  display: none;
 }
 
 .tab-content {
@@ -1034,19 +980,6 @@ body {
   margin-right: 0;
 }
 
-/* Export Controls */
-.export-controls {
-  padding: 16px;
-  border-top: 1px solid var(--line);
-  background: var(--bg);
-  position: sticky;
-  bottom: 0;
-}
-
-.export-controls .btn {
-  width: 100%;
-}
-
 /* ============================================
    DOWNLOAD STATUS INDICATORS
    ============================================ */
@@ -1139,21 +1072,6 @@ body {
 
 /* ========== SOURCES TAB STYLES ========== */
 
-/* Sources info banner */
-.sources-info {
-  padding: 12px;
-  background: var(--warn-bg);
-  border-radius: 8px;
-  margin-bottom: 16px;
-  border-left: 3px solid var(--warn);
-}
-
-.sources-info .info-text {
-  font-size: 12px;
-  color: var(--warn);
-  margin: 0;
-}
-
 /* Sources list */
 .source-icon {
   display: flex;
@@ -1190,19 +1108,6 @@ body {
 
 .download-single-btn:hover {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
-/* Sources count badge */
-#sources-count {
-  background: var(--warn-bg);
-  color: var(--warn);
-}
-
-/* Export controls */
-.export-controls {
-  display: flex;
-  gap: 10px;
-  margin-top: 16px;
 }
 
 /* DOM Warning Banner */
@@ -1683,6 +1588,8 @@ body {
 body.job-running .tab-content button,
 body.job-running .tab-content input,
 body.job-running .tab-content select,
+body.job-running #action-btn,
+body.job-running #studio-delete-selected-btn,
 body.job-running #rescan-btn {
   pointer-events: none;
   opacity: 0.5;
@@ -1806,4 +1713,48 @@ body.job-running .list-row {
   font-size: 13px;
   color: var(--muted);
   margin: 0 0 8px;
+}
+
+/* The shared action bar: one button docked under the open tab's list */
+.action-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.action-bar[hidden] {
+  display: none;
+}
+
+.action-bar .btn {
+  flex: 1 1 auto;
+  width: auto;
+  margin-top: 0;
+}
+
+.action-bar .btn[hidden] {
+  display: none;
+}
+
+.action-bar .btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Chat: the note above Load chat */
+.chat-load {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.chat-load .info-text {
+  margin: 0;
 }

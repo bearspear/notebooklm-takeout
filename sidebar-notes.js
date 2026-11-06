@@ -15,39 +15,48 @@ async function scanNotesData(tabId) {
 // Sidebar function to trigger note scan
 async function scanNotesPage() {
   const notesResults = document.getElementById('notes-results');
-  const noteCount = document.getElementById('note-count');
+  const seq = ++_notesScanSeq;
 
   notesResults.innerHTML = '<p class="scanning">Scanning for notes...</p>';
+  idleTabAction('notes'); // the list that was here is gone
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (seq !== _notesScanSeq) return;
 
     if (!isNotebookUrl(tab?.url)) {
-      notesResults.innerHTML = '<p class="empty-message">Please open NotebookLM first</p>';
-      noteCount.textContent = '0';
+      renderNotesList([]);
+      notesResults.innerHTML = NOTEBOOK_PROMPT_HTML;
+      setTabCount('notes', null);
       return;
     }
 
     const notes = await scanNotesData(tab.id);
     console.log('[NotebookLM Takeout] Scanned notes:', notes);
 
-    if (await studioViewerOpen(tab.id)) {
+    const viewerOpen = await studioViewerOpen(tab.id);
+    if (seq !== _notesScanSeq) return;
+    if (viewerOpen) {
       renderNotesList([]);
       notesResults.innerHTML = STUDIO_ITEM_OPEN_HTML;
+      setTabCount('notes', null);
       return;
     }
 
     renderNotesList(notes);
 
   } catch (error) {
+    if (seq !== _notesScanSeq) return;
     console.error('Error scanning for notes:', error);
     notesResults.innerHTML = '<p class="error-message">Failed to scan for notes. Please refresh the NotebookLM page and try again.</p>';
-    noteCount.textContent = '0';
+    setTabCount('notes', null);
   }
 }
 
 // The Notes tab's list controller (sidebar-list.js); replaced on every redraw
 let _notesListController = null;
+// The newest scan: an older one still waiting on the page must not draw
+let _notesScanSeq = 0;
 
 // Single-note export from a row button: loose .md files, no ZIP
 async function handleNoteRowExport(note) {
@@ -66,7 +75,6 @@ async function handleNoteRowExport(note) {
 // Render notes list with filter toolbar and checkboxes
 function renderNotesList(notes) {
   const notesResults = document.getElementById('notes-results');
-  const noteCount = document.getElementById('note-count');
 
   if (_notesListController) {
     _notesListController.destroy();
@@ -75,22 +83,15 @@ function renderNotesList(notes) {
 
   if (notes.length === 0) {
     notesResults.innerHTML = '<p class="empty-message">No notes found. Add source materials to your notebook.</p>';
-    noteCount.textContent = '0';
+    setTabCount('notes', 0);
+    idleTabAction('notes');
     return;
   }
 
-  noteCount.textContent = notes.length;
+  setTabCount('notes', notes.length);
 
-  notesResults.innerHTML = `
-    <div class="notes-list"></div>
-    <div class="export-controls">
-      <button id="export-notes-btn" class="btn btn-primary">
-        Export Selected Notes
-      </button>
-    </div>
-  `;
+  notesResults.innerHTML = '<div class="notes-list"></div>';
   const listEl = notesResults.querySelector('.notes-list');
-  const exportBtn = document.getElementById('export-notes-btn');
 
   const rowHtml = (note, idx) => {
     // Choose icon based on note type
@@ -118,7 +119,11 @@ function renderNotesList(notes) {
     rowHtml,
     onChange: controller => {
       const n = controller.selectedCount();
-      exportBtn.textContent = n > 0 ? `Export Selected Notes (${n})` : 'Export Selected Notes';
+      setTabAction('notes', {
+        label: NLME.actionLabel(n, 'note'),
+        disabled: n === 0,
+        onClick: exportSelectedNotes
+      });
     }
   });
 
@@ -131,17 +136,18 @@ function renderNotesList(notes) {
     if (note) handleNoteRowExport(note);
   });
 
-  // Setup export button
-  exportBtn.addEventListener('click', async () => {
-    const selected = _notesListController.selectedItems();
+}
 
-    if (selected.length === 0) {
-      showToast('Please select at least one note', 'error');
-      return;
-    }
+// The Notes action: exports what the current list has selected
+async function exportSelectedNotes() {
+  const selected = _notesListController ? _notesListController.selectedItems() : [];
 
-    await runExclusive('Notes export', () => exportNotesAsMarkdown(selected));
-  });
+  if (selected.length === 0) {
+    showToast('Please select at least one note', 'error');
+    return;
+  }
+
+  await runExclusive('Notes export', () => exportNotesAsMarkdown(selected));
 }
 
 // Notes export (Milestone 3a): the shared export shell around runNotesJob.

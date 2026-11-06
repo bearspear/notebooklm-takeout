@@ -234,8 +234,8 @@ test('the Turndown list rule writes items through listItemMarkdown', () => {
   const rule = src.slice(src.indexOf("addRule('listsWithWrappers'"), src.indexOf("addRule('tables'"));
   assert.match(rule, /NLME\.listItemMarkdown\(marker, /);
 });
-test('the Notes, Artifacts and Generated tabs say when an open item hides the Studio list', () => {
-  const scans = { 'sidebar-notes.js': 'scanNotesPage', 'sidebar-artifacts.js': 'scanPage', 'sidebar-generated.js': 'scanStudioPage' };
+test('the Notes and Generated tabs say when an open item hides the Studio list', () => {
+  const scans = { 'sidebar-notes.js': 'scanNotesPage', 'sidebar-generated.js': 'scanStudioPage' };
   for (const [file, name] of Object.entries(scans)) {
     const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
     const start = src.indexOf(`async function ${name}(`);
@@ -339,4 +339,84 @@ test('panel has no emoji in its markup', () => {
     });
   }
   assert.deepEqual(problems, [], `Emoji in panel files:\n  ${problems.join('\n  ')}`);
+});
+
+// ---- Generated tab: the parts a person cannot afford to get wrong ----
+
+const vmModule = require('node:vm');
+
+function fnSource(file, name) {
+  const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+  const start = src.search(new RegExp(`^(async )?function ${name}\\(`, 'm'));
+  assert.ok(start >= 0, `${name} not found in ${file}`);
+  return src.slice(start, src.indexOf('\n}\n', start) + 3);
+}
+
+function generatedChain() {
+  const generated = fs.readFileSync(path.join(ROOT, 'sidebar-generated.js'), 'utf8');
+  const steps = generated.slice(generated.indexOf('const GENERATED_EXPORT_STEPS'), generated.indexOf('];\n', generated.indexOf('const GENERATED_EXPORT_STEPS')) + 3);
+  const calls = [];
+  const ctx = vmModule.createContext({ calls, console, showToast() {}, TAKEOUT_RETRY_STEPS: [] });
+  vmModule.runInContext(`
+    let chainActive = false, chainCancelRequested = false;
+    const ok = message => ({ result: { failedItems: [] }, message, level: 'success', saved: [], errors: [] });
+    this.cancelAfterArtifacts = false;
+    const downloadAllArtifacts = async (...args) => {
+      calls.push(['artifacts', ...args]);
+      if (this.cancelAfterArtifacts) chainCancelRequested = true;
+      return ok('a');
+    };
+    const exportNotesAsMarkdown = async (...args) => { calls.push(['notes', ...args]); return ok('n'); };
+    ${fnSource('sidebar-takeout.js', 'runChain')}
+    ${fnSource('sidebar-takeout.js', 'runRetryChain')}
+    ${steps}
+    this.run = items => runChain(() => runRetryChain(items, 7, 'Export', GENERATED_EXPORT_STEPS));
+  `, ctx);
+  return { ctx, calls };
+}
+
+test('a Generated export runs artifacts, then notes, as fresh exports on the scanned tab', async () => {
+  const { ctx, calls } = generatedChain();
+  const { steps, notRun } = await ctx.run({ Artifacts: ['a1'], Notes: ['n1'] });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['artifacts', 7, ['a1']], ['notes', ['n1'], { tabId: 7 }]]);
+  assert.deepEqual([steps.length, notRun.length], [2, 0]);
+});
+
+test('a Cancel between the artifact side and the note side stops the notes', async () => {
+  const { ctx, calls } = generatedChain();
+  ctx.cancelAfterArtifacts = true;
+  const { steps, notRun } = await ctx.run({ Artifacts: ['a1'], Notes: ['n1'] });
+  assert.deepEqual(calls.map(c => c[0]), ['artifacts']);
+  assert.equal(steps.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(notRun)), [{ name: 'Notes', failedItems: ['n1'] }]);
+});
+
+test('a Generated export with one side empty runs only the other', async () => {
+  const { ctx, calls } = generatedChain();
+  await ctx.run({ Artifacts: [], Notes: ['n1'] });
+  assert.deepEqual(calls.map(c => c[0]), ['notes']);
+});
+
+test('Generated keeps the delete guards', () => {
+  const generated = fs.readFileSync(path.join(ROOT, 'sidebar-generated.js'), 'utf8');
+  const send = fnSource('sidebar-generated.js', 'sendStudioDelete');
+  assert.match(send, /useIndex \? \{ label: item\.label, combinedIndex: item\.combinedIndex \} : \{ label: item\.label \}/);
+  assert.match(fnSource('sidebar-generated.js', 'handleStudioBulkDelete'), /useIndex: false/);
+  assert.match(fnSource('sidebar-generated.js', 'handleStudioBulkDelete'), /NLME\.bulkDeletePlan\(/);
+  assert.match(generated, /confirm\(`Delete "\$\{item\.label\}"\? This cannot be undone\.`\)/);
+  assert.match(generated, /confirm\(`Delete \$\{deletable\.length\} item\(s\)\? This cannot be undone\.\$\{skippedNote\}`\)/);
+  // Hidden with its tab; off during a job
+  const bulk = fnSource('sidebar-generated.js', 'updateStudioBulkButtonsState');
+  assert.match(bulk, /deleteBulkBtn\.hidden = !controller \|\| openPanelTab\(\) !== 'studio'/);
+  assert.match(bulk, /deleteBulkBtn\.disabled = deletableN === 0 \|\| !!jobLock\.current\(\)/);
+  assert.match(fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8'), /\.tab-content select, #action-btn, #studio-delete-selected-btn/);
+});
+
+test('the panel has one tab per list, in order, and nothing left of the Artifacts tab', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8');
+  assert.deepEqual([...html.matchAll(/class="tab-btn[^"]*" data-tab="(\w+)"/g)].map(m => m[1]), ['sources', 'notes', 'studio', 'chat']);
+  assert.doesNotMatch(html, /data-tab="studio" hidden|data-tab-content="studio" hidden|data-tab(-content)?="artifacts"/);
+  const files = ['sidebar.html', 'styles.css', ...fs.readdirSync(ROOT).filter(f => /^sidebar-.*\.js$/.test(f))];
+  const text = files.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
+  assert.doesNotMatch(text, /\bscanPage\b|dropArtifactsList|updateArtifactsDownloadBtn|applyStudioTabVisibility|show-studio-tab-checkbox|download-all-btn|studio-download-selected-btn|"zip-checkbox|'zip-checkbox|artifact-count|export-controls/);
 });

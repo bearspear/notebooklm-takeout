@@ -39,31 +39,14 @@
     </div>
 
     <div class="tabs">
-      <button class="tab-btn active" data-tab="sources">Sources</button>
-      <button class="tab-btn" data-tab="notes">Notes</button>
-      <button class="tab-btn" data-tab="artifacts">Artifacts</button>
-      <button class="tab-btn" data-tab="chat">Chat</button>
-      <button class="tab-btn" data-tab="studio" hidden>Generated</button>
-    </div>
-
-    <div class="tab-content" data-tab-content="artifacts">
-      <section id="artifacts-section" class="section">
-      <div class="section-header">
-        <h2>Artifacts</h2>
-        <span id="artifact-count" class="count-badge">0</span>
-      </div>
-      <div id="scan-results" class="scan-results">
-        <p class="scanning">Scanning...</p>
-      </div>
-    </section>
+      <button class="tab-btn active" data-tab="sources">Sources <span class="tab-count" hidden></span></button>
+      <button class="tab-btn" data-tab="notes">Notes <span class="tab-count" hidden></span></button>
+      <button class="tab-btn" data-tab="studio">Generated <span class="tab-count" hidden></span></button>
+      <button class="tab-btn" data-tab="chat">Chat <span class="tab-count" hidden></span></button>
     </div>
 
     <div class="tab-content" data-tab-content="notes">
       <section id="notes-section" class="section">
-        <div class="section-header">
-          <h2>Notes</h2>
-          <span id="note-count" class="count-badge">0</span>
-        </div>
         <div id="notes-results" class="scan-results">
           <p class="scanning">Scanning...</p>
         </div>
@@ -72,94 +55,48 @@
 
     <div class="tab-content active" data-tab-content="sources">
       <section id="sources-section" class="section">
-        <div class="section-header">
-          <h2>Sources</h2>
-          <span id="sources-count" class="count-badge">0</span>
-        </div>
-
-        <div class="sources-info">
-          <p class="info-text">Download your uploaded source documents (markdown, PDFs, etc.) with full content.</p>
-        </div>
-
         <div id="sources-scan-results" class="scan-results">
-          <p class="empty-message">Click "Scan Sources" to find all uploaded source documents.</p>
-        </div>
-
-        <div class="export-controls">
-          <button id="scan-sources-btn" class="btn btn-secondary">
-            <span data-icon="search"></span>
-            Scan Sources
-          </button>
-
-          <button id="export-sources-btn" class="btn btn-primary" style="display: none;">
-            <span data-icon="download"></span>
-            Export Selected Sources
-          </button>
+          <p class="scanning">Scanning...</p>
         </div>
       </section>
     </div>
 
     <div class="tab-content" data-tab-content="chat">
       <section id="chat-section" class="section">
-        <div class="section-header">
-          <h2>Chat History</h2>
-          <span id="chat-count" class="count-badge">0</span>
-        </div>
-
-        <div class="chat-info">
-          <p class="info-text">Export your conversation with NotebookLM, including questions, answers, and citations.</p>
-        </div>
-
         <p id="chat-citation-info" class="info-text chat-citation-info">Citations: Full quotes · change in Settings</p>
 
-        <div id="chat-scan-results" class="scan-results">
-          <p class="empty-message">Click "Scan Chat" to load your conversation history.</p>
+        <div class="chat-load">
+          <p class="info-text">Takeout scrolls your chat panel to the top to load every message. Your place in the chat will move.</p>
+          <button id="scan-chat-btn" class="btn btn-secondary">
+            <span data-icon="refresh"></span>
+            Load chat
+          </button>
         </div>
 
-        <div class="export-controls">
-          <button id="scan-chat-btn" class="btn btn-secondary">
-            <span data-icon="search"></span>
-            Scan Chat
-          </button>
-
-          <button id="export-chat-btn" class="btn btn-primary" style="display: none;">
-            <span data-icon="download"></span>
-            Export Chat
-          </button>
+        <div id="chat-scan-results" class="scan-results">
+          <p class="empty-message">Click "Load chat" to load your conversation history.</p>
         </div>
       </section>
     </div>
 
-    <div class="tab-content" data-tab-content="studio" hidden>
+    <div class="tab-content" data-tab-content="studio">
       <section id="studio-section" class="section">
-        <div class="section-header">
-          <h2>Generated</h2>
-          <span id="studio-count" class="count-badge">0</span>
-        </div>
-
         <div class="studio-info">
-          <p class="info-text">Everything Gemini Notebook generated: Studio items plus the notes in the Sources panel. Download each item individually (Sources-panel notes can't be deleted here yet). No ZIP.</p>
+          <p class="info-text">Everything Gemini Notebook generated: Studio items plus the notes in the Sources panel.</p>
         </div>
 
         <div id="studio-scan-results" class="scan-results">
-          <p class="empty-message">Click "Scan Generated" to load all generated items.</p>
-        </div>
-
-        <div class="export-controls">
-          <button id="scan-studio-btn" class="btn btn-secondary">
-            <span data-icon="search"></span>
-            Scan Generated
-          </button>
-          <button id="studio-download-selected-btn" class="btn btn-primary" style="display: none;" disabled>
-            <span data-icon="download"></span>
-            Download Selected
-          </button>
-          <button id="studio-delete-selected-btn" class="btn btn-danger" style="display: none;" disabled>
-            <span data-icon="trash"></span>
-            Delete Selected
-          </button>
+          <p class="scanning">Scanning...</p>
         </div>
       </section>
+    </div>
+
+    <div id="action-bar" class="action-bar" hidden>
+      <button id="action-btn" class="btn btn-primary" disabled></button>
+      <button id="studio-delete-selected-btn" class="btn btn-danger" hidden disabled>
+        <span data-icon="trash"></span>
+        Delete Selected
+      </button>
     </div>
 
     <div id="download-progress" class="download-progress" style="display: none;">
@@ -212,21 +149,13 @@
         <div class="setting-group">
           <label>
             <input type="checkbox" id="auto-refresh-checkbox">
-            <span>Auto-refresh the lists</span>
+            <span>Auto-refresh the Generated list</span>
           </label>
         </div>
 
         <div class="setting-group">
           <label>Auto-refresh interval (seconds)</label>
           <input type="number" id="refresh-interval-input" min="5" max="60" value="10" class="number-input">
-        </div>
-
-        <div class="setting-group">
-          <label>
-            <input type="checkbox" id="show-studio-tab-checkbox">
-            <span>Show the Generated tab</span>
-          </label>
-          <p class="setting-help">Adds a fifth tab that lists everything Gemini Notebook generated as a single flat list: the Studio panel's items (notes, audio, slides, infographics, reports, data tables, flowcharts) and the notes in the Sources panel. Each row can be downloaded individually — no ZIP — and Studio items can be deleted (Sources-panel notes can't yet). Off by default.</p>
         </div>
       </div>
 

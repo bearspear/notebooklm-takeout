@@ -291,7 +291,7 @@ async function saveFiles(files, { zipName, folder, capture = null } = {}) {
  *   label names the export in logs; healthType ('notes', 'sources', ...) runs
  *   the DOM health check first; preflight ('chat') shows preflightWarn's
  *   toast after the tab lookup; tabId: the tab the items were scanned on
- *   (Download All, every Retry), used instead of the active tab, also for
+ *   (the Generated action, every Retry), used instead of the active tab, also for
  *   shell.meta (notebook title and URL). Omitted: the active tab.
  * @param {(shell: object) => Promise<any>} run
  * @returns {Promise<any>} see above
@@ -375,6 +375,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
 
     // Progress panel in the side panel
     progressPanel.style.display = 'block';
+    progressPanel.scrollIntoView({ block: 'nearest' }); // it sits below a long list
     panelShown = true;
     progressText.textContent = 'Preparing export...';
     progressFill.style.width = '0%';
@@ -528,8 +529,7 @@ async function saveTakeoutImages(images, { root, folder, zipNameFor }) {
 }
 
 // The ZIP setting: the checkbox next to the Full Takeout button, else the saved
-// choice (takeoutZip, falling back to autoZip). The Artifacts tab's Zip tick
-// only affects Download Selected.
+// choice (takeoutZip, falling back to autoZip).
 function takeoutZipEnabled() {
   const checkbox = document.getElementById('takeout-zip-checkbox');
   return checkbox ? checkbox.checked : NLME.takeoutZipChoice(settings);
@@ -938,8 +938,9 @@ async function runChain(fn) {
 }
 
 /**
- * The steps shared by the takeout Retry and Resume, in TAKEOUT_RETRY_STEPS order,
- * each an ordinary tab export of `itemsByName[step.name]` on `tabId`. Empty
+ * The steps shared by the takeout Retry and Resume, in TAKEOUT_RETRY_STEPS order
+ * (chainSteps: the Generated export's own steps), each an ordinary tab export of
+ * `itemsByName[step.name]` on `tabId`. Empty
  * categories are skipped. A cancel (the step's own, or the chain flag set between
  * steps), a declined health-check dialog or an aborted step ends the chain: later
  * categories do not run. Call it inside runChain.
@@ -947,11 +948,11 @@ async function runChain(fn) {
  * @returns {{ steps: object[], notRun: object[] }} the inputs of
  *   NLME.combineRetryOutcomes
  */
-async function runRetryChain(itemsByName, tabId, verb = 'Retry') {
+async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TAKEOUT_RETRY_STEPS) {
   const steps = [];
   const notRun = [];
   let stopped = false;
-  for (const step of TAKEOUT_RETRY_STEPS) {
+  for (const step of chainSteps) {
     const items = itemsByName[step.name] || [];
     if (items.length === 0) continue;
     if (chainCancelRequested) stopped = true;
@@ -974,7 +975,9 @@ async function runRetryChain(itemsByName, tabId, verb = 'Retry') {
       level: out.level,
       saved: out.saved,
       errors: out.errors,
-      failedItems: out.result.failedItems || []
+      failedItems: out.result.failedItems || [],
+      exported: out.result.exported,
+      stopped: !!(out.result.cancelled || out.result.stopped)
     });
     if (out.result.cancelled) stopped = true;
   }

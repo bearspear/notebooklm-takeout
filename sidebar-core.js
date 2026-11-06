@@ -244,10 +244,7 @@ async function init() {
 
 function disableExportButtons() {
   const exportButtons = [
-    'export-notes-btn',
-    'export-sources-btn',
-    'export-chat-btn',
-    'scan-sources-btn',
+    'action-btn',
     'scan-chat-btn',
     'full-takeout-btn',
     'takeout-zip-checkbox'
@@ -264,10 +261,7 @@ function disableExportButtons() {
 
 function enableExportButtons() {
   const exportButtons = [
-    'export-notes-btn',
-    'export-sources-btn',
-    'export-chat-btn',
-    'scan-sources-btn',
+    'action-btn',
     'scan-chat-btn',
     'full-takeout-btn',
     'takeout-zip-checkbox'
@@ -280,6 +274,7 @@ function enableExportButtons() {
       btn.style.opacity = '1';
     }
   });
+  applyAction(); // the action stays off while its list is empty or a job runs
 }
 
 async function loadSettings() {
@@ -358,7 +353,6 @@ function applySettingsToUi() {
   document.getElementById('clean-ocr-artifacts-checkbox').checked = settings.cleanOCRArtifacts;
 
   // Interface
-  document.getElementById('show-studio-tab-checkbox').checked = settings.showStudioTab;
   document.getElementById('slides-format-select').value = settings.slidesFormat;
   document.getElementById('citation-detail-select').value = settings.citationDetail;
   document.getElementById('reuse-citations-checkbox').checked = settings.reuseCitations !== false;
@@ -366,7 +360,6 @@ function applySettingsToUi() {
   document.getElementById('obsidian-names-checkbox').checked = settings.obsidianNames === true;
   document.getElementById('theme-select').value = NLME.themeValue(settings.theme);
   applyTheme();
-  applyStudioTabVisibility();
   updateChatCitationInfo();
 }
 
@@ -392,29 +385,6 @@ function updateChatCitationInfo() {
   if (!el) return;
   const label = { quotes: 'Full quotes', titles: 'Source titles only', none: 'No citations' }[NLME.chatCitationMode(settings)];
   el.textContent = `Citations: ${label} · change in Settings`;
-}
-
-function applyStudioTabVisibility() {
-  const tabBtn = document.querySelector('.tab-btn[data-tab="studio"]');
-  const tabContent = document.querySelector('.tab-content[data-tab-content="studio"]');
-  if (!tabBtn || !tabContent) return;
-
-  if (settings.showStudioTab) {
-    tabBtn.hidden = false;
-    tabContent.hidden = false;
-  } else {
-    tabBtn.hidden = true;
-    tabContent.hidden = true;
-    // If the Generated tab was the active tab, fall back to Sources.
-    if (tabBtn.classList.contains('active')) {
-      tabBtn.classList.remove('active');
-      tabContent.classList.remove('active');
-      const sourcesBtn = document.querySelector('.tab-btn[data-tab="sources"]');
-      const sourcesContent = document.querySelector('.tab-content[data-tab-content="sources"]');
-      if (sourcesBtn) sourcesBtn.classList.add('active');
-      if (sourcesContent) sourcesContent.classList.add('active');
-    }
-  }
 }
 
 async function saveSettings() {
@@ -443,7 +413,6 @@ async function saveSettings() {
   settings.cleanOCRArtifacts = document.getElementById('clean-ocr-artifacts-checkbox').checked;
 
   // Interface
-  settings.showStudioTab = document.getElementById('show-studio-tab-checkbox').checked;
   settings.slidesFormat = document.getElementById('slides-format-select').value === 'pptx' ? 'pptx' : 'pdf';
   settings.citationDetail = ['titles', 'none'].includes(document.getElementById('citation-detail-select').value)
     ? document.getElementById('citation-detail-select').value : 'quotes';
@@ -452,7 +421,6 @@ async function saveSettings() {
   settings.obsidianNames = document.getElementById('obsidian-names-checkbox').checked;
   settings.theme = NLME.themeValue(document.getElementById('theme-select').value);
   applyTheme();
-  applyStudioTabVisibility();
   updateChatCitationInfo();
 
   await chrome.storage.local.set({ settings });
@@ -460,7 +428,7 @@ async function saveSettings() {
 
 function setupEventListeners() {
   document.getElementById('rescan-btn').addEventListener('click', async () => {
-    if (!jobLock.current()) await Promise.resolve(scanPage()).catch(() => {});
+    if (!jobLock.current()) await Promise.resolve(rescanOpenPanelTab()).catch(() => {});
     repaintActiveName();
   });
   document.getElementById('cancel-download-btn')?.addEventListener('click', requestCancel);
@@ -609,12 +577,12 @@ function setupEventListeners() {
     }
   });
 
-  // Sources scan button
-  const scanSourcesBtn = document.getElementById('scan-sources-btn');
-  if (scanSourcesBtn) {
-    scanSourcesBtn.addEventListener('click', scanSourcesPage);
-  }
+  // The shared action bar: runs whatever the open tab last set with setAction
+  document.getElementById('action-btn').addEventListener('click', () => {
+    if (_action && !_action.disabled && !jobLock.current() && _action.onClick) _action.onClick();
+  });
 
+  // Load chat (the Chat tab never scans by itself: it scrolls the page)
   // Chat scan button
   const scanChatBtn = document.getElementById('scan-chat-btn');
   if (scanChatBtn) {
@@ -627,15 +595,7 @@ function setupEventListeners() {
     dismissWarningBtn.addEventListener('click', hideWarningBanner);
   }
 
-  // Generated tab buttons (internal id 'studio')
-  const scanStudioBtn = document.getElementById('scan-studio-btn');
-  if (scanStudioBtn) {
-    scanStudioBtn.addEventListener('click', scanStudioPage);
-  }
-  const studioDownloadSelectedBtn = document.getElementById('studio-download-selected-btn');
-  if (studioDownloadSelectedBtn) {
-    studioDownloadSelectedBtn.addEventListener('click', () => runExclusive('Generated download', handleStudioBulkDownload));
-  }
+  // Generated tab's Delete, beside the action bar (internal id 'studio')
   const studioDeleteSelectedBtn = document.getElementById('studio-delete-selected-btn');
   if (studioDeleteSelectedBtn) {
     studioDeleteSelectedBtn.addEventListener('click', () => runExclusive('Generated delete', handleStudioBulkDelete));
@@ -663,10 +623,12 @@ function setupTabSwitching() {
         }
       });
 
+      applyOpenTabAction();
       // Trigger scan for the active tab (not while a job runs)
       await rescanOpenPanelTab();
     });
   });
+  applyOpenTabAction(); // the first tab's idle action, before its list loads
 }
 
 function startAutoRefresh() {
@@ -677,7 +639,7 @@ function startAutoRefresh() {
     if (jobLock.current()) return; // never rescan during a job
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (isNotebookUrl(tab?.url)) {
-      await scanPage();
+      await rescanGeneratedIfOpen();
     }
   }, interval);
 }
@@ -695,17 +657,30 @@ function openPanelTab() {
   return btn ? btn.dataset.tab : '';
 }
 
-// Scan the open panel tab (not while a job runs). Chat has no auto-scan: the
-// user clicks "Scan Chat".
+// Scan the open panel tab (not while a job runs). Lists fill themselves when a
+// tab is opened. Chat has no auto-scan: the user clicks "Load chat".
 async function rescanOpenPanelTab() {
   if (jobLock.current()) return;
   switch (openPanelTab()) {
-    case 'artifacts': await scanPage(); break;
     case 'notes': await scanNotesPage(); break;
     case 'sources': await scanSourcesPage(); break;
     case 'studio': await scanStudioPage(); break;
     default: break;
   }
+}
+
+// Generated is the one list that may rescan without being asked (auto-refresh, a
+// tab event in the same notebook): an unchanged scan leaves it alone, and the
+// Notes and Sources scans are slow and redraw.
+async function rescanGeneratedIfOpen() {
+  if (openPanelTab() === 'studio' && !jobLock.current()) await scanStudioPage();
+}
+
+// The open tab's list holds an element matching `selector`. Chat is not a list here.
+const LIST_RESULTS_IDS = { sources: 'sources-scan-results', notes: 'notes-results', studio: 'studio-scan-results' };
+function openListShows(selector) {
+  const id = LIST_RESULTS_IDS[openPanelTab()];
+  return !!id && !!document.getElementById(id)?.querySelector(selector);
 }
 
 // The notebook the panel last scanned. Only a notebook tab with a different id
@@ -714,15 +689,19 @@ async function rescanOpenPanelTab() {
 let lastPanelNotebookId = '';
 
 // Drop the scanned chat so it cannot be exported against another notebook, and
-// show the same prompt as before a scan.
+// show the same prompt as before a scan. Also forgets every tab's action and
+// count, and the Generated list, which a rescan leaves up and whose Delete must
+// not reach the new notebook: they belong to the notebook that was scanned.
 function resetChatPanel() {
   window._currentChatData = null;
   const chatResults = document.getElementById('chat-scan-results');
-  const chatCount = document.getElementById('chat-count');
-  const exportBtn = document.getElementById('export-chat-btn');
-  if (chatResults) chatResults.innerHTML = '<p class="empty-message">Click "Scan Chat" to load your conversation history.</p>';
-  if (chatCount) chatCount.textContent = '0';
-  if (exportBtn) exportBtn.style.display = 'none';
+  if (chatResults) chatResults.innerHTML = '<p class="empty-message">Click "Load chat" to load your conversation history.</p>';
+  forgetStudioList();
+  _sourcesScanSeq++; // a scan of the old notebook still running must not draw
+  _notesScanSeq++;
+  Object.keys(_tabActions).forEach(tab => delete _tabActions[tab]);
+  document.querySelectorAll('.tab-btn').forEach(btn => setTabCount(btn.dataset.tab, null));
+  applyOpenTabAction();
 }
 
 // True when tab shows a different notebook than the panel last scanned (and
@@ -739,8 +718,9 @@ function notebookSwitchedTo(tab) {
 }
 
 // After a tab switch or navigation: a different notebook rescans the open panel
-// tab and clears the chat; the same notebook only refreshes Artifacts (the Notes
-// and Sources scans are slow), unless sameNotebookScan is false.
+// tab and clears the chat; the same notebook only refreshes Generated, if open (the
+// Notes and Sources scans are slow), unless sameNotebookScan is false. A list still
+// showing the prompt from another site is rescanned: there is nothing drawn to lose.
 // settleMs: in-app (history API) navigation reports the new URL before the page
 // has drawn the new notebook, and the content-script scans read the DOM as it
 // is (no waits), so wait, then rescan only if the tab still shows that notebook.
@@ -788,8 +768,10 @@ async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}
       refreshResumeBanner();
     }
     await rescanOpenPanelTab();
-  } else if (sameNotebookScan && !jobLock.current()) {
-    await scanPage();
+  } else if (isNotebookUrl(tab?.url) && openListShows('[data-needs-notebook]')) {
+    await rescanOpenPanelTab();
+  } else if (sameNotebookScan) {
+    await rescanGeneratedIfOpen();
   }
 }
 
@@ -845,6 +827,13 @@ async function runPendingNotebookCheck() {
   pendingNotebookCheck = false;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   await refreshForTab(tab, { sameNotebookScan: false });
+}
+
+// A job ended. Scans are skipped during a job, so a list opened for the first time
+// then still shows "Scanning...", and the notebook check may not have rescanned it.
+async function afterJobChecks() {
+  await runPendingNotebookCheck();
+  if (openListShows('.scanning')) await rescanOpenPanelTab();
 }
 
 // ---- Resume banner (Milestone 3c) ----
@@ -1012,6 +1001,63 @@ async function checkStatus() {
 // A scan the page answered with an error message (SCAN_SOURCES, SCAN_CHAT);
 // the tab scans show that message as is
 class ScanError extends Error {}
+
+// ---- The shared action bar (one button under the open tab's list) ----
+// A tab publishes its action with setTabAction(tab, ...); only the open tab's
+// action is shown, and switching tabs or notebooks swaps or clears it, so an
+// action never runs against another tab's list.
+let _action = null;
+const _tabActions = {};
+// What each tab shows before its list has loaded; tabs not listed have no bar
+const TAB_ACTION_IDLE = {
+  sources: { label: NLME.actionLabel(0, 'source') },
+  notes: { label: NLME.actionLabel(0, 'note') },
+  studio: { label: NLME.actionLabel(0, 'item') },
+  chat: { label: 'Load chat to export' }
+};
+
+// Show the action (or hide the bar for null). Disabled while a job runs.
+function setAction(action) {
+  _action = action || null;
+  applyAction();
+}
+
+function applyAction() {
+  const bar = document.getElementById('action-bar');
+  const btn = document.getElementById('action-btn');
+  if (!bar || !btn) return;
+  bar.hidden = !_action;
+  if (!_action) return;
+  btn.innerHTML = `${icon('download')} ${NLME.escapeHtml(_action.label)}`;
+  btn.disabled = !!_action.disabled || !!jobLock.current();
+  btn.style.opacity = btn.disabled ? '0.5' : '1';
+}
+
+// The tab's own action; shown now only when that tab is open
+function setTabAction(tab, action) {
+  _tabActions[tab] = action;
+  if (openPanelTab() === tab) setAction(action);
+}
+
+// Not loaded yet (or being scanned): the tab's idle label, disabled
+function idleTabAction(tab) {
+  setTabAction(tab, { ...TAB_ACTION_IDLE[tab], disabled: true });
+}
+
+function applyOpenTabAction() {
+  updateStudioBulkButtonsState(); // Generated's Delete shows with its tab only
+  const tab = openPanelTab();
+  setAction(_tabActions[tab] || (TAB_ACTION_IDLE[tab] ? { ...TAB_ACTION_IDLE[tab], disabled: true } : null));
+}
+
+// The number of items found, on the tab's label; null omits it
+function setTabCount(tab, count) {
+  const el = document.querySelector(`.tab-btn[data-tab="${tab}"] .tab-count`);
+  if (!el) return;
+  el.textContent = count == null ? '' : Number(count).toLocaleString('en-US');
+  el.title = el.textContent; // a narrow panel can clip the count
+  el.hidden = count == null;
+}
 
 // Set a button's text, keeping its icon: the label is the last text node
 function setButtonLabel(btn, text) {
@@ -1305,7 +1351,7 @@ async function runExclusive(name, fn) {
   // blocked too. Mark them: a scan may replace a control with a clone (the
   // chat Export button), and the clone must be re-enabled too, so restore
   // by the mark, not by the original element.
-  Array.from(document.querySelectorAll('.tab-content button, .tab-content input, .tab-content select, #full-takeout-btn, #takeout-zip-checkbox'))
+  Array.from(document.querySelectorAll('.tab-content button, .tab-content input, .tab-content select, #action-btn, #studio-delete-selected-btn, #full-takeout-btn, #takeout-zip-checkbox'))
     .filter(el => !el.disabled && el.id !== 'cancel-download-btn')
     .forEach(el => { el.disabled = true; el.setAttribute('data-job-disabled', ''); });
   try {
@@ -1330,7 +1376,7 @@ async function runExclusive(name, fn) {
     // The job may have left (or finished) a record: show or hide Resume
     refreshResumeBanner();
     // A tab switch or navigation to another notebook during the job was skipped
-    runPendingNotebookCheck().catch(e => console.warn('[NotebookLM Takeout] Notebook check failed:', e));
+    afterJobChecks().catch(e => console.warn('[NotebookLM Takeout] Notebook check failed:', e));
   }
 }
 
@@ -1348,7 +1394,7 @@ function retryFor(failedItems, jobName, exportFn) {
 // Buttons that follow a list's selection (disabled at K = 0): re-derive them from the
 // controllers, whatever just enabled or disabled them (a job ending, a redraw)
 function refreshListButtons() {
-  updateArtifactsDownloadBtn();
+  applyAction();
   updateStudioBulkButtonsState();
 }
 
@@ -1367,7 +1413,7 @@ async function requestCancel() {
   // cancel on the chain so it does not start the next step
   if (chainActive) chainCancelRequested = true;
   try {
-    // The export shell's tab first: retries and Download Selected run on the tab
+    // The export shell's tab first: retries and the action bar's exports run on the tab
     // they were scanned on, which need not be the active one. The content script
     // there broadcasts CANCEL_EXPORT, which the shell's own listener also receives.
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -1380,6 +1426,8 @@ async function requestCancel() {
 
 // The Studio list is not in the page while one of its items is open, so a scan
 // would show nothing or only part of it
+// Sources and Notes on another site; refreshForTab rescans a list showing it
+const NOTEBOOK_PROMPT_HTML = '<p class="empty-message" data-needs-notebook>Please open NotebookLM first</p>';
 const STUDIO_ITEM_OPEN_HTML = '<p class="empty-message">An item is open in Studio, which hides this list.<br><span class="hint">Close it, then click Refresh.</span></p>';
 
 async function studioViewerOpen(tabId) {

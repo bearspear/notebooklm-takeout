@@ -10,34 +10,56 @@ let _studioItems = [];
 let _studioTabId = null;
 // The Generated tab's list controller (sidebar-list.js); replaced on every redraw
 let _studioListController = null;
+// What the list on screen was built from. startAutoRefresh rescans every few
+// seconds: when the scan finds the same items the list is left alone, so typing in
+// the filter box and the selection are never interrupted.
+let _studioSignature = null;
+// The newest scan: an older one still waiting on the page must not draw
+let _studioScanSeq = 0;
 
 function dropStudioList() {
   if (_studioListController) {
     _studioListController.destroy();
     _studioListController = null;
   }
+  _studioSignature = null;
   updateStudioBulkButtonsState();
+}
+
+// The notebook changed: the list, and any scan still running, belong to the old one
+function forgetStudioList() {
+  _studioScanSeq++;
+  dropStudioList();
+  const resultsEl = document.getElementById('studio-scan-results');
+  if (resultsEl) resultsEl.innerHTML = '<p class="scanning">Scanning generated items...</p>';
 }
 
 async function scanStudioPage() {
   const resultsEl = document.getElementById('studio-scan-results');
-  const countBadge = document.getElementById('studio-count');
-  if (!resultsEl || !countBadge) return;
+  if (!resultsEl) return;
 
-  dropStudioList();
-  resultsEl.innerHTML = '<p class="scanning">Scanning generated items...</p>';
-  countBadge.textContent = '0';
+  const seq = ++_studioScanSeq;
+  // A live list is not blanked while rescanning: the redraw (if any) happens below
+  const listLive = () => !!_studioListController && !!resultsEl.querySelector('.studio-list');
+  if (!listLive()) resultsEl.innerHTML = '<p class="scanning">Scanning generated items...</p>';
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (seq !== _studioScanSeq) return;
     if (!isNotebookUrl(tab?.url)) {
+      dropStudioList();
       resultsEl.innerHTML = '<p class="empty-message">Please open NotebookLM first.</p>';
+      setTabCount('studio', null);
       return;
     }
 
     await ensureContentScriptLoaded(tab.id);
-    if (await studioViewerOpen(tab.id)) {
+    const viewerOpen = await studioViewerOpen(tab.id);
+    if (seq !== _studioScanSeq) return;
+    if (viewerOpen) {
+      dropStudioList();
       resultsEl.innerHTML = STUDIO_ITEM_OPEN_HTML;
+      setTabCount('studio', null);
       return;
     }
     const response = await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.SCAN_STUDIO_ITEMS });
@@ -45,50 +67,71 @@ async function scanStudioPage() {
 
     // Notes in the Sources panel's "Notes" group are not in the Studio list. If this
     // extra scan fails, the Studio items still render.
+    let notes = [];
     try {
-      const notes = await scanNotesData(tab.id);
+      notes = await scanNotesData(tab.id);
+      stampJobKeys('notes', notes);
       for (const note of notes) {
         if (note.elementType !== 'source-note') continue;
         items.push({
           kind: 'source-note',
           label: note.title,
           type: note.type || 'Note (Sources panel)',
-          sourceIndex: note.sourceIndex
+          sourceIndex: note.sourceIndex,
+          jobKey: note._listKey
         });
       }
     } catch (noteError) {
       console.warn('[NotebookLM Takeout] Sources-panel notes scan failed; listing Studio items only:', noteError);
     }
+    NLME.stampGeneratedJobKeys(items, notes);
+
+    if (seq !== _studioScanSeq) return;
+    const signature = NLME.generatedSignature(tab, items);
+    if (listLive() && signature === _studioSignature) {
+      return; // unchanged: keep the list, its focus, caret, scroll and selection
+    }
+
+    // A redraw must not cost the user their place: keep the scroll position and,
+    // if they are typing in the filter box, focus and caret
+    const scrollTop = resultsEl.scrollTop;
+    const active = document.activeElement;
+    const searchHadFocus = !!active && active.classList && active.classList.contains('list-search') && resultsEl.contains(active);
+    const caret = searchHadFocus ? [active.selectionStart, active.selectionEnd, active.selectionDirection] : null;
 
     _studioItems = items;
     _studioTabId = tab.id;
-
     renderStudioList(items);
+    _studioSignature = signature;
+
+    resultsEl.scrollTop = scrollTop;
+    if (caret) {
+      const search = resultsEl.querySelector('.list-search');
+      if (search) {
+        search.focus({ preventScroll: true });
+        try { search.setSelectionRange(caret[0], caret[1], caret[2] || 'none'); } catch (_) { /* not a text field */ }
+      }
+    }
   } catch (error) {
     console.error('[NotebookLM Takeout] Generated scan failed:', error);
+    if (seq !== _studioScanSeq) return;
+    dropStudioList();
+    setTabCount('studio', null);
     resultsEl.innerHTML = `<p class="error-message">Generated scan failed: ${escapeHtml(error.message || String(error))}</p>`;
   }
 }
 
 function renderStudioList(items) {
   const resultsEl = document.getElementById('studio-scan-results');
-  const countBadge = document.getElementById('studio-count');
-  const downloadBulkBtn = document.getElementById('studio-download-selected-btn');
-  const deleteBulkBtn = document.getElementById('studio-delete-selected-btn');
-  if (!resultsEl || !countBadge) return;
+  if (!resultsEl) return;
 
   dropStudioList();
-  countBadge.textContent = items.length;
+  setTabCount('studio', items.length);
 
   if (items.length === 0) {
     resultsEl.innerHTML = '<p class="empty-message">No generated items found. Generate content in NotebookLM first.</p>';
-    if (downloadBulkBtn) downloadBulkBtn.style.display = 'none';
-    if (deleteBulkBtn) deleteBulkBtn.style.display = 'none';
     return;
   }
-
-  if (downloadBulkBtn) downloadBulkBtn.style.display = '';
-  if (deleteBulkBtn) deleteBulkBtn.style.display = '';
 
   resultsEl.innerHTML = '<div class="studio-list"></div>';
   const listEl = resultsEl.querySelector('.studio-list');
@@ -96,13 +139,14 @@ function renderStudioList(items) {
   const rowHtml = (item, idx) => {
     const iconSvg = getIconForType(item.type);
     const detailsStr = item.details ? ` · ${escapeHtml(item.details)}` : '';
+    const unavailable = NLME.studioItemUnavailableReason(item);
     return `
         <div class="scan-item-icon">${iconSvg}</div>
         <div class="scan-item-info">
           <strong>${escapeHtml(item.label)}</strong>
           <small>${escapeHtml(item.type)}${detailsStr}</small>
         </div>
-        <button class="btn-icon download-single-btn studio-download-btn" data-idx="${idx}" title="Download ${escapeHtml(item.label)}" aria-label="Download ${escapeHtml(item.label)}">
+        <button class="btn-icon download-single-btn studio-download-btn" data-idx="${idx}" title="${escapeHtml(unavailable || `Download ${item.label}`)}" aria-label="Download ${escapeHtml(item.label)}"${unavailable ? ' disabled' : ''}>
           ${icon('download')}
           <span class="download-status"></span>
         </button>
@@ -127,13 +171,15 @@ function renderStudioList(items) {
   listEl.addEventListener('click', (e) => {
     const downloadBtn = e.target.closest('.studio-download-btn');
     if (downloadBtn) {
-      const idx = parseInt(downloadBtn.dataset.idx, 10);
-      runExclusive('Generated download', () => handleStudioDownloadRow(idx, downloadBtn));
+      // The item now: a rescan may replace _studioItems while the job lock is awaited
+      const item = _studioItems[parseInt(downloadBtn.dataset.idx, 10)];
+      runExclusive('Generated download', () => handleStudioDownloadRow(item, downloadBtn));
       return;
     }
     const deleteBtn = e.target.closest('.studio-delete-btn');
     if (deleteBtn) {
-      runExclusive('Generated delete', () => handleStudioDeleteRow(parseInt(deleteBtn.dataset.idx, 10), deleteBtn));
+      const item = _studioItems[parseInt(deleteBtn.dataset.idx, 10)];
+      runExclusive('Generated delete', () => handleStudioDeleteRow(item, deleteBtn));
     }
   });
 }
@@ -142,13 +188,6 @@ function renderStudioList(items) {
 // notes (kind 'source-note') by sourceIndex + title.
 function isStudioItemDeletable(item) {
   return !!item;
-}
-
-// An untitled Studio item only has a made-up label ("Item 3"): deleting by it
-// could hit a real item with that title, so a bulk delete skips it. The bulk
-// button's count and the confirm both use this.
-function isStudioItemUntitled(item) {
-  return !!item && item.untitled === true && item.kind !== 'source-note';
 }
 
 // One delete request for a Generated item; throws on failure. Bulk delete passes
@@ -163,24 +202,59 @@ async function sendStudioDelete(item, { useIndex = true } = {}) {
   }
 }
 
-// The bulk buttons follow the selection: disabled at 0, otherwise "... Selected (K)".
-// Delete is enabled while anything deletable is selected, but its count K is what
-// the bulk delete will remove: untitled Studio items are left out, as in the confirm.
+// Both follow the selection. The action counts what can be exported; Delete is
+// enabled while anything deletable is selected, but its count K is what the bulk
+// delete will remove: untitled Studio items are left out, as in the confirm.
 function updateStudioBulkButtonsState(controller = _studioListController) {
-  const n = controller ? controller.selectedCount() : 0;
   const selected = controller ? controller.selectedItems() : [];
   const deletableN = selected.filter(isStudioItemDeletable).length;
-  const deleteCount = selected.filter(item => isStudioItemDeletable(item) && !isStudioItemUntitled(item)).length;
-  const downloadBulkBtn = document.getElementById('studio-download-selected-btn');
+  const deleteCount = NLME.bulkDeletePlan(selected.filter(isStudioItemDeletable), _studioItems).deletable.length;
+  const plan = NLME.generatedExportPlan(selected);
+  const n = plan.artifacts.length + plan.notes.length;
+  setTabAction('studio', { label: NLME.generatedActionLabel(plan), disabled: n === 0, onClick: exportSelectedGenerated });
   const deleteBulkBtn = document.getElementById('studio-delete-selected-btn');
-  if (downloadBulkBtn) {
-    downloadBulkBtn.disabled = n === 0;
-    setButtonLabel(downloadBulkBtn, n > 0 ? `Download Selected (${n})` : 'Download Selected');
-  }
   if (deleteBulkBtn) {
-    deleteBulkBtn.disabled = deletableN === 0;
+    deleteBulkBtn.hidden = !controller || openPanelTab() !== 'studio';
+    deleteBulkBtn.disabled = deletableN === 0 || !!jobLock.current();
     setButtonLabel(deleteBulkBtn, deleteCount > 0 ? `Delete Selected (${deleteCount})` : 'Delete Selected');
   }
+}
+
+// The two sides of a Generated export, in this order. Each is the ordinary export
+// with its own job record, on the tab the list was scanned on.
+const GENERATED_EXPORT_STEPS = [
+  { name: 'Artifacts', run: (items, tabId) => downloadAllArtifacts(tabId, items) },
+  { name: 'Notes', run: (items, tabId) => exportNotesAsMarkdown(items, { tabId }) }
+];
+
+// The Generated action: exports what the current list has selected. It runs as a
+// chain, so a Cancel (or a declined health check) in the first side stops the
+// second, and each side's results survive the other: with both sides there is one
+// combined panel. Its Retry covers items that failed and a side that did not run.
+// Unstarted items are in no failedItems: artifacts a Cancel left are in the job
+// record's Resume, and with an artifacts record pending, notes a Cancel left are in
+// neither (jobRecordMode). The headline counts all of it. Items the export cannot
+// take always reach that panel, as a warning, even with one side:
+// NLME.generatedExportOutcome.
+function exportSelectedGenerated() {
+  const plan = NLME.generatedExportPlan(_studioListController ? _studioListController.selectedItems() : []);
+  if (plan.artifacts.length + plan.notes.length === 0) return;
+  const tabId = _studioTabId;
+  return runExclusive('Generated export', () => runChain(async () => {
+    const { steps, notRun } = await runRetryChain({ Artifacts: plan.artifacts, Notes: plan.notes }, tabId, 'Export', GENERATED_EXPORT_STEPS);
+    // Nothing ran (declined, tab closed: already said), or one side ran alone with
+    // nothing left out: its own panel stands
+    const leftOut = plan.skipped.length > 0;
+    if (steps.length === 0 || (steps.length === 1 && notRun.length === 0 && !leftOut)) return;
+    const outcome = NLME.generatedExportOutcome({ steps, notRun, total: plan.artifacts.length + plan.notes.length, skipped: plan.skipped });
+    showTakeoutResults({
+      message: outcome.message,
+      level: outcome.level,
+      lines: outcome.lines,
+      saved: outcome.saved,
+      errors: outcome.errors
+    }, outcome.remaining, tabId);
+  }));
 }
 
 function setStudioRowStatus(btn, state) {
@@ -202,14 +276,13 @@ function setStudioRowStatus(btn, state) {
   }
 }
 
-async function handleStudioDownloadRow(idx, btn) {
-  const item = _studioItems[idx];
-  if (!item) return;
+async function handleStudioDownloadRow(item, btn) {
+  if (!item || NLME.isStudioItemUnavailable(item)) return;
   setStudioRowStatus(btn, 'pending');
   try {
     if (item.kind === 'artifact') {
-      // moreIndex: same index space as the Artifacts tab and DOWNLOAD_ARTIFACT
-      await downloadArtifact(_studioTabId, item.moreIndex, item.type, item.label);
+      // moreIndex: same index space as DOWNLOAD_ARTIFACT. With retries; says its own failure
+      await triggerItemDownload(_studioTabId, item.moreIndex, item.label, item.type);
     } else if (item.kind === 'source-note') {
       // A note from the Sources panel: EXTRACT_NOTE opens it by sourceIndex (as the Notes tab does)
       await exportSingleNote({ index: -1, sourceIndex: item.sourceIndex, title: item.label, type: item.type });
@@ -220,14 +293,12 @@ async function handleStudioDownloadRow(idx, btn) {
     setStudioRowStatus(btn, 'success');
   } catch (error) {
     console.error('[NotebookLM Takeout] Generated download failed:', error);
-    showToast(`Failed to download ${item.label}: ${error.message || error}`, 'error');
+    if (item.kind !== 'artifact') showToast(`Failed to download ${item.label}: ${error.message || error}`, 'error');
     setStudioRowStatus(btn, 'error');
-    throw error;
   }
 }
 
-async function handleStudioDeleteRow(idx, btn) {
-  const item = _studioItems[idx];
+async function handleStudioDeleteRow(item, btn) {
   if (!item || !isStudioItemDeletable(item)) return;
 
   if (!confirm(`Delete "${item.label}"? This cannot be undone.`)) return;
@@ -236,7 +307,9 @@ async function handleStudioDeleteRow(idx, btn) {
   try {
     await sendStudioDelete(item);
     showToast(`Deleted "${item.label}"`, 'success');
-    // Refresh the list so indices are re-aligned with the DOM.
+    if (item.kind !== 'artifact') setTabCount('notes', null); // recounted when Notes rescans
+    // Refresh the list so indices are re-aligned with the DOM (always a redraw).
+    _studioSignature = null;
     await scanStudioPage();
   } catch (error) {
     console.error('[NotebookLM Takeout] Generated delete failed:', error);
@@ -245,40 +318,18 @@ async function handleStudioDeleteRow(idx, btn) {
   }
 }
 
-async function handleStudioBulkDownload() {
-  const selected = _studioListController ? _studioListController.selectedItems() : [];
-  const selectedIdxs = selected.map(item => _studioItems.indexOf(item)).filter(n => n >= 0);
-  if (selectedIdxs.length === 0) return;
-
-  const bulkBtn = document.getElementById('studio-download-selected-btn');
-  if (bulkBtn) bulkBtn.disabled = true;
-
-  let okCount = 0;
-  for (const idx of selectedIdxs) {
-    const rowBtn = document.querySelector(`#studio-scan-results .studio-download-btn[data-idx="${idx}"]`);
-    try {
-      await handleStudioDownloadRow(idx, rowBtn);
-      okCount++;
-    } catch (_) {
-      // errors already surfaced per-row
-    }
-  }
-
-  showToast(`Downloaded ${okCount}/${selectedIdxs.length} generated item(s)`, okCount === selectedIdxs.length ? 'success' : 'warning');
-  updateStudioBulkButtonsState();
-}
-
 async function handleStudioBulkDelete() {
   // Only what is selected (and so visible) is deleted; the dialog names that count.
   const selectedItems = _studioListController ? _studioListController.selectedItems() : [];
-  const skippedUntitled = selectedItems.filter(isStudioItemUntitled).length;
-  const deletable = selectedItems.filter(item => isStudioItemDeletable(item) && !isStudioItemUntitled(item));
+  const deletePlan = NLME.bulkDeletePlan(selectedItems.filter(isStudioItemDeletable), _studioItems);
+  const { deletable } = deletePlan;
+  const skipText = NLME.bulkDeleteSkipText(deletePlan);
   if (deletable.length === 0) {
-    if (skippedUntitled > 0) showToast(`Skipped ${skippedUntitled} untitled item(s): delete them one by one`, 'warning');
+    if (skipText) showToast(`Skipped ${skipText}: delete them one by one`, 'warning');
     return;
   }
 
-  const skippedNote = skippedUntitled > 0 ? `\n\n${skippedUntitled} untitled item(s) will be skipped; delete those one by one.` : '';
+  const skippedNote = skipText ? `\n\n${skipText} will be skipped; delete those one by one.` : '';
   if (!confirm(`Delete ${deletable.length} item(s)? This cannot be undone.${skippedNote}`)) return;
 
   const bulkBtn = document.getElementById('studio-delete-selected-btn');
@@ -308,7 +359,9 @@ async function handleStudioBulkDelete() {
     }
   }
 
-  const skippedText = skippedUntitled > 0 ? `, skipped ${skippedUntitled} untitled` : '';
-  showToast(`Deleted ${okCount}/${queue.length} generated item(s)${skippedText}`, okCount === queue.length && skippedUntitled === 0 ? 'success' : 'warning');
+  const skippedText = skipText ? `, skipped ${skipText}` : '';
+  showToast(`Deleted ${okCount}/${queue.length} generated item(s)${skippedText}`, okCount === queue.length && !skipText ? 'success' : 'warning');
+  if (queue.some(item => item.kind !== 'artifact')) setTabCount('notes', null); // recounted when Notes rescans
+  _studioSignature = null; // always a redraw
   await scanStudioPage();
 }

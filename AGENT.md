@@ -48,8 +48,8 @@ The per-milestone contracts (Milestone 2 to 3d) sit between "Drift patterns" and
 
 A Chrome side-panel extension that scrapes content out of `notebook.google.com` (formerly
 `notebooklm.google.com`, renamed to "Gemini Notebook" in Aug 2026) into local
-files. Five user-facing surfaces: Sources, Notes, Artifacts, Chat, and the optional Generated
-tab (internal id `studio`). The Generated tab gives a unified flat list with per-item Download / Delete; everything
+files. Four tabs: Sources, Notes, Generated (internal id `studio`) and Chat. The Generated tab gives a unified
+flat list of artifacts and notes with per-item Download / Delete, one Export action and Delete Selected; everything
 else uses tab-specific batch exports producing ZIPs. A 📦 Full Takeout button in the header
 runs all four categories in one go.
 
@@ -283,9 +283,9 @@ Storage: `chrome.storage.local`, single key `settings`. Defaults in the frozen `
 ```js
 {
   // Behavior
-  autoZip: false,                            // default Artifacts ZIP toggle to on
+  autoZip: false,                            // artifact exports go to a ZIP (else a folder)
   showNotifications: true,                   // toast on download completion
-  refreshInterval: 10,                       // seconds, auto-refresh in artifacts tab
+  refreshInterval: 10,                       // seconds, auto-refresh while Generated is open
 
   // Source export variants (any combo, ≥1 required)
   exportSourceBase: true,                    // base, no metadata, no images
@@ -304,7 +304,6 @@ Storage: `chrome.storage.local`, single key `settings`. Defaults in the frozen `
   cleanOCRArtifacts: true,                   // scrub ~~~, :~:, etc. from quotes
 
   // Interface
-  showStudioTab: false,                      // gate the optional Generated tab
 
   // Downloads
   slidesFormat: 'pdf',                       // 'pdf' | 'pptx' — slide deck More-menu item
@@ -335,7 +334,7 @@ in `setupEventListeners` (`sourceParentChildPairs` / `noteParentChildPairs`).
 
 ## Tab system
 
-Five tabs: `sources`, `notes`, `artifacts`, `chat`, `studio` (the last hidden by default).
+Four tabs, in this order: `sources`, `notes`, `studio` (labelled Generated), `chat`. No tab is remembered: the panel always opens on Sources. `settings.showStudioTab` (a stored value from before 1.9.1) is ignored.
 
 Markup (`sidebar.html`):
 
@@ -343,28 +342,25 @@ Markup (`sidebar.html`):
 <div class="tabs">
   <button class="tab-btn active" data-tab="sources">Sources</button>
   <button class="tab-btn" data-tab="notes">Notes</button>
-  <button class="tab-btn" data-tab="artifacts">Artifacts</button>
+  <button class="tab-btn" data-tab="studio">Generated</button>
   <button class="tab-btn" data-tab="chat">Chat</button>
-  <button class="tab-btn" data-tab="studio" hidden>Generated</button>
 </div>
 
 <div class="tab-content" data-tab-content="{name}">...</div>
 ```
 
 Wiring is in `setupTabSwitching` (sidebar-core.js). Each button toggles the `.active` class on
-itself + the matching `.tab-content`, then calls the relevant scan:
+itself + the matching `.tab-content`, swaps the action bar (`applyOpenTabAction`), then calls
+`rescanOpenPanelTab()`:
 
 ```js
-if (targetTab === 'notes')        await scanNotesPage();
-else if (targetTab === 'artifacts') await scanPage();
-else if (targetTab === 'sources') await scanSourcesPage();
-else if (targetTab === 'studio')  await scanStudioPage();
-// chat: manual via Scan Chat button
+case 'notes':   await scanNotesPage();
+case 'sources': await scanSourcesPage();
+case 'studio':  await scanStudioPage();
+// chat: manual via Load chat
 ```
 
-Generated-tab visibility is gated by `settings.showStudioTab` (the tab was called Studio before 1.5.0; ids, classes, functions and the setting key kept the old name). `applyStudioTabVisibility()` toggles
-the `hidden` attribute on both the tab button and the tab-content, and falls back to Sources
-if Studio was active when disabled. Called from `loadSettings` and `saveSettings`.
+The tab was called Studio before 1.5.0; ids, classes and functions kept the old name.
 
 ## Message protocol
 
@@ -395,7 +391,7 @@ respond synchronously (and `return true` is omitted) or asynchronously (must
 | `GET_DOM_ERRORS` | — | `{shouldWarn, issues}` |
 | `RESET_DOM_TRACKER` | — | `{success}` |
 | `RUN_COMPREHENSIVE_HEALTH_CHECK` | `{fastMode, skipCitations}` | full results object |
-| `SCAN_STUDIO_ITEMS` | — | `{items: [{combinedIndex, kindIndex, moreIndex, kind, label, type, details, downloadable, hasMoreButton}]}` — also feeds the Artifacts tab |
+| `SCAN_STUDIO_ITEMS` | — | `{items: [{combinedIndex, kindIndex, moreIndex, kind, label, type, details, downloadable, hasMoreButton}]}` — also feeds `scanArtifactsData` |
 | `DELETE_STUDIO_ITEM` | `{label?, combinedIndex?}` | `{success, error?}` |
 | `DELETE_SOURCE_NOTE` | `{sourceIndex, title}` | `{success, error?}` — deletes a note of the Sources panel's "Notes" group (Milestone 3c). The container at `sourceIndex` must be a note container whose `getSourceContainerTitle` equals `title`, else `{success: false, error: 'Note changed — rescan and try again'}` and nothing is clicked |
 
@@ -447,7 +443,7 @@ side panel.
 
 1. `scanNotesPage` → `SCAN_NOTES` → content returns notes from the Studio list
    (`artifact-library-note`, icon in `NLME.NOTE_ICONS`) plus Sources-panel notes
-   (`index: -1`, `sourceIndex`, `elementType: 'source-note'`; the Generated tab reads those entries too). Mind maps are Studio artifacts now (Artifacts tab).
+   (`index: -1`, `sourceIndex`, `elementType: 'source-note'`; the Generated tab reads those entries too). Mind maps are Studio artifacts now.
 2. `exportNotesAsMarkdown(selected)`:
    - Pre-flight: `CHECK_DOM_HEALTH` with type=notes; if unhealthy, show warning dialog.
    - Show page overlay (`SHOW_EXPORT_OVERLAY`).
@@ -511,8 +507,8 @@ in every answer, so sources must never be keyed by number across answers.
 
 ### Artifacts
 
-1. `scanPage` (artifacts) sends `SCAN_STUDIO_ITEMS` and keeps `kind === 'artifact'`
-   rows (`index` = `moreIndex`). Flashcards and Quiz rows are disabled (no Download).
+1. `scanArtifactsData` (Full Takeout, Resume) sends `SCAN_STUDIO_ITEMS` and keeps `kind === 'artifact'`
+   rows (`index` = `moreIndex`). The Generated tab lists the same rows; Flashcards and Quiz have no Download there.
 2. Type = `NLME.resolveArtifactType({iconText, buttonLabel})`: the stretched button's
    aria-label when it names a type ("Data Table", "Report", …; "Artifact" is ignored),
    else the icon:
@@ -523,7 +519,7 @@ in every answer, so sources must never be keyed by number across answers.
    videocam → Video Overview          copy → Flashcards (not downloadable)
    quiz → Quiz (not downloadable)
    ```
-3. Each row renders with a per-item Download button. Bulk: `Download All` with optional ZIP
+3. Each row renders with a per-item Download button. Bulk: the Generated action, ZIP from `settings.autoZip`,
    toggle.
 4. `downloadArtifact(tabId, artifactIndex, artifactType, artifactName)` (sidebar-artifacts.js):
    - **Reports / Data Tables**: skip More button. Message `DOWNLOAD_ARTIFACT` with
@@ -548,7 +544,7 @@ in every answer, so sources must never be keyed by number across answers.
      the proper filename. The extension comes from the URL's `filename` parameter
      (`NLME.extensionFromDownloadUrl`; `.pptx` vs `.pdf`). A download that is never captured
      now fails ("Download was not captured") instead of reporting success.
-   - **Download Selected** (button `#download-all-btn`, ticked rows only; `downloadAllArtifacts` → `runArtifactsJob`, on `runExportJob`) writes
+   - **The Generated action's artifact side** (ticked rows only; `downloadAllArtifacts(tabId, items, { updateRecord, zip })` → `runArtifactsJob`, on `runExportJob`; `zip` defaults to `!!settings.autoZip`, its Retry keeps the run's value) writes
      `<type folder>/<stem>.<ext>` plus `_index.md`, `manifest.json` and `errors.md`. Type
      folders: `audio/ video/ slides/ infographics/ reports/ tables/ mind-maps/`
      (`NLME.artifactFolder`); stems unique per folder (`NLME.artifactStems`; Data Tables
@@ -600,13 +596,14 @@ repeats become `-2`, `-3` (`NLME.uniqueStems`).
    - `combinedIndex` — position in the combined DOM walk (stable identifier for delete)
    - `kindIndex` — position within its own kind (`artifact` or `note`)
    - `moreIndex` — index among `artifact-library-item`s that have a More button; this is
-     the index every artifact download uses (Artifacts tab, Generated tab, batch)
-   - `downloadable` — false for Flashcards / Quiz
+     the index every artifact download uses (Generated tab, batch)
+   - `downloadable` — false for Flashcards / Quiz. By type only (`NLME.isDownloadableType`): it says
+     nothing about an item still generating; Generated also refuses `moreIndex < 0`
    - `kind` — `'artifact'` | `'note'`
    - `label` (title), `details`, `type`, `hasMoreButton`
 3. Row Download:
-   - `kind === 'artifact'` → `downloadArtifact(tabId, moreIndex, type, label)` (same path
-     as Artifacts tab).
+   - `kind === 'artifact'` → `triggerItemDownload(tabId, moreIndex, label, type)` (retries, then
+     `downloadArtifact`). Disabled when `NLME.isStudioItemUnavailable`.
    - `kind === 'note'` → `exportSingleNote({index: kindIndex, title: label, type})`.
      - Mindmap path: three loose files (`.svg`, `.json`, `.html` from
        `generateMindmapHTML(svgContent, title)`) through `saveFiles`.
@@ -929,15 +926,43 @@ something specific.
 
 Already covered in [Export pipelines](#export-pipelines-deep), but the wiring:
 
-- HTML: tab button + tab-content panel at the end of `sidebar.html`, both `hidden` by default.
+- HTML: tab button between Notes and Chat; tab-content panel in `sidebar.html`.
 - CSS: `.studio-delete-btn` in `styles.css` near the end; rows come from the list controller.
 - Sidebar state: module-level `_studioItems = []` and `_studioTabId = null`. Populated by
   `scanStudioPage`. Indexes referenced by `idx` on row buttons; `idx` is the position in
   `_studioItems`, *not* `combinedIndex`.
-- Buttons: `scan-studio-btn`, `studio-download-selected-btn`, `studio-delete-selected-btn`
-  are wired once in `setupEventListeners`. Per-row buttons (`studio-download-btn`,
+- Buttons: the shared `#action-btn` (`setTabAction('studio', ...)` in `updateStudioBulkButtonsState`,
+  `exportSelectedGenerated`) and `studio-delete-selected-btn`, which sits in `#action-bar` beside it, shows only
+  while the tab is open with a list, and is wired once in `setupEventListeners` (`runExclusive` and
+  `refreshListButtons` cover it by id). Per-row buttons (`studio-download-btn`,
   `studio-delete-btn`) are wired (delegated on `.studio-list`) inside `renderStudioList` after
-  each scan; the bulk buttons act on `_studioListController.selectedItems()` and show `(K)`.
+  each scan; the bulk actions use `_studioListController.selectedItems()`.
+- Export: `NLME.generatedExportPlan(selected) -> { artifacts, notes, skipped }`. The action counts artifacts + notes;
+  `NLME.studioItemUnavailableReason(item)` is the one rule for `skipped` and the row's disabled Download and title:
+  `downloadable` false, or `moreIndex < 0` (no More button: `pickByIndexThenTitleStrict(titles, -1, title)` would hit a
+  same-titled ready item and report success). `scanArtifactsData`, so Full Takeout, does not apply it. Skipped items
+  stay selectable for delete (default selection is `none` for that
+  reason). `exportSelectedGenerated` runs `runRetryChain` with `GENERATED_EXPORT_STEPS` (artifacts, then notes, as
+  fresh exports, on `_studioTabId`) under `runExclusive('Generated export')` + `runChain`: a Cancel or a declined
+  health check in the first side leaves the second in `notRun`. One side alone keeps its own panel; both end in one
+  `NLME.combineRetryOutcomes` panel, so the second `withExportShell`'s `hideResults()` cannot lose the first side's
+  failures. Its Retry is `takeoutRetry`, covering failed items and a side not run. Artifacts a Cancel left unstarted are
+  in the job record's Resume only, so the headline is `NLME.generatedExportMessage` (`Export stopped before notes — L of
+  T items not exported`, from `exported` and `stopped` on `runRetryChain`'s steps). `plan.skipped` must never vanish
+  silently: the label says it (`NLME.generatedActionLabel`: `Export 1 item · 2 can't be exported`), and a selection with
+  skipped items always ends in `NLME.generatedExportOutcome`, one side or two: the titles in `lines`, at least `warning`,
+  and not in `remaining`, so no Retry tries them.
+- Job keys: `createListController`'s `_listKey` here is a key in the MERGED list, and the plan builds new objects, so
+  neither reaches a job record. Rows carry `jobKey` (`NLME.stampGeneratedJobKeys`: artifacts over all artifact rows, notes
+  from the full `scanNotesData`, the keys Resume's fresh scans give) and the plan stamps it as the items' `_listKey`.
+- Records: each side has its own record rules. With an artifacts record left unfinished, the notes side runs in update
+  mode (`jobRecordMode`) and adds no record of its own. Its failed notes are in the panel's Retry, but a Cancel during
+  the notes then leaves unstarted notes in neither Retry nor Resume; only the headline counts them.
+- Rescans: a live list is not blanked. `NLME.generatedSignature(tab, items)` covers everything rows act on, delete's
+  `combinedIndex` included; an unchanged scan returns without touching the DOM, a changed one redraws and restores the
+  scroll position and the filter box's focus and caret. A delete clears `_studioSignature`, so it always redraws.
+  `_studioScanSeq` lets the newest scan win. A notebook switch calls `forgetStudioList` (via `resetChatPanel`): a list
+  of the old notebook must not stay live under the new one.
 
 Per-row Download routes to `handleStudioDownloadRow(idx, btn)` which dispatches by kind.
 Status is shown via the row's `.download-status` span (⏳ → ✓ / ✗).
@@ -1303,7 +1328,7 @@ download (`triggerItemDownload`); it is not a system notification.
 
 - Generated tab (id `studio`, user-facing name only changed): `scanStudioPage` appends the `elementType === 'source-note'` entries of `scanNotesData` as `{ kind: 'source-note', label, type: 'Note (Sources panel)', sourceIndex }` after the `SCAN_STUDIO_ITEMS` items (a failed notes scan only logs a warning); they download through `exportSingleNote({ index: -1, sourceIndex })` and, until Milestone 3c, were never deletable. 3c made them deletable, see "Milestone 3c contracts".
 
-- Full Takeout's ZIP choice is its own: `NLME.takeoutZipChoice(settings)` returns `settings.takeoutZip` when it is a boolean, else `!!settings.autoZip`. The header's `#takeout-zip-checkbox` shows it and saves `settings.takeoutZip` on change (outside `saveSettings`); the Artifacts tab's `#zip-checkbox` only affects Download Selected.
+- Full Takeout's ZIP choice is its own: `NLME.takeoutZipChoice(settings)` returns `settings.takeoutZip` when it is a boolean, else `!!settings.autoZip`. The header's `#takeout-zip-checkbox` shows it and saves `settings.takeoutZip` on change (outside `saveSettings`); the Generated action's artifact side uses `settings.autoZip`.
 
 - Size-split artifacts ZIPs: `NLME.runExportJob` takes optional `maxBatchBytes` and `sizeOf(result) -> bytes`
   (both needed). The size is checked after each item; when the batch total reaches the cap the batch is
@@ -1331,7 +1356,7 @@ restoreListState` in `takeout-shared.js` (unit tested).
 `createListController({ tab, container, items, titleOf, typeOf, defaultSelected, rowHtml,
 onChange, canSelect }) -> { items, selectedItems(), selectedCount(), destroy() }`
 
-- `tab` is `'artifacts'|'notes'|'sources'|'studio'`. `container` is the results element and the
+- `tab` is `'notes'|'sources'|'studio'`. (A stored `nlme.list.<id>.artifacts` from before 1.9.1 is read by nothing and goes with its notebook in `pruneListStates`; its default-all selection is deliberately not carried into Generated, whose selection also drives delete.) `container` is the results element and the
   controller owns its contents (put action buttons outside it). A second controller on the same
   container destroys the first.
 - Toolbar: search box, type chips (only with 2+ types), sort select, "Select all visible"
@@ -1358,21 +1383,22 @@ onChange, canSelect }) -> { items, selectedItems(), selectedCount(), destroy() }
   so a remembered selection does not leave new items unticked forever. State saved without
   `known` restores as a plain allow-list.
 - The Notes tab (`renderNotesList`) is the reference port: `defaultSelected: 'none'`, a
-  `.notes-list` container beside the `.export-controls`, and the row export button calls
+  `.notes-list` container, the shared action bar, and the row export button calls
   `handleNoteRowExport` -> `exportSingleNote` (loose `.md` files, no ZIP) under `runExclusive`.
-- Sources (`renderSourcesList`, `'all'`), Artifacts (`scanPage`, `'all'`, `canSelect: !disabled`)
-  and Studio (`renderStudioList`, `'none'`) use the same pattern: list container
-  (`.sources-list` / `.artifacts-list` / `.studio-list`) beside the action buttons, row buttons via a
-  delegated click handler, buttons reflect `selectedCount()` in `onChange`
-  (`setButtonLabel` keeps the icon). Artifacts: `startAutoRefresh` re-runs `scanPage` every few
-  seconds, so `scanPage` keeps a signature of the last scan (`artifactsSignature`: tab id + url
-  and each item's key, index, disabled, details) and returns without touching the DOM when it is
-  unchanged; it does not blank the list with "Scanning..." either. A real change redraws and
-  restores the Zip choice, scroll position and, if the filter box had focus, its focus and caret.
+- Sources (`renderSourcesList`, `'all'`) and Studio (`renderStudioList`, `'none'`) use the same pattern: list
+  container (`.sources-list` / `.studio-list`), the action bar, row buttons via a delegated click handler,
+  the action reflects the selection in `onChange`. Generated: `startAutoRefresh` rescans every few seconds while
+  that tab is open, so `scanStudioPage` keeps a signature of the last scan and leaves an unchanged list alone
+  (see [Studio tab internals](#studio-tab-internals-the-generated-tab)).
+
+- Scans of Sources, Notes and Generated have a sequence (`_sourcesScanSeq`, `_notesScanSeq`, `_studioScanSeq`): the newest
+  wins, and `resetChatPanel` bumps them, so a scan of the old notebook cannot draw. Off a notebook, Sources and Notes drop
+  their list and show `NOTEBOOK_PROMPT_HTML`; `refreshForTab` rescans a list showing it once a notebook is back, and
+  `afterJobChecks` (end of `runExclusive`) rescans an open list still on "Scanning...". Neither touches a drawn list.
 
 - Notebook switch: `refreshForTab` (tab activation, `complete`, or history-API `changeInfo.url` with no
   status, after a 1.5 s settle) compares `NLME.notebookIdFromUrl(tab.url)` with `lastPanelNotebookId`. A new
-  notebook clears Chat and runs `rescanOpenPanelTab()`; the same one only runs `scanPage`; a non-notebook tab
+  notebook clears Chat and runs `rescanOpenPanelTab()`; the same one only refreshes Generated, if open (`rescanGeneratedIfOpen`); a non-notebook tab
   is no change. During a job nothing runs: `pendingNotebookCheck` re-checks once when `runExclusive` ends.
 
 ### Results panel and failed items (`sidebar-results.js`)
@@ -1402,7 +1428,7 @@ user clicks Dismiss.
 - `shell.finish({ ..., saved, retry })`: `saved` is the ZIP names (`zips` from the runner) or the
   Downloads folder; `stoppedMessage` still replaces the outcome line (level error) and the errors
   are listed anyway. `retryFor(failedItems, jobName, exportFn)` (sidebar-core.js) builds `retry` for
-  notes, sources and Download All (`downloadAllArtifacts(shell.tab.id, failed)`, `exportSources(failed, { tabId })`); chat passes none
+  notes, sources and the action bar's artifact export (`downloadAllArtifacts(shell.tab.id, failed, { updateRecord: true, zip })`, `exportSources(failed, { tabId })`); chat passes none
   (its messages do not fail as a whole; re-export the chat).
 - Toasts remain for short notices (job refused, no tab, cancelled at the health check, unexpected
   failure) and single-item exports. Full Takeout shows its combined outcome in the results panel (`showResults`).
@@ -1421,7 +1447,7 @@ user clicks Dismiss.
   panels shown while the chain runs are replaced by the combined one.
 - Side-panel Cancel (`requestCancel`, sidebar-core.js) sends `REQUEST_EXPORT_CANCEL` to
   `activeShellTabId` (the running shell's tab, sidebar-takeout.js), else `jobTabId` (the active tab
-  when the job started), else the current tab. Retries and Download Selected run on the tab they
+  when the job started), else the current tab. Retries and the action bar's Generated export run on the tab they
   were scanned on, which need not be the active one. The content script there broadcasts
   `CANCEL_EXPORT`, which the shell's own listener receives.
 
@@ -1431,7 +1457,7 @@ user clicks Dismiss.
   instead of the active tab, and `shell.meta` (notebook title, URL) comes from that tab. Omitted:
   the active tab, as before. `downloadAllArtifacts(tabId, items)` and Full Takeout pass it.
   `exportSources(selected, { tabId })` and `exportNotesAsMarkdown(selected, { tabId })` take it too
-  (default: the active tab). Every retry (`retryFor` closures for notes, sources and Download All, and
+  (default: the active tab). Every retry (`retryFor` closures for notes, sources and the action bar's artifact export, and
   Full Takeout's Retry) re-runs on the tab the original export used (`shell.tab.id` / the takeout's tab).
 - `target.written` (every category runner, `CategoryTarget`): `{ zips: [], count: 0, multi: false,
   parts: 0 }` (`newWritten()`), filled by `saveCategoryBatch` as each package is saved (the artifacts
@@ -1483,7 +1509,7 @@ before `sidebar-takeout.js`:
 | File | Holds |
 |---|---|
 | `sidebar-core.js` | `logger`, mindmap template and `mindmapFiles`, `showDOMWarningDialog`, settings (`settings`, `loadSettings`, `saveSettings`), `init`, tab and notebook switching, auto-refresh, resume banner, `retryDownload`, `checkStatus`, `ScanError`, `ensureContentScriptLoaded`, `convertToMarkdown`, timing and audit helpers, `runExclusive` / job lock, `retryFor`, `refreshListButtons`, cancel, `sanitizeFilename`, image helpers, job records (`startJobRecord`, `withJobRecord`), `saveCategoryBatch`, `batchPrefix`, `newWritten`, `itemFailed`, `variantName`, `noteFrontMatter`, `getIconForType`, `showToast`, `escapeHtml` |
-| `sidebar-artifacts.js` | artifact files (`fetchArtifactFiles`, `downloadArtifact`), `scanArtifactsData`, `scanPage`, Download Selected, `runArtifactsJob`, `downloadAllArtifacts`, and the table converters (`convertTableToCSV`, `createCleanTableHTML`, ...) that only data-table artifacts use |
+| `sidebar-artifacts.js` | artifact files (`fetchArtifactFiles`, `downloadArtifact`), `scanArtifactsData`, `runArtifactsJob`, `downloadAllArtifacts`, and the table converters (`convertTableToCSV`, `createCleanTableHTML`, ...) that only data-table artifacts use |
 | `sidebar-notes.js` | note scanning and list, `exportNotesAsMarkdown`, `runNotesJob`, `extractNoteItem`, `exportSingleNote`, `buildNotesFiles` |
 | `sidebar-sources.js` | the sources scan, list, `runSourcesJob`, `extractSourceItem`, `buildSourcesFiles` |
 | `sidebar-chat.js` | the chat scan, `runChatJob`, `extractChatPair`, `buildChatFiles`, `convertChatToMarkdown` |
@@ -1627,8 +1653,9 @@ not Citation detail 'none') or on `obsidianNames`.
   dialog whose `.cdk-overlay-pane` is the last pane in `.cdk-overlay-container`, never to a snack bar or
   tooltip pane), so a confirm dialog the delete opened does not stay open and a dialog that existed before
   is never touched.
-- **Delete Selected count.** `isStudioItemUntitled` is shared by the button label and the confirm in
-  `handleStudioBulkDelete`; untitled Studio items are not counted (Sources-panel notes are).
+- **Delete Selected count.** `NLME.bulkDeletePlan` is shared by the button label and the confirm in
+  `handleStudioBulkDelete`; untitled Studio items and Studio items with a shared title are not counted
+  (Sources-panel notes are).
 - **Folder-mode sizes.** `downloadUrlTo` returns the download id; `downloadSizeWhenDone(id)` polls
   `chrome.downloads.search({ id })` (500 ms, 120 s cap, never rejects) through the pure
   `NLME.downloadSizeStatus`. `saveFiles` folder mode returns `sizes` (promises); `runArtifactsJob` sets
@@ -1654,9 +1681,10 @@ chat history for context — the fix often introduces a different regression.
 
 Exports are fixed (Nov 2026): notes, reports, tables and mind maps resolve with
 `NLME.pickByIndexThenTitle` (scanned index while its title matches, else title).
-`deleteStudioItem` / bulk delete still resolve by label, so deleting the second of two
-same-titled items hits the first. A fix covering delete was tried in June and **reverted at
-the user's request** — re-do only after talking with them.
+`deleteStudioItem` resolves by label in bulk, so deleting the second of two same-titled items
+would hit the first. A fix covering delete was tried in June and **reverted at the user's
+request**. In 1.9.1, with the owner's OK, `NLME.bulkDeletePlan` skips Studio items with a shared
+title in Delete Selected; a row delete checks position and title. `content.js` is unchanged.
 
 Related (Milestone 3c Resume): job-record keys are `type\0title`, plus `#n` for the nth duplicate. If
 the first of two same-titled items is deleted, the survivor becomes the unsuffixed key, so a Resume may
@@ -1698,8 +1726,8 @@ loose files in `mind-maps/`. This asymmetry is intentional but worth knowing.
 
 ### 7. Flashcards and Quiz are not exportable
 
-They have no Download item in the More menu. They are listed but disabled in the
-Artifacts tab. Rows in the Generated tab are still clickable and fail with an error.
+They have no Download item in the More menu. The Generated tab lists them: their row Download is
+disabled (as for an artifact with no More button), the action does not count them (`skipped`), and they stay selectable for delete.
 
 ### 8. Follow-ups from the PR #2 review (deferred, minor)
 
@@ -1739,8 +1767,6 @@ A pause-between-items setting was discussed and not built.
 2. Add the checkbox to the appropriate `.setting-section` in sidebar.html.
 3. Add load/save lines in `loadSettings` / `saveSettings`.
 4. Reference where the setting affects behavior.
-5. Bonus: if it gates a UI element's visibility, add a helper like `applyStudioTabVisibility`
-   and call from both load and save.
 
 ### "Add a new export pipeline / file type"
 
@@ -1812,22 +1838,20 @@ Export checks that catch real bugs (scripted against the unzipped export):
 3. Run the 🩺 health check. All categories should pass.
 4. Export one source. Open the resulting `.md`, confirm content + citations look right.
 5. Export one note (Notes tab). Confirm `.md` has citations and `## Sources` block.
-6. Export one mind map (Artifacts tab). Confirm the ZIP has SVG + JSON + HTML and the
+6. Export one mind map (Generated tab). Confirm the ZIP has SVG + JSON + HTML and the
    viewer closed.
 7. Export one artifact of each type. Confirm files land with correct prefix and extension.
 8. Export chat. Confirm filename uses the real project title.
 
 ### Generated tab check (when touching Studio code)
 
-1. Enable Show the Generated tab in Settings.
-2. Switch to Generated → Scan Generated. Confirm the list mirrors NotebookLM's right column plus the notes in the Sources panel's "Notes" group.
-3. Row download for each kind: artifact, note, mindmap.
-4. Row delete on a disposable note. Confirm the sidebar confirm appears, NotebookLM's
+1. Open the Generated tab. Confirm the list mirrors NotebookLM's right column plus the notes in the Sources panel's "Notes" group.
+2. Row download for each kind: artifact, note, mindmap.
+3. Row delete on a disposable note. Confirm the sidebar confirm appears, NotebookLM's
    dialog auto-confirms, the row disappears, and the rescan completes.
-5. Bulk select 2–3 items → Download Selected. Confirm sequential downloads with status.
-6. Bulk delete 2–3 items. Confirm 1s settle delay between deletes.
-7. Sources-panel notes: confirm they appear (type "Note (Sources panel)") and download. Row delete on a disposable one: the sidebar confirm appears, the note leaves the Sources panel and the rescan completes. Delete Selected with two such notes plus a Studio item counts all three in the confirm; the Studio item goes first, then the notes from the highest `sourceIndex` down.
-8. Disable Show the Generated tab. Confirm the tab disappears and a non-Generated tab activates.
+4. Bulk select notes plus a deck → Export N items. Confirm the artifacts, then the notes, and one combined panel.
+5. Bulk delete 2–3 items. Confirm 1s settle delay between deletes.
+6. Sources-panel notes: confirm they appear (type "Note (Sources panel)") and download. Row delete on a disposable one: the sidebar confirm appears, the note leaves the Sources panel and the rescan completes. Delete Selected with two such notes plus a Studio item counts all three in the confirm; the Studio item goes first, then the notes from the highest `sourceIndex` down.
 
 ### Syntax and unit tests
 
