@@ -294,9 +294,15 @@ test('styles.css has no colour outside the theme blocks', () => {
   const css = fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8');
   const rest = css.replace(/\/\* theme:start \*\/[\s\S]*?\/\* theme:end \*\//, '');
   assert.deepEqual(rest.match(/#[0-9a-fA-F]{3,8}\b|rgba?\(/g), null);
-  // Named colours used as a value (declaration lines only, so selectors and class names are safe)
-  const NAMED = /(?<![\w-])(white|black|red|green|blue|gray|grey|orange|yellow|purple|pink|silver|navy|teal|maroon|lime|aqua|brown|gold)(?![\w-])/;
-  const named = rest.split('\n').filter(l => /^\s*[a-z-]+\s*:/.test(l) && NAMED.test(l.replace(/^\s*[a-z-]+\s*:/, '').replace(/var\([^)]*\)/g, '')));
+  // Named colours (with an optional shade prefix) used as a declaration value.
+  // Pieces ending in `{` are selectors, so they are skipped; one-line rules are covered.
+  const NAMED = /(?<![\w-])(?:(?:light|dark|medium|pale|deep)?(?:white|black|red|green|blue|gray|grey|orange|yellow|purple|pink|silver|navy|teal|maroon|lime|aqua|brown|gold)|whitesmoke|coral|tan|indigo|ivory|beige|khaki|violet|crimson|salmon)(?![\w-])/i;
+  const named = [];
+  for (const m of rest.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{};]+)([{};])/g)) {
+    if (m[2] === '{') continue;
+    const decl = m[1].match(/^\s*[a-z-]+\s*:([\s\S]*)$/i);
+    if (decl && NAMED.test(decl[1].replace(/var\([^)]*\)/g, ''))) named.push(m[1].trim());
+  }
   assert.deepEqual(named, []);
 });
 
