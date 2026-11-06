@@ -34,6 +34,13 @@ const ICON_PATHS = {
   download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
   trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/>',
   check: '<path d="M5 12l5 5 10-11"/>',
+  // Artifact types
+  audio: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
+  video: '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/>',
+  slides: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8"/>',
+  image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.5"/><path d="M21 16l-5-5-9 9"/>',
+  table: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18M9 4v16"/>',
+  map: '<circle cx="12" cy="12" r="2.5"/><circle cx="4.5" cy="6" r="1.5"/><circle cx="4.5" cy="18" r="1.5"/><circle cx="19.5" cy="6" r="1.5"/><circle cx="19.5" cy="18" r="1.5"/><path d="M9.8 10.8L5.8 7M9.8 13.2l-4 3.8M14.2 10.8l4-3.8M14.2 13.2l4 3.8"/>',
   // Extras for buttons that had their own inline SVG
   search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/>',
@@ -1713,14 +1720,16 @@ function noteFrontMatter(meta, { title, kind = 'note', variant }) {
 
 function getIconForType(type) {
   const names = {
-    'Audio Overview': 'spark',
-    'Slides': 'doc',
-    'Infographic': 'doc',
+    'Audio Overview': 'audio',
+    'Slides': 'slides',
+    'Infographic': 'image',
     'Report': 'doc',
-    'Data Table': 'doc',
-    'Video Overview': 'spark',
-    'Mind Map': 'spark'
+    'Data Table': 'table',
+    'Video Overview': 'video',
+    'Mind Map': 'map',
+    'Note': 'note'
   };
+  if (!names[type] && /^Note/.test(type || '')) return icon('note'); // e.g. 'Note (Sources panel)'
   return icon(names[type] || 'doc');
 }
 
