@@ -289,3 +289,24 @@ test('Full Takeout gives the viewer the notebook emoji, shown on the cover and t
   assert.match(app, /class="nb-emoji">' \+ esc\(D\.emoji\)/);
   assert.match(app, /document\.title = \(D\.emoji \? D\.emoji \+ ' ' : ''\)/);
 });
+
+test('styles.css has no colour outside the theme blocks', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8');
+  const rest = css.replace(/\/\* theme:start \*\/[\s\S]*?\/\* theme:end \*\//, '');
+  assert.deepEqual(rest.match(/#[0-9a-fA-F]{3,8}\b|rgba?\(/g), null);
+});
+
+test('every id the sidebar scripts look up is declared', () => {
+  const files = ['sidebar.html', ...fs.readdirSync(ROOT).filter(f => /^sidebar-.*\.js$/.test(f))];
+  const text = files.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
+  const declared = new Set();
+  for (const m of text.matchAll(/\bid=["']([\w-]+)["']/g)) declared.add(m[1]);
+  for (const m of text.matchAll(/\.id\s*=\s*['"`]([\w-]+)['"`]/g)) declared.add(m[1]);
+  // Looked up but declared nowhere; each is optional (guarded with ?. or a null check)
+  const KNOWN_GAPS = {};
+  const missing = new Set();
+  for (const m of text.matchAll(/getElementById\(\s*['"]([\w-]+)['"]\s*\)/g)) {
+    if (!declared.has(m[1]) && !(m[1] in KNOWN_GAPS)) missing.add(m[1]);
+  }
+  assert.deepEqual([...missing], []);
+});

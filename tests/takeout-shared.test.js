@@ -2244,3 +2244,14 @@ test('takeoutFolderName trims a long notebook name, never the timestamp', () => 
   assert.equal(emoji, `${'a'.repeat(52)} takeout ${ts}`);
   assert.equal(NLME.takeoutFolderName(`${'b'.repeat(50)} . extra words here`, ts), `${'b'.repeat(50)} takeout ${ts}`);
 });
+
+test('themeAttr maps the theme setting to the data-theme attribute', () => {
+  assert.equal(NLME.themeAttr('auto'), null);
+  assert.equal(NLME.themeAttr('dark'), 'dark');
+  assert.equal(NLME.themeAttr('light'), 'light');
+  assert.equal(NLME.themeAttr('nonsense'), null);
+  assert.equal(NLME.themeAttr(undefined), null);
+  assert.equal(NLME.themeValue('dark'), 'dark');
+  assert.equal(NLME.themeValue('nonsense'), 'auto');
+  assert.equal(NLME.DEFAULT_SETTINGS.theme, 'auto');
+});

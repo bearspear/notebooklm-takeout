@@ -91,7 +91,7 @@ function showDOMWarningDialog(issues, isMidExport = false) {
       <div class="dialog-overlay"></div>
       <div class="dialog-content">
         <h3>${isMidExport ? 'Export Issues Detected' : 'Potential Compatibility Issues'}</h3>
-        <p style="font-size: 13px; color: #666; margin: 0 0 8px;">
+        <p class="dialog-note">
           ${isMidExport
             ? 'Multiple errors occurred. NotebookLM may have been updated.'
             : 'Some expected elements were not found. The extension may need an update.'}
@@ -268,6 +268,22 @@ async function loadSettings() {
   applySettingsToUi();
 }
 
+// Set or remove data-theme on <html> from settings.theme ('auto' follows the
+// OS through the CSS media query). The choice is also kept in localStorage so
+// the next open can apply it before settings load (no flash of the wrong theme).
+function applyTheme() {
+  const attr = NLME.themeAttr(settings.theme);
+  if (attr) document.documentElement.setAttribute('data-theme', attr);
+  else document.documentElement.removeAttribute('data-theme');
+  try { localStorage.setItem('nlme-theme', attr || 'auto'); } catch (e) { /* storage blocked */ }
+}
+
+// Apply the remembered theme at once, before the async settings load
+try {
+  const early = NLME.themeAttr(localStorage.getItem('nlme-theme'));
+  if (early) document.documentElement.setAttribute('data-theme', early);
+} catch (e) { /* storage blocked */ }
+
 // Show `settings` in the ⚙️ panel (on load and after Reset to defaults)
 function applySettingsToUi() {
   document.getElementById('auto-zip-checkbox').checked = settings.autoZip;
@@ -302,6 +318,8 @@ function applySettingsToUi() {
   document.getElementById('reuse-citations-checkbox').checked = settings.reuseCitations !== false;
   document.getElementById('citation-style-select').value = settings.citationStyle === 'footnotes' ? 'footnotes' : 'links';
   document.getElementById('obsidian-names-checkbox').checked = settings.obsidianNames === true;
+  document.getElementById('theme-select').value = NLME.themeValue(settings.theme);
+  applyTheme();
   applyStudioTabVisibility();
   updateChatCitationInfo();
 }
@@ -386,6 +404,8 @@ async function saveSettings() {
   settings.reuseCitations = document.getElementById('reuse-citations-checkbox').checked;
   settings.citationStyle = document.getElementById('citation-style-select').value === 'footnotes' ? 'footnotes' : 'links';
   settings.obsidianNames = document.getElementById('obsidian-names-checkbox').checked;
+  settings.theme = NLME.themeValue(document.getElementById('theme-select').value);
+  applyTheme();
   applyStudioTabVisibility();
   updateChatCitationInfo();
 

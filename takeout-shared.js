@@ -2442,7 +2442,8 @@ footer { margin-top: 3rem; }
     citationDetail: 'quotes',
     reuseCitations: true,
     citationStyle: 'links',
-    obsidianNames: false
+    obsidianNames: false,
+    theme: 'auto'
   });
 
   // A fresh, editable copy of the defaults. Keeps only the Full Takeout ZIP
@@ -2451,6 +2452,17 @@ footer { margin-top: 3rem; }
     const fresh = { ...DEFAULT_SETTINGS };
     if (current && current.takeoutZip !== undefined) fresh.takeoutZip = current.takeoutZip;
     return fresh;
+  }
+
+  // 'light' or 'dark' for the <html data-theme> attribute; null for Auto (the
+  // CSS then follows the OS) and for anything unknown.
+  function themeAttr(theme) {
+    return theme === 'light' || theme === 'dark' ? theme : null;
+  }
+
+  // The setting value to store: 'auto', 'light' or 'dark'
+  function themeValue(theme) {
+    return themeAttr(theme) || 'auto';
   }
 
   const NLME = {
@@ -2616,7 +2628,9 @@ footer { margin-top: 3rem; }
     CITE_MAX_BYTES_PER_NOTEBOOK,
     CITE_KEEP_NOTEBOOKS,
     DEFAULT_SETTINGS,
-    resetSettings
+    resetSettings,
+    themeAttr,
+    themeValue
   };
 
   root.NLME = NLME;
