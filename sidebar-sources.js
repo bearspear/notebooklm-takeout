@@ -119,6 +119,9 @@ async function scanSourcesPage() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   if (!isNotebookUrl(tab?.url)) {
+    const resultsDiv = document.getElementById('sources-scan-results');
+    if (resultsDiv) resultsDiv.innerHTML = '<p class="empty-message">Please open NotebookLM first</p>';
+    setTabCount('sources', null);
     showToast('Please open NotebookLM first', 'error');
     return;
   }

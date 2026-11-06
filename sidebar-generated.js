@@ -37,6 +37,7 @@ async function scanStudioPage() {
     await ensureContentScriptLoaded(tab.id);
     if (await studioViewerOpen(tab.id)) {
       resultsEl.innerHTML = STUDIO_ITEM_OPEN_HTML;
+      setTabCount('studio', null);
       return;
     }
     const response = await chrome.tabs.sendMessage(tab.id, { type: NLME.MSG.SCAN_STUDIO_ITEMS });
@@ -65,6 +66,7 @@ async function scanStudioPage() {
     renderStudioList(items);
   } catch (error) {
     console.error('[NotebookLM Takeout] Generated scan failed:', error);
+    setTabCount('studio', null);
     resultsEl.innerHTML = `<p class="error-message">Generated scan failed: ${escapeHtml(error.message || String(error))}</p>`;
   }
 }
