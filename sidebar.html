@@ -41,17 +41,8 @@
     <div class="tabs">
       <button class="tab-btn active" data-tab="sources">Sources <span class="tab-count" hidden></span></button>
       <button class="tab-btn" data-tab="notes">Notes <span class="tab-count" hidden></span></button>
-      <button class="tab-btn" data-tab="artifacts">Artifacts <span class="tab-count" hidden></span></button>
+      <button class="tab-btn" data-tab="studio">Generated <span class="tab-count" hidden></span></button>
       <button class="tab-btn" data-tab="chat">Chat <span class="tab-count" hidden></span></button>
-      <button class="tab-btn" data-tab="studio" hidden>Generated <span class="tab-count" hidden></span></button>
-    </div>
-
-    <div class="tab-content" data-tab-content="artifacts">
-      <section id="artifacts-section" class="section">
-      <div id="scan-results" class="scan-results">
-        <p class="scanning">Scanning...</p>
-      </div>
-    </section>
     </div>
 
     <div class="tab-content" data-tab-content="notes">
@@ -88,31 +79,24 @@
       </section>
     </div>
 
-    <div class="tab-content" data-tab-content="studio" hidden>
+    <div class="tab-content" data-tab-content="studio">
       <section id="studio-section" class="section">
         <div class="studio-info">
-          <p class="info-text">Everything Gemini Notebook generated: Studio items plus the notes in the Sources panel. Download each item individually (Sources-panel notes can't be deleted here yet). No ZIP.</p>
+          <p class="info-text">Everything Gemini Notebook generated: Studio items plus the notes in the Sources panel.</p>
         </div>
 
         <div id="studio-scan-results" class="scan-results">
           <p class="scanning">Scanning...</p>
-        </div>
-
-        <div class="export-controls">
-          <button id="studio-download-selected-btn" class="btn btn-primary" style="display: none;" disabled>
-            <span data-icon="download"></span>
-            Download Selected
-          </button>
-          <button id="studio-delete-selected-btn" class="btn btn-danger" style="display: none;" disabled>
-            <span data-icon="trash"></span>
-            Delete Selected
-          </button>
         </div>
       </section>
     </div>
 
     <div id="action-bar" class="action-bar" hidden>
       <button id="action-btn" class="btn btn-primary" disabled></button>
+      <button id="studio-delete-selected-btn" class="btn btn-danger" hidden disabled>
+        <span data-icon="trash"></span>
+        Delete Selected
+      </button>
     </div>
 
     <div id="download-progress" class="download-progress" style="display: none;">
@@ -172,14 +156,6 @@
         <div class="setting-group">
           <label>Auto-refresh interval (seconds)</label>
           <input type="number" id="refresh-interval-input" min="5" max="60" value="10" class="number-input">
-        </div>
-
-        <div class="setting-group">
-          <label>
-            <input type="checkbox" id="show-studio-tab-checkbox">
-            <span>Show the Generated tab</span>
-          </label>
-          <p class="setting-help">Adds a fifth tab that lists everything Gemini Notebook generated as a single flat list: the Studio panel's items (notes, audio, slides, infographics, reports, data tables, flowcharts) and the notes in the Sources panel. Each row can be downloaded individually — no ZIP — and Studio items can be deleted (Sources-panel notes can't yet). Off by default.</p>
         </div>
       </div>
 

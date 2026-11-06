@@ -1992,7 +1992,7 @@ test('DEFAULT_SETTINGS pins the shipped defaults and cannot be changed', () => {
   assert.equal(d.sourcesPerZip, 25);
   assert.equal(d.notesPerZip, 25);
   assert.equal(d.cleanOCRArtifacts, true);
-  assert.equal(d.showStudioTab, false);
+  assert.equal('showStudioTab' in d, false);
   assert.equal(d.slidesFormat, 'pdf');
   assert.equal(d.citationDetail, 'quotes');
   assert.equal(d.reuseCitations, true);
@@ -2271,4 +2271,77 @@ test('actionLabel', () => {
   assert.equal(NLME.actionLabel(0, 'note'), 'Select notes to export');
   assert.equal(NLME.actionLabel(1400, 'message'), 'Export 1,400 messages');
   assert.equal(NLME.actionLabel(3, 'artifact', 'Download'), 'Download 3 artifacts');
+});
+
+test('generatedExportPlan splits by kind and skips what cannot download', () => {
+  const plan = NLME.generatedExportPlan([
+    { kind: 'artifact', moreIndex: 2, label: 'Deck', type: 'Slides', details: '', downloadable: true },
+    { kind: 'artifact', moreIndex: 3, label: 'Audio', type: 'Audio', details: 'Generating', downloadable: false },
+    { kind: 'note', kindIndex: 0, label: 'N1', type: 'Note' },
+    { kind: 'source-note', sourceIndex: 4, label: 'N2', type: 'Note (Sources panel)' }
+  ]);
+  assert.deepEqual(plan.artifacts.map(a => a.index), [2]);
+  assert.deepEqual(plan.notes.map(n => n.title), ['N1', 'N2']);
+  assert.equal(plan.notes[1].index, -1);
+  assert.equal(plan.notes[1].sourceIndex, 4);
+  assert.equal(plan.skipped.length, 1);
+});
+
+test('a selection of only unavailable items exports nothing', () => {
+  const plan = NLME.generatedExportPlan([{ kind: 'artifact', moreIndex: 1, label: 'A', type: 'Audio', downloadable: false }]);
+  assert.equal(plan.artifacts.length + plan.notes.length, 0);
+});
+
+test('generatedExportPlan gives each side the shape its exporter reads', () => {
+  const plan = NLME.generatedExportPlan([
+    { kind: 'artifact', combinedIndex: 5, kindIndex: 1, moreIndex: 2, label: 'Deck', type: 'Slides', details: '3 sources', downloadable: true },
+    { kind: 'note', combinedIndex: 6, kindIndex: 0, label: 'N1', type: 'Note', details: '' }
+  ]);
+  assert.deepEqual(plan.artifacts, [{ index: 2, label: 'Deck', type: 'Slides', details: '3 sources', disabled: false }]);
+  assert.deepEqual(plan.notes, [{ index: 0, title: 'N1', type: 'Note' }]);
+});
+
+test('generatedExportPlan skips a kind it does not know instead of guessing', () => {
+  const plan = NLME.generatedExportPlan([{ kind: 'something-new', label: 'X', type: 'X' }, null]);
+  assert.equal(plan.artifacts.length + plan.notes.length, 0);
+  assert.equal(plan.skipped.length, 1);
+});
+
+test('generatedExportPlan carries the job key as _listKey, for Retry and Resume', () => {
+  const plan = NLME.generatedExportPlan([
+    { kind: 'artifact', moreIndex: 2, label: 'Deck', type: 'Slides', downloadable: true, jobKey: 'Slides\u0000Deck#2' },
+    { kind: 'note', kindIndex: 1, label: 'N1', type: 'Note', jobKey: 'Note\u0000N1#2' },
+    { kind: 'note', kindIndex: 2, label: 'N2', type: 'Note' }
+  ]);
+  assert.equal(plan.artifacts[0]._listKey, 'Slides\u0000Deck#2');
+  assert.equal(plan.notes[0]._listKey, 'Note\u0000N1#2');
+  assert.equal('_listKey' in plan.notes[1], false);
+  // Non-enumerable, as on the tab lists: a copy of the item does not carry it
+  assert.equal(Object.keys(plan.artifacts[0]).includes('_listKey'), false);
+});
+
+test('generatedSignature changes with everything a row acts on, and with nothing else', () => {
+  const tab = { id: 1, url: 'https://notebook.google.com/notebook/a' };
+  const item = { kind: 'artifact', combinedIndex: 0, kindIndex: 0, moreIndex: 0, label: 'Deck', type: 'Slides', details: '', downloadable: true, untitled: false, jobKey: 'k' };
+  const base = NLME.generatedSignature(tab, [item]);
+  assert.equal(NLME.generatedSignature({ ...tab }, [{ ...item }]), base);
+  const changes = [
+    { combinedIndex: 1 }, { kindIndex: 1 }, { moreIndex: 1 }, { sourceIndex: 1 }, { kind: 'note' }, { label: 'Other' }, { type: 'Report' },
+    { details: 'Generating' }, { downloadable: false }, { untitled: true }, { jobKey: 'other' }
+  ];
+  for (const change of changes) {
+    assert.notEqual(NLME.generatedSignature(tab, [{ ...item, ...change }]), base, JSON.stringify(change));
+  }
+  assert.notEqual(NLME.generatedSignature({ ...tab, id: 2 }, [item]), base);
+  assert.notEqual(NLME.generatedSignature({ ...tab, url: tab.url + 'b' }, [item]), base);
+});
+
+test('combineRetryOutcomes names a stopped Generated export', () => {
+  const combined = NLME.combineRetryOutcomes({
+    steps: [{ name: 'Artifacts', message: 'Export cancelled', level: 'warning', saved: ['a.zip'], errors: [], failedItems: [] }],
+    notRun: [{ name: 'Notes', failedItems: [{ title: 'N1' }] }],
+    verb: 'Export'
+  });
+  assert.equal(combined.message, 'Export stopped before notes — 1 still failed');
+  assert.deepEqual(Object.keys(combined.remaining), ['Artifacts', 'Notes']);
 });

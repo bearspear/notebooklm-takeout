@@ -192,21 +192,6 @@ body {
   font-weight: 500;
 }
 
-.artifact-count {
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 10px;
-  min-width: 20px;
-  text-align: center;
-}
-
-.artifact-group.empty .artifact-count {
-  background: var(--muted);
-}
-
 .artifact-list {
   max-height: 150px;
   overflow-y: auto;
@@ -495,18 +480,6 @@ body {
   margin: 4px 0 12px;
 }
 
-/* Download All Controls */
-.download-all-controls {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 12px;
-}
-
-.download-all-controls .btn-primary {
-  flex: 1;
-}
-
 /* Full Takeout button with its own ZIP choice, under the header */
 .takeout-row {
   display: flex;
@@ -529,21 +502,6 @@ body {
   width: 14px;
   height: 14px;
   margin: 0;
-}
-
-.zip-checkbox {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.zip-checkbox input {
-  cursor: pointer;
-  width: 14px;
-  height: 14px;
 }
 
 /* Spinner Animation */
@@ -576,11 +534,6 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-}
-
-.sidebar-mode #artifacts-section {
-  flex: 1;
-  overflow-y: auto;
 }
 
 /* Scan Item Icons */
@@ -862,16 +815,6 @@ body {
   max-height: none; /* Remove max-height for sidebar */
 }
 
-/* Download all controls in sidebar */
-.download-all-controls {
-  position: sticky;
-  bottom: 0;
-  background: var(--bg);
-  padding: 12px 0 0;
-  margin-top: 8px;
-  border-top: 1px solid var(--line);
-}
-
 /* Tab Navigation */
 .tabs {
   display: flex;
@@ -1027,19 +970,6 @@ body {
   margin-right: 0;
 }
 
-/* Export Controls */
-.export-controls {
-  padding: 16px;
-  border-top: 1px solid var(--line);
-  background: var(--bg);
-  position: sticky;
-  bottom: 0;
-}
-
-.export-controls .btn {
-  width: 100%;
-}
-
 /* ============================================
    DOWNLOAD STATUS INDICATORS
    ============================================ */
@@ -1168,13 +1098,6 @@ body {
 
 .download-single-btn:hover {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
-/* Export controls */
-.export-controls {
-  display: flex;
-  gap: 10px;
-  margin-top: 16px;
 }
 
 /* DOM Warning Banner */
@@ -1656,6 +1579,7 @@ body.job-running .tab-content button,
 body.job-running .tab-content input,
 body.job-running .tab-content select,
 body.job-running #action-btn,
+body.job-running #studio-delete-selected-btn,
 body.job-running #rescan-btn {
   pointer-events: none;
   opacity: 0.5;
@@ -1785,6 +1709,9 @@ body.job-running .list-row {
 .action-bar {
   position: sticky;
   bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   padding: 12px 16px;
   border-top: 1px solid var(--line);
   background: var(--bg);
@@ -1795,7 +1722,13 @@ body.job-running .list-row {
 }
 
 .action-bar .btn {
-  width: 100%;
+  flex: 1 1 auto;
+  width: auto;
+  margin-top: 0;
+}
+
+.action-bar .btn[hidden] {
+  display: none;
 }
 
 /* Chat: the note above Load chat */

@@ -528,8 +528,7 @@ async function saveTakeoutImages(images, { root, folder, zipNameFor }) {
 }
 
 // The ZIP setting: the checkbox next to the Full Takeout button, else the saved
-// choice (takeoutZip, falling back to autoZip). The Artifacts tab's Zip tick
-// only affects Download Selected.
+// choice (takeoutZip, falling back to autoZip).
 function takeoutZipEnabled() {
   const checkbox = document.getElementById('takeout-zip-checkbox');
   return checkbox ? checkbox.checked : NLME.takeoutZipChoice(settings);
@@ -938,8 +937,9 @@ async function runChain(fn) {
 }
 
 /**
- * The steps shared by the takeout Retry and Resume, in TAKEOUT_RETRY_STEPS order,
- * each an ordinary tab export of `itemsByName[step.name]` on `tabId`. Empty
+ * The steps shared by the takeout Retry and Resume, in TAKEOUT_RETRY_STEPS order
+ * (chainSteps: the Generated export's own steps), each an ordinary tab export of
+ * `itemsByName[step.name]` on `tabId`. Empty
  * categories are skipped. A cancel (the step's own, or the chain flag set between
  * steps), a declined health-check dialog or an aborted step ends the chain: later
  * categories do not run. Call it inside runChain.
@@ -947,11 +947,11 @@ async function runChain(fn) {
  * @returns {{ steps: object[], notRun: object[] }} the inputs of
  *   NLME.combineRetryOutcomes
  */
-async function runRetryChain(itemsByName, tabId, verb = 'Retry') {
+async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TAKEOUT_RETRY_STEPS) {
   const steps = [];
   const notRun = [];
   let stopped = false;
-  for (const step of TAKEOUT_RETRY_STEPS) {
+  for (const step of chainSteps) {
     const items = itemsByName[step.name] || [];
     if (items.length === 0) continue;
     if (chainCancelRequested) stopped = true;

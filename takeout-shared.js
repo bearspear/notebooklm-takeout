@@ -1653,6 +1653,42 @@
     return `${verb} ${n.toLocaleString('en-US')} ${unit}${n === 1 ? '' : 's'}`;
   }
 
+  // The Generated list's selection as the two exports it becomes: artifacts in the
+  // scanArtifactsData shape, notes in the exportSingleNote shape. skipped: what
+  // cannot be exported (Flashcards, Quiz); those stay selectable for delete.
+  // item.jobKey (see stampGeneratedJobKeys in sidebar-generated.js) travels as the
+  // non-enumerable _listKey jobItemKeys reads, so a job record holds the keys a
+  // fresh scan of that category gives, whatever else is in the merged list.
+  function generatedExportPlan(items) {
+    const plan = { artifacts: [], notes: [], skipped: [] };
+    const keyed = (out, item) => {
+      if (typeof item.jobKey === 'string') Object.defineProperty(out, '_listKey', { value: item.jobKey, configurable: true, writable: true });
+      return out;
+    };
+    for (const item of items || []) {
+      if (!item) continue;
+      if (item.kind === 'artifact' && item.downloadable) {
+        plan.artifacts.push(keyed({ index: item.moreIndex, label: item.label, type: item.type, details: item.details, disabled: false }, item));
+      } else if (item.kind === 'note') {
+        plan.notes.push(keyed({ index: item.kindIndex, title: item.label, type: item.type }, item));
+      } else if (item.kind === 'source-note') {
+        plan.notes.push(keyed({ index: -1, sourceIndex: item.sourceIndex, title: item.label, type: item.type }, item));
+      } else {
+        plan.skipped.push(item);
+      }
+    }
+    return plan;
+  }
+
+  // Everything the Generated rows are drawn from and act on (and the page their
+  // buttons talk to); equal signatures need no redraw
+  function generatedSignature(tab, items) {
+    return JSON.stringify([tab.id, tab.url, items.map(item => [
+      item.kind, item.label, item.type, item.details || '', item.combinedIndex, item.kindIndex, item.moreIndex,
+      item.sourceIndex, !!item.downloadable, !!item.untitled, item.jobKey
+    ])]);
+  }
+
   function listStateKey(notebookId, tab) {
     return `nlme.list.${notebookId}.${tab}`;
   }
@@ -2453,7 +2489,6 @@ footer { margin-top: 3rem; }
     sourcesPerZip: 25,
     notesPerZip: 25,
     cleanOCRArtifacts: true,
-    showStudioTab: false,
     slidesFormat: 'pdf',
     citationDetail: 'quotes',
     reuseCitations: true,
@@ -2519,6 +2554,8 @@ footer { margin-top: 3rem; }
     pruneSelection,
     listSummary,
     actionLabel,
+    generatedExportPlan,
+    generatedSignature,
     listStateKey,
     pruneListStates,
     restoreListState,

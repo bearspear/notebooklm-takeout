@@ -73,7 +73,7 @@ permissions or content scripts.
 
 Open a notebook, then use the tabs in the side panel.
 
-The Notes, Sources, Artifacts and Generated lists each have a toolbar with a filter box that matches
+The Sources, Notes and Generated lists each have a toolbar with a filter box that matches
 titles and types, type chips with counts (shown when there is more than one type), a sort menu
 (notebook order, title A-Z, type) and a **Select all visible** checkbox that only touches the rows
 the filter leaves showing. Rows the filter hides are deselected, so an export never includes
@@ -129,17 +129,23 @@ The quoted passage from the source…
    `chat-with-images.md` when they apply), `_index.md`, `manifest.json`, `_audit.md` and
    `errors.md` when something failed.
 
-### Artifacts
+### Generated
 
-1. **Artifacts** tab lists everything in the Studio panel. Every downloadable artifact starts
-   selected; filter, sort or untick rows to choose what you want.
-2. Click **Download** on a row, or **Download Selected (N)** for the ticked rows.
+1. The **Generated** tab lists everything Gemini Notebook generated as one list: the items in the
+   Studio panel (audio, slides, reports, notes and so on) and the notes in the Sources panel's
+   "Notes" group (type "Note (Sources panel)"). Nothing starts selected, because the same selection
+   drives **Delete Selected**; tick or filter rows to choose what you want.
+2. Click **Download** on a row, or **Export N items** under the list for the ticked rows. Notes in
+   the selection are exported after the artifacts, into `{notebook}-notes-{timestamp}.zip` as on the
+   Notes tab. If you press Cancel during the artifacts, the notes do not start. Flashcards and quizzes
+   stay in the list so you can delete them, but they are not counted and not exported. Whether artifacts go
+   to a ZIP or a folder follows the **Always use ZIP** setting.
    - **Download** saves one file named `[type]_Title.ext` (for example `[report]_Title.md`,
      `[mind-map]_Title.svg`). A Data Table or mind map saves as one ZIP (`[data-table]_Title.zip`, `[mind-map]_Title.zip`).
-   - With **ZIP off** (recommended for whole notebooks), **Download Selected** saves every ticked file into
+   - With **ZIP off** (recommended for whole notebooks), **Export N items** saves every ticked artifact into
      `Downloads/<Notebook name>/<type>/…`, one file at a time, so even large audio and video
      overviews work.
-   - With **ZIP on**, **Download Selected** writes one `{notebook}-artifacts-{timestamp}.zip` with
+   - With **ZIP on**, **Export N items** writes one `{notebook}-artifacts-{timestamp}.zip` with
      type folders (`audio/ video/ slides/ infographics/ reports/ tables/ mind-maps/`), an
      `_index.md`, a `manifest.json` and `errors.md` when something failed. The side panel builds
      each ZIP in memory, so a big notebook is split into parts of about 500 MB:
@@ -160,11 +166,10 @@ sources, then notes, then chat, then artifacts. It scans each category first, so
 shows what is coming; a category with nothing in it is reported as "none in notebook". It
 uses your Settings (versions, citation detail, slide format). Its own **ZIP** checkbox sits next
 to the button: ticked gives one ZIP per category (artifacts may be split into parts of about 500 MB), unticked a folder in Downloads. The choice is
-remembered; until you change it, it follows the "Always use ZIP" setting. The Artifacts tab's
-**Zip** toggle no longer affects Full Takeout (it only applies to Download Selected). Chat follows
+remembered; until you change it, it follows the "Always use ZIP" setting. Chat follows
 the **Citation detail** setting too, the same as the Chat tab (Full quotes, Source titles only or No
 citations). Every Slides artifact is saved twice, as `.pdf` and `.pptx`, whatever the slide
-format setting says (the Artifacts tab still uses that setting). Notes, sources and chat also
+format setting says (the Generated tab still uses that setting). Notes, sources and chat also
 always get their `-with-images` versions (for items that have images), whatever the image
 checkboxes in Settings say, so a takeout is complete without extra setup; the tabs still follow
 your checkboxes. The cost is bigger and slower takeouts for notebooks with many images.
@@ -254,15 +259,12 @@ category fails, the others still run.
 was exported so far is kept) and skips the remaining categories. The root index and
 `errors.md` are still written, so you can see exactly what you got.
 
-### Generated tab (optional)
+### Deleting from the Generated tab
 
-Enable it under **Settings → Show the Generated tab**. It lists everything Gemini Notebook
-generated as one list: the items in the Studio panel (notes, audio, slides, reports and so on)
-and the notes in the Sources panel's "Notes" group (type "Note (Sources panel)"). Every row has
-**Download** and **Delete**, and there are bulk actions. Delete asks you first and then confirms
-Gemini Notebook's own dialog if it shows one. This includes the notes in the Sources panel: the
-tab removes them through the panel's "Remove note" menu item. Delete Selected removes the Sources-panel
-notes last, from the bottom of the list up.
+Every row on the **Generated** tab has **Delete**, and **Delete Selected (N)** sits beside the export
+button. Delete asks you first and then confirms Gemini Notebook's own dialog if it shows one. This
+includes the notes in the Sources panel: the tab removes them through the panel's "Remove note" menu
+item. Delete Selected removes the Sources-panel notes last, from the bottom of the list up.
 
 ### Cancelling
 
@@ -311,8 +313,7 @@ are disabled and a second click shows "… is still running".
 | Setting | Default | |
 |---|---|---|
 | Show download notifications | on | In-panel toast when a single download finishes (the extension sends no system notifications) |
-| Show the Generated tab | off | Adds the Generated tab (the former Studio tab) |
-| Always use ZIP for batch downloads | off | Default for the Artifacts ZIP toggle, and the starting value of Full Takeout's ZIP checkbox |
+| Always use ZIP for batch downloads | off | Artifacts exported from the Generated tab go to one ZIP instead of a folder. Also the starting value of Full Takeout's ZIP checkbox |
 | Theme | Auto | Auto (match the browser), Light or Dark |
 | Slide deck format | PDF | PDF or PowerPoint |
 | Source versions | base + metadata | Any mix of: base, with AI summary & topics, each optionally with images |
@@ -480,11 +481,11 @@ Plain JavaScript Manifest V3 extension: no build step, no npm dependencies.
 manifest.json         Manifest V3
 sidebar.html          Side panel UI
 sidebar-core.js       Settings, tab and notebook switching, job lock, shared helpers, Markdown and formulas
-sidebar-artifacts.js  Artifacts tab: scan, Download Selected, Download All, table converters
+sidebar-artifacts.js  Artifact files and the artifact export, table converters
 sidebar-notes.js      Notes tab: scan, list, note export jobs
 sidebar-sources.js    Sources tab: scan, list, source export jobs
 sidebar-chat.js       Chat tab: scan, chat export job
-sidebar-generated.js  Generated tab: list, download and delete
+sidebar-generated.js  Generated tab: list, export, download and delete
 sidebar-health.js     DOM health check panel and report
 sidebar-list.js       List toolbar: filter, type chips, sort, select all visible, remembered state
 sidebar-results.js    Results panel (outcome, saved files, errors, Retry)
@@ -544,6 +545,8 @@ python3 -I tools/validate_export.py NEW.zip --baseline OLD.zip --allow '\$[^$\n]
 contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
+
+**1.9.1 (Nov 2026)**: Artifacts and Generated are now one always-visible Generated tab, between Notes and Chat. Export N items saves the ticked artifacts and notes together, and Cancel stops before the notes start. Nothing starts selected, because the same selection drives Delete Selected. Whether artifacts go to a ZIP now follows the Always use ZIP setting, and an unchanged rescan keeps your place in the list.
 
 **1.9.0 (Nov 2026)**: the side panel has a one-line header with the notebook's name, the connection status, Refresh and Settings. One set of simple line icons replaces the emoji and mixed icons, and Auto-refresh and the health check moved into Settings.
 
