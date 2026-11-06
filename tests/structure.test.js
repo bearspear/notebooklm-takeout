@@ -473,10 +473,10 @@ test('a refused settings write says so, undoes what asked to, and never rejects'
   assert.deepEqual(toasts, ['Could not save settings', 'Could not save settings']);
 });
 
-test('Full Takeout keeps the plain notes scan; Home and Generated ask for the strict one', () => {
+test('Full Takeout, Resume, Home and Generated all ask for the strict notes scan', () => {
   const takeout = fs.readFileSync(path.join(ROOT, 'sidebar-takeout.js'), 'utf8');
-  assert.equal([...takeout.matchAll(/scanNotesData\(tabId\)/g)].length, 2);
-  assert.doesNotMatch(takeout, /strict/);
+  assert.equal([...takeout.matchAll(/scanNotesData\(tabId, \{ strict: true \}\)/g)].length, 2);
+  assert.doesNotMatch(takeout, /scanNotesData\(tabId\)/);
   assert.match(fnSource('sidebar-generated.js', 'scanGeneratedItems'), /scanNotesData\(tabId, \{ strict: true \}\)/);
   assert.match(fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8'), /scanNotesData\(tabId, \{ strict: true \}\)/);
 });
@@ -493,7 +493,7 @@ test('a failed scan never reads as an empty list', async () => {
   vm.runInContext(fnSource('sidebar-notes.js', 'scanNotesData') + fnSource('sidebar-generated.js', 'scanGeneratedItems'), sandbox);
   const { scanNotesData, scanGeneratedItems } = sandbox;
   answers = { n: undefined };
-  assert.equal((await scanNotesData(1)).length, 0); // the default Full Takeout has today
+  assert.equal((await scanNotesData(1)).length, 0); // the default the Notes tab keeps
   await assert.rejects(scanNotesData(1, { strict: true }), /No response/);
   answers = { n: { error: 'boom' } };
   await assert.rejects(scanNotesData(1, { strict: true }), /boom/);

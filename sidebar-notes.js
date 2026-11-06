@@ -6,7 +6,8 @@
 
 // Notes from SCAN_NOTES, no UI (Notes tab, Full Takeout, Home, Generated)
 // strict: throw when the page gave no list, instead of reading that as no notes
-// (Home and Generated; Full Takeout keeps the default).
+// (everything but the Notes tab, whose own message says so). A takeout then reports
+// a failed scan, not "none in notebook".
 // @returns {Promise<Array<{ index, title, ... }>>} as the content script sends them
 async function scanNotesData(tabId, { strict = false } = {}) {
   await ensureContentScriptLoaded(tabId);
