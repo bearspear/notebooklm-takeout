@@ -36,9 +36,9 @@ async function scanChatPage() {
 
   // Update UI to show scanning state
   const chatResults = document.getElementById('chat-scan-results');
-  const chatCount = document.getElementById('chat-count');
   chatResults.innerHTML = '<p class="scanning">Scanning chat and loading messages...</p>';
-  chatCount.textContent = '0';
+  setTabCount('chat', null);
+  idleTabAction('chat');
 
   // Ensure content script is loaded
   await ensureContentScriptLoaded(tab.id);
@@ -90,17 +90,15 @@ async function scanChatPage() {
 function renderChatSummary(chatData) {
   updateChatCitationInfo();
   const chatResults = document.getElementById('chat-scan-results');
-  const chatCount = document.getElementById('chat-count');
-  const exportBtn = document.getElementById('export-chat-btn');
 
   if (chatData.messagePairs.length === 0) {
     chatResults.innerHTML = '<p class="empty-message">No chat messages found. Start a conversation with NotebookLM.</p>';
-    chatCount.textContent = '0';
-    exportBtn.style.display = 'none';
+    setTabCount('chat', 0);
+    idleTabAction('chat');
     return;
   }
 
-  chatCount.textContent = chatData.messagePairs.length;
+  setTabCount('chat', chatData.messagePairs.length);
 
   // Build summary HTML
   let html = '<div class="chat-summary">';
@@ -137,14 +135,12 @@ function renderChatSummary(chatData) {
   html += '</div>';
 
   chatResults.innerHTML = html;
-  exportBtn.style.display = 'block';
 
-  // Setup export button handler
-  const newExportBtn = exportBtn.cloneNode(true);
-  exportBtn.parentNode.replaceChild(newExportBtn, exportBtn);
-
-  newExportBtn.addEventListener('click', async () => {
-    await runExclusive('Chat export', () => exportChat(chatData));
+  // The action exports every loaded message
+  setTabAction('chat', {
+    label: NLME.actionLabel(chatData.messagePairs.length, 'message'),
+    disabled: false,
+    onClick: () => runExclusive('Chat export', () => exportChat(chatData))
   });
 }
 

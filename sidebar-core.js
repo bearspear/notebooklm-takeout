@@ -244,10 +244,7 @@ async function init() {
 
 function disableExportButtons() {
   const exportButtons = [
-    'export-notes-btn',
-    'export-sources-btn',
-    'export-chat-btn',
-    'scan-sources-btn',
+    'action-btn',
     'scan-chat-btn',
     'full-takeout-btn',
     'takeout-zip-checkbox'
@@ -264,10 +261,7 @@ function disableExportButtons() {
 
 function enableExportButtons() {
   const exportButtons = [
-    'export-notes-btn',
-    'export-sources-btn',
-    'export-chat-btn',
-    'scan-sources-btn',
+    'action-btn',
     'scan-chat-btn',
     'full-takeout-btn',
     'takeout-zip-checkbox'
@@ -280,6 +274,7 @@ function enableExportButtons() {
       btn.style.opacity = '1';
     }
   });
+  applyAction(); // the action stays off while its list is empty or a job runs
 }
 
 async function loadSettings() {
@@ -460,7 +455,7 @@ async function saveSettings() {
 
 function setupEventListeners() {
   document.getElementById('rescan-btn').addEventListener('click', async () => {
-    if (!jobLock.current()) await Promise.resolve(scanPage()).catch(() => {});
+    if (!jobLock.current()) await Promise.resolve(rescanOpenPanelTab()).catch(() => {});
     repaintActiveName();
   });
   document.getElementById('cancel-download-btn')?.addEventListener('click', requestCancel);
@@ -609,12 +604,12 @@ function setupEventListeners() {
     }
   });
 
-  // Sources scan button
-  const scanSourcesBtn = document.getElementById('scan-sources-btn');
-  if (scanSourcesBtn) {
-    scanSourcesBtn.addEventListener('click', scanSourcesPage);
-  }
+  // The shared action bar: runs whatever the open tab last set with setAction
+  document.getElementById('action-btn').addEventListener('click', () => {
+    if (_action && !_action.disabled && !jobLock.current() && _action.onClick) _action.onClick();
+  });
 
+  // Load chat (the Chat tab never scans by itself: it scrolls the page)
   // Chat scan button
   const scanChatBtn = document.getElementById('scan-chat-btn');
   if (scanChatBtn) {
@@ -628,10 +623,6 @@ function setupEventListeners() {
   }
 
   // Generated tab buttons (internal id 'studio')
-  const scanStudioBtn = document.getElementById('scan-studio-btn');
-  if (scanStudioBtn) {
-    scanStudioBtn.addEventListener('click', scanStudioPage);
-  }
   const studioDownloadSelectedBtn = document.getElementById('studio-download-selected-btn');
   if (studioDownloadSelectedBtn) {
     studioDownloadSelectedBtn.addEventListener('click', () => runExclusive('Generated download', handleStudioBulkDownload));
@@ -663,10 +654,12 @@ function setupTabSwitching() {
         }
       });
 
+      applyOpenTabAction();
       // Trigger scan for the active tab (not while a job runs)
       await rescanOpenPanelTab();
     });
   });
+  applyOpenTabAction(); // the first tab's idle action, before its list loads
 }
 
 function startAutoRefresh() {
@@ -695,8 +688,8 @@ function openPanelTab() {
   return btn ? btn.dataset.tab : '';
 }
 
-// Scan the open panel tab (not while a job runs). Chat has no auto-scan: the
-// user clicks "Scan Chat".
+// Scan the open panel tab (not while a job runs). Lists fill themselves when a
+// tab is opened. Chat has no auto-scan: the user clicks "Load chat".
 async function rescanOpenPanelTab() {
   if (jobLock.current()) return;
   switch (openPanelTab()) {
@@ -714,15 +707,15 @@ async function rescanOpenPanelTab() {
 let lastPanelNotebookId = '';
 
 // Drop the scanned chat so it cannot be exported against another notebook, and
-// show the same prompt as before a scan.
+// show the same prompt as before a scan. Also forgets every tab's action and
+// count: they belong to the notebook that was scanned.
 function resetChatPanel() {
   window._currentChatData = null;
   const chatResults = document.getElementById('chat-scan-results');
-  const chatCount = document.getElementById('chat-count');
-  const exportBtn = document.getElementById('export-chat-btn');
-  if (chatResults) chatResults.innerHTML = '<p class="empty-message">Click "Scan Chat" to load your conversation history.</p>';
-  if (chatCount) chatCount.textContent = '0';
-  if (exportBtn) exportBtn.style.display = 'none';
+  if (chatResults) chatResults.innerHTML = '<p class="empty-message">Click "Load chat" to load your conversation history.</p>';
+  Object.keys(_tabActions).forEach(tab => delete _tabActions[tab]);
+  document.querySelectorAll('.tab-btn').forEach(btn => setTabCount(btn.dataset.tab, null));
+  applyOpenTabAction();
 }
 
 // True when tab shows a different notebook than the panel last scanned (and
@@ -1012,6 +1005,60 @@ async function checkStatus() {
 // A scan the page answered with an error message (SCAN_SOURCES, SCAN_CHAT);
 // the tab scans show that message as is
 class ScanError extends Error {}
+
+// ---- The shared action bar (one button under the open tab's list) ----
+// A tab publishes its action with setTabAction(tab, ...); only the open tab's
+// action is shown, and switching tabs or notebooks swaps or clears it, so an
+// action never runs against another tab's list.
+let _action = null;
+const _tabActions = {};
+// What each tab shows before its list has loaded; tabs not listed have no bar
+const TAB_ACTION_IDLE = {
+  sources: { label: NLME.actionLabel(0, 'source') },
+  notes: { label: NLME.actionLabel(0, 'note') },
+  chat: { label: 'Load chat to export' }
+};
+
+// Show the action (or hide the bar for null). Disabled while a job runs.
+function setAction(action) {
+  _action = action || null;
+  applyAction();
+}
+
+function applyAction() {
+  const bar = document.getElementById('action-bar');
+  const btn = document.getElementById('action-btn');
+  if (!bar || !btn) return;
+  bar.hidden = !_action;
+  if (!_action) return;
+  btn.innerHTML = `${icon('download')} ${NLME.escapeHtml(_action.label)}`;
+  btn.disabled = !!_action.disabled || !!jobLock.current();
+  btn.style.opacity = btn.disabled ? '0.5' : '1';
+}
+
+// The tab's own action; shown now only when that tab is open
+function setTabAction(tab, action) {
+  _tabActions[tab] = action;
+  if (openPanelTab() === tab) setAction(action);
+}
+
+// Not loaded yet (or being scanned): the tab's idle label, disabled
+function idleTabAction(tab) {
+  setTabAction(tab, { ...TAB_ACTION_IDLE[tab], disabled: true });
+}
+
+function applyOpenTabAction() {
+  const tab = openPanelTab();
+  setAction(_tabActions[tab] || (TAB_ACTION_IDLE[tab] ? { ...TAB_ACTION_IDLE[tab], disabled: true } : null));
+}
+
+// The number of items found, on the tab's label; null omits it
+function setTabCount(tab, count) {
+  const el = document.querySelector(`.tab-btn[data-tab="${tab}"] .tab-count`);
+  if (!el) return;
+  el.textContent = count == null ? '' : Number(count).toLocaleString('en-US');
+  el.hidden = count == null;
+}
 
 // Set a button's text, keeping its icon: the label is the last text node
 function setButtonLabel(btn, text) {
@@ -1305,7 +1352,7 @@ async function runExclusive(name, fn) {
   // blocked too. Mark them: a scan may replace a control with a clone (the
   // chat Export button), and the clone must be re-enabled too, so restore
   // by the mark, not by the original element.
-  Array.from(document.querySelectorAll('.tab-content button, .tab-content input, .tab-content select, #full-takeout-btn, #takeout-zip-checkbox'))
+  Array.from(document.querySelectorAll('.tab-content button, .tab-content input, .tab-content select, #action-btn, #full-takeout-btn, #takeout-zip-checkbox'))
     .filter(el => !el.disabled && el.id !== 'cancel-download-btn')
     .forEach(el => { el.disabled = true; el.setAttribute('data-job-disabled', ''); });
   try {
@@ -1348,6 +1395,7 @@ function retryFor(failedItems, jobName, exportFn) {
 // Buttons that follow a list's selection (disabled at K = 0): re-derive them from the
 // controllers, whatever just enabled or disabled them (a job ending, a redraw)
 function refreshListButtons() {
+  applyAction();
   updateArtifactsDownloadBtn();
   updateStudioBulkButtonsState();
 }

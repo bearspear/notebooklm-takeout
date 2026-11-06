@@ -2264,3 +2264,11 @@ test('headerName shows the notebook name only on a notebook page', () => {
   assert.equal(NLME.headerName(nb, 'New Physics'), 'New Physics');
   assert.equal(NLME.headerName(nb, ''), 'NotebookLM');
 });
+
+test('actionLabel', () => {
+  assert.equal(NLME.actionLabel(12, 'note'), 'Export 12 notes');
+  assert.equal(NLME.actionLabel(1, 'source'), 'Export 1 source');
+  assert.equal(NLME.actionLabel(0, 'note'), 'Select notes to export');
+  assert.equal(NLME.actionLabel(1400, 'message'), 'Export 1,400 messages');
+  assert.equal(NLME.actionLabel(3, 'artifact', 'Download'), 'Download 3 artifacts');
+});

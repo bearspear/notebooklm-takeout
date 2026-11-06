@@ -1645,6 +1645,14 @@
     return `${shown} of ${total} shown · ${selected} selected`;
   }
 
+  // The action bar's label: "Export 12 notes", "Select notes to export" at 0.
+  // The plural adds an s; thousands get separators.
+  function actionLabel(count, unit, verb = 'Export') {
+    const n = Math.max(0, Math.floor(Number(count) || 0));
+    if (n === 0) return `Select ${unit}s to ${verb.toLowerCase()}`;
+    return `${verb} ${n.toLocaleString('en-US')} ${unit}${n === 1 ? '' : 's'}`;
+  }
+
   function listStateKey(notebookId, tab) {
     return `nlme.list.${notebookId}.${tab}`;
   }
@@ -2510,6 +2518,7 @@ footer { margin-top: 3rem; }
     listView,
     pruneSelection,
     listSummary,
+    actionLabel,
     listStateKey,
     pruneListStates,
     restoreListState,

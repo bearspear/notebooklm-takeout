@@ -150,13 +150,6 @@ body {
   margin: 0;
 }
 
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-
 .btn-small {
   padding: 6px 12px;
   font-size: 12px;
@@ -590,18 +583,6 @@ body {
   overflow-y: auto;
 }
 
-/* Count Badge */
-.count-badge {
-  background: var(--accent);
-  color: var(--on-accent);
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: 10px;
-  min-width: 20px;
-  text-align: center;
-}
-
 /* Scan Item Icons */
 .scan-item-icon {
   display: flex;
@@ -894,14 +875,14 @@ body {
 /* Tab Navigation */
 .tabs {
   display: flex;
-  gap: 8px;
+  gap: 4px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
 
 .tab-btn {
-  padding: 8px 16px;
+  padding: 8px 12px;
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
@@ -918,6 +899,18 @@ body {
 .tab-btn.active {
   color: var(--accent);
   border-bottom-color: var(--accent);
+}
+
+/* The number of items found, on the tab label */
+.tab-count {
+  margin-left: 4px;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.tab-count[hidden] {
+  display: none;
 }
 
 .tab-content {
@@ -1139,21 +1132,6 @@ body {
 
 /* ========== SOURCES TAB STYLES ========== */
 
-/* Sources info banner */
-.sources-info {
-  padding: 12px;
-  background: var(--warn-bg);
-  border-radius: 8px;
-  margin-bottom: 16px;
-  border-left: 3px solid var(--warn);
-}
-
-.sources-info .info-text {
-  font-size: 12px;
-  color: var(--warn);
-  margin: 0;
-}
-
 /* Sources list */
 .source-icon {
   display: flex;
@@ -1190,12 +1168,6 @@ body {
 
 .download-single-btn:hover {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
-/* Sources count badge */
-#sources-count {
-  background: var(--warn-bg);
-  color: var(--warn);
 }
 
 /* Export controls */
@@ -1683,6 +1655,7 @@ body {
 body.job-running .tab-content button,
 body.job-running .tab-content input,
 body.job-running .tab-content select,
+body.job-running #action-btn,
 body.job-running #rescan-btn {
   pointer-events: none;
   opacity: 0.5;
@@ -1806,4 +1779,34 @@ body.job-running .list-row {
   font-size: 13px;
   color: var(--muted);
   margin: 0 0 8px;
+}
+
+/* The shared action bar: one button docked under the open tab's list */
+.action-bar {
+  position: sticky;
+  bottom: 0;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.action-bar[hidden] {
+  display: none;
+}
+
+.action-bar .btn {
+  width: 100%;
+}
+
+/* Chat: the note above Load chat */
+.chat-load {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.chat-load .info-text {
+  margin: 0;
 }

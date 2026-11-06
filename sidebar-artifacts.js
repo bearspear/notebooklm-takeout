@@ -275,12 +275,10 @@ function updateArtifactsDownloadBtn(controller = _artifactsListController) {
 
 async function scanPage() {
   const resultsEl = document.getElementById('scan-results');
-  const countBadge = document.getElementById('artifact-count');
   // A live list is not blanked while rescanning: the redraw (if any) happens below
   const listLive = !!_artifactsListController && !!resultsEl.querySelector('.artifacts-list');
   if (!listLive) {
     resultsEl.innerHTML = '<p class="scanning">Scanning...</p>';
-    countBadge.textContent = '0';
   }
 
   try {
@@ -289,7 +287,7 @@ async function scanPage() {
     if (!isNotebookUrl(tab?.url)) {
       dropArtifactsList();
       resultsEl.innerHTML = '<p class="error">Please open NotebookLM first</p>';
-      countBadge.textContent = '0';
+      setTabCount('artifacts', null);
       return;
     }
 
@@ -298,14 +296,14 @@ async function scanPage() {
     if (await studioViewerOpen(tab.id)) {
       dropArtifactsList();
       resultsEl.innerHTML = STUDIO_ITEM_OPEN_HTML;
-      countBadge.textContent = '0';
+      setTabCount('artifacts', 0);
       return;
     }
 
     if (items.length === 0) {
       dropArtifactsList();
       resultsEl.innerHTML = '<p class="empty-message">No downloadable artifacts found.<br><span class="hint">Make sure you have generated content in Studio.</span></p>';
-      countBadge.textContent = '0';
+      setTabCount('artifacts', 0);
       return;
     }
 
@@ -315,7 +313,7 @@ async function scanPage() {
     }
 
     const enabledItems = items.filter(i => !i.disabled);
-    countBadge.textContent = enabledItems.length;
+    setTabCount('artifacts', enabledItems.length);
 
     // A redraw must not cost the user their place: keep the Zip choice, the scroll
     // position and, if they are typing in the filter box, focus and caret

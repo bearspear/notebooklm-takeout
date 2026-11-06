@@ -21,17 +21,16 @@ function dropStudioList() {
 
 async function scanStudioPage() {
   const resultsEl = document.getElementById('studio-scan-results');
-  const countBadge = document.getElementById('studio-count');
-  if (!resultsEl || !countBadge) return;
+  if (!resultsEl) return;
 
   dropStudioList();
   resultsEl.innerHTML = '<p class="scanning">Scanning generated items...</p>';
-  countBadge.textContent = '0';
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!isNotebookUrl(tab?.url)) {
       resultsEl.innerHTML = '<p class="empty-message">Please open NotebookLM first.</p>';
+      setTabCount('studio', null);
       return;
     }
 
@@ -72,13 +71,12 @@ async function scanStudioPage() {
 
 function renderStudioList(items) {
   const resultsEl = document.getElementById('studio-scan-results');
-  const countBadge = document.getElementById('studio-count');
   const downloadBulkBtn = document.getElementById('studio-download-selected-btn');
   const deleteBulkBtn = document.getElementById('studio-delete-selected-btn');
-  if (!resultsEl || !countBadge) return;
+  if (!resultsEl) return;
 
   dropStudioList();
-  countBadge.textContent = items.length;
+  setTabCount('studio', items.length);
 
   if (items.length === 0) {
     resultsEl.innerHTML = '<p class="empty-message">No generated items found. Generate content in NotebookLM first.</p>';
