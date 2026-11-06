@@ -188,14 +188,12 @@ function renderSourcesList(sources, skippedNotes = 0) {
   const listEl = resultsDiv.querySelector('.sources-list');
 
   const rowHtml = (source, idx) => {
-    const icon = source.type === 'markdown' ? '📄' : '📎';
+    const typeIcon = source.type === 'markdown' ? 'doc' : 'note';
     return `
-        <span class="source-icon">${icon}</span>
+        <span class="source-icon">${icon(typeIcon)}</span>
         <span class="source-title">${escapeHtml(source.title)}</span>
-        <button class="download-single-btn" data-index="${idx}" title="Download ${escapeHtml(source.title)}">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
-          </svg>
+        <button class="download-single-btn" data-index="${idx}" title="Download ${escapeHtml(source.title)}" aria-label="Download ${escapeHtml(source.title)}">
+          ${icon('download')}
         </button>
       `;
   };

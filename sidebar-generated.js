@@ -102,16 +102,12 @@ function renderStudioList(items) {
           <strong>${escapeHtml(item.label)}</strong>
           <small>${escapeHtml(item.type)}${detailsStr}</small>
         </div>
-        <button class="btn-icon download-single-btn studio-download-btn" data-idx="${idx}" title="Download ${escapeHtml(item.label)}">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
-          </svg>
+        <button class="btn-icon download-single-btn studio-download-btn" data-idx="${idx}" title="Download ${escapeHtml(item.label)}" aria-label="Download ${escapeHtml(item.label)}">
+          ${icon('download')}
           <span class="download-status"></span>
         </button>
-        <button class="btn-icon studio-delete-btn" data-idx="${idx}" title="Delete ${escapeHtml(item.label)}">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
-          </svg>
+        <button class="btn-icon studio-delete-btn" data-idx="${idx}" title="Delete ${escapeHtml(item.label)}" aria-label="Delete ${escapeHtml(item.label)}">
+          ${icon('trash')}
         </button>
       `;
   };
@@ -192,15 +188,15 @@ function setStudioRowStatus(btn, state) {
   const statusSpan = btn.querySelector('.download-status');
   if (!statusSpan) return;
   if (state === 'pending') {
-    statusSpan.textContent = '⏳';
+    statusSpan.innerHTML = icon('refresh');
     statusSpan.className = 'download-status downloading';
     btn.disabled = true;
   } else if (state === 'success') {
-    statusSpan.textContent = '✓';
+    statusSpan.innerHTML = icon('check');
     statusSpan.className = 'download-status success';
     setTimeout(() => { statusSpan.textContent = ''; statusSpan.className = 'download-status'; btn.disabled = false; }, 3000);
   } else if (state === 'error') {
-    statusSpan.textContent = '✗';
+    statusSpan.innerHTML = icon('close');
     statusSpan.className = 'download-status error';
     setTimeout(() => { statusSpan.textContent = ''; statusSpan.className = 'download-status'; btn.disabled = false; }, 3000);
   }
@@ -224,7 +220,7 @@ async function handleStudioDownloadRow(idx, btn) {
     setStudioRowStatus(btn, 'success');
   } catch (error) {
     console.error('[NotebookLM Takeout] Generated download failed:', error);
-    showToast(`✗ Failed to download ${item.label}: ${error.message || error}`, 'error');
+    showToast(`Failed to download ${item.label}: ${error.message || error}`, 'error');
     setStudioRowStatus(btn, 'error');
     throw error;
   }
@@ -244,7 +240,7 @@ async function handleStudioDeleteRow(idx, btn) {
     await scanStudioPage();
   } catch (error) {
     console.error('[NotebookLM Takeout] Generated delete failed:', error);
-    showToast(`✗ Failed to delete ${item.label}: ${error.message || error}`, 'error');
+    showToast(`Failed to delete ${item.label}: ${error.message || error}`, 'error');
     if (btn) btn.disabled = false;
   }
 }

@@ -544,6 +544,8 @@ contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
 
+**1.9.0 (Nov 2026)**: the side panel has a one-line header with the notebook's name, the connection status, Refresh and Settings. One set of simple line icons replaces the emoji and mixed icons, and Auto-refresh and the health check moved into Settings.
+
 **1.8.8 (Nov 2026)**: a long notebook name no longer cuts the time off a Full Takeout folder, so two runs on one day stay apart. The export checker no longer fails a source's own footnote text.
 
 **1.8.7 (Nov 2026)**: the offline viewer's Copy button gives clean Markdown, without citation numbers, and open sources, notes and reports now have one too.

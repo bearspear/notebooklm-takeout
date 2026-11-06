@@ -123,9 +123,7 @@ function displayHealthCheckResults(results) {
         <span class="health-category-status ${categoryData.healthy ? 'passed' : 'failed'}"></span>
         <span>${categoryLabels[categoryKey] || categoryKey}</span>
       </div>
-      <svg class="health-category-toggle" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z"/>
-      </svg>
+      <span class="health-category-toggle">${icon('chevron')}</span>
     `;
 
     headerEl.addEventListener('click', () => {

@@ -320,3 +320,23 @@ test('every id the sidebar scripts look up is declared', () => {
   }
   assert.deepEqual([...missing], []);
 });
+
+test('panel has no emoji in its markup', () => {
+  // The panel uses one stroke icon set (icon() in sidebar-core.js). Emoji and
+  // check marks in panel UI are replaced; exported content is not panel UI and
+  // may keep them, but must be listed here with a reason.
+  const ALLOWED = [
+    // { file: 'sidebar-x.js', text: '...', reason: '...' }
+  ];
+  const EMOJI = /[\p{Extended_Pictographic}✓✗✔✖️]/u;
+  const files = ['sidebar.html', ...fs.readdirSync(ROOT).filter(f => /^sidebar-.*\.js$/.test(f))];
+  const problems = [];
+  for (const file of files) {
+    fs.readFileSync(path.join(ROOT, file), 'utf8').split('\n').forEach((line, i) => {
+      if (!EMOJI.test(line)) return;
+      if (ALLOWED.some(a => a.file === file && line.includes(a.text))) return;
+      problems.push(`${file}:${i + 1}: ${line.trim().slice(0, 100)}`);
+    });
+  }
+  assert.deepEqual(problems, [], `Emoji in panel files:\n  ${problems.join('\n  ')}`);
+});

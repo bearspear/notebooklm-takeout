@@ -45,43 +45,41 @@ body {
   padding: 16px;
 }
 
-/* Header */
-header {
-  position: relative;
-  text-align: center;
-  margin-bottom: 16px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--line);
-}
-
-header h1 {
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--accent);
-  margin-bottom: 4px;
-}
-
-header .subtitle {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-/* .header-settings-btn moved to .header-icon-btn in health check section */
-
-/* Status */
-.status {
+/* Header: one 48px row, notebook name, status, Refresh, Settings */
+.panel-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  background: var(--surface);
-  border-radius: 8px;
-  margin-bottom: 16px;
+  height: 48px;
+  margin: -16px -16px 12px;
+  padding: 0 12px 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.notebook-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 45%;
 }
 
 .status-dot {
   width: 8px;
   height: 8px;
+  flex-shrink: 0;
   border-radius: 50%;
   background: var(--muted);
 }
@@ -97,6 +95,30 @@ header .subtitle {
 #status-text {
   font-size: 12px;
   color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The one icon set: stroke SVGs from icon() in sidebar-core.js */
+.icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.open-notebook-link {
+  display: inline-block;
+  margin-bottom: 12px;
+}
+
+.open-notebook-link[hidden] {
+  display: none;
 }
 
 /* Sections */
@@ -311,20 +333,6 @@ header .subtitle {
   text-decoration: underline;
 }
 
-/* Footer */
-footer {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
-}
-
-.separator {
-  color: var(--line);
-}
-
 /* Toast */
 .toast {
   position: fixed;
@@ -496,7 +504,7 @@ footer {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 8px;
+  margin-bottom: 12px;
 }
 
 .takeout-zip {
@@ -565,40 +573,6 @@ footer {
 .sidebar-mode #artifacts-section {
   flex: 1;
   overflow-y: auto;
-}
-
-/* Controls Bar */
-.controls-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.controls-bar .btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.auto-refresh-toggle {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  cursor: pointer;
-  padding: 6px 10px;
-  background: var(--surface);
-  border-radius: 6px;
-  transition: background 0.2s;
-}
-
-.auto-refresh-toggle:hover {
-  background: var(--line);
-}
-
-.auto-refresh-toggle input[type="checkbox"] {
-  cursor: pointer;
 }
 
 /* Count Badge */
@@ -834,12 +808,6 @@ footer {
 .number-input:focus {
   outline: none;
   border-color: var(--accent);
-}
-
-/* Footer Enhancements */
-footer {
-  margin-top: auto;
-  padding-top: 16px;
 }
 
 /* Scrollbar Styling */
@@ -1086,6 +1054,20 @@ footer {
   pointer-events: none;
 }
 
+.download-status .icon {
+  width: 10px;
+  height: 10px;
+  stroke-width: 3;
+}
+
+.download-status.downloading .icon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 .download-status.downloading {
   background: var(--warn-bg);
   border-color: var(--warn);
@@ -1153,9 +1135,19 @@ footer {
 
 /* Sources list */
 .source-icon {
-  font-size: 18px;
+  display: flex;
   flex-shrink: 0;
+  color: var(--muted);
 }
+
+.scan-item-icon {
+  color: var(--muted);
+}
+
+.health-category-toggle {
+  display: flex;
+}
+
 
 .source-title {
   flex: 1;
@@ -1284,22 +1276,13 @@ footer {
    HEALTH CHECK PANEL
    ============================================ */
 
-/* Header buttons container */
-.header-buttons {
-  position: absolute;
-  top: 0;
-  right: 0;
-  display: flex;
-  gap: 4px;
-}
-
 .header-icon-btn {
   background: none;
   border: none;
-  padding: 4px;
+  padding: 6px;
   cursor: pointer;
   color: var(--muted);
-  border-radius: 4px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;

@@ -12,10 +12,46 @@ const logger = {
     console.error(`[NotebookLM Takeout] [${context}] ${message}`, error || '');
   },
   download: (itemName, status, details) => {
-    const statusIcon = status === 'success' ? '✓' : status === 'error' ? '✗' : '⏳';
+    const statusIcon = status === 'success' ? '[ok]' : status === 'error' ? '[failed]' : '[...]';
     console.log(`[NotebookLM Takeout] [Download] ${statusIcon} ${itemName}`, details || '');
   }
 };
+
+// The panel's one icon set: simple stroke SVGs drawn in the current text colour
+// (sized by CSS, .icon). Earlier scripts must not call it at load time; static
+// markup uses <span data-icon="name"></span>, filled in by hydrateIcons().
+const ICON_PATHS = {
+  box: '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33 1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82 1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+  back: '<path d="M15 18l-6-6 6-6"/>',
+  next: '<path d="M9 18l6-6-6-6"/>',
+  close: '<path d="M18 6L6 18M6 6l12 12"/>',
+  doc: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h6"/>',
+  note: '<path d="M4 4h16v10l-6 6H4z"/><path d="M14 20v-6h6"/>',
+  spark: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 17v4M17 19h4"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/>',
+  download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/>',
+  check: '<path d="M5 12l5 5 10-11"/>',
+  // Extras for buttons that had their own inline SVG
+  search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/>',
+  chevron: '<path d="M6 9l6 6 6-6"/>',
+  health: '<path d="M22 12h-4l-3 8-6-16-3 8H2"/>'
+};
+
+function icon(name) {
+  const body = ICON_PATHS[name] || ICON_PATHS.doc;
+  return `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${body}</svg>`;
+}
+
+// Swap each <span data-icon="name"></span> in the page for its SVG
+function hydrateIcons(root = document) {
+  root.querySelectorAll('[data-icon]').forEach(el => {
+    el.outerHTML = icon(el.dataset.icon);
+  });
+}
 
 // Mindmap HTML template - loaded from external file for easy updates
 let mindmapTemplate = null;
@@ -172,6 +208,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function init() {
+  hydrateIcons();
   // Disable export buttons until settings are loaded
   disableExportButtons();
 
@@ -187,6 +224,7 @@ async function init() {
   try {
     const [startTab] = await chrome.tabs.query({ active: true, currentWindow: true });
     notebookSwitchedTo(startTab); // the first scan below covers this notebook
+    paintNotebookName(startTab);
   } catch (_) { /* no active tab */ }
   refreshResumeBanner(); // an earlier unfinished export of this notebook
   await scanSourcesPage(); // Start with Sources tab since it's now the default
@@ -284,7 +322,7 @@ try {
   if (early) document.documentElement.setAttribute('data-theme', early);
 } catch (e) { /* storage blocked */ }
 
-// Show `settings` in the ⚙️ panel (on load and after Reset to defaults)
+// Show `settings` in the Settings panel (on load and after Reset to defaults)
 function applySettingsToUi() {
   document.getElementById('auto-zip-checkbox').checked = settings.autoZip;
   document.getElementById('takeout-zip-checkbox').checked = NLME.takeoutZipChoice(settings);
@@ -345,7 +383,7 @@ function updateChatCitationInfo() {
   const el = document.getElementById('chat-citation-info');
   if (!el) return;
   const label = { quotes: 'Full quotes', titles: 'Source titles only', none: 'No citations' }[NLME.chatCitationMode(settings)];
-  el.textContent = `Citations: ${label} · change in ⚙️ Settings`;
+  el.textContent = `Citations: ${label} · change in Settings`;
 }
 
 function applyStudioTabVisibility() {
@@ -698,6 +736,10 @@ function notebookSwitchedTo(tab) {
 const settleGate = NLME.createSettleGate();
 async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}) {
   const switched = notebookSwitchedTo(tab);
+  // Not awaited: the name needs the page and must never delay the rescans.
+  // After in-app navigation the page needs the settle time to draw the new name.
+  if (settleMs) setTimeout(() => paintNotebookName(tab), settleMs);
+  else paintNotebookName(tab);
   // A second in-app navigation during the first one's settle wait replaces it
   // (the older wait returns without a banner or rescan); a rescan the older
   // one owed passes to this one (settle.owesRescan)
@@ -737,6 +779,29 @@ async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}
     await rescanOpenPanelTab();
   } else if (sameNotebookScan && !jobLock.current()) {
     await scanPage();
+  }
+}
+
+// The header's notebook name. A newer call supersedes an older one still
+// waiting on the page, and a late answer for a notebook other than the one the
+// panel shows (lastPanelNotebookId) is dropped. Never throws.
+let notebookNameSeq = 0;
+function setNotebookName(name) {
+  const el = document.getElementById('notebook-name');
+  if (!el) return;
+  el.textContent = name;
+  el.title = name;
+}
+async function paintNotebookName(tab) {
+  const seq = ++notebookNameSeq;
+  try {
+    if (!tab || !isNotebookUrl(tab.url)) { setNotebookName('Open a notebook'); return; }
+    const id = NLME.notebookIdFromUrl(tab.url);
+    const name = await getProjectName(tab.id);
+    if (seq !== notebookNameSeq || id !== lastPanelNotebookId) return;
+    setNotebookName(name);
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Notebook name not shown:', error);
   }
 }
 
@@ -879,6 +944,8 @@ async function mindmapFiles(stem, svgContent, treeData, title) {
 async function checkStatus() {
   const statusDot = document.querySelector('.status-dot');
   const statusText = document.getElementById('status-text');
+  const openLink = document.getElementById('open-notebook-link');
+  const showOpenLink = (show) => { if (openLink) openLink.hidden = !show; };
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -888,15 +955,18 @@ async function checkStatus() {
       statusDot.classList.remove('inactive');
       statusDot.classList.add('active');
       statusText.textContent = 'Connected to NotebookLM';
+      showOpenLink(false);
     } else {
       statusDot.classList.remove('active');
       statusDot.classList.add('inactive');
       statusText.textContent = 'Not on NotebookLM';
+      showOpenLink(true);
     }
   } catch (error) {
     statusDot.classList.remove('active');
     statusDot.classList.add('inactive');
     statusText.textContent = 'Unable to check status';
+    showOpenLink(false);
   }
 }
 // ==================== STATUS CHECK ====================
@@ -945,7 +1015,7 @@ async function ensureContentScriptLoaded(tabId) {
 // dropCitations: Citation detail 'none' — remove [n] markers and the Sources
 // section, leaving plain text
 // citationStyle: 'footnotes' writes [^label] markers and [^label]: definitions
-// instead of <sup> links (Milestone 3d, ⚙️ Citation style). Only the link
+// instead of <sup> links (Milestone 3d, Citation style setting). Only the link
 // versions use it: a code-blocks version (citationsCodeBlock) keeps its
 // links, since a fenced quote cannot live inside a footnote definition.
 // Labels: the citation number; with noteId (combined notes files) '<noteId>-<n>',
@@ -1291,7 +1361,7 @@ async function preflightWarn(tabId, type) {
   try {
     const health = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.CHECK_DOM_HEALTH, data: { type } });
     if (health && health.healthy === false) {
-      showToast(`Gemini Notebook may have changed (${(health.issues || []).length} ${type} check(s) failed). Exporting anyway; run the health check 🩺 afterwards if results look wrong.`, 'warning');
+      showToast(`Gemini Notebook may have changed (${(health.issues || []).length} ${type} check(s) failed). Exporting anyway; run the health check afterwards if results look wrong.`, 'warning');
     }
   } catch (e) {
     console.warn('[NotebookLM Takeout] Pre-flight check failed:', e.message);
@@ -1642,33 +1712,16 @@ function noteFrontMatter(meta, { title, kind = 'note', variant }) {
 }
 
 function getIconForType(type) {
-  const icons = {
-    'Audio Overview': `<svg width="20" height="20" viewBox="0 0 24 24" fill="#1a73e8">
-      <path d="M12 3v9.28c-.47-.17-.97-.28-1.5-.28C8.01 12 6 14.01 6 16.5S8.01 21 10.5 21c2.31 0 4.2-1.75 4.45-4H15V6h4V3h-7z"/>
-    </svg>`,
-    'Slides': `<svg width="20" height="20" viewBox="0 0 24 24" fill="#34a853">
-      <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z"/>
-    </svg>`,
-    'Infographic': `<svg width="20" height="20" viewBox="0 0 24 24" fill="#fbbc04">
-      <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/>
-    </svg>`,
-    'Report': `<svg width="20" height="20" viewBox="0 0 24 24" fill="#ea4335">
-      <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
-    </svg>`,
-    'Data Table': `<svg width="20" height="20" viewBox="0 0 24 24" fill="#34a853">
-      <path d="M3 3h18v18H3V3zm16 16V5H5v14h14zM7 7h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"/>
-    </svg>`,
-    'Video Overview': `<svg width="20" height="20" viewBox="0 0 24 24" fill="#1a73e8">
-      <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
-    </svg>`,
-    'Mind Map': `<svg width="20" height="20" viewBox="0 0 24 24" fill="#ea4335">
-      <path d="M22 11V3h-7v3H9V3H2v8h7V8h2v10h4v3h7v-8h-7v3h-2V8h2v3h7z"/>
-    </svg>`
+  const names = {
+    'Audio Overview': 'spark',
+    'Slides': 'doc',
+    'Infographic': 'doc',
+    'Report': 'doc',
+    'Data Table': 'doc',
+    'Video Overview': 'spark',
+    'Mind Map': 'spark'
   };
-
-  return icons[type] || `<svg width="20" height="20" viewBox="0 0 24 24" fill="#5f6368">
-    <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/>
-  </svg>`;
+  return icon(names[type] || 'doc');
 }
 
 function showToast(message, type = 'success') {
