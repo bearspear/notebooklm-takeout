@@ -190,6 +190,10 @@ function isNotebookUrl(url) {
 let currentTabId = null;
 let autoRefreshInterval = null;
 let settingsLoaded = false;
+// A load from storage has worked. Until then `settings` is the defaults, and writing
+// them would replace what the person saved (writeSettings).
+let settingsStored = false;
+const SETTINGS_UNREAD_MESSAGE = 'Your saved settings could not be read. Using defaults; changes are not saved.';
 // Shipped defaults live in NLME.DEFAULT_SETTINGS (takeout-shared.js); stored
 // settings are merged over them in loadSettings.
 let settings = NLME.resetSettings();
@@ -220,12 +224,15 @@ async function init() {
   // Disable export buttons until settings are loaded
   disableExportButtons();
 
-  try {
-    await loadSettings();
-  } catch (error) {
-    // Storage down: the shipped defaults, and Home (chooseOpeningView)
-    console.warn('[NotebookLM Takeout] Could not load settings:', error);
+  settingsStored = await NLME.loadWithRetry(loadSettings, {
+    sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+    waitMs: 500
+  });
+  if (!settingsStored) {
+    // Storage down: the shipped defaults, and Home (chooseOpeningView). writeSettings
+    // keeps them out of storage, where they would replace the person's settings.
     applySettingsToUi();
+    showToast(SETTINGS_UNREAD_MESSAGE, 'warning');
   }
   settingsLoaded = true;
 
@@ -242,13 +249,16 @@ async function init() {
     paintNotebookName(startTab);
   } catch (_) { /* no active tab */ }
   showView(await chooseOpeningView(startTab), { save: false }); // nothing changed: keep the stored view
+
+  // Monitor tab changes, from before the first scan: a page still loading reports
+  // while it runs
+  chrome.tabs.onActivated.addListener(handleTabChange);
+  chrome.tabs.onUpdated.addListener(handleTabUpdate);
+  window.addEventListener('focus', handlePanelFocus);
+
   refreshResumeBanner(); // an earlier unfinished export of this notebook
   await rescanOpenPanelTab();
   repaintActiveName(); // the scan injected the content script if it was missing
-
-  // Monitor tab changes
-  chrome.tabs.onActivated.addListener(handleTabChange);
-  chrome.tabs.onUpdated.addListener(handleTabUpdate);
 }
 
 function disableExportButtons() {
@@ -396,6 +406,25 @@ function updateChatCitationInfo() {
   el.textContent = `Citations: ${label} · change in Settings`;
 }
 
+// The one write of `settings`, false when it did not happen. Blocked until a load
+// has worked. A blocked write tries the load again, so storage coming back lifts
+// the block: the stored settings return, and the change has to be made again.
+async function writeSettings() {
+  if (settingsStored) {
+    await chrome.storage.local.set({ settings });
+    return true;
+  }
+  try {
+    await loadSettings();
+    settingsStored = true;
+    showToast('Your saved settings are back. Please make that change again.', 'warning');
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Settings still cannot be read:', error);
+    showToast(SETTINGS_UNREAD_MESSAGE, 'warning');
+  }
+  return false;
+}
+
 async function saveSettings() {
   settings.autoZip = document.getElementById('auto-zip-checkbox').checked;
   settings.showNotifications = document.getElementById('show-notifications-checkbox').checked;
@@ -432,12 +461,12 @@ async function saveSettings() {
   applyTheme();
   updateChatCitationInfo();
 
-  await chrome.storage.local.set({ settings });
+  await writeSettings();
 }
 
 function setupEventListeners() {
   document.getElementById('rescan-btn').addEventListener('click', async () => {
-    if (!jobLock.current()) await Promise.resolve(panelView === 'home' ? refreshHome({ force: true }) : rescanOpenPanelTab()).catch(() => {});
+    if (!jobLock.current()) await Promise.resolve(panelView === 'home' ? reconcileHome() : rescanOpenPanelTab()).catch(() => {});
     repaintActiveName();
   });
   document.getElementById('cancel-download-btn')?.addEventListener('click', requestCancel);
@@ -460,8 +489,7 @@ function setupEventListeners() {
     settings = NLME.resetSettings(settings);
     applySettingsToUi();
     syncVersionChildStates();
-    await chrome.storage.local.set({ settings });
-    showToast('Settings reset to defaults', 'success');
+    if (await writeSettings()) showToast('Settings reset to defaults', 'success');
   });
 
   document.getElementById('clear-citation-cache-btn')?.addEventListener('click', async () => {
@@ -480,7 +508,7 @@ function setupEventListeners() {
   // Its ZIP choice is saved on its own (settings.takeoutZip); the settings panel need not be open
   document.getElementById('takeout-zip-checkbox')?.addEventListener('change', (e) => {
     settings.takeoutZip = e.target.checked;
-    chrome.storage.local.set({ settings }).catch(e2 => console.warn('[NotebookLM Takeout] Could not save the takeout ZIP choice:', e2));
+    writeSettings().catch(e2 => console.warn('[NotebookLM Takeout] Could not save the takeout ZIP choice:', e2));
   });
 
   // Health check panel
@@ -639,7 +667,8 @@ const PANEL_VIEW_KEY = 'nlme.panelView';
 let panelView = 'home';
 
 // Fire-and-forget: a failed save only means the next open lands on Home. Nothing is
-// saved off a notebook: the record names the notebook the view belongs to.
+// saved before the panel has seen a notebook; after that the record names the last
+// one, also while the active tab is another site.
 function savePanelView(view) {
   if (!lastPanelNotebookId) return;
   try {
@@ -676,6 +705,7 @@ function showView(view, { save = true, focus = false } = {}) {
   document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === target));
   document.querySelectorAll('.tab-content').forEach(content => content.classList.toggle('active', content.dataset.tabContent === target));
   applyOpenTabAction();
+  if (home) document.getElementById('resume-notice').textContent = ''; // the card itself shows here
   if (save) savePanelView(target);
   const lostFocus = !!held && held !== document.body && held.getClientRects().length === 0;
   if (focus || lostFocus) focusView(target, left);
@@ -701,48 +731,88 @@ async function chooseOpeningView(tab) {
 // none clicks, opens or scrolls anything. Chat is not here: its scan scrolls the page.
 const HOME_SCANS = [
   ['sources', async tabId => (await scanSourcesData(tabId)).sources.length],
-  ['notes', async tabId => (await scanNotesData(tabId)).length],
+  ['notes', async tabId => (await scanNotesData(tabId, { strict: true })).length],
   ['studio', async tabId => (await scanGeneratedItems(tabId)).length]
 ];
+// The page draws its lists after it reports loaded, so a 0 is read again: waits
+// before each re-read, which makes the reads 0 s, 1.5 s and 4 s after the first.
+const HOME_REREAD_WAITS = [1500, 2500];
+const HOME_READ_THROTTLE_MS = 1000;
 const homeGate = NLME.createLatestGate();
 let homeNotebookOpen = false; // the active tab shows a notebook (checkStatus)
+let homeOnSite = false; // the active tab is on a notebook host, a notebook or not
 let homeItemOpen = false; // the last scan found a Studio item open, which hides its lists
-let settleWaits = 0; // in-app navigation settle waits running: the page is not drawn yet
+let homeReadFailed = false; // the last reads left a count unreadable
+let homeRereading = false; // a re-read is waiting on its timer
+let homeForceOwed = false; // a forced read arrived during a settle wait
+let lastHomeRead = 0;
+const _homeZeroConfirmed = new Set(); // lists this notebook has proved empty
+let settleWaits = 0; // settle waits running: the page is not drawn yet
 
+// A 0 is not known until it has survived the re-reads
 function homeCountsKnown() {
-  return HOME_SCANS.every(([tab]) => _tabCounts[tab] != null);
+  return HOME_SCANS.every(([tab]) => _tabCounts[tab] > 0 || (_tabCounts[tab] === 0 && _homeZeroConfirmed.has(tab)));
 }
 
-// What Home offers right now. Called when the tab changes, a job ends and a scan
-// finds an item open. Rows stay usable during a job, as the tabs do.
+function paintHomeRow(tab) {
+  const row = document.querySelector(`.home-row[data-home-tab="${tab}"]`);
+  if (!row) return;
+  const count = _tabCounts[tab];
+  const text = NLME.homeCountText(tab, count, homeNotebookOpen);
+  row.querySelector('.home-count').textContent = text;
+  const name = row.querySelector('.home-label').textContent;
+  const unknown = tab === 'chat' ? 'not loaded' : 'not counted yet';
+  const spoken = !homeNotebookOpen ? 'not available' : (count != null ? text : unknown);
+  row.setAttribute('aria-label', `${name}, ${spoken}`);
+}
+
+// What Home offers right now. Called when the tab changes, a job or settle wait
+// starts or ends, and a scan changes what it knows. Rows stay usable during a job, as
+// the tabs do. Export everything waits out a settle: the notebook is half switched.
 function syncHomeControls() {
+  NLME.PANEL_TABS.forEach(paintHomeRow);
   document.querySelectorAll('.home-row').forEach(row => { row.disabled = !homeNotebookOpen; });
   const exportBtn = document.getElementById('full-takeout-btn');
   if (exportBtn && settingsLoaded) {
-    exportBtn.disabled = !homeNotebookOpen || !!jobLock.current();
+    exportBtn.disabled = !homeNotebookOpen || !!jobLock.current() || settleWaits > 0;
     exportBtn.style.opacity = '';
   }
   const notice = document.getElementById('home-notice');
   if (!notice) return;
-  const html = !homeNotebookOpen ? NOTEBOOK_PROMPT_HTML : (homeItemOpen ? STUDIO_ITEM_OPEN_HTML : '');
+  const html = HOME_NOTICE_HTML[NLME.homeNotice({ onSite: homeOnSite, onNotebook: homeNotebookOpen, itemOpen: homeItemOpen, readFailed: homeReadFailed })] || '';
   if (notice.innerHTML !== html) notice.innerHTML = html;
   notice.hidden = !html;
 }
 
 // Count this notebook's lists, one after another, painting each as it lands. Runs
 // once per notebook: a notebook switch clears the counts, and with all three known
-// only force (the header's Refresh) scans again. Skipped during a job, during a
-// settle wait and on a list; the job's end, the settle's end and returning to Home
-// each call it again. Every await rechecks the gate and the notebook, so a scan of
-// a notebook the panel has left never paints.
+// only force scans again. Skipped during a job and on a list; the job's end and
+// returning to Home each call it again. During a settle wait it only remembers a
+// force for the wait's end, when the wait's owner calls it.
 async function refreshHome({ force = false } = {}) {
-  if (panelView !== 'home' || jobLock.current() || settleWaits > 0) return;
-  if (!force && homeCountsKnown() && !homeItemOpen) return;
-  const token = homeGate.begin();
+  if (panelView !== 'home' || jobLock.current()) return;
+  if (settleWaits > 0) {
+    homeForceOwed = homeForceOwed || force;
+    return;
+  }
+  if (!force && !homeForceOwed && homeCountsKnown() && !homeItemOpen) return;
+  homeForceOwed = false;
+  homeRereading = false;
+  lastHomeRead = Date.now();
+  await readHomeCounts(homeGate.begin(), 0);
+}
+
+// One pass of reads. A count that may be wrong (a 0, a failed read) makes it come
+// back on a timer, up to the attempts. Every await rechecks the gate, the job lock,
+// the view and the notebook, so a scan of a notebook the panel has left never paints,
+// and a job or leaving Home ends the re-reads (their ends call refreshHome again).
+async function readHomeCounts(token, attempt) {
+  if (!homeGate.isLatest(token)) return;
+  homeRereading = false;
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const id = isNotebookUrl(tab?.url) ? NLME.notebookIdFromUrl(tab.url) : '';
-    const live = () => homeGate.isLatest(token) && panelView === 'home' && !jobLock.current() && !!id && lastPanelNotebookId === id;
+    const live = () => homeGate.isLatest(token) && panelView === 'home' && !jobLock.current() && settleWaits === 0 && !!id && lastPanelNotebookId === id;
     // The panel hears of a navigation late: ask the tab too before believing a scan
     const stillHere = async () => {
       if (!live()) return false;
@@ -754,11 +824,15 @@ async function refreshHome({ force = false } = {}) {
     const itemOpen = await studioViewerOpen(tab.id);
     if (!await stillHere()) return;
     homeItemOpen = itemOpen;
-    syncHomeControls();
     if (itemOpen) {
+      homeReadFailed = false;
       HOME_SCANS.forEach(([name]) => setTabCount(name, null));
+      syncHomeControls();
       return;
     }
+    syncHomeControls();
+    let again = false;
+    let failed = false;
     for (const [name, count] of HOME_SCANS) {
       let found = null;
       try {
@@ -767,11 +841,44 @@ async function refreshHome({ force = false } = {}) {
         console.warn(`[NotebookLM Takeout] Home could not count ${name}:`, error);
       }
       if (!await stillHere()) return;
-      setTabCount(name, found);
+      const read = NLME.homeCountRead({ found, confirmedZero: _homeZeroConfirmed.has(name), attemptsLeft: HOME_REREAD_WAITS.length - attempt });
+      if (read.zeroConfirmed) _homeZeroConfirmed.add(name);
+      setTabCount(name, read.show);
+      again = again || read.retry;
+      failed = failed || read.failed;
+    }
+    homeReadFailed = failed && !again;
+    syncHomeControls();
+    if (again) {
+      homeRereading = true;
+      setTimeout(() => readHomeCounts(token, attempt + 1), HOME_REREAD_WAITS[attempt]);
     }
   } catch (error) {
     console.warn('[NotebookLM Takeout] Home scan failed:', error);
   }
+}
+
+// Read Home again though every count is known: the page may have changed while the
+// panel looked elsewhere. Rapid events do one read.
+function refreshHomeFresh() {
+  if (panelView !== 'home' || jobLock.current()) return;
+  return refreshHome({ force: Date.now() - lastHomeRead >= HOME_READ_THROTTLE_MS });
+}
+
+// The person came back to the panel's window. Only Home reads: a list and its
+// selection are left alone.
+function handlePanelFocus() {
+  if (document.hidden || homeRereading || settleWaits > 0) return;
+  refreshHomeFresh();
+}
+
+// Refresh on Home goes the way of a tab event, so a notebook the panel missed is
+// picked up here instead of leaving a Home that cannot scan.
+async function reconcileHome() {
+  if (settleWaits > 0) return refreshHome({ force: true });
+  await checkStatus();
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  await refreshForTab(tab, { homeForce: true });
 }
 
 function startAutoRefresh() {
@@ -845,7 +952,10 @@ function resetChatPanel() {
   _sourcesScanSeq++; // a scan of the old notebook still running must not draw
   _notesScanSeq++;
   homeGate.begin(); // A -> B -> A: an A scan from before the trip read the page as it was
+  homeRereading = false;
   homeItemOpen = false;
+  homeReadFailed = false;
+  _homeZeroConfirmed.clear();
   Object.keys(_tabActions).forEach(tab => delete _tabActions[tab]);
   document.querySelectorAll('.tab-btn').forEach(btn => setTabCount(btn.dataset.tab, null));
   applyOpenTabAction();
@@ -869,23 +979,27 @@ function notebookSwitchedTo(tab) {
 // the wait's owner scans then, and a scan now would read the old notebook's page.
 async function settleWait(ms) {
   settleWaits++;
+  syncHomeControls();
   try {
     await new Promise(resolve => setTimeout(resolve, ms));
   } finally {
     settleWaits--;
+    syncHomeControls();
   }
 }
 
 // After a tab switch or navigation: a different notebook clears the chat and opens
-// Home, then counts it; the same notebook counts what Home does not know yet, or on
-// a list only refreshes Generated, if open (the Notes and Sources scans are slow),
-// unless sameNotebookScan is false. A list still showing the prompt from another
-// site is rescanned: there is nothing drawn to lose.
+// Home, then counts it; the same notebook reads Home again (the page may have changed,
+// homeForce: Refresh, not throttled), or on a list only refreshes Generated, if open
+// (the Notes and Sources scans are slow), unless sameNotebookScan is false. A list
+// still showing the prompt from another site is rescanned: there is nothing drawn to
+// lose.
 // settleMs: in-app (history API) navigation reports the new URL before the page
 // has drawn the new notebook, and the content-script scans read the DOM as it
 // is (no waits), so wait, then rescan only if the tab still shows that notebook.
 const settleGate = NLME.createSettleGate();
-async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}) {
+const PAGE_SETTLE_MS = 1500;
+async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true, homeForce = false } = {}) {
   const switched = notebookSwitchedTo(tab);
   // Not awaited: the name needs the page and must never delay the rescans.
   // After in-app navigation the page needs the settle time to draw the new name.
@@ -933,7 +1047,7 @@ async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}
     }
     await rescanOpenPanelTab();
   } else if (panelView === 'home') {
-    await refreshHome();
+    await (homeForce ? refreshHome({ force: true }) : refreshHomeFresh());
   } else if (isNotebookUrl(tab?.url) && openListShows('[data-needs-notebook]')) {
     await rescanOpenPanelTab();
   } else if (sameNotebookScan) {
@@ -1008,14 +1122,23 @@ async function afterJobChecks() {
 // and when a job ends (runExclusive). A newer check supersedes an older one still
 // waiting on storage. On a list the banner is out of sight: the Back button carries
 // a dot (setResumeIndicator) rather than taking the person off the list they are on.
-function setResumeIndicator(on) {
+let resumeAnnouncedId = ''; // the record the person has been told about
+function setResumeIndicator(on, recordId = '') {
   const dot = document.getElementById('back-resume-dot');
   const back = document.getElementById('back-btn');
-  if (!dot || !back) return;
+  const notice = document.getElementById('resume-notice');
+  if (!dot || !back || !notice) return;
   dot.hidden = !on;
   back.title = on ? 'Back to Home: an earlier export can be resumed' : 'Back to Home';
   if (on) back.setAttribute('aria-description', 'An earlier export can be resumed');
   else back.removeAttribute('aria-description');
+  if (!on) {
+    notice.textContent = '';
+  } else if (recordId !== resumeAnnouncedId) {
+    // Once per record: this runs on every tab event. On Home the card says it.
+    resumeAnnouncedId = recordId;
+    if (panelView !== 'home') notice.textContent = 'An earlier export can be resumed on Home.';
+  }
 }
 
 let resumeBannerSeq = 0;
@@ -1057,6 +1180,10 @@ async function discardJobRecord(record) {
 }
 
 async function handleTabChange(activeInfo) {
+  // onActivated fires for every window; this panel belongs to one
+  let active = null;
+  try { [active] = await chrome.tabs.query({ active: true, currentWindow: true }); } catch (_) { /* judged below */ }
+  if (active?.id !== activeInfo.tabId) return;
   currentTabId = activeInfo.tabId;
   await checkStatus();
   let tab = null;
@@ -1070,12 +1197,15 @@ async function handleTabUpdate(tabId, changeInfo, tab) {
   if (activeTab && activeTab.id === tabId) {
     if (changeInfo.status === 'complete') {
       await checkStatus();
-      await refreshForTab(tab);
+      _homeZeroConfirmed.clear(); // an empty list read while loading proves nothing
+      // A new notebook's page reports complete before it has drawn its lists
+      const id = isNotebookUrl(tab?.url) ? NLME.notebookIdFromUrl(tab.url) : '';
+      await refreshForTab(tab, id && id !== lastPanelNotebookId ? { settleMs: PAGE_SETTLE_MS } : {});
     } else if (changeInfo.url && !changeInfo.status) {
       // In-app navigation (history API): a URL change with no status. A full
       // load reports {status: 'loading', url} first and is handled by 'complete'.
       await checkStatus();
-      await refreshForTab(tab, { settleMs: 1500, sameNotebookScan: false });
+      await refreshForTab(tab, { settleMs: PAGE_SETTLE_MS, sameNotebookScan: false });
     }
   }
 }
@@ -1150,7 +1280,8 @@ async function checkStatus() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     currentTabId = tab?.id;
-    homeNotebookOpen = isNotebookUrl(tab?.url) && !!NLME.notebookIdFromUrl(tab.url);
+    homeOnSite = isNotebookUrl(tab?.url);
+    homeNotebookOpen = homeOnSite && !!NLME.notebookIdFromUrl(tab.url);
 
     if (isNotebookUrl(tab?.url)) {
       statusDot.classList.remove('inactive');
@@ -1171,6 +1302,7 @@ async function checkStatus() {
     statusText.textContent = 'Unknown';
     statusText.title = 'Unable to check status';
     showOpenLink(false);
+    homeOnSite = false;
     homeNotebookOpen = false;
   }
   syncHomeControls();
@@ -1232,24 +1364,18 @@ function applyOpenTabAction() {
 
 // The number of items found, on the tab's label and its Home row; null omits it
 // from the label and shows as not known yet on Home. The one place a count is set,
-// so the two can never disagree.
+// so the two can never disagree. Items found end a list's proof of being empty.
 const _tabCounts = {};
 function setTabCount(tab, count) {
   _tabCounts[tab] = count ?? null;
+  if (count > 0) _homeZeroConfirmed.delete(tab);
   const el = document.querySelector(`.tab-btn[data-tab="${tab}"] .tab-count`);
   if (el) {
     el.textContent = count == null ? '' : Number(count).toLocaleString('en-US');
     el.title = el.textContent; // a narrow panel can clip the count
     el.hidden = count == null;
   }
-  const row = document.querySelector(`.home-row[data-home-tab="${tab}"]`);
-  if (row) {
-    const text = NLME.homeCountText(tab, count);
-    row.querySelector('.home-count').textContent = text;
-    const name = row.querySelector('.home-label').textContent;
-    const spoken = count != null ? text : (tab === 'chat' ? 'not loaded' : 'not counted yet');
-    row.setAttribute('aria-label', `${name}, ${spoken}`);
-  }
+  paintHomeRow(tab);
 }
 
 // Set a button's text, keeping its icon: the label is the last text node
@@ -1539,6 +1665,7 @@ async function runExclusive(name, fn) {
     return JOB_BUSY;
   }
   document.body.classList.add('job-running');
+  if (!settingsStored) showToast(SETTINGS_UNREAD_MESSAGE, 'warning'); // the job runs on defaults
   hideResumeBanner(); // its numbers go stale while a job writes the record
   // Disable (not just dim) the tab controls so keyboard activation is
   // blocked too. Mark them: a scan may replace a control with a clone (the
@@ -1623,6 +1750,13 @@ async function requestCancel() {
 // Sources and Notes on another site; refreshForTab rescans a list showing it
 const NOTEBOOK_PROMPT_HTML = '<p class="empty-message" data-needs-notebook>Please open NotebookLM first</p>';
 const STUDIO_ITEM_OPEN_HTML = '<p class="empty-message">An item is open in Studio, which hides this list.<br><span class="hint">Close it, then click Refresh.</span></p>';
+// Home's one line, by NLME.homeNotice
+const HOME_NOTICE_HTML = {
+  'open-site': NOTEBOOK_PROMPT_HTML,
+  'open-notebook': '<p class="empty-message" data-needs-notebook>Open a notebook</p>',
+  'item-open': STUDIO_ITEM_OPEN_HTML,
+  'read-failed': '<p class="empty-message">Could not read a count. Click Refresh.</p>'
+};
 
 async function studioViewerOpen(tabId) {
   try {

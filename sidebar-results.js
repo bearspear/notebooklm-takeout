@@ -113,7 +113,7 @@ function showResumeBanner(record, { onResume, onDiscard, running = false } = {})
       <button type="button" class="btn btn-secondary resume-discard">Discard</button>
     </div>`;
   banner.style.display = 'block';
-  setResumeIndicator(true);
+  setResumeIndicator(true, record.id);
 
   const resumeBtn = banner.querySelector('.resume-go');
   const discardBtn = banner.querySelector('.resume-discard');

@@ -583,6 +583,22 @@ body {
   display: none;
 }
 
+/* Says once, on a list, what the dot means */
+.resume-notice {
+  margin-top: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--warn-bg);
+  color: var(--ink);
+  font-size: 11.5px;
+}
+
+.resume-notice:empty {
+  margin: 0;
+  padding: 0;
+  background: none;
+}
+
 .home-row:focus-visible,
 .header-icon-btn:focus-visible,
 .home-export .btn:focus-visible,

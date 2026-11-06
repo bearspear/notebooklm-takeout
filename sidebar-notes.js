@@ -4,11 +4,14 @@
 // ==================== NOTE SCANNING ====================
 
 
-// Notes from SCAN_NOTES, no UI (Notes tab, Full Takeout)
+// Notes from SCAN_NOTES, no UI (Notes tab, Full Takeout, Home, Generated)
+// strict: throw when the page gave no list, instead of reading that as no notes
+// (Home and Generated; Full Takeout keeps the default).
 // @returns {Promise<Array<{ index, title, ... }>>} as the content script sends them
-async function scanNotesData(tabId) {
+async function scanNotesData(tabId, { strict = false } = {}) {
   await ensureContentScriptLoaded(tabId);
   const response = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.SCAN_NOTES });
+  if (strict && !Array.isArray(response?.notes)) throw new Error(response?.error || 'No response from the page');
   return response?.notes || [];
 }
 

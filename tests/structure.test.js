@@ -444,9 +444,49 @@ test('Home counts with the lists\' own data and never scans the chat', () => {
   for (const name of ['scanSourcesData', 'scanNotesData', 'scanGeneratedItems']) assert.ok(scans.includes(name), name);
   assert.doesNotMatch(scans, /scanArtifactsData|scanChat/); // artifacts only: not the Generated list
   assert.match(fnSource('sidebar-generated.js', 'scanStudioPage'), /await scanGeneratedItems\(tab\.id\)/);
-  const refresh = fnSource('sidebar-core.js', 'refreshHome');
+  const refresh = fnSource('sidebar-core.js', 'refreshHome') + fnSource('sidebar-core.js', 'readHomeCounts');
   assert.doesNotMatch(refresh, /scanChat|scrollTo|\.click\(/);
   assert.match(refresh, /jobLock\.current\(\)/);
   assert.match(refresh, /settleWaits/);
-  assert.match(fnSource('sidebar-core.js', 'setTabCount'), /home-row/);
+  assert.match(fnSource('sidebar-core.js', 'setTabCount'), /paintHomeRow\(tab\)/);
+});
+
+test('settings reach storage through one guarded write', () => {
+  const core = fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8');
+  assert.equal([...core.matchAll(/storage\.local\.set\(\{ settings \}\)/g)].length, 1);
+  assert.match(fnSource('sidebar-core.js', 'writeSettings'), /if \(settingsStored\) \{\s+await chrome\.storage\.local\.set\(\{ settings \}\)/);
+});
+
+test('Full Takeout keeps the plain notes scan; Home and Generated ask for the strict one', () => {
+  const takeout = fs.readFileSync(path.join(ROOT, 'sidebar-takeout.js'), 'utf8');
+  assert.equal([...takeout.matchAll(/scanNotesData\(tabId\)/g)].length, 2);
+  assert.doesNotMatch(takeout, /strict/);
+  assert.match(fnSource('sidebar-generated.js', 'scanGeneratedItems'), /scanNotesData\(tabId, \{ strict: true \}\)/);
+  assert.match(fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8'), /scanNotesData\(tabId, \{ strict: true \}\)/);
+});
+
+test('a failed scan never reads as an empty list', async () => {
+  const vm = require('node:vm');
+  let answers = {};
+  const sandbox = {
+    NLME: { MSG: { SCAN_NOTES: 'n', SCAN_STUDIO_ITEMS: 's' }, stampGeneratedJobKeys() {} },
+    chrome: { tabs: { sendMessage: async (id, m) => answers[m.type] } },
+    ensureContentScriptLoaded: async () => {}, stampJobKeys() {}, console: { warn() {} }
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(fnSource('sidebar-notes.js', 'scanNotesData') + fnSource('sidebar-generated.js', 'scanGeneratedItems'), sandbox);
+  const { scanNotesData, scanGeneratedItems } = sandbox;
+  answers = { n: undefined };
+  assert.equal((await scanNotesData(1)).length, 0); // the default Full Takeout has today
+  await assert.rejects(scanNotesData(1, { strict: true }), /No response/);
+  answers = { n: { error: 'boom' } };
+  await assert.rejects(scanNotesData(1, { strict: true }), /boom/);
+  answers = { n: { notes: [] } };
+  assert.equal((await scanNotesData(1, { strict: true })).length, 0); // a real empty list
+  answers = { s: undefined };
+  await assert.rejects(scanGeneratedItems(1), /No response/);
+  answers = { s: { items: [], error: 'boom' } };
+  await assert.rejects(scanGeneratedItems(1), /boom/);
+  answers = { s: { items: [{ kind: 'artifact' }] }, n: undefined };
+  assert.equal((await scanGeneratedItems(1)).length, 1); // a failed notes side-scan lists Studio items only
 });

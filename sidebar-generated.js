@@ -36,15 +36,18 @@ function forgetStudioList() {
 
 // The Generated list's items, no UI (the list, and its count on Home, so the two
 // cannot differ): SCAN_STUDIO_ITEMS plus the notes in the Sources panel's "Notes"
-// group, which are not in the Studio list. If that extra scan fails, the Studio
+// group, which are not in the Studio list. Throws when the Studio scan fails, so a
+// failure never reads as an empty list. If the extra notes scan fails, the Studio
 // items still render.
 async function scanGeneratedItems(tabId) {
   const response = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.SCAN_STUDIO_ITEMS });
-  const items = [...(response?.items || [])];
+  if (!response) throw new Error('No response from the page');
+  if (response.error) throw new Error(response.error);
+  const items = [...(response.items || [])];
 
   let notes = [];
   try {
-    notes = await scanNotesData(tabId);
+    notes = await scanNotesData(tabId, { strict: true });
     stampJobKeys('notes', notes);
     for (const note of notes) {
       if (note.elementType !== 'source-note') continue;
@@ -96,6 +99,7 @@ async function scanStudioPage() {
     if (seq !== _studioScanSeq) return;
     const signature = NLME.generatedSignature(tab, items);
     if (listLive() && signature === _studioSignature) {
+      setTabCount('studio', items.length); // a Home scan may have cleared it
       return; // unchanged: keep the list, its focus, caret, scroll and selection
     }
 

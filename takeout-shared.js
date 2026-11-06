@@ -1446,9 +1446,45 @@
 
   // A Home row's count. null is not known yet (it never reads as a number); Chat
   // is never scanned from Home, so it offers Load until the Chat tab has loaded.
-  function homeCountText(tab, count) {
+  // available false: off a notebook nothing is shown, the count is only kept.
+  function homeCountText(tab, count, available = true) {
+    if (!available) return '\u2014';
     if (count == null) return tab === 'chat' ? 'Load' : '\u2014';
     return Number(count).toLocaleString('en-US');
+  }
+
+  // What one read of a list means on Home. The page draws its lists late, and an
+  // undrawn list reads as 0, so a 0 is shown as not known and read again; once the
+  // attempts run out it is believed, so an empty notebook settles. A list proved
+  // empty needs no second proof. A failed read (found null) is never a number.
+  function homeCountRead({ found, confirmedZero = false, attemptsLeft = 0 }) {
+    if (found == null) return { show: null, retry: attemptsLeft > 0, zeroConfirmed: false, failed: true };
+    if (found > 0) return { show: found, retry: false, zeroConfirmed: false, failed: false };
+    if (confirmedZero || attemptsLeft <= 0) return { show: 0, retry: false, zeroConfirmed: true, failed: false };
+    return { show: null, retry: true, zeroConfirmed: false, failed: false };
+  }
+
+  // The one line Home shows above its rows, by what stands in the way
+  function homeNotice({ onSite = false, onNotebook = false, itemOpen = false, readFailed = false } = {}) {
+    if (!onSite) return 'open-site';
+    if (!onNotebook) return 'open-notebook';
+    if (itemOpen) return 'item-open';
+    return readFailed ? 'read-failed' : '';
+  }
+
+  // Run an async load, and once more after waitMs if it throws. True when it worked.
+  async function loadWithRetry(load, { sleep, waitMs }) {
+    try {
+      await load();
+      return true;
+    } catch (_) { /* once more below */ }
+    await sleep(waitMs);
+    try {
+      await load();
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   // The side panel header's text: the notebook's name on a notebook page, else
@@ -2670,6 +2706,9 @@ footer { margin-top: 3rem; }
     openingView,
     panelOpenView,
     homeCountText,
+    homeCountRead,
+    homeNotice,
+    loadWithRetry,
     headerName,
     listItemKeys,
     jobRecordKey,

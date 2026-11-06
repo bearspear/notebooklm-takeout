@@ -2535,3 +2535,49 @@ test('homeCountText: an unknown count never reads as a number, Chat offers Load'
   assert.equal(NLME.homeCountText('chat', null), 'Load');
   assert.equal(NLME.homeCountText('chat', 12), '12');
 });
+
+test('homeCountRead: a 0 is held back until the attempts run out, then believed', () => {
+  assert.deepEqual(NLME.homeCountRead({ found: 40, attemptsLeft: 2 }), { show: 40, retry: false, zeroConfirmed: false, failed: false });
+  assert.deepEqual(NLME.homeCountRead({ found: 0, attemptsLeft: 2 }), { show: null, retry: true, zeroConfirmed: false, failed: false });
+  assert.deepEqual(NLME.homeCountRead({ found: 0, attemptsLeft: 0 }), { show: 0, retry: false, zeroConfirmed: true, failed: false });
+});
+
+test('homeCountRead: a list already proved empty is not re-read', () => {
+  assert.deepEqual(NLME.homeCountRead({ found: 0, confirmedZero: true, attemptsLeft: 2 }), { show: 0, retry: false, zeroConfirmed: true, failed: false });
+  assert.equal(NLME.homeCountRead({ found: 3, confirmedZero: true, attemptsLeft: 2 }).show, 3);
+});
+
+test('homeCountRead: a failed read is never a number', () => {
+  assert.deepEqual(NLME.homeCountRead({ found: null, attemptsLeft: 1 }), { show: null, retry: true, zeroConfirmed: false, failed: true });
+  assert.deepEqual(NLME.homeCountRead({ found: null, attemptsLeft: 0 }), { show: null, retry: false, zeroConfirmed: false, failed: true });
+});
+
+test('homeCountText: nothing but a dash off a notebook, whatever is kept', () => {
+  assert.equal(NLME.homeCountText('sources', 40, false), '—');
+  assert.equal(NLME.homeCountText('chat', null, false), '—');
+  assert.equal(NLME.homeCountText('sources', 40, true), '40');
+});
+
+test('homeNotice: says what Home needs, most basic first', () => {
+  assert.equal(NLME.homeNotice({ onSite: false, onNotebook: false, itemOpen: true, readFailed: true }), 'open-site');
+  assert.equal(NLME.homeNotice({ onSite: true, onNotebook: false, itemOpen: true }), 'open-notebook');
+  assert.equal(NLME.homeNotice({ onSite: true, onNotebook: true, itemOpen: true, readFailed: true }), 'item-open');
+  assert.equal(NLME.homeNotice({ onSite: true, onNotebook: true, readFailed: true }), 'read-failed');
+  assert.equal(NLME.homeNotice({ onSite: true, onNotebook: true }), '');
+});
+
+test('loadWithRetry: tries once more, and says whether a load succeeded', async () => {
+  let calls = 0;
+  const waits = [];
+  const sleep = async ms => { waits.push(ms); };
+  assert.equal(await NLME.loadWithRetry(async () => { calls++; }, { sleep, waitMs: 500 }), true);
+  assert.equal(calls, 1);
+  assert.deepEqual(waits, []);
+  calls = 0;
+  assert.equal(await NLME.loadWithRetry(async () => { if (++calls === 1) throw new Error('down'); }, { sleep, waitMs: 500 }), true);
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, [500]);
+  calls = 0;
+  assert.equal(await NLME.loadWithRetry(async () => { calls++; throw new Error('down'); }, { sleep, waitMs: 500 }), false);
+  assert.equal(calls, 2);
+});
