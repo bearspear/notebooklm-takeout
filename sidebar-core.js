@@ -1393,7 +1393,7 @@ async function requestCancel() {
   // cancel on the chain so it does not start the next step
   if (chainActive) chainCancelRequested = true;
   try {
-    // The export shell's tab first: retries and Download Selected run on the tab
+    // The export shell's tab first: retries and the action bar's exports run on the tab
     // they were scanned on, which need not be the active one. The content script
     // there broadcasts CANCEL_EXPORT, which the shell's own listener also receives.
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });

@@ -34,27 +34,6 @@ function forgetStudioList() {
   if (resultsEl) resultsEl.innerHTML = '<p class="scanning">Scanning generated items...</p>';
 }
 
-// A job record holds the keys Resume's fresh scans give (scanArtifactsData,
-// scanNotesData), never this merged list's: each row keeps them as jobKey, and
-// NLME.generatedExportPlan hands them on. Artifacts are in the same order as
-// scanArtifactsData. A Studio note takes the key of its entry in `notes` (the
-// labels of untitled rows differ); with no notes scan, one computed from the row.
-// Source notes come with theirs.
-function stampGeneratedJobKeys(items, notes) {
-  const stamp = list => {
-    const keys = NLME.listItemKeys(list, JOB_KEY_ACCESSORS.artifacts); // label, type
-    list.forEach((item, i) => { item.jobKey = keys[i]; });
-  };
-  stamp(items.filter(item => item.kind === 'artifact'));
-  const studioNotes = items.filter(item => item.kind === 'note');
-  stamp(studioNotes);
-  const scanned = new Map(notes.map(note => [note.index, note]));
-  for (const item of studioNotes) {
-    const key = scanned.get(item.kindIndex)?._listKey;
-    if (key) item.jobKey = key;
-  }
-}
-
 async function scanStudioPage() {
   const resultsEl = document.getElementById('studio-scan-results');
   if (!resultsEl) return;
@@ -105,7 +84,7 @@ async function scanStudioPage() {
     } catch (noteError) {
       console.warn('[NotebookLM Takeout] Sources-panel notes scan failed; listing Studio items only:', noteError);
     }
-    stampGeneratedJobKeys(items, notes);
+    NLME.stampGeneratedJobKeys(items, notes);
 
     if (seq !== _studioScanSeq) return;
     const signature = NLME.generatedSignature(tab, items);
@@ -160,14 +139,14 @@ function renderStudioList(items) {
   const rowHtml = (item, idx) => {
     const iconSvg = getIconForType(item.type);
     const detailsStr = item.details ? ` · ${escapeHtml(item.details)}` : '';
-    const downloadTitle = isStudioItemUnavailable(item) ? `${item.type} export not supported yet` : `Download ${item.label}`;
+    const unavailable = NLME.studioItemUnavailableReason(item);
     return `
         <div class="scan-item-icon">${iconSvg}</div>
         <div class="scan-item-info">
           <strong>${escapeHtml(item.label)}</strong>
           <small>${escapeHtml(item.type)}${detailsStr}</small>
         </div>
-        <button class="btn-icon download-single-btn studio-download-btn" data-idx="${idx}" title="${escapeHtml(downloadTitle)}" aria-label="Download ${escapeHtml(item.label)}"${isStudioItemUnavailable(item) ? ' disabled' : ''}>
+        <button class="btn-icon download-single-btn studio-download-btn" data-idx="${idx}" title="${escapeHtml(unavailable || `Download ${item.label}`)}" aria-label="Download ${escapeHtml(item.label)}"${unavailable ? ' disabled' : ''}>
           ${icon('download')}
           <span class="download-status"></span>
         </button>
@@ -201,11 +180,6 @@ function renderStudioList(items) {
       runExclusive('Generated delete', () => handleStudioDeleteRow(parseInt(deleteBtn.dataset.idx, 10), deleteBtn));
     }
   });
-}
-
-// Listed and deletable, but with nothing to download (Flashcards, Quiz)
-function isStudioItemUnavailable(item) {
-  return !!item && item.kind === 'artifact' && !item.downloadable;
 }
 
 // Every Generated item can be deleted: Studio items by label, Sources-panel
@@ -261,7 +235,9 @@ const GENERATED_EXPORT_STEPS = [
 // The Generated action: exports what the current list has selected. It runs as a
 // chain, so a Cancel (or a declined health check) in the first side stops the
 // second, and each side's results survive the other: with both sides there is one
-// combined panel, whose Retry covers everything failed or not run.
+// combined panel. Its Retry covers items that failed and a side that did not run.
+// Artifacts a Cancel left unstarted are in no failedItems: only the job record's
+// Resume has them. The headline counts all of it (NLME.generatedExportMessage).
 function exportSelectedGenerated() {
   const plan = NLME.generatedExportPlan(_studioListController ? _studioListController.selectedItems() : []);
   if (plan.artifacts.length + plan.notes.length === 0) return;
@@ -270,9 +246,9 @@ function exportSelectedGenerated() {
     const { steps, notRun } = await runRetryChain({ Artifacts: plan.artifacts, Notes: plan.notes }, tabId, 'Export', GENERATED_EXPORT_STEPS);
     // Nothing ran (declined, tab closed: already said), or one side ran alone: its own panel stands
     if (steps.length === 0 || (steps.length === 1 && notRun.length === 0)) return;
-    const combined = NLME.combineRetryOutcomes({ steps, notRun, verb: 'Export' });
+    const combined = NLME.combineRetryOutcomes({ steps, notRun });
     showTakeoutResults({
-      message: combined.message,
+      message: NLME.generatedExportMessage({ steps, notRun, total: plan.artifacts.length + plan.notes.length }),
       level: combined.level,
       lines: combined.lines,
       saved: combined.saved,
@@ -302,7 +278,7 @@ function setStudioRowStatus(btn, state) {
 
 async function handleStudioDownloadRow(idx, btn) {
   const item = _studioItems[idx];
-  if (!item || isStudioItemUnavailable(item)) return;
+  if (!item || NLME.isStudioItemUnavailable(item)) return;
   setStudioRowStatus(btn, 'pending');
   try {
     if (item.kind === 'artifact') {

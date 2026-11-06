@@ -2336,12 +2336,79 @@ test('generatedSignature changes with everything a row acts on, and with nothing
   assert.notEqual(NLME.generatedSignature({ ...tab, url: tab.url + 'b' }, [item]), base);
 });
 
-test('combineRetryOutcomes names a stopped Generated export', () => {
-  const combined = NLME.combineRetryOutcomes({
-    steps: [{ name: 'Artifacts', message: 'Export cancelled', level: 'warning', saved: ['a.zip'], errors: [], failedItems: [] }],
-    notRun: [{ name: 'Notes', failedItems: [{ title: 'N1' }] }],
-    verb: 'Export'
-  });
-  assert.equal(combined.message, 'Export stopped before notes — 1 still failed');
-  assert.deepEqual(Object.keys(combined.remaining), ['Artifacts', 'Notes']);
+test('an artifact with no More button is not exported: its index would resolve by title to another row', () => {
+  // pickByIndexThenTitleStrict(['Deck'], -1, 'Deck') is 0: the ready item of that title
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Deck'], -1, 'Deck'), 0);
+  const plan = NLME.generatedExportPlan([
+    { kind: 'artifact', moreIndex: -1, label: 'Deck', type: 'Slides', downloadable: true },
+    { kind: 'artifact', moreIndex: 0, label: 'Deck', type: 'Slides', downloadable: true }
+  ]);
+  assert.deepEqual(plan.artifacts.map(a => a.index), [0]);
+  assert.deepEqual(plan.skipped.map(i => i.moreIndex), [-1]);
+});
+
+test('the row check and the export plan share one rule', () => {
+  const rows = [
+    { kind: 'artifact', moreIndex: 0, label: 'A', type: 'Slides', downloadable: true },
+    { kind: 'artifact', moreIndex: -1, label: 'B', type: 'Slides', downloadable: true },
+    { kind: 'artifact', moreIndex: 2, label: 'C', type: 'Quiz', downloadable: false },
+    { kind: 'artifact', moreIndex: -1, label: 'D', type: 'Quiz', downloadable: false },
+    { kind: 'note', kindIndex: 0, label: 'E', type: 'Note' },
+    { kind: 'source-note', sourceIndex: 1, label: 'F', type: 'Note (Sources panel)' }
+  ];
+  const skipped = NLME.generatedExportPlan(rows).skipped;
+  assert.deepEqual(rows.filter(NLME.isStudioItemUnavailable), skipped);
+  assert.deepEqual(skipped.map(i => i.label), ['B', 'C', 'D']);
+});
+
+test('an unavailable row says why it cannot download', () => {
+  assert.equal(NLME.studioItemUnavailableReason({ kind: 'artifact', moreIndex: 2, type: 'Quiz', downloadable: false }), 'Quiz export not supported yet');
+  assert.equal(NLME.studioItemUnavailableReason({ kind: 'artifact', moreIndex: -1, type: 'Slides', downloadable: true }), 'Not ready to download yet');
+  assert.equal(NLME.studioItemUnavailableReason({ kind: 'artifact', moreIndex: 0, type: 'Slides', downloadable: true }), '');
+  assert.equal(NLME.studioItemUnavailableReason({ kind: 'note', kindIndex: 0, type: 'Note' }), '');
+  assert.equal(NLME.isStudioItemUnavailable(null), false);
+});
+
+test('Generated rows carry the keys Resume finds again, not keys in the merged list', () => {
+  const items = [
+    { kind: 'artifact', label: 'X', type: 'Report' },
+    { kind: 'note', kindIndex: 0, label: 'X', type: 'Note' },
+    { kind: 'artifact', label: 'X', type: 'Report' },
+    { kind: 'note', kindIndex: 1, label: 'Item 4', type: 'Note' } // untitled: the Notes scan calls it "Note 2"
+  ];
+  const notes = [{ index: 0, title: 'X', type: 'Note' }, { index: 1, title: 'Note 2', type: 'Note' }];
+  const keys = NLME.listItemKeys(notes, { titleOf: n => n.title, typeOf: n => n.type });
+  notes.forEach((n, i) => { n._listKey = keys[i]; });
+  NLME.stampGeneratedJobKeys(items, notes);
+  assert.deepEqual(items.map(i => i.jobKey), ['Report\u0000X', 'Note\u0000X', 'Report\u0000X#2', 'Note\u0000Note 2']);
+
+  // The notes scan failed: keys from the rows, still over each side alone
+  const again = items.map(({ jobKey, ...rest }) => rest);
+  NLME.stampGeneratedJobKeys(again, []);
+  assert.deepEqual(again.map(i => i.jobKey), ['Report\u0000X', 'Note\u0000X', 'Report\u0000X#2', 'Note\u0000Item 4']);
+});
+
+test('a Generated export headline counts everything not exported, Retry and Resume alike', () => {
+  // Cancel partway through the artifacts: 3 of 5 artifacts left unstarted, 2 notes not run, nothing failed
+  assert.equal(NLME.generatedExportMessage({
+    steps: [{ name: 'Artifacts', exported: 2, stopped: true, failedItems: [] }],
+    notRun: [{ name: 'Notes', failedItems: [{}, {}] }],
+    total: 7
+  }), 'Export stopped before notes — 5 of 7 items not exported');
+  // Cancel partway through the notes, the last side
+  assert.equal(NLME.generatedExportMessage({
+    steps: [{ name: 'Artifacts', exported: 2 }, { name: 'Notes', exported: 1, stopped: true }],
+    notRun: [],
+    total: 4
+  }), 'Export stopped — 1 of 4 items not exported');
+  assert.equal(NLME.generatedExportMessage({
+    steps: [{ name: 'Artifacts', exported: 2 }, { name: 'Notes', exported: 1 }],
+    notRun: [],
+    total: 4
+  }), 'Export finished — 1 of 4 items not exported');
+  assert.equal(NLME.generatedExportMessage({
+    steps: [{ name: 'Artifacts', exported: 2 }, { name: 'Notes', exported: 2 }],
+    notRun: [],
+    total: 4
+  }), 'Export finished');
 });

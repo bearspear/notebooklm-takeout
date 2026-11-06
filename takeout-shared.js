@@ -1653,11 +1653,57 @@
     return `${verb} ${n.toLocaleString('en-US')} ${unit}${n === 1 ? '' : 's'}`;
   }
 
+  // Why a Generated row has nothing to download, '' when it can. The one rule for
+  // the row's Download button and generatedExportPlan. With no More button (moreIndex
+  // -1) the row must not be tried: a strict title match would download another
+  // item of the same title and report success.
+  function studioItemUnavailableReason(item) {
+    if (!item || item.kind !== 'artifact') return '';
+    if (!item.downloadable) return `${item.type} export not supported yet`;
+    return item.moreIndex >= 0 ? '' : 'Not ready to download yet';
+  }
+
+  function isStudioItemUnavailable(item) {
+    return !!studioItemUnavailableReason(item);
+  }
+
+  // A job record holds the keys Resume's fresh scans give (scanArtifactsData,
+  // scanNotesData), never the merged list's: each row keeps them as jobKey, and
+  // generatedExportPlan hands them on. Artifacts are in the same order as
+  // scanArtifactsData. A Studio note takes the key of its entry in `notes`, stamped
+  // by the caller (the labels of untitled rows differ); with no notes scan, one
+  // computed from the row. Source notes come with theirs.
+  function stampGeneratedJobKeys(items, notes) {
+    const stamp = list => {
+      const keys = listItemKeys(list, { titleOf: item => item.label, typeOf: item => item.type });
+      list.forEach((item, i) => { item.jobKey = keys[i]; });
+    };
+    stamp(items.filter(item => item.kind === 'artifact'));
+    const studioNotes = items.filter(item => item.kind === 'note');
+    stamp(studioNotes);
+    const scanned = new Map(notes.map(note => [note.index, note]));
+    for (const item of studioNotes) {
+      const key = scanned.get(item.kindIndex)?._listKey;
+      if (key) item.jobKey = key;
+    }
+  }
+
+  // The headline of a Generated export's combined panel: what was left out of the
+  // whole selection, so it counts unstarted items too, which no failedItems holds.
+  // steps: runRetryChain's, with exported and stopped. total: items in the selection.
+  function generatedExportMessage({ steps = [], notRun = [], total = 0 } = {}) {
+    const exported = steps.reduce((sum, step) => sum + (step.exported || 0), 0);
+    const left = total - exported;
+    const head = notRun.length
+      ? `Export stopped before ${notRun.map(n => n.name.toLowerCase()).join(' and ')}`
+      : steps.some(step => step.stopped) ? 'Export stopped' : 'Export finished';
+    return left > 0 ? `${head} \u2014 ${left} of ${total} items not exported` : head;
+  }
+
   // The Generated list's selection as the two exports it becomes: artifacts in the
   // scanArtifactsData shape, notes in the exportSingleNote shape. skipped: what
-  // cannot be exported (Flashcards, Quiz); those stay selectable for delete.
-  // item.jobKey (see stampGeneratedJobKeys in sidebar-generated.js) travels as the
-  // non-enumerable _listKey jobItemKeys reads, so a job record holds the keys a
+  // cannot be exported (studioItemUnavailableReason); those stay selectable for
+  // delete. item.jobKey (see stampGeneratedJobKeys) travels as the non-enumerable _listKey jobItemKeys reads, so a job record holds the keys a
   // fresh scan of that category gives, whatever else is in the merged list.
   function generatedExportPlan(items) {
     const plan = { artifacts: [], notes: [], skipped: [] };
@@ -1667,7 +1713,9 @@
     };
     for (const item of items || []) {
       if (!item) continue;
-      if (item.kind === 'artifact' && item.downloadable) {
+      if (isStudioItemUnavailable(item)) {
+        plan.skipped.push(item);
+      } else if (item.kind === 'artifact') {
         plan.artifacts.push(keyed({ index: item.moreIndex, label: item.label, type: item.type, details: item.details, disabled: false }, item));
       } else if (item.kind === 'note') {
         plan.notes.push(keyed({ index: item.kindIndex, title: item.label, type: item.type }, item));
@@ -2554,6 +2602,10 @@ footer { margin-top: 3rem; }
     pruneSelection,
     listSummary,
     actionLabel,
+    studioItemUnavailableReason,
+    isStudioItemUnavailable,
+    stampGeneratedJobKeys,
+    generatedExportMessage,
     generatedExportPlan,
     generatedSignature,
     listStateKey,

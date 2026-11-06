@@ -598,12 +598,12 @@ repeats become `-2`, `-3` (`NLME.uniqueStems`).
    - `moreIndex` — index among `artifact-library-item`s that have a More button; this is
      the index every artifact download uses (Generated tab, batch)
    - `downloadable` — false for Flashcards / Quiz. By type only (`NLME.isDownloadableType`): it says
-     nothing about an item still generating, which is exported and fails as an item if it cannot download
+     nothing about an item still generating; Generated also refuses `moreIndex < 0`
    - `kind` — `'artifact'` | `'note'`
    - `label` (title), `details`, `type`, `hasMoreButton`
 3. Row Download:
    - `kind === 'artifact'` → `triggerItemDownload(tabId, moreIndex, label, type)` (retries, then
-     `downloadArtifact`). Disabled when `downloadable` is false.
+     `downloadArtifact`). Disabled when `NLME.isStudioItemUnavailable`.
    - `kind === 'note'` → `exportSingleNote({index: kindIndex, title: label, type})`.
      - Mindmap path: three loose files (`.svg`, `.json`, `.html` from
        `generateMindmapHTML(svgContent, title)`) through `saveFiles`.
@@ -938,14 +938,19 @@ Already covered in [Export pipelines](#export-pipelines-deep), but the wiring:
   `studio-delete-btn`) are wired (delegated on `.studio-list`) inside `renderStudioList` after
   each scan; the bulk actions use `_studioListController.selectedItems()`.
 - Export: `NLME.generatedExportPlan(selected) -> { artifacts, notes, skipped }`. The action counts artifacts + notes;
-  items that cannot download are `skipped` but stay selectable for delete (default selection is `none` for that
+  `NLME.studioItemUnavailableReason(item)` is the one rule for `skipped` and the row's disabled Download and title:
+  `downloadable` false, or `moreIndex < 0` (no More button: `pickByIndexThenTitleStrict(titles, -1, title)` would hit a
+  same-titled ready item and report success). `scanArtifactsData`, so Full Takeout, does not apply it. Skipped items
+  stay selectable for delete (default selection is `none` for that
   reason). `exportSelectedGenerated` runs `runRetryChain` with `GENERATED_EXPORT_STEPS` (artifacts, then notes, as
   fresh exports, on `_studioTabId`) under `runExclusive('Generated export')` + `runChain`: a Cancel or a declined
   health check in the first side leaves the second in `notRun`. One side alone keeps its own panel; both end in one
-  `NLME.combineRetryOutcomes` panel (verb `'Export'`), so the second `withExportShell`'s `hideResults()` cannot lose
-  the first side's failures. Its Retry is `takeoutRetry`.
+  `NLME.combineRetryOutcomes` panel, so the second `withExportShell`'s `hideResults()` cannot lose the first side's
+  failures. Its Retry is `takeoutRetry`, covering failed items and a side not run. Artifacts a Cancel left unstarted are
+  in the job record's Resume only, so the headline is `NLME.generatedExportMessage` (`Export stopped before notes — L of
+  T items not exported`, from `exported` and `stopped` on `runRetryChain`'s steps).
 - Job keys: `createListController`'s `_listKey` here is a key in the MERGED list, and the plan builds new objects, so
-  neither reaches a job record. Rows carry `jobKey` (`stampGeneratedJobKeys`: artifacts over all artifact rows, notes
+  neither reaches a job record. Rows carry `jobKey` (`NLME.stampGeneratedJobKeys`: artifacts over all artifact rows, notes
   from the full `scanNotesData`, the keys Resume's fresh scans give) and the plan stamps it as the items' `_listKey`.
 - Records: each side has its own record rules. With an artifacts record left unfinished, the notes side runs in update
   mode (`jobRecordMode`) and adds no record of its own; its failures are still in the panel's Retry.
@@ -1414,7 +1419,7 @@ user clicks Dismiss.
 - `shell.finish({ ..., saved, retry })`: `saved` is the ZIP names (`zips` from the runner) or the
   Downloads folder; `stoppedMessage` still replaces the outcome line (level error) and the errors
   are listed anyway. `retryFor(failedItems, jobName, exportFn)` (sidebar-core.js) builds `retry` for
-  notes, sources and Download All (`downloadAllArtifacts(shell.tab.id, failed, { updateRecord: true, zip })`, `exportSources(failed, { tabId })`); chat passes none
+  notes, sources and the action bar's artifact export (`downloadAllArtifacts(shell.tab.id, failed, { updateRecord: true, zip })`, `exportSources(failed, { tabId })`); chat passes none
   (its messages do not fail as a whole; re-export the chat).
 - Toasts remain for short notices (job refused, no tab, cancelled at the health check, unexpected
   failure) and single-item exports. Full Takeout shows its combined outcome in the results panel (`showResults`).
@@ -1433,7 +1438,7 @@ user clicks Dismiss.
   panels shown while the chain runs are replaced by the combined one.
 - Side-panel Cancel (`requestCancel`, sidebar-core.js) sends `REQUEST_EXPORT_CANCEL` to
   `activeShellTabId` (the running shell's tab, sidebar-takeout.js), else `jobTabId` (the active tab
-  when the job started), else the current tab. Retries and Download Selected run on the tab they
+  when the job started), else the current tab. Retries and the action bar's Generated export run on the tab they
   were scanned on, which need not be the active one. The content script there broadcasts
   `CANCEL_EXPORT`, which the shell's own listener receives.
 
@@ -1443,7 +1448,7 @@ user clicks Dismiss.
   instead of the active tab, and `shell.meta` (notebook title, URL) comes from that tab. Omitted:
   the active tab, as before. `downloadAllArtifacts(tabId, items)` and Full Takeout pass it.
   `exportSources(selected, { tabId })` and `exportNotesAsMarkdown(selected, { tabId })` take it too
-  (default: the active tab). Every retry (`retryFor` closures for notes, sources and Download All, and
+  (default: the active tab). Every retry (`retryFor` closures for notes, sources and the action bar's artifact export, and
   Full Takeout's Retry) re-runs on the tab the original export used (`shell.tab.id` / the takeout's tab).
 - `target.written` (every category runner, `CategoryTarget`): `{ zips: [], count: 0, multi: false,
   parts: 0 }` (`newWritten()`), filled by `saveCategoryBatch` as each package is saved (the artifacts
@@ -1711,7 +1716,7 @@ loose files in `mind-maps/`. This asymmetry is intentional but worth knowing.
 ### 7. Flashcards and Quiz are not exportable
 
 They have no Download item in the More menu. The Generated tab lists them: their row Download is
-disabled, the action does not count them (`skipped`), and they stay selectable for delete.
+disabled (as for an artifact with no More button), the action does not count them (`skipped`), and they stay selectable for delete.
 
 ### 8. Follow-ups from the PR #2 review (deferred, minor)
 

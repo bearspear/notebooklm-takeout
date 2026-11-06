@@ -344,7 +344,6 @@ test('panel has no emoji in its markup', () => {
 // ---- Generated tab: the parts a person cannot afford to get wrong ----
 
 const vmModule = require('node:vm');
-const shared = require('../takeout-shared.js');
 
 function fnSource(file, name) {
   const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
@@ -396,30 +395,6 @@ test('a Generated export with one side empty runs only the other', async () => {
   const { ctx, calls } = generatedChain();
   await ctx.run({ Artifacts: [], Notes: ['n1'] });
   assert.deepEqual(calls.map(c => c[0]), ['notes']);
-});
-
-test('Generated rows carry the keys Resume finds again, not keys in the merged list', () => {
-  const core = fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8');
-  const accessors = core.slice(core.indexOf('const JOB_KEY_ACCESSORS'), core.indexOf('};\n', core.indexOf('const JOB_KEY_ACCESSORS')) + 3);
-  const ctx = vmModule.createContext({ NLME: shared });
-  vmModule.runInContext(`${accessors}\n${fnSource('sidebar-generated.js', 'stampGeneratedJobKeys')}\nthis.stamp = stampGeneratedJobKeys;`, ctx);
-
-  const items = [
-    { kind: 'artifact', label: 'X', type: 'Report' },
-    { kind: 'note', kindIndex: 0, label: 'X', type: 'Note' },
-    { kind: 'artifact', label: 'X', type: 'Report' },
-    { kind: 'note', kindIndex: 1, label: 'Item 4', type: 'Note' } // untitled: the Notes scan calls it "Note 2"
-  ];
-  const notes = [{ index: 0, title: 'X', type: 'Note' }, { index: 1, title: 'Note 2', type: 'Note' }];
-  const keys = shared.listItemKeys(notes, { titleOf: n => n.title, typeOf: n => n.type });
-  notes.forEach((n, i) => { n._listKey = keys[i]; });
-  ctx.stamp(items, notes);
-  assert.deepEqual(items.map(i => i.jobKey), ['Report\u0000X', 'Note\u0000X', 'Report\u0000X#2', 'Note\u0000Note 2']);
-
-  // The notes scan failed: keys from the rows, still over each side alone
-  const again = items.map(({ jobKey, ...rest }) => rest);
-  ctx.stamp(again, []);
-  assert.deepEqual(again.map(i => i.jobKey), ['Report\u0000X', 'Note\u0000X', 'Report\u0000X#2', 'Note\u0000Item 4']);
 });
 
 test('Generated keeps the delete guards', () => {

@@ -291,7 +291,7 @@ async function saveFiles(files, { zipName, folder, capture = null } = {}) {
  *   label names the export in logs; healthType ('notes', 'sources', ...) runs
  *   the DOM health check first; preflight ('chat') shows preflightWarn's
  *   toast after the tab lookup; tabId: the tab the items were scanned on
- *   (Download All, every Retry), used instead of the active tab, also for
+ *   (the Generated action, every Retry), used instead of the active tab, also for
  *   shell.meta (notebook title and URL). Omitted: the active tab.
  * @param {(shell: object) => Promise<any>} run
  * @returns {Promise<any>} see above
@@ -974,7 +974,9 @@ async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TA
       level: out.level,
       saved: out.saved,
       errors: out.errors,
-      failedItems: out.result.failedItems || []
+      failedItems: out.result.failedItems || [],
+      exported: out.result.exported,
+      stopped: !!(out.result.cancelled || out.result.stopped)
     });
     if (out.result.cancelled) stopped = true;
   }
