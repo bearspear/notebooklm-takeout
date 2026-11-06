@@ -97,7 +97,7 @@ function renderNotesList(notes) {
     const isMindmap = note.type === 'Mindmap';
 
     return `
-        <div class="scan-item-icon">${icon(isMindmap ? 'spark' : 'note')}</div>
+        <div class="scan-item-icon">${icon(isMindmap ? 'map' : 'note')}</div>
         <div class="scan-item-info">
           <strong>${escapeHtml(note.title)}</strong>
           <small>${escapeHtml(note.type)}</small>

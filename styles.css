@@ -1,4 +1,4 @@
-/* NotebookLM Takeout - Popup Styles */
+/* NotebookLM Takeout - Side panel styles */
 
 /* theme:start */
 :root {
@@ -71,9 +71,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-shrink: 1;
-  min-width: 0;
-  max-width: 45%;
+  flex-shrink: 0;
 }
 
 .status-dot {
@@ -98,6 +96,23 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.header-icon-btn {
+  background: none;
+  border: none;
+  padding: 8px;
+  cursor: pointer;
+  color: var(--muted);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.header-icon-btn:hover {
+  background: var(--surface);
+  color: var(--ink);
 }
 
 /* The one icon set: stroke SVGs from icon() in sidebar-core.js */
@@ -499,7 +514,7 @@ body {
   flex: 1;
 }
 
-/* Full Takeout button with its own ZIP choice, in the header */
+/* Full Takeout button with its own ZIP choice, under the header */
 .takeout-row {
   display: flex;
   align-items: center;
@@ -1280,23 +1295,6 @@ body {
 /* ============================================
    HEALTH CHECK PANEL
    ============================================ */
-
-.header-icon-btn {
-  background: none;
-  border: none;
-  padding: 8px;
-  cursor: pointer;
-  color: var(--muted);
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.header-icon-btn:hover {
-  background: var(--surface);
-  color: var(--ink);
-}
 
 /* Health Check Panel (full overlay like settings) */
 .health-check-panel {

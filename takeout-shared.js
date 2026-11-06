@@ -1418,6 +1418,14 @@
     return m ? m[1] : '';
   }
 
+  // The side panel header's text: the notebook's name on a notebook page, else
+  // "Open a notebook" (no URL, another site, or Gemini Notebook's home page,
+  // which has a notebook host but no notebook id).
+  function headerName(url, projectName) {
+    if (!isNotebookUrl(url) || !notebookIdFromUrl(url)) return 'Open a notebook';
+    return String(projectName || '').trim() || 'NotebookLM';
+  }
+
   // ---- List view helpers (filter / sort / select toolbar) ----
 
   const LIST_SORTS = ['notebook', 'title', 'type'];
@@ -2482,6 +2490,7 @@ footer { margin-top: 3rem; }
     categoryIndexFrontMatter,
     uniqueStems,
     notebookIdFromUrl,
+    headerName,
     listItemKeys,
     jobRecordKey,
     newJobRecord,

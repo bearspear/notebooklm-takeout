@@ -2255,3 +2255,12 @@ test('themeAttr maps the theme setting to the data-theme attribute', () => {
   assert.equal(NLME.themeValue('nonsense'), 'auto');
   assert.equal(NLME.DEFAULT_SETTINGS.theme, 'auto');
 });
+
+test('headerName shows the notebook name only on a notebook page', () => {
+  const nb = 'https://notebooklm.google.com/notebook/62d6e344-2fa7-42ed-b3ef-236f3007fdc3';
+  assert.equal(NLME.headerName('', 'X'), 'Open a notebook');
+  assert.equal(NLME.headerName('https://example.com/', 'X'), 'Open a notebook');
+  assert.equal(NLME.headerName('https://notebooklm.google.com/', 'X'), 'Open a notebook');
+  assert.equal(NLME.headerName(nb, 'New Physics'), 'New Physics');
+  assert.equal(NLME.headerName(nb, ''), 'NotebookLM');
+});

@@ -49,7 +49,7 @@ Flashcards and quizzes are listed but can't be exported yet, because Gemini Note
 - A uniform layout: every ZIP has `_index.md`, `_index.html` and `manifest.json`, every Markdown file starts
   with YAML front matter
 - Files named after the notebook (`New-Physics-notes-2026-11-02T15-13-06.zip`)
-- Built-in **health check** (🩺) that tells you when a Gemini Notebook update has broken
+- Built-in **health check** that tells you when a Gemini Notebook update has broken
   something
 
 ## Installation
@@ -119,7 +119,7 @@ The quoted passage from the source…
 
 1. **Chat** tab → **Scan Chat** (scrolls to load the whole history and opens collapsed
    citation groups).
-2. Chat follows ⚙️ **Citation detail** (the line above Export Chat shows the current level):
+2. Chat follows the **Citation detail** setting (the line above Export Chat shows the current level):
    Full quotes adds the quoted passage for every citation (slower: it reads each citation's
    popup), Source titles only keeps the [n] links without quotes, No citations removes the
    [n] markers and the Sources section.
@@ -162,7 +162,7 @@ uses your Settings (versions, citation detail, slide format). Its own **ZIP** ch
 to the button: ticked gives one ZIP per category (artifacts may be split into parts of about 500 MB), unticked a folder in Downloads. The choice is
 remembered; until you change it, it follows the "Always use ZIP" setting. The Artifacts tab's
 **Zip** toggle no longer affects Full Takeout (it only applies to Download Selected). Chat follows
-⚙️ **Citation detail** too, the same as the Chat tab (Full quotes, Source titles only or No
+the **Citation detail** setting too, the same as the Chat tab (Full quotes, Source titles only or No
 citations). Every Slides artifact is saved twice, as `.pdf` and `.pptx`, whatever the slide
 format setting says (the Artifacts tab still uses that setting). Notes, sources and chat also
 always get their `-with-images` versions (for items that have images), whatever the image
@@ -299,20 +299,21 @@ the notebook are listed there as "no longer in the notebook" and dropped from th
 items that fail again stay in it. If the page looks only partly loaded (a list not drawn yet),
 those items are reported as "could not be checked" and stay in the banner instead of being
 dropped. The files come as new ZIPs or folders; a resume never
-adds to the earlier export's files. Resume uses your current ⚙️ settings (citation detail,
+adds to the earlier export's files. Resume uses your current Settings (citation detail,
 versions, ZIP), not the ones of the stopped export. **Discard** forgets the earlier export. Chat exports are
 never resumed. Cancel stops a resume between its steps, too.
 
 Only one export, scan or download runs at a time. While one runs, the panel's other buttons
 are disabled and a second click shows "… is still running".
 
-## Settings (⚙️)
+## Settings
 
 | Setting | Default | |
 |---|---|---|
 | Show download notifications | on | In-panel toast when a single download finishes (the extension sends no system notifications) |
 | Show the Generated tab | off | Adds the Generated tab (the former Studio tab) |
 | Always use ZIP for batch downloads | off | Default for the Artifacts ZIP toggle, and the starting value of Full Takeout's ZIP checkbox |
+| Theme | Auto | Auto (match the browser), Light or Dark |
 | Slide deck format | PDF | PDF or PowerPoint |
 | Source versions | base + metadata | Any mix of: base, with AI summary & topics, each optionally with images |
 | Citation detail (notes and chat) | Full quotes | "Source titles only" skips reading each citation's popup: much faster, every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. |
@@ -325,7 +326,7 @@ are disabled and a second click shows "… is still running".
 
 The chat export uses the note version settings.
 
-**Reset to defaults** (bottom of ⚙️) puts every option above back to the values in this table,
+**Reset to defaults** (bottom of Settings) puts every option above back to the values in this table,
 after a confirm. It keeps the citation cache, Full Takeout's own ZIP tick and saved exports to resume.
 
 ### Footnote citations and Obsidian-friendly names
@@ -396,10 +397,10 @@ variant: base
 or `with-images`. YouTube sources also carry `youtube_url`, sources carry `source_type` (the type icon the page shows, such as `drive_pdf`), and the chat has `messages` (the
 number of question/answer pairs). Empty values are left out.
 
-## Health check (🩺)
+## Health check
 
 Gemini Notebook changes its page structure from time to time, and that can break exports.
-Click 🩺 in the panel header to test what the extension depends on. You can copy the report
+Open Settings, Diagnostics, **Run health check** to test what the extension depends on. You can copy the report
 to the clipboard.
 
 - **General:** notebook title, the Studio viewer close button, and whether formulas carry
@@ -428,8 +429,8 @@ check means that export is likely broken. Please
 | "Please open NotebookLM first", or the panel stays empty | Make sure the tab is a notebook on `notebook.google.com`; refresh it |
 | Behaviour didn't change after updating | Toggle the extension off/on in `chrome://extensions/`, then refresh the notebook tab |
 | Nothing found / scan returns 0 | Wait for the notebook to finish loading, then scan again |
-| Citations missing or wrong | Run 🩺 and check **Citations**; export a single note to compare |
-| A viewer stays open after an export | Close it in Gemini Notebook; run 🩺 and check "Studio header close control" |
+| Citations missing or wrong | Run the health check and check **Citations**; export a single note to compare |
+| A viewer stays open after an export | Close it in Gemini Notebook; run the health check and check "Studio header close control" |
 | Download failed | Download that item on its own; check Chrome's download permissions and disk space |
 | Overlay won't go away | Click **Cancel Export**, or refresh the notebook tab |
 

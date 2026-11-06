@@ -235,6 +235,7 @@ async function init() {
   } catch (_) { /* no active tab */ }
   refreshResumeBanner(); // an earlier unfinished export of this notebook
   await scanSourcesPage(); // Start with Sources tab since it's now the default
+  repaintActiveName(); // the scan injected the content script if it was missing
 
   // Monitor tab changes
   chrome.tabs.onActivated.addListener(handleTabChange);
@@ -458,7 +459,10 @@ async function saveSettings() {
 }
 
 function setupEventListeners() {
-  document.getElementById('rescan-btn').addEventListener('click', () => { if (!jobLock.current()) scanPage(); });
+  document.getElementById('rescan-btn').addEventListener('click', async () => {
+    if (!jobLock.current()) await Promise.resolve(scanPage()).catch(() => {});
+    repaintActiveName();
+  });
   document.getElementById('cancel-download-btn')?.addEventListener('click', requestCancel);
 
   document.getElementById('auto-refresh-checkbox').addEventListener('change', (e) => {
@@ -745,7 +749,7 @@ async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}
   const switched = notebookSwitchedTo(tab);
   // Not awaited: the name needs the page and must never delay the rescans.
   // After in-app navigation the page needs the settle time to draw the new name.
-  if (settleMs) setTimeout(() => paintNotebookName(tab), settleMs);
+  if (settleMs) setTimeout(() => repaintActiveName(), settleMs);
   else paintNotebookName(tab);
   // A second in-app navigation during the first one's settle wait replaces it
   // (the older wait returns without a banner or rescan); a rescan the older
@@ -793,20 +797,43 @@ async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}
 // waiting on the page, and a late answer for a notebook other than the one the
 // panel shows (lastPanelNotebookId) is dropped. Never throws.
 let notebookNameSeq = 0;
+let paintedName = { id: '', real: false }; // what the header shows, for the fallback rule
+const NAME_FALLBACK = 'NotebookLM'; // what getProjectName returns on any failure
 function setNotebookName(name) {
   const el = document.getElementById('notebook-name');
   if (!el) return;
   el.textContent = name;
   el.title = name;
 }
-async function paintNotebookName(tab) {
+// retry: when only the fallback came back (the content script may not be there
+// yet), try once more after a short wait. Never more than once.
+async function paintNotebookName(tab, retry = true) {
   const seq = ++notebookNameSeq;
   try {
-    if (!tab || !isNotebookUrl(tab.url)) { setNotebookName('Open a notebook'); return; }
-    const id = NLME.notebookIdFromUrl(tab.url);
+    const id = tab && isNotebookUrl(tab.url) ? NLME.notebookIdFromUrl(tab.url) : '';
+    if (!id) {
+      paintedName = { id: '', real: false };
+      setNotebookName(NLME.headerName(tab?.url, ''));
+      return;
+    }
     const name = await getProjectName(tab.id);
     if (seq !== notebookNameSeq || id !== lastPanelNotebookId) return;
-    setNotebookName(name);
+    const real = name !== NAME_FALLBACK;
+    if (real || paintedName.id !== id || !paintedName.real) {
+      setNotebookName(NLME.headerName(tab.url, name));
+      paintedName = { id, real };
+    }
+    if (!real && retry) setTimeout(() => repaintActiveName(false), 1500);
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Notebook name not shown:', error);
+  }
+}
+// Paint for whatever tab is active now (the tab a timer captured may be gone
+// or no longer active).
+async function repaintActiveName(retry = true) {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await paintNotebookName(tab, retry);
   } catch (error) {
     console.warn('[NotebookLM Takeout] Notebook name not shown:', error);
   }
@@ -961,18 +988,21 @@ async function checkStatus() {
     if (isNotebookUrl(tab?.url)) {
       statusDot.classList.remove('inactive');
       statusDot.classList.add('active');
-      statusText.textContent = 'Connected to NotebookLM';
+      statusText.textContent = 'Connected';
+      statusText.title = 'Connected to NotebookLM';
       showOpenLink(false);
     } else {
       statusDot.classList.remove('active');
       statusDot.classList.add('inactive');
-      statusText.textContent = 'Not on NotebookLM';
+      statusText.textContent = 'Not connected';
+      statusText.title = 'Not on NotebookLM';
       showOpenLink(true);
     }
   } catch (error) {
     statusDot.classList.remove('active');
     statusDot.classList.add('inactive');
-    statusText.textContent = 'Unable to check status';
+    statusText.textContent = 'Unknown';
+    statusText.title = 'Unable to check status';
     showOpenLink(false);
   }
 }
