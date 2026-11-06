@@ -375,6 +375,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
 
     // Progress panel in the side panel
     progressPanel.style.display = 'block';
+    progressPanel.scrollIntoView({ block: 'nearest' }); // it sits below a long list
     panelShown = true;
     progressText.textContent = 'Preparing export...';
     progressFill.style.width = '0%';

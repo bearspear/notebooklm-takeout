@@ -2412,3 +2412,52 @@ test('a Generated export headline counts everything not exported, Retry and Resu
     total: 4
   }), 'Export finished');
 });
+
+const quiz = { kind: 'artifact', moreIndex: 1, label: 'Quiz A', type: 'Quiz', downloadable: false };
+const cards = { kind: 'artifact', moreIndex: 2, label: 'Cards B', type: 'Flashcards', downloadable: false };
+
+test('a Generated headline names what the export cannot take', () => {
+  assert.equal(NLME.generatedExportMessage({
+    steps: [{ name: 'Notes', exported: 3 }], notRun: [], total: 3, skipped: [quiz, cards]
+  }), "Export finished — 2 of 5 items can't be exported");
+  // Failed or unstarted items on top of the skipped ones
+  assert.equal(NLME.generatedExportMessage({
+    steps: [{ name: 'Artifacts', exported: 1, stopped: true }], notRun: [{ name: 'Notes', failedItems: [{}] }], total: 3, skipped: [quiz]
+  }), "Export stopped before notes — 3 of 4 items not exported, 1 of them can't be exported");
+});
+
+test('a Generated outcome with skipped items reads as incomplete, on one side or two', () => {
+  const step = (name, exported) => ({ name, message: 'ok', level: 'success', saved: [`${name}.zip`], errors: [], failedItems: [], exported });
+  const one = NLME.generatedExportOutcome({ steps: [step('Notes', 2)], notRun: [], total: 2, skipped: [quiz, cards] });
+  assert.equal(one.level, 'warning');
+  assert.equal(one.message, "Export finished — 2 of 4 items can't be exported");
+  assert.deepEqual(one.lines, ['Notes: ok', "Can't be exported (2): Quiz A, Cards B"]);
+  assert.deepEqual(one.saved, ['Notes.zip']);
+  assert.deepEqual(one.remaining, { Notes: [] }); // a Retry never tries them
+
+  const two = NLME.generatedExportOutcome({ steps: [step('Artifacts', 1), step('Notes', 1)], notRun: [], total: 2, skipped: [quiz] });
+  assert.equal(two.level, 'warning');
+  assert.equal(two.lines.length, 3);
+  // An error level is not lowered
+  const bad = NLME.generatedExportOutcome({ steps: [{ ...step('Notes', 0), level: 'error' }], notRun: [], total: 1, skipped: [quiz] });
+  assert.equal(bad.level, 'error');
+});
+
+test('a Generated outcome with nothing skipped is what it was', () => {
+  const steps = [{ name: 'Artifacts', message: 'a', level: 'success', saved: [], errors: [], failedItems: [], exported: 1 },
+    { name: 'Notes', message: 'n', level: 'success', saved: [], errors: [], failedItems: [], exported: 1 }];
+  const out = NLME.generatedExportOutcome({ steps, notRun: [], total: 2 });
+  assert.equal(out.level, 'success');
+  assert.equal(out.message, 'Export finished');
+  assert.deepEqual(out.lines, ['Artifacts: a', 'Notes: n']);
+});
+
+test('generatedActionLabel says what the action leaves out', () => {
+  const note = { kind: 'note', kindIndex: 0, label: 'N', type: 'Note' };
+  const label = items => NLME.generatedActionLabel(NLME.generatedExportPlan(items));
+  assert.equal(label([]), 'Select items to export');
+  assert.equal(label([note]), 'Export 1 item');
+  assert.equal(label([note, note]), 'Export 2 items');
+  assert.equal(label([note, quiz, cards]), "Export 1 item · 2 can't be exported");
+  assert.equal(label([quiz]), "1 can't be exported");
+});

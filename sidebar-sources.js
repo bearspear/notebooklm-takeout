@@ -116,11 +116,14 @@ async function embedAndReportImages(markdown, item, earlierFailures, warn, jobWa
 async function scanSourcesPage() {
   console.log('[NotebookLM Takeout] Scanning sources page...');
 
+  const seq = ++_sourcesScanSeq;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (seq !== _sourcesScanSeq) return;
 
   if (!isNotebookUrl(tab?.url)) {
+    dropSourcesList();
     const resultsDiv = document.getElementById('sources-scan-results');
-    if (resultsDiv) resultsDiv.innerHTML = '<p class="empty-message">Please open NotebookLM first</p>';
+    if (resultsDiv) resultsDiv.innerHTML = NOTEBOOK_PROMPT_HTML;
     setTabCount('sources', null);
     showToast('Please open NotebookLM first', 'error');
     return;
@@ -128,17 +131,23 @@ async function scanSourcesPage() {
 
   try {
     const { sources, skippedNotes } = await scanSourcesData(tab.id);
+    if (seq !== _sourcesScanSeq) return;
 
     console.log(`[NotebookLM Takeout] Found ${sources.length} sources`);
 
     renderSourcesList(sources, skippedNotes);
   } catch (error) {
-    if (error instanceof ScanError) {
-      showToast(`Scan failed: ${error.message}`, 'error');
-      return;
+    if (seq !== _sourcesScanSeq) return;
+    const scanError = error instanceof ScanError;
+    if (!scanError) console.error('[NotebookLM Takeout] Scan error:', error);
+    const message = scanError ? `Scan failed: ${error.message}` : 'Failed to scan sources';
+    showToast(message, 'error');
+    // A list already drawn stays; otherwise "Scanning..." would stay for good
+    if (!_sourcesListController) {
+      const resultsDiv = document.getElementById('sources-scan-results');
+      if (resultsDiv) resultsDiv.innerHTML = `<p class="error-message">${escapeHtml(message)}</p>`;
+      setTabCount('sources', null);
     }
-    console.error('[NotebookLM Takeout] Scan error:', error);
-    showToast('Failed to scan sources', 'error');
   }
 }
 // ========== SOURCES EXPORT FUNCTIONS ==========
@@ -159,6 +168,17 @@ async function scanSourcesData(tabId) {
 
 // The Sources tab's list controller (sidebar-list.js); replaced on every redraw
 let _sourcesListController = null;
+// The newest scan: an older one still waiting on the page must not draw
+let _sourcesScanSeq = 0;
+
+// The list is gone, and with it the action its selection drove
+function dropSourcesList() {
+  if (_sourcesListController) {
+    _sourcesListController.destroy();
+    _sourcesListController = null;
+  }
+  idleTabAction('sources');
+}
 
 /**
  * Render the list of sources: filter toolbar, checkboxes (all selected at first)

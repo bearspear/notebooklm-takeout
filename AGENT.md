@@ -948,12 +948,16 @@ Already covered in [Export pipelines](#export-pipelines-deep), but the wiring:
   `NLME.combineRetryOutcomes` panel, so the second `withExportShell`'s `hideResults()` cannot lose the first side's
   failures. Its Retry is `takeoutRetry`, covering failed items and a side not run. Artifacts a Cancel left unstarted are
   in the job record's Resume only, so the headline is `NLME.generatedExportMessage` (`Export stopped before notes — L of
-  T items not exported`, from `exported` and `stopped` on `runRetryChain`'s steps).
+  T items not exported`, from `exported` and `stopped` on `runRetryChain`'s steps). `plan.skipped` must never vanish
+  silently: the label says it (`NLME.generatedActionLabel`: `Export 1 item · 2 can't be exported`), and a selection with
+  skipped items always ends in `NLME.generatedExportOutcome`, one side or two: the titles in `lines`, at least `warning`,
+  and not in `remaining`, so no Retry tries them.
 - Job keys: `createListController`'s `_listKey` here is a key in the MERGED list, and the plan builds new objects, so
   neither reaches a job record. Rows carry `jobKey` (`NLME.stampGeneratedJobKeys`: artifacts over all artifact rows, notes
   from the full `scanNotesData`, the keys Resume's fresh scans give) and the plan stamps it as the items' `_listKey`.
 - Records: each side has its own record rules. With an artifacts record left unfinished, the notes side runs in update
-  mode (`jobRecordMode`) and adds no record of its own; its failures are still in the panel's Retry.
+  mode (`jobRecordMode`) and adds no record of its own. Its failed notes are in the panel's Retry, but a Cancel during
+  the notes then leaves unstarted notes in neither Retry nor Resume; only the headline counts them.
 - Rescans: a live list is not blanked. `NLME.generatedSignature(tab, items)` covers everything rows act on, delete's
   `combinedIndex` included; an unchanged scan returns without touching the DOM, a changed one redraws and restores the
   scroll position and the filter box's focus and caret. A delete clears `_studioSignature`, so it always redraws.
@@ -1386,6 +1390,11 @@ onChange, canSelect }) -> { items, selectedItems(), selectedCount(), destroy() }
   the action reflects the selection in `onChange`. Generated: `startAutoRefresh` rescans every few seconds while
   that tab is open, so `scanStudioPage` keeps a signature of the last scan and leaves an unchanged list alone
   (see [Studio tab internals](#studio-tab-internals-the-generated-tab)).
+
+- Scans of Sources, Notes and Generated have a sequence (`_sourcesScanSeq`, `_notesScanSeq`, `_studioScanSeq`): the newest
+  wins, and `resetChatPanel` bumps them, so a scan of the old notebook cannot draw. Off a notebook, Sources and Notes drop
+  their list and show `NOTEBOOK_PROMPT_HTML`; `refreshForTab` rescans a list showing it once a notebook is back, and
+  `afterJobChecks` (end of `runExclusive`) rescans an open list still on "Scanning...". Neither touches a drawn list.
 
 - Notebook switch: `refreshForTab` (tab activation, `complete`, or history-API `changeInfo.url` with no
   status, after a 1.5 s settle) compares `NLME.notebookIdFromUrl(tab.url)` with `lastPanelNotebookId`. A new

@@ -1689,15 +1689,41 @@
   }
 
   // The headline of a Generated export's combined panel: what was left out of the
-  // whole selection, so it counts unstarted items too, which no failedItems holds.
-  // steps: runRetryChain's, with exported and stopped. total: items in the selection.
-  function generatedExportMessage({ steps = [], notRun = [], total = 0 } = {}) {
+  // whole selection, so it counts unstarted items too, which no failedItems holds,
+  // and the items the export cannot take. steps: runRetryChain's, with exported and
+  // stopped. total: items sent to export. skipped: generatedExportPlan's.
+  function generatedExportMessage({ steps = [], notRun = [], total = 0, skipped = [] } = {}) {
     const exported = steps.reduce((sum, step) => sum + (step.exported || 0), 0);
     const left = total - exported;
+    const all = total + skipped.length;
     const head = notRun.length
       ? `Export stopped before ${notRun.map(n => n.name.toLowerCase()).join(' and ')}`
       : steps.some(step => step.stopped) ? 'Export stopped' : 'Export finished';
-    return left > 0 ? `${head} \u2014 ${left} of ${total} items not exported` : head;
+    if (left <= 0 && skipped.length === 0) return head;
+    if (left <= 0) return `${head} — ${skipped.length} of ${all} items can't be exported`;
+    const rest = skipped.length ? `, ${skipped.length} of them can't be exported` : '';
+    return `${head} — ${left + skipped.length} of ${all} items not exported${rest}`;
+  }
+
+  // The combined panel of a Generated export: combineRetryOutcomes plus the headline
+  // above. Skipped items name their titles and make it a warning, never a success:
+  // someone may delete the notebook after reading it. They stay out of `remaining`.
+  function generatedExportOutcome({ steps = [], notRun = [], total = 0, skipped = [] } = {}) {
+    const combined = combineRetryOutcomes({ steps, notRun });
+    const outcome = { ...combined, message: generatedExportMessage({ steps, notRun, total, skipped }) };
+    if (skipped.length) {
+      outcome.lines = [...combined.lines, `Can't be exported (${skipped.length}): ${skipped.map(item => item.label).join(', ')}`];
+      if (outcome.level === 'success' || outcome.level === 'info') outcome.level = 'warning';
+    }
+    return outcome;
+  }
+
+  // The Generated action's label for a generatedExportPlan
+  function generatedActionLabel({ artifacts = [], notes = [], skipped = [] } = {}) {
+    const n = artifacts.length + notes.length;
+    if (skipped.length === 0) return actionLabel(n, 'item');
+    const left = `${skipped.length} can't be exported`;
+    return n === 0 ? left : `${actionLabel(n, 'item')} · ${left}`;
   }
 
   // The Generated list's selection as the two exports it becomes: artifacts in the
@@ -2606,6 +2632,8 @@ footer { margin-top: 3rem; }
     isStudioItemUnavailable,
     stampGeneratedJobKeys,
     generatedExportMessage,
+    generatedExportOutcome,
+    generatedActionLabel,
     generatedExportPlan,
     generatedSignature,
     listStateKey,

@@ -15,15 +15,18 @@ async function scanNotesData(tabId) {
 // Sidebar function to trigger note scan
 async function scanNotesPage() {
   const notesResults = document.getElementById('notes-results');
+  const seq = ++_notesScanSeq;
 
   notesResults.innerHTML = '<p class="scanning">Scanning for notes...</p>';
   idleTabAction('notes'); // the list that was here is gone
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (seq !== _notesScanSeq) return;
 
     if (!isNotebookUrl(tab?.url)) {
-      notesResults.innerHTML = '<p class="empty-message">Please open NotebookLM first</p>';
+      renderNotesList([]);
+      notesResults.innerHTML = NOTEBOOK_PROMPT_HTML;
       setTabCount('notes', null);
       return;
     }
@@ -31,15 +34,19 @@ async function scanNotesPage() {
     const notes = await scanNotesData(tab.id);
     console.log('[NotebookLM Takeout] Scanned notes:', notes);
 
-    if (await studioViewerOpen(tab.id)) {
+    const viewerOpen = await studioViewerOpen(tab.id);
+    if (seq !== _notesScanSeq) return;
+    if (viewerOpen) {
       renderNotesList([]);
       notesResults.innerHTML = STUDIO_ITEM_OPEN_HTML;
+      setTabCount('notes', null);
       return;
     }
 
     renderNotesList(notes);
 
   } catch (error) {
+    if (seq !== _notesScanSeq) return;
     console.error('Error scanning for notes:', error);
     notesResults.innerHTML = '<p class="error-message">Failed to scan for notes. Please refresh the NotebookLM page and try again.</p>';
     setTabCount('notes', null);
@@ -48,6 +55,8 @@ async function scanNotesPage() {
 
 // The Notes tab's list controller (sidebar-list.js); replaced on every redraw
 let _notesListController = null;
+// The newest scan: an older one still waiting on the page must not draw
+let _notesScanSeq = 0;
 
 // Single-note export from a row button: loose .md files, no ZIP
 async function handleNoteRowExport(note) {

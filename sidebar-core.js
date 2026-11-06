@@ -676,6 +676,13 @@ async function rescanGeneratedIfOpen() {
   if (openPanelTab() === 'studio' && !jobLock.current()) await scanStudioPage();
 }
 
+// The open tab's list holds an element matching `selector`. Chat is not a list here.
+const LIST_RESULTS_IDS = { sources: 'sources-scan-results', notes: 'notes-results', studio: 'studio-scan-results' };
+function openListShows(selector) {
+  const id = LIST_RESULTS_IDS[openPanelTab()];
+  return !!id && !!document.getElementById(id)?.querySelector(selector);
+}
+
 // The notebook the panel last scanned. Only a notebook tab with a different id
 // counts as a switch: a non-notebook tab leaves it alone, so A -> other site -> A
 // is not a change.
@@ -690,6 +697,8 @@ function resetChatPanel() {
   const chatResults = document.getElementById('chat-scan-results');
   if (chatResults) chatResults.innerHTML = '<p class="empty-message">Click "Load chat" to load your conversation history.</p>';
   forgetStudioList();
+  _sourcesScanSeq++; // a scan of the old notebook still running must not draw
+  _notesScanSeq++;
   Object.keys(_tabActions).forEach(tab => delete _tabActions[tab]);
   document.querySelectorAll('.tab-btn').forEach(btn => setTabCount(btn.dataset.tab, null));
   applyOpenTabAction();
@@ -710,7 +719,8 @@ function notebookSwitchedTo(tab) {
 
 // After a tab switch or navigation: a different notebook rescans the open panel
 // tab and clears the chat; the same notebook only refreshes Generated, if open (the
-// Notes and Sources scans are slow), unless sameNotebookScan is false.
+// Notes and Sources scans are slow), unless sameNotebookScan is false. A list still
+// showing the prompt from another site is rescanned: there is nothing drawn to lose.
 // settleMs: in-app (history API) navigation reports the new URL before the page
 // has drawn the new notebook, and the content-script scans read the DOM as it
 // is (no waits), so wait, then rescan only if the tab still shows that notebook.
@@ -757,6 +767,8 @@ async function refreshForTab(tab, { settleMs = 0, sameNotebookScan = true } = {}
       }
       refreshResumeBanner();
     }
+    await rescanOpenPanelTab();
+  } else if (isNotebookUrl(tab?.url) && openListShows('[data-needs-notebook]')) {
     await rescanOpenPanelTab();
   } else if (sameNotebookScan) {
     await rescanGeneratedIfOpen();
@@ -815,6 +827,13 @@ async function runPendingNotebookCheck() {
   pendingNotebookCheck = false;
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   await refreshForTab(tab, { sameNotebookScan: false });
+}
+
+// A job ended. Scans are skipped during a job, so a list opened for the first time
+// then still shows "Scanning...", and the notebook check may not have rescanned it.
+async function afterJobChecks() {
+  await runPendingNotebookCheck();
+  if (openListShows('.scanning')) await rescanOpenPanelTab();
 }
 
 // ---- Resume banner (Milestone 3c) ----
@@ -1356,7 +1375,7 @@ async function runExclusive(name, fn) {
     // The job may have left (or finished) a record: show or hide Resume
     refreshResumeBanner();
     // A tab switch or navigation to another notebook during the job was skipped
-    runPendingNotebookCheck().catch(e => console.warn('[NotebookLM Takeout] Notebook check failed:', e));
+    afterJobChecks().catch(e => console.warn('[NotebookLM Takeout] Notebook check failed:', e));
   }
 }
 
@@ -1406,6 +1425,8 @@ async function requestCancel() {
 
 // The Studio list is not in the page while one of its items is open, so a scan
 // would show nothing or only part of it
+// Sources and Notes on another site; refreshForTab rescans a list showing it
+const NOTEBOOK_PROMPT_HTML = '<p class="empty-message" data-needs-notebook>Please open NotebookLM first</p>';
 const STUDIO_ITEM_OPEN_HTML = '<p class="empty-message">An item is open in Studio, which hides this list.<br><span class="hint">Close it, then click Refresh.</span></p>';
 
 async function studioViewerOpen(tabId) {

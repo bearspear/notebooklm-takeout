@@ -171,13 +171,15 @@ function renderStudioList(items) {
   listEl.addEventListener('click', (e) => {
     const downloadBtn = e.target.closest('.studio-download-btn');
     if (downloadBtn) {
-      const idx = parseInt(downloadBtn.dataset.idx, 10);
-      runExclusive('Generated download', () => handleStudioDownloadRow(idx, downloadBtn));
+      // The item now: a rescan may replace _studioItems while the job lock is awaited
+      const item = _studioItems[parseInt(downloadBtn.dataset.idx, 10)];
+      runExclusive('Generated download', () => handleStudioDownloadRow(item, downloadBtn));
       return;
     }
     const deleteBtn = e.target.closest('.studio-delete-btn');
     if (deleteBtn) {
-      runExclusive('Generated delete', () => handleStudioDeleteRow(parseInt(deleteBtn.dataset.idx, 10), deleteBtn));
+      const item = _studioItems[parseInt(deleteBtn.dataset.idx, 10)];
+      runExclusive('Generated delete', () => handleStudioDeleteRow(item, deleteBtn));
     }
   });
 }
@@ -216,7 +218,7 @@ function updateStudioBulkButtonsState(controller = _studioListController) {
   const deleteCount = selected.filter(item => isStudioItemDeletable(item) && !isStudioItemUntitled(item)).length;
   const plan = NLME.generatedExportPlan(selected);
   const n = plan.artifacts.length + plan.notes.length;
-  setTabAction('studio', { label: NLME.actionLabel(n, 'item'), disabled: n === 0, onClick: exportSelectedGenerated });
+  setTabAction('studio', { label: NLME.generatedActionLabel(plan), disabled: n === 0, onClick: exportSelectedGenerated });
   const deleteBulkBtn = document.getElementById('studio-delete-selected-btn');
   if (deleteBulkBtn) {
     deleteBulkBtn.hidden = !controller || openPanelTab() !== 'studio';
@@ -236,24 +238,29 @@ const GENERATED_EXPORT_STEPS = [
 // chain, so a Cancel (or a declined health check) in the first side stops the
 // second, and each side's results survive the other: with both sides there is one
 // combined panel. Its Retry covers items that failed and a side that did not run.
-// Artifacts a Cancel left unstarted are in no failedItems: only the job record's
-// Resume has them. The headline counts all of it (NLME.generatedExportMessage).
+// Unstarted items are in no failedItems: artifacts a Cancel left are in the job
+// record's Resume, and with an artifacts record pending, notes a Cancel left are in
+// neither (jobRecordMode). The headline counts all of it. Items the export cannot
+// take always reach that panel, as a warning, even with one side:
+// NLME.generatedExportOutcome.
 function exportSelectedGenerated() {
   const plan = NLME.generatedExportPlan(_studioListController ? _studioListController.selectedItems() : []);
   if (plan.artifacts.length + plan.notes.length === 0) return;
   const tabId = _studioTabId;
   return runExclusive('Generated export', () => runChain(async () => {
     const { steps, notRun } = await runRetryChain({ Artifacts: plan.artifacts, Notes: plan.notes }, tabId, 'Export', GENERATED_EXPORT_STEPS);
-    // Nothing ran (declined, tab closed: already said), or one side ran alone: its own panel stands
-    if (steps.length === 0 || (steps.length === 1 && notRun.length === 0)) return;
-    const combined = NLME.combineRetryOutcomes({ steps, notRun });
+    // Nothing ran (declined, tab closed: already said), or one side ran alone with
+    // nothing left out: its own panel stands
+    const leftOut = plan.skipped.length > 0;
+    if (steps.length === 0 || (steps.length === 1 && notRun.length === 0 && !leftOut)) return;
+    const outcome = NLME.generatedExportOutcome({ steps, notRun, total: plan.artifacts.length + plan.notes.length, skipped: plan.skipped });
     showTakeoutResults({
-      message: NLME.generatedExportMessage({ steps, notRun, total: plan.artifacts.length + plan.notes.length }),
-      level: combined.level,
-      lines: combined.lines,
-      saved: combined.saved,
-      errors: combined.errors
-    }, combined.remaining, tabId);
+      message: outcome.message,
+      level: outcome.level,
+      lines: outcome.lines,
+      saved: outcome.saved,
+      errors: outcome.errors
+    }, outcome.remaining, tabId);
   }));
 }
 
@@ -276,8 +283,7 @@ function setStudioRowStatus(btn, state) {
   }
 }
 
-async function handleStudioDownloadRow(idx, btn) {
-  const item = _studioItems[idx];
+async function handleStudioDownloadRow(item, btn) {
   if (!item || NLME.isStudioItemUnavailable(item)) return;
   setStudioRowStatus(btn, 'pending');
   try {
@@ -299,8 +305,7 @@ async function handleStudioDownloadRow(idx, btn) {
   }
 }
 
-async function handleStudioDeleteRow(idx, btn) {
-  const item = _studioItems[idx];
+async function handleStudioDeleteRow(item, btn) {
   if (!item || !isStudioItemDeletable(item)) return;
 
   if (!confirm(`Delete "${item.label}"? This cannot be undone.`)) return;
@@ -309,6 +314,7 @@ async function handleStudioDeleteRow(idx, btn) {
   try {
     await sendStudioDelete(item);
     showToast(`Deleted "${item.label}"`, 'success');
+    if (item.kind !== 'artifact') setTabCount('notes', null); // recounted when Notes rescans
     // Refresh the list so indices are re-aligned with the DOM (always a redraw).
     _studioSignature = null;
     await scanStudioPage();
@@ -361,6 +367,7 @@ async function handleStudioBulkDelete() {
 
   const skippedText = skippedUntitled > 0 ? `, skipped ${skippedUntitled} untitled` : '';
   showToast(`Deleted ${okCount}/${queue.length} generated item(s)${skippedText}`, okCount === queue.length && skippedUntitled === 0 ? 'success' : 'warning');
+  if (queue.some(item => item.kind !== 'artifact')) setTabCount('notes', null); // recounted when Notes rescans
   _studioSignature = null; // always a redraw
   await scanStudioPage();
 }

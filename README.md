@@ -82,8 +82,8 @@ list, so it is still there after a rescan or when you reopen the panel.
 
 ### Sources
 
-1. **Sources** tab → **Scan Sources**.
-2. Tick the sources to export → **Export Selected Sources**.
+1. The **Sources** tab opens automatically and lists the notebook's sources.
+2. Tick the sources to export → **Export N sources**.
 3. You get `{notebook}-sources-{timestamp}.zip` with one or more Markdown versions per
    source, an `_index.md` and a `manifest.json` (see [What an export contains](#what-an-export-contains)).
 
@@ -93,7 +93,7 @@ how many) and exported from the Notes tab instead.
 ### Notes
 
 1. **Notes** tab (scans automatically). This includes notes shown in the Sources panel.
-2. Tick notes → **Export Notes**.
+2. Tick notes → **Export N notes**.
 3. You get `{notebook}-notes-{timestamp}.zip` (split into parts for large exports).
 
 Each note looks like this:
@@ -117,13 +117,13 @@ The quoted passage from the source…
 
 ### Chat
 
-1. **Chat** tab → **Scan Chat** (scrolls to load the whole history and opens collapsed
-   citation groups).
-2. Chat follows the **Citation detail** setting (the line above Export Chat shows the current level):
+1. **Chat** tab → **Load chat** (scrolls to load the whole history and opens collapsed
+   citation groups). The note above the button says this moves your place in the chat.
+2. Chat follows the **Citation detail** setting (the line above the list shows the current level):
    Full quotes adds the quoted passage for every citation (slower: it reads each citation's
    popup), Source titles only keeps the [n] links without quotes, No citations removes the
    [n] markers and the Sources section.
-3. **Export Chat**. A clean single-version chat downloads as one file,
+3. **Export N messages**. A clean single-version chat downloads as one file,
    `{notebook}-chat-{timestamp}.md`. With several versions, errors or a failed audit you get
    `{notebook}-chat-{timestamp}.zip` with `chat.md` (and `chat-code-blocks.md` /
    `chat-with-images.md` when they apply), `_index.md`, `manifest.json`, `_audit.md` and
@@ -137,9 +137,10 @@ The quoted passage from the source…
    drives **Delete Selected**; tick or filter rows to choose what you want.
 2. Click **Download** on a row, or **Export N items** under the list for the ticked rows. Notes in
    the selection are exported after the artifacts, into `{notebook}-notes-{timestamp}.zip` as on the
-   Notes tab. If you press Cancel during the artifacts, the notes do not start. Flashcards and quizzes
-   stay in the list so you can delete them, but they are not counted and not exported. Whether artifacts go
-   to a ZIP or a folder follows the **Always use ZIP** setting.
+   Notes tab. If you press Cancel during the artifacts, the notes do not start. Flashcards, quizzes and
+   items with no More menu yet stay in the list so you can delete them, but they can't be exported. The
+   button says how many ("Export 1 item · 2 can't be exported"), and the results list them by title as a warning.
+   Whether artifacts go to a ZIP or a folder follows the **Always use ZIP** setting.
    - **Download** saves one file named `[type]_Title.ext` (for example `[report]_Title.md`,
      `[mind-map]_Title.svg`). A Data Table or mind map saves as one ZIP (`[data-table]_Title.zip`, `[mind-map]_Title.zip`).
    - With **ZIP off** (recommended for whole notebooks), **Export N items** saves every ticked artifact into

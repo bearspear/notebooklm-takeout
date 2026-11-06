@@ -818,14 +818,18 @@ body {
 /* Tab Navigation */
 .tabs {
   display: flex;
-  gap: 4px;
-  padding: 12px 16px;
+  padding: 12px 0;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
 
 .tab-btn {
-  padding: 8px 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
@@ -834,6 +838,12 @@ body {
   color: var(--muted);
   transition: all 0.2s ease;
 }
+
+/* Room for each label plus its padding: at 320px with big counts only the count gives way */
+.tab-btn[data-tab="sources"] { min-width: 5.5em; }
+.tab-btn[data-tab="notes"] { min-width: 4.5em; }
+.tab-btn[data-tab="studio"] { min-width: 6.5em; }
+.tab-btn[data-tab="chat"] { min-width: 3.5em; }
 
 .tab-btn:hover {
   color: var(--accent);
@@ -1729,6 +1739,11 @@ body.job-running .list-row {
 
 .action-bar .btn[hidden] {
   display: none;
+}
+
+.action-bar .btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* Chat: the note above Load chat */
