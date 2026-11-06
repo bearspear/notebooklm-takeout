@@ -226,10 +226,7 @@ function showResults(options = {}) {
     </div>
     ${groupsHtml}`;
   clearTimeout(progressRun?.textTimer);
-  setDock('results');
-  keepDockFocus();
-  if (notify) showToast(NLME.resultsToast(level), level);
-
+  // Done is the way out of the dock, so it is wired before anything else can throw
   panel.querySelector('.results-done').addEventListener('click', closeResults);
 
   const retryBtn = panel.querySelector('.results-retry');
@@ -247,6 +244,10 @@ function showResults(options = {}) {
       }
     });
   }
+
+  setDock('results');
+  keepDockFocus();
+  if (notify) showToast(NLME.resultsToast(level), level);
 }
 
 // One step of a chain ended it alone: its own panel stands

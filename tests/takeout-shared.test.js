@@ -3349,8 +3349,8 @@ test('a resume with items it could not check or take has no count to show', () =
   const ok = { name: 'Notes', level: 'success', exported: 3, selected: 3, failedItems: [] };
   const extra = type => [{ type, title: 'Notes', message: 'm' }];
   assert.equal(NLME.combineRetryOutcomes({ steps: [ok], verb: 'Resume', extraErrors: extra('scan_failed') }).count, null);
+  assert.equal(NLME.combineRetryOutcomes({ steps: [ok], verb: 'Resume', extraErrors: extra('not_found') }).count, null);
   assert.equal(NLME.combineRetryOutcomes({ steps: [ok], verb: 'Resume', extraErrors: extra('not_ready') }).count, null);
-  assert.deepEqual(NLME.combineRetryOutcomes({ steps: [ok], verb: 'Resume', extraErrors: extra('not_found') }).count, { done: 3, total: 3 });
 });
 
 test('restCounts adds up what is left by estimate key', () => {

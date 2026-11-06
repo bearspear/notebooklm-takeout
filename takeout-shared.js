@@ -454,7 +454,7 @@
     const ranTotal = steps.reduce((sum, s) => sum + (s.selected ?? (s.exported || 0) + (s.failedItems || []).length), 0);
     const notRunTotal = notRun.reduce((sum, n) => sum + (n.failedItems || []).length, 0);
     // Items that could not be checked or taken are in neither side of the sum
-    const uncounted = extraErrors.some(e => ['scan_failed', 'not_ready'].includes(e.type));
+    const uncounted = extraErrors.some(e => ['scan_failed', 'not_ready', 'not_found'].includes(e.type));
 
     return {
       message,
