@@ -289,3 +289,54 @@ test('Full Takeout gives the viewer the notebook emoji, shown on the cover and t
   assert.match(app, /class="nb-emoji">' \+ esc\(D\.emoji\)/);
   assert.match(app, /document\.title = \(D\.emoji \? D\.emoji \+ ' ' : ''\)/);
 });
+
+test('styles.css has no colour outside the theme blocks', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8');
+  const rest = css.replace(/\/\* theme:start \*\/[\s\S]*?\/\* theme:end \*\//, '');
+  assert.deepEqual(rest.match(/#[0-9a-fA-F]{3,8}\b|rgba?\(/g), null);
+  // Named colours (with an optional shade prefix) used as a declaration value.
+  // Pieces ending in `{` are selectors, so they are skipped; one-line rules are covered.
+  const NAMED = /(?<![\w-])(?:(?:light|dark|medium|pale|deep)?(?:white|black|red|green|blue|gray|grey|orange|yellow|purple|pink|silver|navy|teal|maroon|lime|aqua|brown|gold)|whitesmoke|coral|tan|indigo|ivory|beige|khaki|violet|crimson|salmon)(?![\w-])/i;
+  const named = [];
+  for (const m of rest.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{};]+)([{};])/g)) {
+    if (m[2] === '{') continue;
+    const decl = m[1].match(/^\s*[a-z-]+\s*:([\s\S]*)$/i);
+    if (decl && NAMED.test(decl[1].replace(/var\([^)]*\)/g, ''))) named.push(m[1].trim());
+  }
+  assert.deepEqual(named, []);
+});
+
+test('every id the sidebar scripts look up is declared', () => {
+  const files = ['sidebar.html', ...fs.readdirSync(ROOT).filter(f => /^sidebar-.*\.js$/.test(f))];
+  const text = files.map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
+  const declared = new Set();
+  for (const m of text.matchAll(/\bid=["']([\w-]+)["']/g)) declared.add(m[1]);
+  for (const m of text.matchAll(/\.id\s*=\s*['"`]([\w-]+)['"`]/g)) declared.add(m[1]);
+  // Looked up but declared nowhere; each is optional (guarded with ?. or a null check)
+  const KNOWN_GAPS = {};
+  const missing = new Set();
+  for (const m of text.matchAll(/getElementById\(\s*['"]([\w-]+)['"]\s*\)/g)) {
+    if (!declared.has(m[1]) && !(m[1] in KNOWN_GAPS)) missing.add(m[1]);
+  }
+  assert.deepEqual([...missing], []);
+});
+
+test('panel has no emoji in its markup', () => {
+  // The panel uses one stroke icon set (icon() in sidebar-core.js). Emoji and
+  // check marks in panel UI are replaced; exported content is not panel UI and
+  // may keep them, but must be listed here with a reason.
+  const ALLOWED = [
+    // { file: 'sidebar-x.js', text: '...', reason: '...' }
+  ];
+  const EMOJI = /[\p{Extended_Pictographic}✓✗✔✖️]/u;
+  const files = ['sidebar.html', ...fs.readdirSync(ROOT).filter(f => /^sidebar-.*\.js$/.test(f))];
+  const problems = [];
+  for (const file of files) {
+    fs.readFileSync(path.join(ROOT, file), 'utf8').split('\n').forEach((line, i) => {
+      if (!EMOJI.test(line)) return;
+      if (ALLOWED.some(a => a.file === file && line.includes(a.text))) return;
+      problems.push(`${file}:${i + 1}: ${line.trim().slice(0, 100)}`);
+    });
+  }
+  assert.deepEqual(problems, [], `Emoji in panel files:\n  ${problems.join('\n  ')}`);
+});

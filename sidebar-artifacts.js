@@ -76,7 +76,7 @@ function reportFile(stem, response, title, meta) {
  * @param {{ stem: string, mode: 'single'|'zip'|'folder', meta?: object, folder?: string, slidesFormat?: 'pdf'|'pptx', onlyIfOffered?: boolean }} options
  *   meta: front matter metadata (computed from the tab when omitted);
  *   folder: Downloads subfolder for a captured button_click download;
- *   slidesFormat: Slides format for this call (default: the ⚙️ setting);
+ *   slidesFormat: Slides format for this call (default: the Settings value);
  *   onlyIfOffered: a PPTX request fails with .formatNotOffered when the menu lists no PowerPoint item (never clicks PDF instead)
  * @returns {Promise<{ files: Array<{path: string, data?: string|Blob, url?: string}>, savedOutside: boolean, savedName?: string }>}
  *   savedName: the captured download's name, with `folder` when given
@@ -330,9 +330,7 @@ async function scanPage() {
       <div class="artifacts-list"></div>
       <div class="download-all-controls">
         <button id="download-all-btn" class="btn btn-primary" disabled>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
-          </svg>
+          ${icon('download')}
           Download Selected (0)
         </button>
         <label class="zip-checkbox">
@@ -350,10 +348,8 @@ async function scanPage() {
           <strong>${escapeHtml(item.label)}</strong>
           <small>${escapeHtml(item.type)}${item.details ? ' · ' + escapeHtml(item.details) : ''}</small>
         </div>
-        <button class="btn-icon download-single-btn" data-index="${escapeHtml(String(item.index))}" data-item-idx="${idx}" ${item.disabled ? `disabled title="${escapeHtml(item.type)} export not supported yet"` :`title="Download ${escapeHtml(item.label)}"`}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
-          </svg>
+        <button class="btn-icon download-single-btn" data-index="${escapeHtml(String(item.index))}" data-item-idx="${idx}" ${item.disabled ? `disabled title="${escapeHtml(item.type)} export not supported yet"` :`title="Download ${escapeHtml(item.label)}"`} aria-label="Download ${escapeHtml(item.label)}">
+          ${icon('download')}
           <span class="download-status"></span>
         </button>
       `;
@@ -391,7 +387,7 @@ async function scanPage() {
         // Disable button and show downloading status
         btn.disabled = true;
         if (statusSpan) {
-          statusSpan.textContent = '⏳';
+          statusSpan.innerHTML = icon('refresh');
           statusSpan.className = 'download-status downloading';
         }
 
@@ -406,7 +402,7 @@ async function scanPage() {
 
           // Show success status
           if (statusSpan) {
-            statusSpan.textContent = '✓';
+            statusSpan.innerHTML = icon('check');
             statusSpan.className = 'download-status success';
           }
 
@@ -422,7 +418,7 @@ async function scanPage() {
         } catch (error) {
           // Show error status
           if (statusSpan) {
-            statusSpan.textContent = '✗';
+            statusSpan.innerHTML = icon('close');
             statusSpan.className = 'download-status error';
           }
 
@@ -968,11 +964,11 @@ async function triggerItemDownload(tabId, itemIndex, artifactName, artifactType)
     );
 
     if (settings.showNotifications) {
-      showToast(`✓ Downloaded ${artifactName}`, 'success');
+      showToast(`Downloaded ${artifactName}`, 'success');
     }
   } catch (error) {
     logger.error('Download', `Failed to download ${artifactName}`, error);
-    showToast(`✗ Failed to download ${artifactName}`, 'error');
+    showToast(`Failed to download ${artifactName}`, 'error');
     throw error;
   }
 }
@@ -1027,7 +1023,7 @@ async function downloadAllArtifacts(tabId, items, { updateRecord = false } = {})
  * @param {Array<{ index, label, type }>} items downloadable artifacts (scanArtifactsData)
  * @param {CategoryTarget & { bothSlideFormats?: boolean }} [target]
  *   bothSlideFormats: save every Slides artifact as PDF and PowerPoint
- *   (Full Takeout); otherwise the ⚙️ slides format alone
+ *   (Full Takeout); otherwise the Settings slides format alone
  * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, savedOutside: number, parts: number, packages: number }>}
  *   savedOutside: items Chrome saved itself (no capturable URL)
  */

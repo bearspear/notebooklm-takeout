@@ -1418,6 +1418,14 @@
     return m ? m[1] : '';
   }
 
+  // The side panel header's text: the notebook's name on a notebook page, else
+  // "Open a notebook" (no URL, another site, or Gemini Notebook's home page,
+  // which has a notebook host but no notebook id).
+  function headerName(url, projectName) {
+    if (!isNotebookUrl(url) || !notebookIdFromUrl(url)) return 'Open a notebook';
+    return String(projectName || '').trim() || 'NotebookLM';
+  }
+
   // ---- List view helpers (filter / sort / select toolbar) ----
 
   const LIST_SORTS = ['notebook', 'title', 'type'];
@@ -2442,7 +2450,8 @@ footer { margin-top: 3rem; }
     citationDetail: 'quotes',
     reuseCitations: true,
     citationStyle: 'links',
-    obsidianNames: false
+    obsidianNames: false,
+    theme: 'auto'
   });
 
   // A fresh, editable copy of the defaults. Keeps only the Full Takeout ZIP
@@ -2451,6 +2460,17 @@ footer { margin-top: 3rem; }
     const fresh = { ...DEFAULT_SETTINGS };
     if (current && current.takeoutZip !== undefined) fresh.takeoutZip = current.takeoutZip;
     return fresh;
+  }
+
+  // 'light' or 'dark' for the <html data-theme> attribute; null for Auto (the
+  // CSS then follows the OS) and for anything unknown.
+  function themeAttr(theme) {
+    return theme === 'light' || theme === 'dark' ? theme : null;
+  }
+
+  // The setting value to store: 'auto', 'light' or 'dark'
+  function themeValue(theme) {
+    return themeAttr(theme) || 'auto';
   }
 
   const NLME = {
@@ -2470,6 +2490,7 @@ footer { margin-top: 3rem; }
     categoryIndexFrontMatter,
     uniqueStems,
     notebookIdFromUrl,
+    headerName,
     listItemKeys,
     jobRecordKey,
     newJobRecord,
@@ -2616,7 +2637,9 @@ footer { margin-top: 3rem; }
     CITE_MAX_BYTES_PER_NOTEBOOK,
     CITE_KEEP_NOTEBOOKS,
     DEFAULT_SETTINGS,
-    resetSettings
+    resetSettings,
+    themeAttr,
+    themeValue
   };
 
   root.NLME = NLME;

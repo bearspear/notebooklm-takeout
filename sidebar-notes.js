@@ -58,7 +58,7 @@ async function handleNoteRowExport(note) {
       showToast(`Exported "${note.title}"`, 'success');
     } catch (error) {
       console.error('[NotebookLM Takeout] Note export failed:', error);
-      showToast(`✗ Failed to export ${note.title}: ${error.message || error}`, 'error');
+      showToast(`Failed to export ${note.title}: ${error.message || error}`, 'error');
     }
   });
 }
@@ -96,30 +96,14 @@ function renderNotesList(notes) {
     // Choose icon based on note type
     const isMindmap = note.type === 'Mindmap';
 
-    let iconColor = '#1a73e8'; // Default: blue for notes
-    if (isMindmap) iconColor = '#ea4335'; // Red for mindmaps
-
-    let iconPath;
-    if (isMindmap) {
-      iconPath = 'M14 2l6 6v12c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h8zm-1 2H6v16h12V9h-5V4zM12 11c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm-5 4h2.5c-.3-.6-.5-1.3-.5-2s.2-1.4.5-2H7v4zm8.5 0H18v-4h-2.5c.3.6.5 1.3.5 2s-.2 1.4-.5 2z';
-    } else {
-      iconPath = 'M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z';
-    }
-
     return `
-        <div class="scan-item-icon">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="${iconColor}">
-            <path d="${iconPath}"/>
-          </svg>
-        </div>
+        <div class="scan-item-icon">${icon(isMindmap ? 'map' : 'note')}</div>
         <div class="scan-item-info">
           <strong>${escapeHtml(note.title)}</strong>
           <small>${escapeHtml(note.type)}</small>
         </div>
-        <button class="btn-icon note-download-btn" data-index="${idx}" title="Export ${escapeHtml(note.title)}">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
-          </svg>
+        <button class="btn-icon note-download-btn" data-index="${idx}" title="Export ${escapeHtml(note.title)}" aria-label="Export ${escapeHtml(note.title)}">
+          ${icon('download')}
         </button>
       `;
   };
@@ -179,7 +163,7 @@ async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = fals
       result,
       auditOk,
       stoppedMessage: result.stopped
-        ? `Stopped after ${result.exported} of ${selectedNotes.length} notes: citations could not be read (Gemini Notebook may have changed). Run the health check 🩺; details in errors.md.`
+        ? `Stopped after ${result.exported} of ${selectedNotes.length} notes: citations could not be read (Gemini Notebook may have changed). Run the health check; details in errors.md.`
         : undefined,
       saved: zips,
       retry: retryFor(result.failedItems, 'Notes export', failed => exportNotesAsMarkdown(failed, { tabId: shell.tab.id, updateRecord: true }))
