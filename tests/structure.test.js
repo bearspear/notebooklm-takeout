@@ -46,6 +46,12 @@ test('classic scripts declare each top-level name once', () => {
   assert.deepEqual(problems, [], `Duplicate top-level declarations:\n  ${problems.join('\n  ')}`);
 });
 
+test('sidebar.html loads the export sheet right after the core', () => {
+  const scripts = sidebarScripts();
+  assert.ok(scripts.includes('sidebar-sheet.js'));
+  assert.ok(scripts.indexOf('sidebar-sheet.js') > scripts.indexOf('sidebar-core.js'));
+});
+
 test('every non-IIFE sidebar script yields top-level names', () => {
   // Guards the scan above: a file the regex cannot read would pass it silently
   const empty = sidebarScripts()
@@ -259,11 +265,13 @@ test('a citation popup is closed by mouseleave, not Escape, which does nothing t
 test('Full Takeout takes Cancel away before its final save, and gives it back', () => {
   const src = fs.readFileSync(path.join(ROOT, 'sidebar-takeout.js'), 'utf8');
   const finishing = src.indexOf('shell.finishing()');
-  assert.ok(finishing > 0 && finishing < src.indexOf("shell.progress('Saving images...', 1)"));
+  assert.ok(finishing > 0 && finishing < src.indexOf("shell.progress('Saving images...')"));
   const shell = src.slice(src.indexOf('async function withExportShell('), src.indexOf('// ---- Full Takeout (Milestone 3a)'));
   assert.match(shell, /finishing\(\) \{/);
   const cleanup = shell.slice(shell.indexOf('finally'));
   assert.match(cleanup, /cancelBtn\.disabled = false/);
+  assert.match(cleanup, /cancelBtn\.hidden = false/);
+  assert.match(shell.slice(shell.indexOf('finishing() {')), /cancelBtn\.hidden = true/);
 });
 
 test('artifact and takeout manifests count errors, not notices', () => {
@@ -358,7 +366,9 @@ function generatedChain() {
   const calls = [];
   const ctx = vmModule.createContext({ calls, console, showToast() {}, TAKEOUT_RETRY_STEPS: [] });
   vmModule.runInContext(`
-    let chainActive = false, chainCancelRequested = false;
+    let chainActive = false, chainCancelRequested = false, chainHolds = 0, chainProgress = null, holdStepResults = false, heldStepResults = null;
+    const hideProgressView = () => {};
+    const chainTabOnRunNotebook = async () => true;
     const ok = message => ({ result: { failedItems: [] }, message, level: 'success', saved: [], errors: [] });
     this.cancelAfterArtifacts = false;
     const downloadAllArtifacts = async (...args) => {
@@ -378,7 +388,7 @@ function generatedChain() {
 test('a Generated export runs artifacts, then notes, as fresh exports on the scanned tab', async () => {
   const { ctx, calls } = generatedChain();
   const { steps, notRun } = await ctx.run({ Artifacts: ['a1'], Notes: ['n1'] });
-  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['artifacts', 7, ['a1']], ['notes', ['n1'], { tabId: 7 }]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['artifacts', 7, ['a1'], {}], ['notes', ['n1'], { tabId: 7 }]]);
   assert.deepEqual([steps.length, notRun.length], [2, 0]);
 });
 
@@ -428,7 +438,7 @@ test('the first paint is Home: no tab active, no action bar, Back hidden', () =>
   assert.match(html, /<div id="action-bar" class="action-bar" hidden>/);
   assert.match(html, /<button id="back-btn"[^>]* aria-label="Back to Home" hidden>/);
   assert.ok(html.indexOf('id="home-view"') < html.indexOf('class="tabs"'), 'Home comes before the tabs');
-  for (const id of ['full-takeout-btn', 'takeout-zip-checkbox', 'resume-banner']) {
+  for (const id of ['full-takeout-btn', 'resume-banner']) {
     const at = html.indexOf(`id="${id}"`);
     assert.ok(at > html.indexOf('id="home-view"') && at < html.indexOf('class="tabs"'), `${id} is on Home`);
   }
@@ -462,7 +472,7 @@ test('a refused settings write says so, undoes what asked to, and never rejects'
   const toasts = [];
   let undone = 0;
   const sandbox = {
-    settingsStored: true, settings: {}, console: { warn() {} }, showToast: text => toasts.push(text),
+    settingsStored: true, realSettings: () => ({}), console: { warn() {} }, showToast: text => toasts.push(text),
     chrome: { storage: { local: { set: async () => { throw new Error('refused'); } } } }
   };
   vm.createContext(sandbox);
@@ -471,6 +481,53 @@ test('a refused settings write says so, undoes what asked to, and never rejects'
   assert.equal(await sandbox.writeSettings(), false);
   assert.equal(undone, 1);
   assert.deepEqual(toasts, ['Could not save settings', 'Could not save settings']);
+});
+
+test('the retired Settings controls and the chat citation line are gone, with their readers', () => {
+  const pages = ['sidebar.html', 'styles.css', 'sidebar-core.js', 'sidebar-chat.js', 'sidebar-takeout.js', 'sidebar-results.js']
+    .map(file => fs.readFileSync(path.join(ROOT, file), 'utf8')).join('\n');
+  for (const gone of ['auto-zip-checkbox', 'export-note-with-images-checkbox', 'export-source-with-images-checkbox', 'chat-citation-info', 'updateChatCitationInfo', 'hideResults', 'results-dismiss']) {
+    assert.ok(!pages.includes(gone), gone);
+  }
+});
+
+test('Default preset and Default save reach settings through saveSettings only', () => {
+  const save = fnSource('sidebar-core.js', 'saveSettings');
+  assert.match(save, /settings\.exportPreset = document\.getElementById\('default-preset-select'\)\.value/);
+  assert.match(save, /settings\.takeoutZip = document\.getElementById\('default-save-select'\)\.value === 'zip'/);
+  assert.match(save, /await writeSettings\(\{ undo \}\)/);
+  assert.doesNotMatch(save, /autoZip|exportNoteWithImages|exportSourceWithImages/);
+  assert.doesNotMatch(fnSource('sidebar-core.js', 'applySettingsToUi'), /autoZip|exportNoteWithImages|exportSourceWithImages/);
+});
+
+test('Artifacts with no sheet choice take the default save', () => {
+  assert.match(fs.readFileSync(path.join(ROOT, 'sidebar-artifacts.js'), 'utf8'), /async function downloadAllArtifacts\(tabId, items, \{ updateRecord = false, zip = NLME\.takeoutZipChoice\(settings\) \} = \{\}\)/);
+});
+
+test('the progress view keeps its ids, and only its text is a live region', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8');
+  const view = html.slice(html.indexOf('id="download-progress"'), html.indexOf('id="results-panel"'));
+  for (const id of ['progress-fill', 'progress-text', 'progress-count', 'progress-left', 'cancel-download-btn']) assert.ok(view.includes(`id="${id}"`), id);
+  assert.equal([...view.matchAll(/aria-live/g)].length, 1);
+  assert.match(view, /id="progress-text"[^>]*aria-live="polite"/);
+  assert.match(view, /Keep this notebook tab visible\. Chrome slows hidden tabs\./);
+});
+
+test('the view under the dock cannot be moved, so no hidden scan starts', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8');
+  for (const hidden of ['body.docked .tabs', 'body.docked #back-btn']) assert.ok(css.includes(hidden), hidden);
+});
+
+test('a chain shows its combined results before it lets the view go', () => {
+  const retry = fnSource('sidebar-takeout.js', 'takeoutRetry');
+  assert.ok(retry.indexOf('showTakeoutResults(') < retry.lastIndexOf('})'));
+  assert.match(retry, /runChain\(async \(\) => \{[^]*restore\(\);[^]*showTakeoutResults\(/);
+});
+
+test('every Retry goes through the one check of the run\'s notebook', () => {
+  const results = fs.readFileSync(path.join(ROOT, 'sidebar-results.js'), 'utf8');
+  assert.match(results, /if \(await retryMayStart\(\)\) await retry\.run\(\);/);
+  assert.equal([...results.matchAll(/retry\.run\(/g)].length, 1);
 });
 
 test('Full Takeout, Resume, Home and Generated all ask for the strict notes scan', () => {
@@ -505,4 +562,83 @@ test('a failed scan never reads as an empty list', async () => {
   await assert.rejects(scanGeneratedItems(1), /boom/);
   answers = { s: { items: [{ kind: 'artifact' }] }, n: undefined };
   assert.equal((await scanGeneratedItems(1)).length, 1); // a failed notes side-scan lists Studio items only
+});
+
+test('the export sheet is a labelled modal outside what it covers, with native radios', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8');
+  const start = html.indexOf('id="export-sheet"');
+  assert.ok(start > 0, 'export sheet markup');
+  const sheet = html.slice(start, html.indexOf('<script', start));
+  assert.match(sheet, /role="dialog"/);
+  assert.match(sheet, /aria-modal="true"/);
+  assert.match(sheet, /aria-labelledby="export-sheet-title"/);
+  assert.match(sheet, /id="export-sheet-title"/);
+  for (const preset of ['archive', 'ai', 'custom']) assert.match(sheet, new RegExp(`<input type="radio" name="sheet-preset" value="${preset}"`));
+  for (const copy of ['Full quotes and image copies', 'Source titles only, no image copies', 'Choose citations and file options', 'Start export']) assert.ok(sheet.includes(copy), copy);
+  // Settings' own wording for the three citation choices
+  for (const option of ['Full quotes (slower)', 'Source titles only (fast)', 'No citations (plain text, fast)']) {
+    assert.ok(sheet.includes(option), option);
+    assert.ok(html.slice(0, start).includes(option), `${option} in Settings`);
+  }
+  // A modal covers the panel: .container goes inert under it, so it must be outside
+  const before = html.slice(0, html.lastIndexOf('<div', start));
+  const depth = before.match(/<div\b/g).length - before.match(/<\/div>/g).length;
+  assert.equal(depth, 0, 'the sheet sits at the top of body');
+});
+
+test('the retired ZIP tick is gone, with its reader', () => {
+  const files = ['sidebar.html', 'styles.css', 'AGENT.md', 'README.md', ...sidebarScripts()];
+  for (const file of files) {
+    const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    assert.doesNotMatch(src, /takeout-zip-checkbox|takeoutZipEnabled|\.takeout-zip\b|class="takeout-zip"/, file);
+  }
+});
+
+test('every export reaches its job through the sheet or the run settings, under the lock', () => {
+  const read = file => fs.readFileSync(path.join(ROOT, file), 'utf8');
+  // A list's action opens the sheet; the job itself is the sheet's start
+  for (const [file, name] of [['sidebar-notes.js', 'exportSelectedNotes'], ['sidebar-sources.js', 'exportSelectedSources'], ['sidebar-generated.js', 'exportSelectedGenerated'], ['sidebar-chat.js', 'openChatExportSheet'], ['sidebar-takeout.js', 'openExportEverythingSheet']]) {
+    const src = read(file);
+    const at = src.search(new RegExp(`^(async )?function ${name}\\(`, 'm'));
+    assert.ok(at >= 0, name);
+    const body = src.slice(at, src.indexOf('\n}\n', at));
+    assert.match(body, /openExportSheet\(\{/, name);
+    assert.match(body, /runExclusive\([^]*withRunSettings\(overrides/, name);
+  }
+  // Row downloads have no sheet: the default preset, Custom's values included
+  assert.match(fnSource('sidebar-core.js', 'runRowExport'), /runExclusive\(name, async \(\) => \{\s+if \(await rowMayStart\(\)\) return withRunSettings\(NLME\.runOverrides\(settings\), fn\);/);
+  assert.match(read('sidebar-notes.js'), /runRowExport\('Note export', /);
+  assert.match(read('sidebar-sources.js'), /runRowExport\('Sources export', \(\) => exportSources\(\[source\], \{ record: false \}\)\)/);
+  assert.match(read('sidebar-generated.js'), /runRowExport\('Generated download', \(\) => handleStudioDownloadRow\(item, downloadBtn\)\)/);
+  assert.doesNotMatch(read('sidebar-notes.js') + read('sidebar-sources.js') + read('sidebar-generated.js'), /presetOverrides/);
+});
+
+test('an export rechecks the tab at Start and at the Export everything click', () => {
+  const read = file => fs.readFileSync(path.join(ROOT, file), 'utf8');
+  assert.match(read('sidebar-sheet.js'), /if \(await tabStillOnPanelNotebook\(\)\) await start\(run\);/);
+  const takeout = read('sidebar-takeout.js');
+  const at = takeout.indexOf('async function openExportEverythingSheet(');
+  assert.ok(at >= 0);
+  assert.ok(takeout.indexOf('tabStillOnPanelNotebook', at) < takeout.indexOf('openExportSheet({', at));
+});
+
+test('a full page load holds the export buttons, and every way out lets go', () => {
+  const core = fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8');
+  const fn = name => {
+    const start = core.search(new RegExp(`^(async )?function ${name}\\(`, 'm'));
+    return core.slice(start, core.indexOf('\n}\n', start));
+  };
+  assert.match(fn('handleTabUpdate'), /if \(changeInfo\.url\) notePageMove\(changeInfo\);/);
+  assert.match(fn('applyAction'), /!!pageLoadHold/);
+  for (const name of ['handleTabChange', 'resetChatPanel', 'handleTabUpdate', 'notePageMove', 'endStalledPageLoad']) assert.match(fn(name), /releasePageLoad\(\)/, name);
+  assert.match(fn('holdForPageLoad'), /setTimeout\(\(\) => endStalledPageLoad\(hold\), PAGE_LOAD_HOLD_MS\)/);
+});
+
+test('a notebook switch closes the sheet, and Settings and Health Check do too', () => {
+  const core = fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8');
+  const switched = core.slice(core.indexOf('function resetChatPanel('), core.indexOf('\n}\n', core.indexOf('function resetChatPanel(')));
+  assert.match(switched, /closeExportSheet\(\{ switched: true \}\)/);
+  assert.match(core, /'settings-btn'\)\.addEventListener\('click', \(\) => \{\s+closeExportSheet\(\);/);
+  const health = fs.readFileSync(path.join(ROOT, 'sidebar-health.js'), 'utf8');
+  assert.match(health.slice(health.indexOf('function runHealthCheck(')), /^[^]*?closeExportSheet\(\);/);
 });

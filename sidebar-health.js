@@ -10,6 +10,7 @@ let lastHealthCheckResults = null;
  * Run comprehensive DOM health check and display results
  */
 async function runHealthCheck() {
+  closeExportSheet();
   const panel = document.getElementById('health-check-panel');
   const loadingEl = document.getElementById('health-check-loading');
   const resultsEl = document.getElementById('health-check-results');

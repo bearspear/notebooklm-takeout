@@ -46,15 +46,15 @@
     return ICON_TO_TYPE[icon] || icon || 'Unknown';
   }
 
-  // Chat (the Chat tab and Full Takeout) follows the one Citation detail setting, the same
+  // Chat (the Chat tab and Full Takeout) follows the run's citationDetail, the same
   // one notes use: 'quotes' (default), 'titles' or 'none'. A missing or unknown value is 'quotes'.
   function chatCitationMode(settings) {
     const detail = settings && settings.citationDetail;
     return detail === 'titles' || detail === 'none' ? detail : 'quotes';
   }
 
-  // Full Takeout's own ZIP choice (the checkbox next to its button): takeoutZip when it has
-  // been set (a boolean), else the "Always use ZIP" setting (autoZip).
+  // Where the export sheet's Save as starts: Settings' Default save (takeoutZip) when it
+  // has been set, else what an earlier version stored as "Always use ZIP" (autoZip).
   function takeoutZipChoice(settings) {
     if (settings && typeof settings.takeoutZip === 'boolean') return settings.takeoutZip;
     return !!(settings && settings.autoZip);
@@ -425,7 +425,7 @@
   }
 
   // Full Takeout's "Retry N failed" runs one export per category (Sources,
-  // Notes, Artifacts) and ends in ONE results panel. steps: each retried
+  // Notes, Artifacts) and ends in ONE outcome. steps: each retried
   // category's outcome { name, message, level, saved, errors, failedItems };
   // notRun: categories a cancel or a declined dialog kept from running
   // { name, failedItems } (their items still failed). Returns the panel's
@@ -450,9 +450,16 @@
       : `${verb} finished`;
     if (remainingCount > 0) message += ` \u2014 ${remainingCount} still failed`;
 
+    const done = steps.reduce((sum, s) => sum + (s.exported || 0), 0);
+    const ranTotal = steps.reduce((sum, s) => sum + (s.selected ?? (s.exported || 0) + (s.failedItems || []).length), 0);
+    const notRunTotal = notRun.reduce((sum, n) => sum + (n.failedItems || []).length, 0);
+    // Items that could not be checked or taken are in neither side of the sum
+    const uncounted = extraErrors.some(e => ['scan_failed', 'not_ready', 'not_found'].includes(e.type));
+
     return {
       message,
       level,
+      count: uncounted ? null : { done, total: ranTotal + notRunTotal },
       lines: steps.map(s => `${s.name}: ${s.message}`),
       saved: steps.flatMap(s => s.saved || []),
       errors: [...steps.flatMap(s => prefixExportErrors(s.name, s.errors)), ...extraErrors],
@@ -465,7 +472,7 @@
   // from the notebook, artifact not ready, scan failed / incomplete.
   const PANEL_ONLY_ERROR_TYPES = ['not_found', 'not_ready', 'scan_failed'];
 
-  // The results panel's error list: groups by error type in first-seen
+  // The results view's error list: groups by error type in first-seen
   // order, at most perGroup entries each; `more` entries are in errors.md.
   function groupErrorsForPanel(errors = [], { perGroup = 20 } = {}) {
     const groups = new Map();
@@ -1127,11 +1134,225 @@
     return variants;
   }
 
-  // Settings for a Full Takeout's notes, sources and chat: a takeout always
-  // writes the with-images versions (for items that have images), whatever
-  // the user ticked for tab exports. The input is not changed.
-  function takeoutVariantSettings(settings = {}) {
-    return { ...settings, exportNoteWithImages: true, exportSourceWithImages: true };
+  const PRESETS = ['archive', 'ai', 'custom'];
+
+  // What a preset sets for one export. custom: the Custom preset's remembered
+  // { citationDetail, obsidianNames, images }. An unknown preset is Archive. No image
+  // copies means none at all: the metadata version's too. With image copies on, that
+  // version stays the person's own setting, so its key is left out.
+  function presetOverrides(preset, custom = {}) {
+    const fixed = (citationDetail, images) => ({ citationDetail, obsidianNames: false, exportNoteWithImages: images, exportSourceWithImages: images });
+    const noImages = { exportNoteWithImages: false, exportSourceWithImages: false, exportSourcePlusMetaWithImages: false };
+    if (preset === 'ai') return { ...fixed('titles', false), ...noImages };
+    if (preset !== 'custom') return fixed('quotes', true);
+    const images = custom.images !== false;
+    return {
+      citationDetail: custom.citationDetail === undefined ? 'quotes' : custom.citationDetail,
+      obsidianNames: !!custom.obsidianNames,
+      ...(images ? { exportNoteWithImages: true, exportSourceWithImages: true } : noImages)
+    };
+  }
+
+  // The preset for raw stored settings that have none (from before 1.9.3).
+  // Archive forces quotes and plain names, so anyone who changed either goes to
+  // Custom, whose remembered values are those same stored settings.
+  function migratePreset(stored) {
+    const { citationDetail, obsidianNames } = stored || {};
+    return obsidianNames || (citationDetail !== undefined && citationDetail !== 'quotes') ? 'custom' : 'archive';
+  }
+
+  // The overrides of `settings.exportPreset`. The one way from settings to a
+  // run's overrides.
+  function runOverrides(settings = {}) {
+    return presetOverrides(settings.exportPreset, {
+      citationDetail: settings.citationDetail,
+      obsidianNames: settings.obsidianNames,
+      images: settings.customImages
+    });
+  }
+
+  // run: `settings` with the overrides on top, for one job. persistable(current):
+  // `current` with the overridden keys back at their saved values, so a run value
+  // never reaches storage. The input is not changed.
+  function applyRunSettings(settings = {}, overrides = {}) {
+    const saved = { ...settings };
+    const persistable = current => {
+      const real = { ...current };
+      for (const key of Object.keys(overrides)) {
+        if (key in saved) real[key] = saved[key];
+        else delete real[key];
+      }
+      return real;
+    };
+    return { run: { ...settings, ...overrides }, persistable };
+  }
+
+  // Seconds per item, from one Full Takeout of 552 items in about 45 minutes. A
+  // cached run is faster: citations read before are not hovered again.
+  const ESTIMATE_SECONDS = {
+    notes: { quotes: 7, titles: 0.3, none: 0.1 },
+    chat: { quotes: 5, titles: 0.2, none: 0.1 },
+    sources: 2,
+    generated: 4
+  };
+
+  // An export's expected length. counts: { notes, chat, sources, generated }; a count
+  // missing or unknown is 0. A citation detail other than titles or none reads quotes.
+  function estimateSeconds(counts, citationDetail) {
+    const detail = citationDetail === 'titles' || citationDetail === 'none' ? citationDetail : 'quotes';
+    const count = name => {
+      const n = counts && counts[name];
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    };
+    return count('notes') * ESTIMATE_SECONDS.notes[detail]
+      + count('chat') * ESTIMATE_SECONDS.chat[detail]
+      + count('sources') * ESTIMATE_SECONDS.sources
+      + count('generated') * ESTIMATE_SECONDS.generated;
+  }
+
+  // 'under 30 sec' or 'about N min'. A time that is not a positive number reads short.
+  function formatEstimate(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 30) return 'under 30 sec';
+    return `about ${Math.max(1, Math.round(seconds / 60))} min`;
+  }
+
+  // The export sheet's estimate. counts holds what the run takes: a key that is there
+  // with no usable number is not known yet, counts as 0 and is named; an absent key is
+  // not part of the run. With nothing known there is no number: a short time would
+  // be a guess.
+  const ESTIMATE_NAMES = [['sources', 'sources'], ['notes', 'notes'], ['generated', 'generated items'], ['chat', 'chat']];
+  function estimateLine(counts, citationDetail) {
+    const asked = ESTIMATE_NAMES.filter(([key]) => counts && key in counts);
+    const unknown = asked.filter(([key]) => !(Number.isFinite(counts[key]) && counts[key] >= 0)).map(([, name]) => name);
+    if (asked.length === unknown.length) return 'Estimated time: not known yet';
+    const line = `Estimated time: ${formatEstimate(estimateSeconds(counts, citationDetail))}`;
+    if (unknown.length === 0) return line;
+    const last = unknown.pop();
+    return `${line}, not counting ${unknown.length ? `${unknown.join(', ')} and ` : ''}${last}`;
+  }
+
+  // Seconds left at the pace so far, null until three items have set a pace. A takeout's
+  // categories run at different paces: calmTimeLeft keeps that from showing.
+  function timeLeft(done, total, elapsedSeconds) {
+    if (!(total > 0) || done < 3 || !Number.isFinite(elapsedSeconds)) return null;
+    if (done >= total) return 0;
+    return (elapsedSeconds / done) * (total - done);
+  }
+
+  // What is left, by estimate key. parts: [category or chain step name, items]
+  const ESTIMATE_KEYS = { Sources: 'sources', Notes: 'notes', Chat: 'chat', Artifacts: 'generated' };
+  function restCounts(parts = []) {
+    const rest = {};
+    for (const [name, n] of parts) {
+      const key = ESTIMATE_KEYS[name];
+      rest[key] = (rest[key] || 0) + n;
+    }
+    return rest;
+  }
+
+  // Seconds left, at least what the work left is expected to take. A run's pace so far
+  // says little about what follows it: 142 sources at 2 s would promise 14 min with 39
+  // min of notes and chat to go. rest: restCounts, or nothing when the run is one kind.
+  function honestTimeLeft(done, total, elapsedSeconds, rest, citationDetail) {
+    const pace = timeLeft(done, total, elapsedSeconds);
+    return pace === null ? null : Math.max(pace, estimateSeconds(rest, citationDetail));
+  }
+
+  // The time to show next. shown: the last time shown; fresh: timeLeft now; waited:
+  // seconds since. The shown time counts down by itself and moves a quarter of the way
+  // to a fresh figure that disagrees, so one slow or fast item cannot throw it about.
+  function calmTimeLeft(shown, fresh, waited) {
+    if (fresh === null) return null;
+    if (shown === null) return fresh;
+    const expected = Math.max(0, shown - waited);
+    return expected + (fresh - expected) * 0.25;
+  }
+
+  // The line under the bar. Nothing until there is a time; with no items left the
+  // rest is the save, whose length is not known, so it never reads as "0 left".
+  function progressLeftLine(done, total, seconds, { finishing = false } = {}) {
+    if (finishing || (total > 0 && done >= total)) return 'Finishing';
+    return seconds === null ? '' : `${formatEstimate(seconds)} left`;
+  }
+
+  // "N of M" and the bar. Only the results say M of M: the last item is not the end,
+  // since the save comes after it.
+  function progressFigures(done, total) {
+    if (!(total > 0)) return { count: '', percent: 0 };
+    const shown = Math.min(Math.max(0, done), total - 1);
+    return { count: `${shown} of ${total}`, percent: Math.min(99, (Math.max(0, done) / total) * 100) };
+  }
+
+  // How long a change to a live region waits, so a screen reader gets one every
+  // minMs: 0 means now. lastAt: when the last one went out, null for never.
+  function announceDelay(lastAt, now, minMs) {
+    return lastAt === null ? 0 : Math.max(0, lastAt + minMs - now);
+  }
+
+  // A takeout's "N of M", from its categories. null when a scan failed before it found
+  // anything: that category's items are in neither number, so "3 of 3" would be false.
+  function takeoutCount(categories = []) {
+    if (categories.some(c => c.status === 'failed' && !c.selected)) return null;
+    return {
+      done: categories.reduce((sum, c) => sum + (c.exported || 0), 0),
+      total: categories.reduce((sum, c) => sum + (c.selected || 0), 0)
+    };
+  }
+
+  // The short toast that points at the results
+  function resultsToast(level) {
+    if (level === 'error') return 'Export failed: see the results';
+    if (level === 'warning') return 'Export did not finish cleanly: see the results';
+    return 'Export finished';
+  }
+
+  // What Export everything counts, from Home's counts (null: not known) and the loaded
+  // chat, if any. Generated's list holds the notes too, so its own items are the rest.
+  function homeEstimateCounts(tabCounts, chatCount = null) {
+    const known = n => (Number.isFinite(n) ? n : null);
+    const { sources, notes, studio } = tabCounts || {};
+    const bothKnown = known(notes) !== null && known(studio) !== null;
+    return { sources: known(sources), notes: known(notes), generated: bothKnown ? Math.max(0, studio - notes) : null, chat: known(chatCount) };
+  }
+
+  // True when a tab's URL names another notebook than the one the panel shows. A URL
+  // with no notebook id is not "another notebook": other checks cover being off a
+  // notebook. panelId '' means the panel holds none, so any notebook differs.
+  function tabLeftPanelNotebook(url, panelId) {
+    const id = notebookIdFromUrl(url);
+    return !!id && id !== panelId;
+  }
+
+  // A row's download must not start: the tab has moved on, or a page is loading in it
+  function rowRefused({ url, panelNotebookId, held }) {
+    return !!held || tabLeftPanelNotebook(url, panelNotebookId);
+  }
+
+  // A Retry must not start: another notebook is in front, or the run's own tab, which
+  // it would run on, shows one. Another site in front is fine, and a closed tab is the
+  // export shell's to report.
+  function retryRefused({ notebookId, activeUrl, runTabUrl }) {
+    if (!notebookId) return false;
+    return tabLeftPanelNotebook(activeUrl, notebookId) || tabLeftPanelNotebook(runTabUrl, notebookId);
+  }
+
+  // The export sheet's state when it opens: the default preset, Custom's remembered
+  // values and the default save.
+  function sheetChoice(settings = {}) {
+    return {
+      preset: PRESETS.includes(settings.exportPreset) ? settings.exportPreset : 'archive',
+      citationDetail: settings.citationDetail === undefined ? 'quotes' : settings.citationDetail,
+      obsidianNames: !!settings.obsidianNames,
+      images: settings.customImages !== false,
+      zip: takeoutZipChoice(settings)
+    };
+  }
+
+  // What the sheet's state runs: `overrides` for withRunSettings, `zip` for the job. A
+  // choice is for this run: nothing here or in the sheet writes settings.
+  function sheetOverrides(choice = {}, settings = {}) {
+    const { preset, citationDetail, obsidianNames, images, zip } = { ...sheetChoice(settings), ...choice };
+    return { overrides: presetOverrides(preset, { citationDetail, obsidianNames, images }), zip: !!zip };
   }
 
   // A code fence the quote cannot close early: longer than its longest
@@ -1521,7 +1742,9 @@
     return `nlme.job.${notebookId}`;
   }
 
-  function newJobRecord({ id, kind, label, notebookId, keysByCategory, now }) {
+  // overrides: the run's (withRunSettings), for a Resume; none outside a run. zip: the
+  // run's save choice, for a job that has one (see jobRecordZip).
+  function newJobRecord({ id, kind, label, notebookId, keysByCategory, now, overrides = null, zip }) {
     const remaining = {};
     const failed = {};
     for (const [category, keys] of Object.entries(keysByCategory || {})) {
@@ -1530,7 +1753,7 @@
     }
     // total: how many keys the job started with (the banner's "stopped at N of total")
     const total = Object.values(remaining).reduce((sum, keys) => sum + keys.length, 0);
-    return { id, kind, label, notebookId, startedAt: now, updatedAt: now, total, remaining, failed };
+    return { id, kind, label, notebookId, startedAt: now, updatedAt: now, total, remaining, failed, ...(overrides ? { overrides } : {}), ...(typeof zip === 'boolean' ? { zip } : {}) };
   }
 
   // A new record with `key` done: removed from remaining, and from failed unless
@@ -1588,6 +1811,21 @@
       && jobRemainingCount(record) > 0;
   }
 
+  // The overrides a Resume runs on: what the person chose when the job started, not
+  // today's default. A record from before 1.9.3 has none and runs on today's settings;
+  // a takeout's still runs through the preset, so it keeps its image copies.
+  function jobRecordOverrides(record, settings) {
+    const held = record && record.overrides;
+    if (held && typeof held === 'object' && !Array.isArray(held)) return held;
+    return record && record.kind === 'takeout' ? runOverrides(settings) : {};
+  }
+
+  // The save choice a Resume's artifacts run on. undefined (a record from before 1.9.3,
+  // or a job without one) leaves downloadAllArtifacts on its default.
+  function jobRecordZip(record) {
+    return record && typeof record.zip === 'boolean' ? record.zip : undefined;
+  }
+
   // matchResumeItems that will not call a key gone on thin evidence. A partial
   // scan (a list not drawn yet, the previous notebook's page) must not clear
   // items that still exist, so:
@@ -1610,12 +1848,12 @@
     return { matched: m.matched, missing, unknown };
   }
 
-  // The banner's "An earlier <this> stopped at": a takeout's label already
-  // names it; the others are an export.
+  // The banner's "An earlier <this> stopped at". A takeout goes by the button's name,
+  // also in a record that still has the old label; the others are an export.
   function resumeBannerLabel(record) {
     const label = String((record && record.label) || '');
     if (!label) return 'export';
-    return record.kind === 'takeout' ? label : `${label} export`;
+    return record.kind === 'takeout' ? 'Export everything' : `${label} export`;
   }
 
   // The banner's wording. A record with nothing remaining and only failed keys
@@ -1779,7 +2017,11 @@
   // someone may delete the notebook after reading it. They stay out of `remaining`.
   function generatedExportOutcome({ steps = [], notRun = [], total = 0, skipped = [] } = {}) {
     const combined = combineRetryOutcomes({ steps, notRun });
-    const outcome = { ...combined, message: generatedExportMessage({ steps, notRun, total, skipped }) };
+    const outcome = {
+      ...combined,
+      message: generatedExportMessage({ steps, notRun, total, skipped }),
+      count: { done: combined.count.done, total: total + skipped.length }
+    };
     if (skipped.length) {
       outcome.lines = [...combined.lines, `Can't be exported (${skipped.length}): ${skipped.map(item => item.label).join(', ')}`];
       if (outcome.level === 'success' || outcome.level === 'info') outcome.level = 'warning';
@@ -2641,8 +2883,11 @@ footer { margin-top: 3rem; }
   });
 
   // The ⚙️ settings as shipped. The side panel starts from these and
-  // "Reset to defaults" returns to them. takeoutZip is Full Takeout's own ZIP
-  // tick (on its tab, not in ⚙️): unset until the user ticks it.
+  // "Reset to defaults" returns to them. takeoutZip is Settings' Default save,
+  // the export sheet's starting Save as; while unset, a stored autoZip decides
+  // (takeoutZipChoice), and no control writes autoZip any more. exportPreset:
+  // 'archive', 'ai' or 'custom'; customImages is Custom's image copies, whose
+  // citations and names are citationDetail and obsidianNames.
   const DEFAULT_SETTINGS = Object.freeze({
     autoZip: false,
     takeoutZip: undefined,
@@ -2663,14 +2908,16 @@ footer { margin-top: 3rem; }
     reuseCitations: true,
     citationStyle: 'links',
     obsidianNames: false,
-    theme: 'auto'
+    theme: 'auto',
+    exportPreset: 'archive',
+    customImages: true
   });
 
-  // A fresh, editable copy of the defaults. Keeps only the Full Takeout ZIP
-  // choice from `current`, since that tick is not one of the ⚙️ options.
+  // A fresh, editable copy of the defaults. Keeps only what Default save shows, a
+  // stored autoZip included, since Reset takes autoZip itself back to false.
   function resetSettings(current) {
     const fresh = { ...DEFAULT_SETTINGS };
-    if (current && current.takeoutZip !== undefined) fresh.takeoutZip = current.takeoutZip;
+    if (current && (current.takeoutZip !== undefined || current.autoZip)) fresh.takeoutZip = takeoutZipChoice(current);
     return fresh;
   }
 
@@ -2719,6 +2966,8 @@ footer { margin-top: 3rem; }
     jobRecordFinished,
     jobRecordMode,
     jobRecordUsable,
+    jobRecordOverrides,
+    jobRecordZip,
     planResume,
     resumeBannerLabel,
     resumeBannerView,
@@ -2779,7 +3028,28 @@ footer { margin-top: 3rem; }
     toBlockquote,
     noteVariants,
     sourceVariants,
-    takeoutVariantSettings,
+    presetOverrides,
+    migratePreset,
+    runOverrides,
+    applyRunSettings,
+    estimateSeconds,
+    formatEstimate,
+    estimateLine,
+    homeEstimateCounts,
+    tabLeftPanelNotebook,
+    rowRefused,
+    retryRefused,
+    timeLeft,
+    restCounts,
+    honestTimeLeft,
+    calmTimeLeft,
+    progressLeftLine,
+    progressFigures,
+    announceDelay,
+    takeoutCount,
+    resultsToast,
+    sheetChoice,
+    sheetOverrides,
     isAllowedDownloadUrl,
     isAllowedImageUrl,
     imageFetchUrl,

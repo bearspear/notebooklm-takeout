@@ -197,6 +197,13 @@ const SETTINGS_UNREAD_MESSAGE = 'Your saved settings could not be read. Using de
 // Shipped defaults live in NLME.DEFAULT_SETTINGS (takeout-shared.js); stored
 // settings are merged over them in loadSettings.
 let settings = NLME.resetSettings();
+// A job's own settings (withRunSettings). While one runs, `settings` is the job's
+// copy and realSettings() is what the person has. currentRunOverrides is null
+// outside a run. runRestore: job values -> real ones. runEdits: the real settings,
+// once something in the job asked for them.
+let currentRunOverrides = null;
+let runRestore = null;
+let runEdits = null;
 
 document.addEventListener('DOMContentLoaded', () => {
   init();
@@ -265,8 +272,7 @@ function disableExportButtons() {
   const exportButtons = [
     'action-btn',
     'scan-chat-btn',
-    'full-takeout-btn',
-    'takeout-zip-checkbox'
+    'full-takeout-btn'
   ];
 
   exportButtons.forEach(id => {
@@ -282,8 +288,7 @@ function enableExportButtons() {
   const exportButtons = [
     'action-btn',
     'scan-chat-btn',
-    'full-takeout-btn',
-    'takeout-zip-checkbox'
+    'full-takeout-btn'
   ];
 
   exportButtons.forEach(id => {
@@ -322,17 +327,61 @@ async function loadSettings() {
       migrated.exportSourceWithImages = stored.settings.exportWithImagesVersion;
     }
 
+    // Only when none is stored: reaches storage with the next save, not from here
+    if (!('exportPreset' in stored.settings)) migrated.exportPreset = NLME.migratePreset(stored.settings);
+
     settings = migrated;
   }
 
   applySettingsToUi();
 }
 
+// The person's settings, whatever job runs. Everything that changes or stores
+// settings goes through this, so a job's values never reach storage and a change
+// made during a job leaves the job's values alone.
+function realSettings() {
+  if (!runRestore) return settings;
+  if (!runEdits) runEdits = runRestore(settings);
+  return runEdits;
+}
+
+// Runs the job `fn` on `settings` with `overrides` on top, async work included, and
+// restores in the finally. A run inside a run adds to the outer one; the real settings
+// stay the first ones. A change made in Settings meanwhile is stored at once and
+// takes effect here, when the job ends. Call it inside runExclusive, so a job refused
+// by the lock swaps nothing.
+async function withRunSettings(overrides, fn) {
+  const outerOverrides = currentRunOverrides;
+  const outerRestore = runRestore;
+  const { run, persistable } = NLME.applyRunSettings(settings, overrides);
+  settings = run;
+  currentRunOverrides = { ...outerOverrides, ...overrides };
+  runRestore = outerRestore ? current => outerRestore(persistable(current)) : persistable;
+  try {
+    return await fn();
+  } finally {
+    settings = persistable(settings);
+    currentRunOverrides = outerOverrides;
+    runRestore = outerRestore;
+    if (!runRestore) {
+      if (runEdits) settings = runEdits;
+      runEdits = null;
+    }
+  }
+}
+
+// Holds on to the running job's overrides: `rerun(fn)` runs fn on them later, when
+// the job has ended (a Retry). Outside a run, fn just runs.
+function rememberRunSettings() {
+  const overrides = currentRunOverrides;
+  return fn => (overrides ? withRunSettings(overrides, fn) : fn());
+}
+
 // Set or remove data-theme on <html> from settings.theme ('auto' follows the
 // OS through the CSS media query). The choice is also kept in localStorage so
 // the next open can apply it before settings load (no flash of the wrong theme).
 function applyTheme() {
-  const attr = NLME.themeAttr(settings.theme);
+  const attr = NLME.themeAttr(realSettings().theme);
   if (attr) document.documentElement.setAttribute('data-theme', attr);
   else document.documentElement.removeAttribute('data-theme');
   try { localStorage.setItem('nlme-theme', attr || 'auto'); } catch (e) { /* storage blocked */ }
@@ -344,23 +393,32 @@ try {
   if (early) document.documentElement.setAttribute('data-theme', early);
 } catch (e) { /* storage blocked */ }
 
-// Show `settings` in the Settings panel (on load and after Reset to defaults)
+// Custom's three rows show only under Custom, which is the only time they are read:
+// a hidden row never writes, so Archive and back keeps Custom's values.
+function paintExportDefaults() {
+  const settings = realSettings();
+  document.getElementById('default-preset-select').value = NLME.sheetChoice(settings).preset;
+  document.getElementById('default-save-select').value = NLME.takeoutZipChoice(settings) ? 'zip' : 'folder';
+  document.getElementById('citation-detail-select').value = settings.citationDetail;
+  document.getElementById('custom-images-checkbox').checked = settings.customImages !== false;
+  document.getElementById('obsidian-names-checkbox').checked = settings.obsidianNames === true;
+  document.getElementById('custom-defaults').hidden = settings.exportPreset !== 'custom';
+}
+
+// Show the person's settings in the Settings panel (on load and after Reset to defaults)
 function applySettingsToUi() {
-  document.getElementById('auto-zip-checkbox').checked = settings.autoZip;
-  document.getElementById('takeout-zip-checkbox').checked = NLME.takeoutZipChoice(settings);
+  const settings = realSettings();
   document.getElementById('show-notifications-checkbox').checked = settings.showNotifications;
   document.getElementById('refresh-interval-input').value = settings.refreshInterval;
 
   // Source version checkboxes
   document.getElementById('export-source-base-checkbox').checked = settings.exportSourceBase;
   document.getElementById('export-source-plus-meta-checkbox').checked = settings.exportSourcePlusMeta;
-  document.getElementById('export-source-with-images-checkbox').checked = settings.exportSourceWithImages;
   document.getElementById('export-source-plus-meta-with-images-checkbox').checked = settings.exportSourcePlusMetaWithImages;
 
   // Note version checkboxes
   document.getElementById('export-note-base-checkbox').checked = settings.exportNoteBase;
   document.getElementById('export-note-code-blocks-checkbox').checked = settings.exportNoteCodeBlocks;
-  document.getElementById('export-note-with-images-checkbox').checked = settings.exportNoteWithImages;
 
   // Sync legacy settings for chat export compatibility
 
@@ -373,22 +431,18 @@ function applySettingsToUi() {
 
   // Interface
   document.getElementById('slides-format-select').value = settings.slidesFormat;
-  document.getElementById('citation-detail-select').value = settings.citationDetail;
   document.getElementById('reuse-citations-checkbox').checked = settings.reuseCitations !== false;
   document.getElementById('citation-style-select').value = settings.citationStyle === 'footnotes' ? 'footnotes' : 'links';
-  document.getElementById('obsidian-names-checkbox').checked = settings.obsidianNames === true;
   document.getElementById('theme-select').value = NLME.themeValue(settings.theme);
+  paintExportDefaults();
   applyTheme();
-  updateChatCitationInfo();
 }
 
 // An "images" version is only offered while its parent version is ticked
 // (the same rule the parent checkboxes' change handlers apply)
 function syncVersionChildStates() {
   [
-    ['export-source-base-checkbox', 'export-source-with-images-checkbox'],
-    ['export-source-plus-meta-checkbox', 'export-source-plus-meta-with-images-checkbox'],
-    ['export-note-base-checkbox', 'export-note-with-images-checkbox']
+    ['export-source-plus-meta-checkbox', 'export-source-plus-meta-with-images-checkbox']
   ].forEach(([parentId, childId]) => {
     const parent = document.getElementById(parentId);
     const child = document.getElementById(childId);
@@ -396,14 +450,6 @@ function syncVersionChildStates() {
     child.disabled = !parent.checked;
     if (!parent.checked) child.checked = false;
   });
-}
-
-// The Chat tab's one-line reminder of the Citation detail it will export with
-function updateChatCitationInfo() {
-  const el = document.getElementById('chat-citation-info');
-  if (!el) return;
-  const label = { quotes: 'Full quotes', titles: 'Source titles only', none: 'No citations' }[NLME.chatCitationMode(settings)];
-  el.textContent = `Citations: ${label} · change in Settings`;
 }
 
 // One more try at storage after a failed load. The values held meanwhile go, so a
@@ -427,8 +473,9 @@ async function retrySettingsLoad() {
 // The one write of `settings`, false when it did not happen. Blocked until a load
 // has worked. A blocked write tries the load again, so storage coming back lifts
 // the block: the stored settings return, and the change has to be made again.
-// undo: puts the change back when storage refuses the write.
+// undo: puts the change back when it was not stored and no stored settings replaced it.
 async function writeSettings({ undo = null } = {}) {
+  const settings = realSettings();
   if (settingsStored) {
     try {
       await chrome.storage.local.set({ settings });
@@ -440,26 +487,46 @@ async function writeSettings({ undo = null } = {}) {
       return false;
     }
   }
-  if (await retrySettingsLoad()) showToast('Your saved settings are back. Please make that change again.', 'warning');
-  else showToast(SETTINGS_UNREAD_MESSAGE, 'warning');
+  // No load during a job, nor once one holds the lock: it would replace the settings
+  // the job runs on, or land just after withRunSettings swapped them in
+  if (!jobLock.current() && !currentRunOverrides && await retrySettingsLoad()) {
+    showToast('Your saved settings are back. Please make that change again.', 'warning');
+  } else {
+    if (undo) undo();
+    showToast(SETTINGS_UNREAD_MESSAGE, 'warning');
+  }
   return false;
 }
 
 async function saveSettings() {
-  settings.autoZip = document.getElementById('auto-zip-checkbox').checked;
+  const settings = realSettings(); // during a job, not the job's copy
+  // What the next export starts on: a change that was not stored must not look stored
+  const { exportPreset, takeoutZip } = settings;
+  const undo = () => {
+    Object.assign(realSettings(), { exportPreset, takeoutZip });
+    paintExportDefaults();
+  };
+  settings.exportPreset = document.getElementById('default-preset-select').value;
+  settings.takeoutZip = document.getElementById('default-save-select').value === 'zip';
+  // Custom's values only while Custom's rows show, so they outlive any other preset
+  if (settings.exportPreset === 'custom') {
+    settings.citationDetail = ['titles', 'none'].includes(document.getElementById('citation-detail-select').value)
+      ? document.getElementById('citation-detail-select').value : 'quotes';
+    settings.customImages = document.getElementById('custom-images-checkbox').checked;
+    settings.obsidianNames = document.getElementById('obsidian-names-checkbox').checked;
+  }
+  document.getElementById('custom-defaults').hidden = settings.exportPreset !== 'custom';
   settings.showNotifications = document.getElementById('show-notifications-checkbox').checked;
   settings.refreshInterval = parseInt(document.getElementById('refresh-interval-input').value) || 10;
 
   // Source version selections
   settings.exportSourceBase = document.getElementById('export-source-base-checkbox').checked;
   settings.exportSourcePlusMeta = document.getElementById('export-source-plus-meta-checkbox').checked;
-  settings.exportSourceWithImages = document.getElementById('export-source-with-images-checkbox').checked;
   settings.exportSourcePlusMetaWithImages = document.getElementById('export-source-plus-meta-with-images-checkbox').checked;
 
   // Note version selections
   settings.exportNoteBase = document.getElementById('export-note-base-checkbox').checked;
   settings.exportNoteCodeBlocks = document.getElementById('export-note-code-blocks-checkbox').checked;
-  settings.exportNoteWithImages = document.getElementById('export-note-with-images-checkbox').checked;
 
   // Sync legacy settings for chat export compatibility
 
@@ -472,16 +539,12 @@ async function saveSettings() {
 
   // Interface
   settings.slidesFormat = document.getElementById('slides-format-select').value === 'pptx' ? 'pptx' : 'pdf';
-  settings.citationDetail = ['titles', 'none'].includes(document.getElementById('citation-detail-select').value)
-    ? document.getElementById('citation-detail-select').value : 'quotes';
   settings.reuseCitations = document.getElementById('reuse-citations-checkbox').checked;
   settings.citationStyle = document.getElementById('citation-style-select').value === 'footnotes' ? 'footnotes' : 'links';
-  settings.obsidianNames = document.getElementById('obsidian-names-checkbox').checked;
   settings.theme = NLME.themeValue(document.getElementById('theme-select').value);
   applyTheme();
-  updateChatCitationInfo();
 
-  await writeSettings();
+  await writeSettings({ undo });
 }
 
 function setupEventListeners() {
@@ -500,12 +563,13 @@ function setupEventListeners() {
   });
 
   document.getElementById('settings-btn').addEventListener('click', () => {
+    closeExportSheet();
     document.getElementById('settings-panel').style.display = 'block';
   });
 
   document.getElementById('reset-settings-btn')?.addEventListener('click', async () => {
     if (jobLock.current()) { showToast(`${jobLock.current()} is still running`, 'warning'); return; }
-    if (!confirm('Reset all settings to their defaults? The citation cache and saved exports to resume are kept.')) return;
+    if (!confirm('Reset all settings to their defaults? Default save, the citation cache and saved exports to resume are kept.')) return;
     settings = NLME.resetSettings(settings);
     applySettingsToUi();
     syncVersionChildStates();
@@ -524,20 +588,9 @@ function setupEventListeners() {
     if (settingsStored) saveSettings();
   });
 
-  // Full Takeout: the whole notebook in one run (sidebar-takeout.js)
-  document.getElementById('full-takeout-btn')?.addEventListener('click', () => runExclusive('Full Takeout', runFullTakeout));
-  // Its ZIP choice is saved on its own (settings.takeoutZip); the settings panel need not be open
-  document.getElementById('takeout-zip-checkbox')?.addEventListener('change', (e) => {
-    const before = settings.takeoutZip;
-    settings.takeoutZip = e.target.checked;
-    writeSettings({
-      undo: () => {
-        if (before === undefined) delete settings.takeoutZip;
-        else settings.takeoutZip = before;
-        e.target.checked = NLME.takeoutZipChoice(settings);
-      }
-    });
-  });
+  // Export everything: the whole notebook in one run (sidebar-takeout.js)
+  document.getElementById('full-takeout-btn')?.addEventListener('click', openExportEverythingSheet);
+  setupExportSheet();
 
   // Health check panel
   // The health check hovers real citations, so it must never run during an
@@ -566,7 +619,6 @@ function setupEventListeners() {
   // Source version checkboxes - parent/child relationships
   // Parent checkboxes control whether child "include images" checkboxes are enabled
   const sourceParentChildPairs = [
-    { parent: 'export-source-base-checkbox', child: 'export-source-with-images-checkbox' },
     { parent: 'export-source-plus-meta-checkbox', child: 'export-source-plus-meta-with-images-checkbox' }
   ];
 
@@ -598,45 +650,6 @@ function setupEventListeners() {
           parentCheckbox.checked = true;
           updateSourceChildState(parent, child);
           showToast('At least one source version must be selected', 'error');
-        }
-      });
-    }
-  });
-
-  // Note version checkboxes - parent/child relationships
-  // Parent checkboxes control whether child "include images" checkboxes are enabled
-  const noteParentChildPairs = [
-    { parent: 'export-note-base-checkbox', child: 'export-note-with-images-checkbox' }
-  ];
-
-  // Function to update child checkbox state based on parent
-  function updateNoteChildState(parentId, childId) {
-    const parent = document.getElementById(parentId);
-    const child = document.getElementById(childId);
-    if (parent && child) {
-      child.disabled = !parent.checked;
-      if (!parent.checked) {
-        child.checked = false;
-      }
-    }
-  }
-
-  // Initialize child states and add event listeners
-  noteParentChildPairs.forEach(({ parent, child }) => {
-    updateNoteChildState(parent, child);
-
-    const parentCheckbox = document.getElementById(parent);
-    if (parentCheckbox && !parentCheckbox.disabled) {
-      parentCheckbox.addEventListener('change', () => {
-        updateNoteChildState(parent, child);
-
-        // Ensure at least one parent version is selected
-        const baseChecked = document.getElementById('export-note-base-checkbox').checked;
-        const codeBlocksChecked = document.getElementById('export-note-code-blocks-checkbox').checked;
-        if (!baseChecked && !codeBlocksChecked) {
-          parentCheckbox.checked = true;
-          updateNoteChildState(parent, child);
-          showToast('At least one note version must be selected', 'error');
         }
       });
     }
@@ -690,7 +703,7 @@ async function openTab(tab, options) {
 // ---- The panel's views: Home (#home-view) or one tab ----
 // Home has no active tab, so openPanelTab() is '' there and everything keyed on the
 // open tab (the action bar, rescans, auto-refresh) leaves Home alone. Progress and
-// results sit outside the views, so a job's panels show in every view.
+// results sit outside the views and hide whichever is open (setDock).
 const PANEL_VIEW_KEY = 'nlme.panelView';
 let panelView = 'home';
 
@@ -709,11 +722,10 @@ function savePanelView(view) {
 
 // Where the keyboard goes: Back returns to the row it left, a row to its tab
 function focusView(view, leftView) {
-  const target = view === 'home'
-    ? document.querySelector(`.home-row[data-home-tab="${leftView}"]:not(:disabled)`)
-      || document.querySelector('.home-row:not(:disabled)')
-      || document.getElementById('rescan-btn')
-    : document.querySelector('.tab-btn.active');
+  const home = () => document.querySelector(`.home-row[data-home-tab="${leftView}"]:not(:disabled)`)
+    || document.querySelector('.home-row:not(:disabled)')
+    || document.getElementById('rescan-btn');
+  const target = dockMode ? dockFocusTarget() : view === 'home' ? home() : document.querySelector('.tab-btn.active');
   target?.focus({ preventScroll: true });
 }
 
@@ -798,6 +810,7 @@ function paintHomeRow(tab) {
 // starts or ends, and a scan changes what it knows. Rows stay usable during a job, as
 // the tabs do. Export everything waits out a settle: the notebook is half switched.
 function syncHomeControls() {
+  syncExportSheet();
   NLME.PANEL_TABS.forEach(paintHomeRow);
   document.querySelectorAll('.home-row').forEach(row => { row.disabled = !homeNotebookOpen; });
   const exportBtn = document.getElementById('full-takeout-btn');
@@ -973,6 +986,9 @@ let lastPanelNotebookId = '';
 // count, and the Generated list, which a rescan leaves up and whose Delete must
 // not reach the new notebook: they belong to the notebook that was scanned.
 function resetChatPanel() {
+  closeExportSheet({ switched: true }); // first: its Start would reach the new notebook
+  releasePageLoad(); // the panel has caught up with the tab; the caller's settle takes over
+  resultsLeftNotebook();
   window._currentChatData = null;
   const chatResults = document.getElementById('chat-scan-results');
   if (chatResults) chatResults.innerHTML = '<p class="empty-message">Click "Load chat" to load your conversation history.</p>';
@@ -1207,11 +1223,71 @@ async function discardJobRecord(record) {
   }
 }
 
+// A full page load reports its URL at once and `complete` much later, or never. Until
+// then the panel still shows the old notebook, so its Export everything and list
+// action stay off: the hold is one more settle wait, plus the action. Every way out
+// runs a refresh of its own: `complete`, the tab going back to the panel's notebook
+// (releasePageLoad), another tab, a notebook switch (resetChatPanel), or a stall.
+const PAGE_LOAD_HOLD_MS = 15000;
+const TAB_MOVING_MESSAGE = 'This tab is moving to another notebook. Wait for it to open, then try again.';
+let pageLoadHold = null;
+
+function holdForPageLoad() {
+  releasePageLoad();
+  const hold = { timer: setTimeout(() => endStalledPageLoad(hold), PAGE_LOAD_HOLD_MS) };
+  pageLoadHold = hold;
+  settleWaits++;
+  syncHomeControls();
+  applyAction();
+}
+
+function releasePageLoad() {
+  if (!pageLoadHold) return;
+  clearTimeout(pageLoadHold.timer);
+  pageLoadHold = null;
+  settleWaits--;
+  syncHomeControls();
+  applyAction();
+}
+
+// No `complete` came: go by the URL, so the panel names what the tab shows
+async function endStalledPageLoad(hold) {
+  if (pageLoadHold !== hold) return;
+  releasePageLoad();
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await refreshForTab(tab, { settleMs: PAGE_SETTLE_MS });
+  } catch (error) {
+    console.warn('[NotebookLM Takeout] Refresh after a stalled load failed:', error);
+  }
+}
+
+// The active tab reported a new URL. Synchronous: the sheet must not outlive this event
+function notePageMove({ url, status }) {
+  if (!isNotebookUrl(url) || !NLME.tabLeftPanelNotebook(url, lastPanelNotebookId)) {
+    releasePageLoad();
+    return;
+  }
+  closeExportSheet({ switched: true });
+  if (status === 'loading') holdForPageLoad();
+}
+
+// false, and says so, when the active tab shows another notebook than the panel: a
+// start now would read one notebook under the other's name. For the moment an export
+// begins, whatever the tab events have told the panel so far.
+async function tabStillOnPanelNotebook() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!isNotebookUrl(tab?.url) || !NLME.tabLeftPanelNotebook(tab.url, lastPanelNotebookId)) return true;
+  showToast(TAB_MOVING_MESSAGE, 'warning');
+  return false;
+}
+
 async function handleTabChange(activeInfo) {
   // onActivated fires for every window; this panel belongs to one
   let active = null;
   try { [active] = await chrome.tabs.query({ active: true, currentWindow: true }); } catch (_) { /* judged below */ }
   if (active?.id !== activeInfo.tabId) return;
+  releasePageLoad(); // the load it waited for is in a tab left behind
   currentTabId = activeInfo.tabId;
   await checkStatus();
   let tab = null;
@@ -1223,17 +1299,24 @@ async function handleTabUpdate(tabId, changeInfo, tab) {
   // Only update if this is the active tab
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (activeTab && activeTab.id === tabId) {
+    if (changeInfo.url) notePageMove(changeInfo);
     if (changeInfo.status === 'complete') {
       await checkStatus();
       _homeZeroConfirmed.clear(); // an empty list read while loading proves nothing
       // A new notebook's page reports complete before it has drawn its lists
       const id = isNotebookUrl(tab?.url) ? NLME.notebookIdFromUrl(tab.url) : '';
-      await refreshForTab(tab, id && id !== lastPanelNotebookId ? { settleMs: PAGE_SETTLE_MS } : {});
+      const moved = !!id && id !== lastPanelNotebookId;
+      if (!moved) releasePageLoad(); // before the refresh, which a hold would turn away
+      const refreshed = refreshForTab(tab, moved ? { settleMs: PAGE_SETTLE_MS } : {});
+      releasePageLoad(); // a switch took the hold over; a job puts the switch off
+      await refreshed;
     } else if (changeInfo.url && !changeInfo.status) {
       // In-app navigation (history API): a URL change with no status. A full
       // load reports {status: 'loading', url} first and is handled by 'complete'.
       await checkStatus();
       await refreshForTab(tab, { settleMs: PAGE_SETTLE_MS, sameNotebookScan: false });
+    } else if (changeInfo.url) {
+      await checkStatus();
     }
   }
 }
@@ -1369,7 +1452,7 @@ function applyAction() {
   bar.hidden = !_action;
   if (!_action) return;
   btn.innerHTML = `${icon('download')} ${NLME.escapeHtml(_action.label)}`;
-  btn.disabled = !!_action.disabled || !!jobLock.current();
+  btn.disabled = !!_action.disabled || !!jobLock.current() || !!pageLoadHold;
   btn.style.opacity = btn.disabled ? '0.5' : '1';
 }
 
@@ -1693,12 +1776,13 @@ async function runExclusive(name, fn) {
     return JOB_BUSY;
   }
   document.body.classList.add('job-running');
+  syncExportSheet();
   hideResumeBanner(); // its numbers go stale while a job writes the record
   // Disable (not just dim) the tab controls so keyboard activation is
   // blocked too. Mark them: a scan may replace a control with a clone (the
   // chat Export button), and the clone must be re-enabled too, so restore
   // by the mark, not by the original element.
-  Array.from(document.querySelectorAll('.tab-content button, .tab-content input, .tab-content select, #action-btn, #studio-delete-selected-btn, #full-takeout-btn, #takeout-zip-checkbox'))
+  Array.from(document.querySelectorAll('.tab-content button, .tab-content input, .tab-content select, #action-btn, #studio-delete-selected-btn, #full-takeout-btn'))
     .filter(el => !el.disabled && el.id !== 'cancel-download-btn')
     .forEach(el => { el.disabled = true; el.setAttribute('data-job-disabled', ''); });
   try {
@@ -1729,14 +1813,45 @@ async function runExclusive(name, fn) {
   }
 }
 
-// The results panel's "Retry N failed": re-runs `exportFn` on the items that
+// false, and says so, when a row must not start: the tab has moved to another notebook,
+// or is loading one. Tab events can lag behind the tab, so this looks at the tab.
+async function rowMayStart() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!NLME.rowRefused({ url: tab?.url, panelNotebookId: lastPanelNotebookId, held: !!pageLoadHold })) return true;
+  showToast(TAB_MOVING_MESSAGE, 'warning');
+  return false;
+}
+
+// A row's download, on the default preset: no sheet. Checks inside the lock, where
+// the tab it reads is the one the job gets.
+function runRowExport(name, fn) {
+  return runExclusive(name, async () => {
+    if (await rowMayStart()) return withRunSettings(NLME.runOverrides(settings), fn);
+  });
+}
+
+// false, and says so, when the Retry of the results showing would run on another
+// notebook. The run's notebook comes from its export shell (dockRun): a Retry's
+// items and tab id belong to it, whatever the panel shows now.
+async function retryMayStart() {
+  if (!dockRun) return true;
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  let runTab = null;
+  try { runTab = await chrome.tabs.get(dockRun.tabId); } catch (_) { /* closed: the shell says so */ }
+  if (!NLME.retryRefused({ notebookId: dockRun.id, activeUrl: active?.url, runTabUrl: runTab?.url })) return true;
+  showToast('Open the notebook this export ran on to retry it', 'warning');
+  return false;
+}
+
+// The results' "Retry N failed": re-runs `exportFn` on the items that
 // failed, under the job lock (a busy lock only shows its toast; the panel
-// stays). null when nothing failed.
+// stays). null when nothing failed. It keeps the job's run settings.
 function retryFor(failedItems, jobName, exportFn) {
   if (!failedItems || failedItems.length === 0) return null;
+  const rerun = rememberRunSettings();
   return {
     count: failedItems.length,
-    run: () => runExclusive(jobName, () => exportFn(failedItems))
+    run: () => runExclusive(jobName, () => rerun(() => exportFn(failedItems)))
   };
 }
 
@@ -1967,14 +2082,15 @@ function stampJobKeys(category, items) {
  * @param {'notes'|'sources'|'artifacts'|'takeout'} kind
  * @param {string} label
  * @param {{ [category: string]: object[] }} itemsByCategory the items to export, by category
- * @param {{ update?: boolean }} [options] update: a retry or resume (also taken
+ * @param {{ update?: boolean, zip?: boolean }} [options] zip: the run's save choice,
+ *   kept in a new record for a Resume. update: a retry or resume (also taken
  *   by a fresh export when the notebook's stored record is another kind's with
  *   items left, NLME.jobRecordMode). It never
  *   creates or replaces a record: it loads the notebook's existing one (none:
  *   returns null) and marks its items done or failed on it, only for keys the
  *   record holds, and writes nothing until one changes.
  */
-async function startJobRecord(shell, kind, label, itemsByCategory, { update = false } = {}) {
+async function startJobRecord(shell, kind, label, itemsByCategory, { update = false, zip } = {}) {
   try {
     const notebookId = NLME.notebookIdFromUrl(shell.tab && shell.tab.url);
     if (!notebookId) return null;
@@ -1998,7 +2114,7 @@ async function startJobRecord(shell, kind, label, itemsByCategory, { update = fa
       record = stored;
     } else {
       const now = Date.now();
-      record = NLME.newJobRecord({ id: `${kind}-${now}`, kind, label, notebookId, keysByCategory, now });
+      record = NLME.newJobRecord({ id: `${kind}-${now}`, kind, label, notebookId, keysByCategory, now, overrides: currentRunOverrides, zip });
       if (NLME.jobRecordFinished(record)) return null;
     }
     const recorder = NLME.createJobRecorder({ storage: chrome.storage.local, record });
@@ -2024,10 +2140,10 @@ async function startJobRecord(shell, kind, label, itemsByCategory, { update = fa
 // { result }. Clean = not cancelled or stopped; a throw leaves the record.
 // update (options.updateRecord of the exports, set by every retry and by resume):
 // see startJobRecord. record false: no record at all (single-item row exports).
-async function withJobRecord(shell, kind, label, category, items, run, { update = false, record = true } = {}) {
+async function withJobRecord(shell, kind, label, category, items, run, { update = false, record = true, zip } = {}) {
   // record false: a one-shot row export (a single source's download) must not
   // replace or clear a pending record
-  const tracker = record ? await startJobRecord(shell, kind, label, { [category]: items }, { update }) : null;
+  const tracker = record ? await startJobRecord(shell, kind, label, { [category]: items }, { update, zip }) : null;
   let out;
   try {
     out = await run(tracker);
@@ -2045,10 +2161,10 @@ async function withJobRecord(shell, kind, label, category, items, run, { update 
  * <Notebook>-<kind>-<ts>.zip, paths as the builders return them. Full
  * Takeout passes pathPrefix '<root>/<category>/', zipKind
  * 'takeout-<category>' and, with ZIP off, the takeout's Downloads folder.
- * It also passes variantSettings (NLME.takeoutVariantSettings: the settings
- * the notes, sources and chat paths read their variants from, default the
- * global `settings`) and itemDir '' (note and source files go straight in the
- * category folder, not in a notes/ or sources/ folder inside it).
+ * It also passes itemDir '' (note and source files go straight in the category
+ * folder, not in a notes/ or sources/ folder inside it). variantSettings: the
+ * settings the notes, sources and chat paths read their variants from, default
+ * the global `settings`, which in a Full Takeout are the run's (withRunSettings).
  *
  * @typedef {{ pathPrefix?: string, zipKind?: string, folder?: string|null,
  *   variantSettings?: object, itemDir?: string, written?: Written,

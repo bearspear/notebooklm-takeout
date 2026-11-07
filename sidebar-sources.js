@@ -242,20 +242,30 @@ function renderSourcesList(sources, skippedNotes = 0) {
     const btn = e.target.closest('.download-single-btn');
     if (!btn) return;
     const source = sources[parseInt(btn.dataset.index, 10)];
-    if (source) await runExclusive('Sources export', () => exportSources([source], { record: false }));
+    if (source) await runRowExport('Sources export', () => exportSources([source], { record: false }));
   });
 }
 
-// The Sources action: exports what the current list has selected
-async function exportSelectedSources() {
-  const selected = _sourcesListController ? _sourcesListController.selectedItems() : [];
-
-  if (selected.length === 0) {
+// The Sources action: opens the sheet for the selection. Start exports what the list
+// has selected then: a rescan may have redrawn it under the sheet.
+function exportSelectedSources() {
+  const n = _sourcesListController ? _sourcesListController.selectedCount() : 0;
+  if (n === 0) {
     showToast('No sources selected', 'warning');
     return;
   }
-
-  await runExclusive('Sources export', () => exportSources(selected));
+  openExportSheet({
+    title: NLME.actionLabel(n, 'source'),
+    counts: { sources: n },
+    start: ({ overrides }) => runExclusive('Sources export', () => withRunSettings(overrides, async () => {
+      const selected = _sourcesListController ? _sourcesListController.selectedItems() : [];
+      if (selected.length === 0) {
+        showToast('Nothing is selected now, so nothing was exported', 'warning');
+        return;
+      }
+      await exportSources(selected);
+    }))
+  });
 }
 
 // Sources export (Milestone 3a): the shared export shell around
@@ -338,7 +348,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
     },
     packageBatch: async (sources, info) => {
       packaged += sources.length;
-      shell.progress(`Creating ZIP ${info.batchIndex}/${info.totalBatches}...`, 1);
+      shell.progress(`Creating ZIP ${info.batchIndex}/${info.totalBatches}...`);
       // Every part gets an _audit.md for its own sources (what was added since
       // the previous part); the last part (an errors-only ZIP too: the outcome
       // toast may point at it) adds the run-wide totals as a second section.
@@ -383,7 +393,7 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
       const batchStart = (batchIndex - 1) * perZip;
       const batchSize = Math.min(perZip, total - batchStart);
       shell.progress(`Batch ${batchIndex}/${totalBatches}: Extracting ${done - batchStart + 1}/${batchSize}: ${item.title}`,
-        (done + 1) / total);
+        { done, total, item: item.title });
       console.log(`[NotebookLM Takeout] Extracting source: "${item.title}"`);
     }
   }).finally(endImageSession);

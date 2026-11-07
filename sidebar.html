@@ -40,7 +40,6 @@
 
       <div class="home-export">
         <button id="full-takeout-btn" class="btn btn-primary" title="Export everything: all sources, notes, chat and artifacts of this notebook in one run"><span data-icon="box"></span> Export everything</button>
-        <label class="takeout-zip" title="Save the export as one ZIP per category (unchecked: a folder in Downloads)"><input type="checkbox" id="takeout-zip-checkbox"> ZIP</label>
       </div>
 
       <div id="home-notice" class="home-notice" role="status" hidden></div>
@@ -81,8 +80,6 @@
 
     <div class="tab-content" data-tab-content="chat">
       <section id="chat-section" class="section">
-        <p id="chat-citation-info" class="info-text chat-citation-info">Citations: Full quotes · change in Settings</p>
-
         <div class="chat-load">
           <p class="info-text">Takeout scrolls your chat panel to the top to load every message. Your place in the chat will move.</p>
           <button id="scan-chat-btn" class="btn btn-secondary">
@@ -117,17 +114,17 @@
       </button>
     </div>
 
+    <!-- One view in the list's place while an export runs, and its results after: see setDock -->
     <div id="download-progress" class="download-progress" style="display: none;">
-      <div class="progress-header">
-        <h3>Download Progress</h3>
-        <button id="cancel-download-btn" class="btn-icon-small" title="Cancel" aria-label="Cancel download">
-          <span data-icon="close"></span>
-        </button>
-      </div>
+      <h3 id="progress-title" class="progress-title" tabindex="-1">Export</h3>
+      <p id="progress-count" class="progress-count"></p>
       <div class="progress-bar">
         <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
       </div>
-      <p id="progress-text" class="progress-text">Starting...</p>
+      <p id="progress-left" class="progress-left"></p>
+      <p id="progress-text" class="progress-text" aria-live="polite">Starting...</p>
+      <p class="progress-note">Keep this notebook tab visible. Chrome slows hidden tabs.</p>
+      <button id="cancel-download-btn" class="btn btn-secondary" type="button" title="Stop the export. What is done so far is saved.">Cancel</button>
     </div>
 
     <div id="results-panel" class="results-panel" style="display: none;" role="status" aria-live="polite"></div>
@@ -142,6 +139,58 @@
       </button>
     </div>
     <div class="settings-content">
+      <!-- What the export sheet starts on, and what row downloads use -->
+      <div class="setting-section">
+        <h3 class="setting-section-title">Export Defaults</h3>
+
+        <div class="setting-group">
+          <label for="default-preset-select">Default preset</label>
+          <select id="default-preset-select" class="number-input">
+            <option value="archive">Archive</option>
+            <option value="ai">AI-ready</option>
+            <option value="custom">Custom</option>
+          </select>
+          <p class="setting-help">Where the export sheet starts, and what the download button on a row uses. Archive: full quotes and image copies. AI-ready: source titles only, no image copies.</p>
+        </div>
+
+        <div id="custom-defaults" hidden>
+          <div class="setting-group">
+            <label for="citation-detail-select">Citations</label>
+            <select id="citation-detail-select" class="number-input">
+              <option value="quotes">Full quotes (slower)</option>
+              <option value="titles">Source titles only (fast)</option>
+              <option value="none">No citations (plain text, fast)</option>
+            </select>
+            <p class="setting-help">For notes and chat. "Source titles only" skips reading each citation's popup: every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. Both are much faster for large exports.</p>
+          </div>
+
+          <div class="setting-group">
+            <label class="toggle-setting">
+              <input type="checkbox" id="custom-images-checkbox">
+              <span>Image copies</span>
+            </label>
+            <p class="setting-help">Also writes a -with-images version of each note, source and chat that has images (embedded base64).</p>
+          </div>
+
+          <div class="setting-group">
+            <label class="toggle-setting">
+              <input type="checkbox" id="obsidian-names-checkbox">
+              <span>Obsidian-friendly file names</span>
+            </label>
+            <p class="setting-help">Removes characters that break Obsidian links ([ ] # ^ | \ : * ? " &lt; &gt;) from note, source and artifact file names, and names single downloads "note - Title" and "mind-map - Title" instead of "[NOTE]_Title".</p>
+          </div>
+        </div>
+
+        <div class="setting-group">
+          <label for="default-save-select">Default save</label>
+          <select id="default-save-select" class="number-input">
+            <option value="folder">Folder</option>
+            <option value="zip">ZIP</option>
+          </select>
+          <p class="setting-help">Where the sheet's Save as starts, for Export everything and the artifacts in a Generated export. You can change it for each export.</p>
+        </div>
+      </div>
+
       <!-- General Settings -->
       <div class="setting-section">
         <h3 class="setting-section-title">General</h3>
@@ -188,13 +237,6 @@
         <h3 class="setting-section-title">Export Format</h3>
 
         <div class="setting-group">
-          <label>
-            <input type="checkbox" id="auto-zip-checkbox">
-            <span>Always use ZIP for batch downloads</span>
-          </label>
-        </div>
-
-        <div class="setting-group">
           <label for="slides-format-select">Slide deck format</label>
           <select id="slides-format-select" class="number-input">
             <option value="pdf">PDF</option>
@@ -209,16 +251,12 @@
 
         <div class="setting-group">
           <label style="font-weight: 500; display: block; margin-bottom: 8px;">Export Versions (select which file types to create)</label>
-          <p class="setting-help" style="margin-top: 0; margin-bottom: 12px;">Choose which combinations of source files to export. At least one version must be selected.</p>
+          <p class="setting-help" style="margin-top: 0; margin-bottom: 12px;">Choose which combinations of source files to export. At least one version must be selected. Image copies of the base version come from the preset. AI-ready, and Custom with Image copies off, leave out the metadata version's images too.</p>
 
           <div class="version-option">
             <label class="version-parent">
               <input type="checkbox" id="export-source-base-checkbox" checked disabled>
               <span>Base version (text-only, no metadata)</span>
-            </label>
-            <label class="version-child">
-              <input type="checkbox" id="export-source-with-images-checkbox">
-              <span>Include images (embedded base64)</span>
             </label>
           </div>
 
@@ -246,16 +284,6 @@
         <h3 class="setting-section-title">Note Options</h3>
 
         <div class="setting-group">
-          <label for="citation-detail-select">Citation detail (notes and chat)</label>
-          <select id="citation-detail-select" class="number-input">
-            <option value="quotes">Full quotes (slower)</option>
-            <option value="titles">Source titles only (fast)</option>
-            <option value="none">No citations (plain text, fast)</option>
-          </select>
-          <p class="setting-help">Applies to notes and to the chat export (the Chat tab and Export everything). "Source titles only" skips reading each citation's popup: every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. Both are much faster for large exports.</p>
-        </div>
-
-        <div class="setting-group">
           <label for="citation-style-select">Citation style</label>
           <select id="citation-style-select" class="number-input">
             <option value="links">Links (default)</option>
@@ -266,33 +294,21 @@
 
         <div class="setting-group">
           <label class="toggle-setting">
-            <input type="checkbox" id="obsidian-names-checkbox">
-            <span>Obsidian-friendly file names</span>
-          </label>
-          <p class="setting-help">Removes characters that break Obsidian links ([ ] # ^ | \ : * ? " &lt; &gt;) from note, source and artifact file names, and names single downloads "note - Title" and "mind-map - Title" instead of "[NOTE]_Title". Off by default; the usual file names are unchanged.</p>
-        </div>
-
-        <div class="setting-group">
-          <label class="toggle-setting">
             <input type="checkbox" id="reuse-citations-checkbox" checked>
             <span>Reuse citation quotes from earlier exports (faster re-exports)</span>
           </label>
-          <p class="setting-help">When a note or chat answer has not changed since an earlier full-quote export, its citation quotes are read from a local cache instead of hovering every marker again. Not used when an "images" version is exported. If a source was edited, clear the cache.</p>
+          <p class="setting-help">When a note or chat answer has not changed since an earlier full-quote export, its citation quotes are read from a local cache instead of hovering every marker again. Not used when an "images" version is exported, which includes every note and chat export under Archive; AI-ready or Custom without Image copies uses it. If a source was edited, clear the cache.</p>
           <button id="clear-citation-cache-btn" class="btn btn-secondary btn-small" type="button">Clear citation cache</button>
         </div>
 
         <div class="setting-group">
           <label style="font-weight: 500; display: block; margin-bottom: 8px;">Export Versions (select which file types to create)</label>
-          <p class="setting-help" style="margin-top: 0; margin-bottom: 12px;">Choose which combinations of note files to export. At least one version must be selected.</p>
+          <p class="setting-help" style="margin-top: 0; margin-bottom: 12px;">Choose which combinations of note files to export. At least one version must be selected. Image copies come from the preset.</p>
 
           <div class="version-option">
             <label class="version-parent">
               <input type="checkbox" id="export-note-base-checkbox" checked disabled>
               <span>Base version (markdown citations)</span>
-            </label>
-            <label class="version-child">
-              <input type="checkbox" id="export-note-with-images-checkbox">
-              <span>Include images (embedded base64)</span>
             </label>
           </div>
 
@@ -328,7 +344,7 @@
       <div class="setting-section">
         <div class="setting-group">
           <button id="reset-settings-btn" class="btn btn-secondary btn-small" type="button">Reset to defaults</button>
-          <p class="setting-help">Puts every setting on this panel back to how it shipped. The citation cache, Export everything's own ZIP choice and saved exports to resume are kept.</p>
+          <p class="setting-help">Puts every setting on this panel except Default save back to how it shipped. Default save, the citation cache and saved exports to resume are kept.</p>
         </div>
       </div>
     </div>
@@ -379,6 +395,46 @@
     </div>
   </div>
 
+  <div id="export-sheet" class="export-sheet" hidden>
+    <div id="export-sheet-scrim" class="export-sheet-scrim"></div>
+    <div id="export-sheet-panel" class="export-sheet-panel" role="dialog" aria-modal="true" aria-labelledby="export-sheet-title" tabindex="-1">
+      <div class="export-sheet-head">
+        <h2 id="export-sheet-title"></h2>
+        <button id="sheet-close" class="header-icon-btn" type="button" title="Close" aria-label="Close"><span data-icon="close"></span></button>
+      </div>
+      <div id="export-sheet-body" class="export-sheet-body">
+        <fieldset class="sheet-group">
+          <legend>Preset</legend>
+          <label class="sheet-option"><input type="radio" name="sheet-preset" value="archive"><span><strong>Archive</strong><small>Full quotes and image copies</small></span></label>
+          <label class="sheet-option"><input type="radio" name="sheet-preset" value="ai"><span><strong>AI-ready</strong><small>Source titles only, no image copies</small></span></label>
+          <label class="sheet-option"><input type="radio" name="sheet-preset" value="custom"><span><strong>Custom</strong><small>Choose citations and file options</small></span></label>
+        </fieldset>
+        <div id="sheet-custom" class="sheet-group" hidden>
+          <label class="sheet-label" for="sheet-citations">Citations</label>
+          <select id="sheet-citations" class="sheet-select">
+            <option value="quotes">Full quotes (slower)</option>
+            <option value="titles">Source titles only (fast)</option>
+            <option value="none">No citations (plain text, fast)</option>
+          </select>
+          <label class="sheet-check"><input type="checkbox" id="sheet-images"> Image copies</label>
+          <label class="sheet-check"><input type="checkbox" id="sheet-obsidian"> Obsidian-friendly file names</label>
+        </div>
+        <fieldset id="sheet-save" class="sheet-group" hidden>
+          <legend>Save as</legend>
+          <div class="sheet-pair">
+            <label class="sheet-option"><input type="radio" name="sheet-save" value="folder"><span>Folder</span></label>
+            <label class="sheet-option"><input type="radio" name="sheet-save" value="zip"><span>ZIP</span></label>
+          </div>
+        </fieldset>
+      </div>
+      <div class="export-sheet-foot">
+        <p id="sheet-estimate" class="sheet-estimate" aria-live="polite"></p>
+        <p id="sheet-blocked" class="sheet-blocked" role="status"></p>
+        <button id="sheet-start" class="btn btn-primary" type="button">Start export</button>
+      </div>
+    </div>
+  </div>
+
   <script src="jszip.min.js"></script>
   <script src="turndown.min.js"></script>
   <script src="takeout-shared.js"></script>
@@ -388,6 +444,7 @@
   <script src="sidebar-list.js"></script>
   <script src="sidebar-results.js"></script>
   <script src="sidebar-core.js"></script>
+  <script src="sidebar-sheet.js"></script>
   <script src="sidebar-artifacts.js"></script>
   <script src="sidebar-notes.js"></script>
   <script src="sidebar-sources.js"></script>

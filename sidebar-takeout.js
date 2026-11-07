@@ -2,7 +2,7 @@
 //
 // saveFiles / fetchDownload: one way to write files (one ZIP, a Downloads
 // subfolder, or single downloads). withExportShell: the pre-flight, progress,
-// cancel, results-panel outcome and cleanup every export needs, written once.
+// cancel, results outcome and cleanup every export needs, written once.
 // runFullTakeout: the whole notebook (sources, notes, chat, artifacts) in one
 // shell, through the per-category runners in sidebar.js (runSourcesJob, ...).
 //
@@ -254,15 +254,17 @@ async function saveFiles(files, { zipName, folder, capture = null } = {}) {
 
 /**
  * The shared wrapper around every export: pre-flight, progress, cancel,
- * outcome (results panel), cleanup. Runs `run(shell)` once.
+ * outcome (results view), cleanup. Runs `run(shell)` once.
  *
  * shell = {
  *   tab, projectName, timestamp, meta,
  *   isCancelled()              // true after Cancel (overlay or side panel)
  *   finishing()                // the rest cannot be cancelled: no Cancel button
- *   progress(text, fraction)   // fraction 0..1: side-panel bar + page overlay
+ *   progress(text, count)      // text: the page overlay, and the view's line unless
+ *                              // count.item is given. count { done, total, item }:
+ *                              // items finished so far. Without it the count stands.
  *   finish({ kind, selected, result, auditOk = true, stoppedMessage, errorNote, saved = [], retry = null })
- *                              // Shows the outcome in the results panel
+ *                              // Shows the outcome in the results view
  *                              // (showResults), not a toast.
  *                              // result: { exported, failed, cancelled,
  *                              // errors }; stoppedMessage replaces the
@@ -275,7 +277,7 @@ async function saveFiles(files, { zipName, folder, capture = null } = {}) {
  *                              // raises success to warning (not on cancel)
  *                              // saved: ZIP names or the Downloads folder
  *                              // retry: { count, run } for "Retry N failed"
- *                              // (runFullTakeout builds its own results panel
+ *                              // (runFullTakeout builds its own outcome
  *                              // and does not call finish)
  *                              // Returns the outcome { kind, selected, message,
  *                              // level, result, saved, errors }
@@ -306,10 +308,6 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
   let cancelListener = null;
   let outcome;
 
-  const progressPanel = document.getElementById('download-progress');
-  const progressFill = document.getElementById('progress-fill');
-  const progressText = document.getElementById('progress-text');
-
   try {
     // The tab the caller scanned (tabId), else the one in front. Everything below
     // (project name, URL, health check, overlay) comes from this tab
@@ -319,15 +317,12 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
       tab = null; // a closed tab: chrome.tabs.get rejects
     }
     if (!tab || (requestedTabId != null && !isNotebookUrl(tab.url))) {
-      // Before hideResults: a retry on a closed tab keeps the panel and its Retry button
+      // Results that are up stay: a retry on a closed tab keeps its Retry button
       showToast(requestedTabId != null
         ? 'The notebook tab for this export is closed. Open it and try again.'
         : 'Please open NotebookLM first', 'error');
       return { aborted: true };
     }
-
-    // A new export replaces the last one's results (only once the tab is known to be there)
-    hideResults();
 
     // Pre-flight warning (the DOM-health type, e.g. 'chat'): after the tab lookup, inside
     // the shell, so its cleanup covers it
@@ -373,12 +368,10 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
     });
     overlayShown = true;
 
-    // Progress panel in the side panel
-    progressPanel.style.display = 'block';
-    progressPanel.scrollIntoView({ block: 'nearest' }); // it sits below a long list
+    // The progress view takes the place of the list, and of the last export's results
+    dockRun = { id: NLME.notebookIdFromUrl(tab.url), tabId: tab.id, name: projectName };
+    showProgressView();
     panelShown = true;
-    progressText.textContent = 'Preparing export...';
-    progressFill.style.width = '0%';
 
     // Listen for cancellation (overlay Cancel or side-panel Cancel)
     cancelListener = (message) => {
@@ -400,13 +393,13 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
       finishing() {
         finishingStarted = true;
         cancelBtn.disabled = true;
-        cancelBtn.title = 'Finishing: saving what was exported';
+        cancelBtn.hidden = true;
+        setProgressFinishing();
         chrome.tabs.sendMessage(tabId, { type: NLME.MSG.UPDATE_EXPORT_OVERLAY, hideCancel: true }).catch(() => {});
       },
-      progress(text, fraction) {
-        const percent = Math.max(0, Math.min(1, fraction || 0)) * 100;
-        progressFill.style.width = `${percent}%`;
-        progressText.textContent = text;
+      progress(text, count) {
+        const percent = count ? setProgressCount(count.done, count.total, count.rest) : progressRun?.percent ?? 0;
+        paintProgressText(count?.item || text);
         chrome.tabs.sendMessage(tabId, {
           type: NLME.MSG.UPDATE_EXPORT_OVERLAY,
           message: text,
@@ -414,13 +407,14 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
         }).catch(() => {}); // overlay is cosmetic; never abort the job
       },
       finish({ kind, selected, result = {}, auditOk = true, stoppedMessage, errorNote, saved = [], retry = null } = {}) {
-        // The outcome stays in the results panel; a stopped job's message
+        // The outcome stays in the results view; a stopped job's message
         // leads it, and the errors still follow
         const composed = stoppedMessage
           ? { message: stoppedMessage, level: 'error' }
           : NLME.composeOutcome({ kind, selected, result, auditOk, errorNote });
         const errors = result.errors || [];
-        showResults({ message: composed.message, level: composed.level, saved, errors, retry });
+        const count = { done: result.exported || 0, total: selected };
+        showResults({ message: composed.message, count, level: composed.level, saved, errors, retry });
         return { kind, selected, message: composed.message, level: composed.level, result, saved, errors };
       }
     };
@@ -445,16 +439,27 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
 
     if (finishingStarted) {
       cancelBtn.disabled = false;
-      cancelBtn.title = 'Cancel';
+      cancelBtn.hidden = false;
     }
 
-    // Hide sidebar progress panel
-    if (panelShown) progressPanel.style.display = 'none';
+    if (panelShown) hideProgressView();
   }
   return outcome;
 }
 
 // ---- Full Takeout (Milestone 3a) ----
+
+// Home's Export everything: the sheet, then the run on what it chose. Each count is
+// what Home knows; chat is known only once loaded.
+async function openExportEverythingSheet() {
+  if (!await tabStillOnPanelNotebook()) return;
+  openExportSheet({
+    title: 'Export everything',
+    counts: NLME.homeEstimateCounts(_tabCounts, window._currentChatData?.messagePairs?.length),
+    offerSaveAs: true,
+    start: ({ overrides, zip }) => runExclusive('Export everything', () => withRunSettings(overrides, () => runFullTakeout({ zip })))
+  });
+}
 
 const VIEWER_FILE = 'viewer.html';
 const VIEWER_ERROR = { type: 'viewer', message: 'The offline viewer could not be built' };
@@ -528,13 +533,6 @@ async function saveTakeoutImages(images, { root, folder, zipNameFor }) {
   return { paths, zips, failed };
 }
 
-// The ZIP setting: the checkbox next to Export everything on Home, else the saved
-// choice (takeoutZip, falling back to autoZip).
-function takeoutZipEnabled() {
-  const checkbox = document.getElementById('takeout-zip-checkbox');
-  return checkbox ? checkbox.checked : NLME.takeoutZipChoice(settings);
-}
-
 // The files at a takeout's root. viewerHtml null: no viewer, and nothing names one.
 function takeoutRootFiles({ meta, summary, errors, partial, viewerHtml }) {
   const viewerFile = viewerHtml === null ? null : VIEWER_FILE;
@@ -581,11 +579,11 @@ function takeoutRootFiles({ meta, summary, errors, partial, viewerHtml }) {
  * <root>/images/, _index.md, viewer.html, manifest.json and errors.md (root = sanitized
  * notebook name). A category written in several batches has part-N/ folders.
  *
- * - ZIP on (takeoutZipEnabled): each category's batches go to
+ * - zip true: each category's batches go to
  *   <Notebook>-takeout-<category>-<ts>[-PARTIAL][-partNofM|-partN].zip, images to
  *   <Notebook>-takeout-images-<ts>[-PARTIAL][-partNofM].zip, the root files to
  *   <Notebook>-takeout-index-<ts>.zip; unzipped into one folder they form one tree.
- * - ZIP off: everything goes to Downloads/<Notebook> takeout <ts>/; artifacts
+ * - zip false: everything goes to Downloads/<Notebook> takeout <ts>/; artifacts
  *   run in folder mode (CDN media straight to disk).
  *
  * Every category is scanned first (0 items: 'empty', nothing written; a scan
@@ -609,15 +607,21 @@ function takeoutRootFiles({ meta, summary, errors, partial, viewerHtml }) {
  * same rule; the viewer shows a placeholder there. If the viewer fails after that,
  * the images stay as plain files nothing links.
  *
- * One combined results panel at the end (showResults): shell.finish reports a
+ * One combined outcome at the end (showResults): shell.finish reports a
  * single category's outcome, so the takeout does not use it. It lists the ZIPs
  * (or the folder) and the combined errors, and offers "Retry N failed" for the
  * Sources, Notes and Artifacts items that failed (never chat). A retry is an
  * ordinary tab export of those items (own ZIPs or folders) on the tab the takeout
  * ran on; it does not rewrite the takeout or its index. It marks its items on the
  * takeout's job record (updateRecord) without replacing it.
+ *
+ * It reads `settings` directly and wraps nothing itself: the caller runs it through
+ * withRunSettings, which is what turns the image copies on under Archive. zip: the
+ * export sheet's Save as, for this run only.
+ *
+ * @param {{ zip?: boolean }} [options]
  */
-async function runFullTakeout() {
+async function runFullTakeout({ zip = NLME.takeoutZipChoice(settings) } = {}) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!isNotebookUrl(tab?.url)) {
     showToast('Please open NotebookLM first', 'error');
@@ -633,12 +637,10 @@ async function runFullTakeout() {
   }
 
   startExportTiming();
-  const zipMode = takeoutZipEnabled();
+  const zipMode = zip;
   const citationMode = NLME.chatCitationMode(settings);
-  // A takeout always includes the with-images versions, whatever the tab exports tick
-  const variantSettings = NLME.takeoutVariantSettings(settings);
 
-  await withExportShell({ label: 'takeout', healthType: 'notes', overlayMessage: 'Preparing Full Takeout...', tabId: tab.id }, async shell => {
+  await withExportShell({ label: 'takeout', healthType: 'notes', overlayMessage: 'Preparing to export everything...', tabId: tab.id }, async shell => {
     const tabId = shell.tab.id;
     const root = NLME.fileStem(shell.projectName, { obsidian: !!settings.obsidianNames });
     // Obsidian-friendly names also cover the folder (its name is part of every link path)
@@ -655,7 +657,7 @@ async function runFullTakeout() {
           return sources;
         },
         // itemDir '': the category folder is already sources/ (notes/), no second one inside it
-        run: (catShell, items, target) => runSourcesJob(catShell, items, { ...target, variantSettings, itemDir: '' })
+        run: (catShell, items, target) => runSourcesJob(catShell, items, { ...target, itemDir: '' })
       },
       {
         name: 'Notes', folder: 'notes',
@@ -664,7 +666,7 @@ async function runFullTakeout() {
           stampJobKeys('notes', notes);
           return notes;
         },
-        run: (catShell, items, target) => runNotesJob(catShell, items, { ...target, variantSettings, itemDir: '' })
+        run: (catShell, items, target) => runNotesJob(catShell, items, { ...target, itemDir: '' })
       },
       {
         name: 'Chat', folder: 'chat',
@@ -678,7 +680,7 @@ async function runFullTakeout() {
         // Messages that could not be read are not "none in notebook": the
         // job still runs and writes them to errors.md
         isEmpty: chatData => NLME.chatScanIsEmpty(chatData),
-        run: (catShell, chatData, target) => runChatJob(catShell, chatData, { ...target, citationMode, forceZip: true, variantSettings })
+        run: (catShell, chatData, target) => runChatJob(catShell, chatData, { ...target, citationMode, forceZip: true })
       },
       {
         name: 'Artifacts', folder: 'artifacts',
@@ -710,13 +712,13 @@ async function runFullTakeout() {
     let stopRest = false;
 
     // 1. Scan everything up front
-    for (const [i, c] of categories.entries()) {
+    for (const c of categories) {
       if (shell.isCancelled()) {
         takeoutErrors.push({ type: 'cancelled', message: 'Cancelled by user during the scan; the remaining categories were skipped' });
         stopRest = true;
         break;
       }
-      shell.progress(`Scanning ${c.name.toLowerCase()}…`, i / categories.length);
+      shell.progress(`Scanning ${c.name.toLowerCase()}…`);
       try {
         c.items = await c.scan();
         c.selected = c.count ? c.count(c.items) : c.items.length;
@@ -736,14 +738,17 @@ async function runFullTakeout() {
       const c = categories.find(cat => cat.name === name);
       return !c.status && c.items ? c.items : [];
     };
-    const tracker = stopRest ? null : await startJobRecord(shell, 'takeout', 'Full Takeout', {
+    const tracker = stopRest ? null : await startJobRecord(shell, 'takeout', 'Export everything', {
       sources: recordedItems('Sources'),
       notes: recordedItems('Notes'),
       artifacts: recordedItems('Artifacts')
-    });
+    }, { zip: zipMode });
     let uncleanEnd = false; // a runner was cancelled or stopped
 
-    // 2. One runner per category, in order; a cancel skips the rest
+    // 2. One runner per category, in order; a cancel skips the rest. "N of M" counts
+    // over all of them: everything the scan found, chat's messages included.
+    const itemsTotal = NLME.takeoutCount(categories.filter(c => !c.status)).total;
+    let itemsBefore = 0;
     for (const c of categories) {
       if (c.status) continue; // empty, or the scan failed
       if (stopRest || shell.isCancelled()) {
@@ -756,7 +761,16 @@ async function runFullTakeout() {
         c.items = null;
         continue;
       }
-      const catShell = { ...shell, progress: (text, fraction) => shell.progress(`${c.name}: ${text}`, fraction) };
+      const later = categories.slice(categories.indexOf(c) + 1).filter(l => !l.status);
+      const catShell = {
+        ...shell,
+        progress: (text, count) => shell.progress(`${c.name}: ${text}`, count && {
+          done: itemsBefore + Math.min(count.done, c.selected),
+          total: itemsTotal,
+          item: count.item && `${c.name}: ${count.item}`,
+          rest: NLME.restCounts([[c.name, Math.max(0, c.selected - count.done)], ...later.map(l => [l.name, l.selected])])
+        })
+      };
       // Filled by the runner as each package is saved: read after a throw too,
       // so the index still links the parts already written
       const written = newWritten();
@@ -791,6 +805,7 @@ async function runFullTakeout() {
       c.parts = written.parts;
       c.packages = written.count;
       c.items = null; // free the scan data before the next category
+      itemsBefore += c.selected;
     }
 
     // Clean end: nothing cancelled, stopped or skipped. The record goes only when
@@ -804,7 +819,7 @@ async function runFullTakeout() {
 
     shell.finishing();
     // Images before the viewer: it may only link what was saved
-    shell.progress('Saving images...', 1);
+    shell.progress('Saving images...');
     const savedImages = await saveTakeoutImages(images, {
       root,
       folder,
@@ -814,7 +829,7 @@ async function runFullTakeout() {
     if (savedImages.failed) takeoutErrors.push(IMAGES_ERROR);
 
     let viewerHtml = null;
-    shell.progress('Building the offline viewer...', 1);
+    shell.progress('Building the offline viewer...');
     try {
       viewerHtml = await buildViewerHtml(viewerFiles, { ...shell.meta, emoji: await getNotebookEmoji(tabId) }, savedImages.paths);
     } catch (error) {
@@ -829,7 +844,7 @@ async function runFullTakeout() {
     ];
     const rootFilesWith = html => takeoutRootFiles({ meta: shell.meta, summary, errors: allErrors(), partial: cancelled, viewerHtml: html });
 
-    shell.progress('Writing the takeout index...', 1);
+    shell.progress('Writing the takeout index...');
     let rootWritten = true;
     let indexZip = null;
     const saveRoot = async files => {
@@ -875,7 +890,7 @@ async function runFullTakeout() {
     viewerHtml = null;
     const errors = allErrors();
 
-    // 4. One results panel for the whole takeout
+    // 4. One outcome for the whole takeout
     let { message, level } = NLME.summarizeTakeoutOutcome({
       categories: summary.map((c, i) => ({ ...c, errorCount: NLME.countExportErrors(categories[i].errors) })),
       auditOk: categories.every(c => c.auditOk)
@@ -900,8 +915,8 @@ async function runFullTakeout() {
     const failedSources = failedOf('Sources');
     const failedNotes = failedOf('Notes');
     const failedArtifacts = failedOf('Artifacts');
-    showTakeoutResults({ message, level, saved, errors },
-      { Sources: failedSources, Notes: failedNotes, Artifacts: failedArtifacts }, tabId);
+    showTakeoutResults({ message, count: NLME.takeoutCount(summary), level, saved, errors },
+      { Sources: failedSources, Notes: failedNotes, Artifacts: failedArtifacts }, tabId, zipMode);
   });
 }
 
@@ -911,75 +926,109 @@ async function runFullTakeout() {
 const TAKEOUT_RETRY_STEPS = [
   { name: 'Sources', run: (items, tabId) => exportSources(items, { tabId, updateRecord: true }) },
   { name: 'Notes', run: (items, tabId) => exportNotesAsMarkdown(items, { tabId, updateRecord: true }) },
-  { name: 'Artifacts', run: (items, tabId) => downloadAllArtifacts(tabId, items, { updateRecord: true }) }
+  { name: 'Artifacts', run: (items, tabId, zip) => downloadAllArtifacts(tabId, items, { updateRecord: true, zip }) }
 ];
 
-// Show a takeout-level results panel with "Retry N failed" for `failed`
+// Show a takeout-level outcome with "Retry N failed" for `failed`
 // ({ Sources: [...], Notes: [...], Artifacts: [...] }; chat is never retried).
-function showTakeoutResults(panel, failed, tabId) {
-  const shown = { ...panel, retry: takeoutRetry(failed, tabId, () => showResults({ ...shown, notify: false })) };
+// zip: the run's save choice, for the Artifacts step of its Retry.
+function showTakeoutResults(panel, failed, tabId, zip) {
+  const shown = { ...panel, retry: takeoutRetry(failed, tabId, () => showResults({ ...shown, notify: false }), zip) };
   showResults(shown);
 }
 
 /**
  * Run `fn` as a Retry / Resume chain: while it runs, requestCancel (sidebar.js)
  * notes a Cancel on the chain, so one pressed between two steps (no shell
- * active) still stops it. The flag is reset when the chain starts and ends.
+ * active) still stops it. The flag is reset when the chain starts and ends. The
+ * progress view stays up across the chain's exports.
  */
 async function runChain(fn) {
   chainActive = true;
   chainCancelRequested = false;
+  chainHolds++;
   try {
     return await fn();
   } finally {
     chainActive = false;
     chainCancelRequested = false;
+    chainHolds--;
+    hideProgressView();
   }
+}
+
+// false, and says so, when the tab the chain runs on has left the notebook of the
+// step before: the next step would read another notebook's page.
+async function chainTabOnRunNotebook(tabId) {
+  if (!dockRun) return true;
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!NLME.tabLeftPanelNotebook(tab?.url, dockRun.id)) return true;
+  } catch (_) {
+    return true; // closed: the step's own shell says so
+  }
+  showToast('The tab left this notebook, so the export stopped', 'warning');
+  return false;
 }
 
 /**
  * The steps shared by the takeout Retry and Resume, in TAKEOUT_RETRY_STEPS order
  * (chainSteps: the Generated export's own steps), each an ordinary tab export of
  * `itemsByName[step.name]` on `tabId`. Empty
- * categories are skipped. A cancel (the step's own, or the chain flag set between
+ * categories are skipped. zip: the run's save choice, which the Artifacts step
+ * takes; undefined leaves it on its default. A cancel (the step's own, or the chain flag set between
  * steps), a declined health-check dialog or an aborted step ends the chain: later
  * categories do not run. Call it inside runChain.
  *
  * @returns {{ steps: object[], notRun: object[] }} the inputs of
  *   NLME.combineRetryOutcomes
  */
-async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TAKEOUT_RETRY_STEPS) {
+async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TAKEOUT_RETRY_STEPS, zip) {
   const steps = [];
   const notRun = [];
   let stopped = false;
-  for (const step of chainSteps) {
-    const items = itemsByName[step.name] || [];
-    if (items.length === 0) continue;
-    if (chainCancelRequested) stopped = true;
-    if (stopped) { notRun.push({ name: step.name, failedItems: items }); continue; }
-    let out;
-    try {
-      out = await step.run(items, tabId);
-    } catch (error) {
-      console.error(`[NotebookLM Takeout] ${verb} ${step.name} failed:`, error);
-      showToast('Export failed. Please try again.', 'error');
+  const total = chainSteps.reduce((sum, step) => sum + (itemsByName[step.name] || []).length, 0);
+  chainProgress = { base: 0, total, step: null, later: [] };
+  holdStepResults = true;
+  heldStepResults = null;
+  try {
+    for (const step of chainSteps) {
+      const items = itemsByName[step.name] || [];
+      if (items.length === 0) continue;
+      if (chainCancelRequested) stopped = true;
+      if (!stopped && steps.length > 0 && !await chainTabOnRunNotebook(tabId)) stopped = true;
+      if (stopped) { notRun.push({ name: step.name, failedItems: items }); continue; }
+      chainProgress.step = step.name;
+      chainProgress.later = chainSteps.slice(chainSteps.indexOf(step) + 1).map(s => [s.name, (itemsByName[s.name] || []).length]);
+      let out;
+      try {
+        out = await step.run(items, tabId, zip);
+      } catch (error) {
+        console.error(`[NotebookLM Takeout] ${verb} ${step.name} failed:`, error);
+        showToast('Export failed. Please try again.', 'error');
+      }
+      chainProgress.base += items.length;
+      if (!out || !out.result) { // declined, aborted (tab closed, export threw)
+        stopped = true;
+        notRun.push({ name: step.name, failedItems: items });
+        continue;
+      }
+      steps.push({
+        name: step.name,
+        message: out.message,
+        level: out.level,
+        saved: out.saved,
+        errors: out.errors,
+        failedItems: out.result.failedItems || [],
+        exported: out.result.exported,
+        selected: out.selected,
+        stopped: !!(out.result.cancelled || out.result.stopped)
+      });
+      if (out.result.cancelled) stopped = true;
     }
-    if (!out || !out.result) { // declined, aborted (tab closed, export threw)
-      stopped = true;
-      notRun.push({ name: step.name, failedItems: items });
-      continue;
-    }
-    steps.push({
-      name: step.name,
-      message: out.message,
-      level: out.level,
-      saved: out.saved,
-      errors: out.errors,
-      failedItems: out.result.failedItems || [],
-      exported: out.result.exported,
-      stopped: !!(out.result.cancelled || out.result.stopped)
-    });
-    if (out.result.cancelled) stopped = true;
+  } finally {
+    chainProgress = null;
+    holdStepResults = false;
   }
   return { steps, notRun };
 }
@@ -989,20 +1038,22 @@ async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TA
  * exports one after another under one job lock, on the tab the takeout
  * scanned (not whichever tab is active now). A cancel or a declined
  * health-check dialog in one step ends the chain: later categories do not run.
- * It ends in ONE combined results panel (NLME.combineRetryOutcomes): a line
+ * It ends in ONE combined outcome (NLME.combineRetryOutcomes): a line
  * per category, the worst level, every ZIP and error, and a Retry for
  * everything still failed (including categories that did not run). When no
  * category ran at all, `restore` puts the previous panel back.
  *
  * @returns {{ count: number, run: () => Promise<any> }|null}
  */
-function takeoutRetry(failed, tabId, restore) {
+function takeoutRetry(failed, tabId, restore, zip) {
   const count = TAKEOUT_RETRY_STEPS.reduce((sum, step) => sum + (failed[step.name] || []).length, 0);
   if (count === 0) return null;
+  const rerun = rememberRunSettings();
   return {
     count,
-    run: () => runExclusive('Retry failed', async () => {
-      const { steps, notRun } = await runChain(() => runRetryChain(failed, tabId, 'Retry'));
+    // Inside the chain, which holds the view: the dock goes straight to these results
+    run: () => runExclusive('Retry', () => rerun(() => runChain(async () => {
+      const { steps, notRun } = await runRetryChain(failed, tabId, 'Retry', TAKEOUT_RETRY_STEPS, zip);
       if (steps.length === 0) {
         restore(); // the first step never ran: keep the panel and its Retry
         return;
@@ -1010,12 +1061,13 @@ function takeoutRetry(failed, tabId, restore) {
       const combined = NLME.combineRetryOutcomes({ steps, notRun });
       showTakeoutResults({
         message: combined.message,
+        count: combined.count,
         level: combined.level,
         lines: combined.lines,
         saved: combined.saved,
         errors: combined.errors
-      }, combined.remaining, tabId);
-    })
+      }, combined.remaining, tabId, zip);
+    })))
   };
 }
 
@@ -1071,10 +1123,10 @@ async function clearMissingFromRecord(record, missingByCategory) {
  * notebook are cleared from the record and listed in the panel as "not_found".
  * The exports run with updateRecord, so the record ends as the outcome: successes
  * cleared, failures kept. Like a retry it makes ordinary tab exports; it never
- * writes back into the original takeout's files. One combined results panel.
+ * writes back into the original takeout's files. One combined outcome.
  */
 function resumeJob(record) {
-  return runExclusive('Resume', () => runChain(async () => {
+  return runExclusive('Resume', () => withRunSettings(NLME.jobRecordOverrides(record, settings), () => runChain(async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab || !isNotebookUrl(tab.url) || NLME.notebookIdFromUrl(tab.url) !== record.notebookId) {
       showToast('Open the notebook this export was running on to resume it', 'warning');
@@ -1099,70 +1151,59 @@ function resumeJob(record) {
     const itemsByName = {};
     const missingByCategory = {};
     const extraErrors = [];
-    // No export shell is active while the categories are scanned, so show the
-    // progress panel with its Cancel button here (requestCancel sets
-    // chainCancelRequested, checked before each scan and again after the last).
-    // The finally hides it on every path: return, throw or normal end. The
-    // export steps that follow show it again through their own shells.
-    const scanPanel = document.getElementById('download-progress');
-    const scanFill = document.getElementById('progress-fill');
-    const scanText = document.getElementById('progress-text');
-    const scanSteps = RESUME_CATEGORIES.filter(c => NLME.jobResumeKeys(live, c.category).length > 0).length;
-    let scanDone = 0;
-    scanPanel.style.display = 'block';
-    scanText.textContent = 'Checking what is left\u2026';
-    scanFill.style.width = '0%';
-    try {
-      for (const { category, name, scan, regionOfType } of RESUME_CATEGORIES) {
-        const keys = NLME.jobResumeKeys(live, category);
-        if (keys.length === 0) continue;
-        scanText.textContent = `Checking ${name.toLowerCase()}\u2026`;
-        scanFill.style.width = `${(scanDone++ / scanSteps) * 100}%`;
-        if (chainCancelRequested) { showToast('Resume cancelled', 'info'); return; }
-        if (!(await onNotebook())) {
-          showToast('The tab left that notebook; resume stopped', 'warning');
-          return;
-        }
-        let items;
-        try {
-          items = await scan(tabId);
-        } catch (error) {
-          console.error(`[NotebookLM Takeout] Resume: ${name} scan failed:`, error);
-          extraErrors.push({ type: 'scan_failed', title: name, message: `Could not scan ${name.toLowerCase()} (${(error && error.message) || error}); its items stay in the list to resume` });
-          continue;
-        }
-        if (!(await onNotebook())) {
-          showToast('The tab left that notebook; resume stopped', 'warning');
-          return;
-        }
-        stampJobKeys(category, items); // over the full scan, before any subset is cut
-        // NLME.planResume: a scan that matches nothing (empty, still drawing, the wrong
-        // page) or lacks a whole region (Studio notes not drawn) cannot say a key is
-        // gone; those keys are `unknown`, reported and kept in the record
-        const { matched, missing, unknown } = NLME.planResume(keys, items, { ...JOB_KEY_ACCESSORS[category], regionOfType });
-        let runnable = matched;
-        if (category === 'artifacts') {
-          runnable = matched.filter(item => !item.disabled);
-          for (const item of matched.filter(item => item.disabled)) {
-            extraErrors.push({ type: 'not_ready', title: name, message: `${item.label} is not ready to download; it stays in the list to resume` });
-          }
-        }
-        if (runnable.length) itemsByName[name] = runnable;
-        if (unknown.length) {
-          for (const key of unknown) extraErrors.push({ type: 'scan_failed', title: name, message: `${NLME.jobKeyTitle(key)} could not be checked (the ${name.toLowerCase()} list looks incomplete; the page may still be loading); it stays in the list to resume` });
-        }
-        if (missing.length) {
-          missingByCategory[category] = missing;
-          for (const key of missing) extraErrors.push({ type: 'not_found', title: name, message: `${NLME.jobKeyTitle(key)} is no longer in the notebook` });
+    // No export shell is active while the categories are scanned, so open the
+    // progress view with its Cancel here (requestCancel sets chainCancelRequested,
+    // checked before each scan and again after the last). The chain holds it for the
+    // exports that follow, and closes it on every other way out.
+    dockRun = { id: record.notebookId, tabId, name: document.getElementById('notebook-name').textContent };
+    showProgressView({ text: 'Checking what is left\u2026' });
+    for (const { category, name, scan, regionOfType } of RESUME_CATEGORIES) {
+      const keys = NLME.jobResumeKeys(live, category);
+      if (keys.length === 0) continue;
+      paintProgressText(`Checking ${name.toLowerCase()}\u2026`);
+      if (chainCancelRequested) { showToast('Resume cancelled', 'info'); return; }
+      if (!(await onNotebook())) {
+        showToast('The tab left that notebook; resume stopped', 'warning');
+        return;
+      }
+      let items;
+      try {
+        items = await scan(tabId);
+      } catch (error) {
+        console.error(`[NotebookLM Takeout] Resume: ${name} scan failed:`, error);
+        extraErrors.push({ type: 'scan_failed', title: name, message: `Could not scan ${name.toLowerCase()} (${(error && error.message) || error}); its items stay in the list to resume` });
+        continue;
+      }
+      if (!(await onNotebook())) {
+        showToast('The tab left that notebook; resume stopped', 'warning');
+        return;
+      }
+      stampJobKeys(category, items); // over the full scan, before any subset is cut
+      // NLME.planResume: a scan that matches nothing (empty, still drawing, the wrong
+      // page) or lacks a whole region (Studio notes not drawn) cannot say a key is
+      // gone; those keys are `unknown`, reported and kept in the record
+      const { matched, missing, unknown } = NLME.planResume(keys, items, { ...JOB_KEY_ACCESSORS[category], regionOfType });
+      let runnable = matched;
+      if (category === 'artifacts') {
+        runnable = matched.filter(item => !item.disabled);
+        for (const item of matched.filter(item => item.disabled)) {
+          extraErrors.push({ type: 'not_ready', title: name, message: `${item.label} is not ready to download; it stays in the list to resume` });
         }
       }
-    } finally {
-      scanPanel.style.display = 'none';
+      if (runnable.length) itemsByName[name] = runnable;
+      if (unknown.length) {
+        for (const key of unknown) extraErrors.push({ type: 'scan_failed', title: name, message: `${NLME.jobKeyTitle(key)} could not be checked (the ${name.toLowerCase()} list looks incomplete; the page may still be loading); it stays in the list to resume` });
+      }
+      if (missing.length) {
+        missingByCategory[category] = missing;
+        for (const key of missing) extraErrors.push({ type: 'not_found', title: name, message: `${NLME.jobKeyTitle(key)} is no longer in the notebook` });
+      }
     }
     if (chainCancelRequested) { showToast('Resume cancelled', 'info'); return; }
     await clearMissingFromRecord(live, missingByCategory);
 
-    const { steps, notRun } = await runRetryChain(itemsByName, tabId, 'Resume');
+    const zip = NLME.jobRecordZip(live);
+    const { steps, notRun } = await runRetryChain(itemsByName, tabId, 'Resume', TAKEOUT_RETRY_STEPS, zip);
     if (steps.length === 0 && notRun.length === 0 && extraErrors.length === 0) {
       showToast('Nothing left to resume', 'info');
       return;
@@ -1175,10 +1216,11 @@ function resumeJob(record) {
     if (steps.length === 0 && notRun.length === 0) combined.message = 'Nothing was resumed'; // only notes about items
     showTakeoutResults({
       message: combined.message,
+      count: combined.count,
       level: combined.level,
       lines: combined.lines,
       saved: combined.saved,
       errors: combined.errors
-    }, combined.remaining, tabId);
-  }));
+    }, combined.remaining, tabId, zip);
+  })));
 }

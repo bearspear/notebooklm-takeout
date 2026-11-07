@@ -43,7 +43,7 @@ Flashcards and quizzes are listed but can't be exported yet, because Gemini Note
 
 **Convenience**
 
-- **Export everything** on the Home screen: the whole notebook in one click (a Full Takeout), with a progress overlay and **Cancel**
+- **Export everything** on the Home screen: the whole notebook in one run, with a progress overlay and **Cancel**
 - Batch export with ZIP packaging (the text is really compressed) and **Cancel**
 - Large exports split into several ZIPs (configurable batch size)
 - A uniform layout: every ZIP has `_index.md`, `_index.html` and `manifest.json`, every Markdown file starts
@@ -129,7 +129,7 @@ The quoted passage from the source…
 
 1. **Chat** tab → **Load chat** (scrolls to load the whole history and opens collapsed
    citation groups). The note above the button says this moves your place in the chat.
-2. Chat follows the **Citation detail** setting (the line above the list shows the current level):
+2. Choose the citations in the export sheet: the preset sets them, and Custom lets you pick.
    Full quotes adds the quoted passage for every citation (slower: it reads each citation's
    popup), Source titles only keeps the [n] links without quotes, No citations removes the
    [n] markers and the Sources section.
@@ -150,7 +150,7 @@ The quoted passage from the source…
    Notes tab. If you press Cancel during the artifacts, the notes do not start. Flashcards, quizzes and
    items with no More menu yet stay in the list so you can delete them, but they can't be exported. The
    button says how many ("Export 1 item · 2 can't be exported"), and the results list them by title as a warning.
-   Whether artifacts go to a ZIP or a folder follows the **Always use ZIP** setting.
+   Whether artifacts go to a ZIP or a folder is the export sheet's **Save as**.
    - **Download** saves one file named `[type]_Title.ext` (for example `[report]_Title.md`,
      `[mind-map]_Title.svg`). A Data Table or mind map saves as one ZIP (`[data-table]_Title.zip`, `[mind-map]_Title.zip`).
    - With **ZIP off** (recommended for whole notebooks), **Export N items** saves every ticked artifact into
@@ -170,20 +170,36 @@ The quoted passage from the source…
 3. Slide decks download as PDF or PowerPoint depending on **Settings → Slide deck format**. Older
    decks only offer PDF and always download as PDF.
 
+### The export sheet
+
+Every export opens a sheet first, for that one export: Export everything, each list's action and
+Chat. The row download buttons skip it and use your default preset.
+
+| Preset | |
+|---|---|
+| Archive | Full quotes and image copies. The default |
+| AI-ready | Source titles only, no image copies |
+| Custom | Choose citations, image copies and Obsidian-friendly file names |
+
+The sheet shows the estimated time for what you chose; a number it does not know yet is named
+("not counting chat"). Export everything, and Generated with artifacts selected, also offer
+**Save as**, a folder or a ZIP. Sources, notes and chat always go to ZIPs (or a single file).
+What you choose applies to this export and to its Retry and Resume. It does not change your defaults.
+On a Retry or Resume, Save as covers the artifacts only. Either one writes new files, as an ordinary
+export of those items: it never joins the folder of the export it continues.
+Press Escape or click outside the sheet to close it.
+
 ### Export everything
 
-**Export everything**, at the top of Home, is a Full Takeout: the whole notebook in one run,
+**Export everything**, at the top of Home, is the whole notebook in one run,
 sources, then notes, then chat, then artifacts. It scans each category first, so the progress
 shows what is coming; a category with nothing in it is reported as "none in notebook". It
-uses your Settings (versions, citation detail, slide format). Its own **ZIP** checkbox sits next
-to the button: ticked gives one ZIP per category (artifacts may be split into parts of about 500 MB), unticked a folder in Downloads. The choice is
-remembered; until you change it, it follows the "Always use ZIP" setting. Chat follows
-the **Citation detail** setting too, the same as the Chat tab (Full quotes, Source titles only or No
-citations). Every Slides artifact is saved twice, as `.pdf` and `.pptx`, whatever the slide
-format setting says (the Generated tab still uses that setting). Notes, sources and chat also
-always get their `-with-images` versions (for items that have images), whatever the image
-checkboxes in Settings say, so a takeout is complete without extra setup; the tabs still follow
-your checkboxes. The cost is bigger and slower takeouts for notebooks with many images.
+opens the export sheet, then uses your Settings for the rest (versions, slide format). **Save as** in the sheet
+gives one ZIP per category (artifacts may be split into parts of about 500 MB) or a folder in Downloads.
+Every Slides artifact is saved twice, as `.pdf` and `.pptx`, whatever the slide
+format setting says (the Generated tab still uses that setting). The Archive preset gives notes
+and sources their `-with-images` versions (for items that have images), so an export is complete
+without extra setup. The cost is bigger and slower exports for notebooks with many images.
 
 *With ZIP on* you get one ZIP per category (artifacts may be split into parts of about 500 MB) plus an index ZIP:
 
@@ -239,7 +255,7 @@ passing through memory, so this is the mode for large notebooks.
 
 #### The offline viewer
 
-Every Full Takeout also writes `viewer.html` at the top of the tree. Open it in a browser (no
+Every Export everything run also writes `viewer.html` at the top of the tree. Open it in a browser (no
 internet needed) to read your sources, notes and chat, and to open slides, audio and other
 artifacts, with citations linked to their sources. `_index.md` and `_index.html` link to it.
 
@@ -282,26 +298,32 @@ with their row's button.
 ### Cancelling
 
 Long exports show an overlay on the notebook page with progress and a **Cancel Export**
-button; the side panel's progress area has a Cancel button too. Cancelling stops within one
+button; the side panel's progress view has a **Cancel** button too. The progress view takes the
+place of the list while the export runs: how many items are done, the time left once there is a
+pace to go by, and the current item. The list comes back afterwards as you left it. Cancel goes
+away during Export everything's final save, which always runs to the end. Cancelling stops within one
 citation. Everything exported so far is saved as `…-PARTIAL.zip`, with `errors.md` when
 anything failed (a note in it records the cancellation), and the message says how many items
-were exported (e.g. "Cancelled: exported 4 of 10 notes"). For a Full Takeout see
+were exported (e.g. "Cancelled: exported 4 of 10 notes"). For Export everything see
 [Export everything](#export-everything).
 
 ### Results and Retry
 
-When an export ends, its outcome stays in a results panel under the progress area until you
-start another export or click **Dismiss**: what was exported, the ZIP names (or the Downloads
-folder) it was saved to, and the errors grouped by kind (collapsed; the first 20 of each, the
-rest are in `errors.md`). If items failed, **Retry N failed** exports just those again.
-(Chat exports have no Retry: re-export the chat.)
+When an export ends, its outcome takes the same place and stays until you click **Done** or start
+another export: how many items were exported, a plain line on how it went, the ZIP names (or the
+Downloads folder) it was saved to, and under that the errors grouped by kind (collapsed; the first
+20 of each, the rest are in `errors.md`). If items failed, **Retry N failed** exports just those
+again. It refuses if the tab has moved to another notebook: open the notebook the export ran on.
+(Chat exports have no Retry: re-export the chat.) **Done** goes back to where you started the
+export. If you switch notebooks meanwhile, the results stay, marked with their notebook's name,
+and Done goes to Home.
 
 ### Resume an unfinished export
 
-If an export stops early (you cancel it, the tab closes, the panel closes or a Full Takeout
+If an export stops early (you cancel it, the tab closes, the panel closes or Export everything
 runs into failures), the side panel remembers which items were left. When you open that
 notebook again, the panel opens on Home, where a card shows "An earlier Notes export stopped at 12 of
-40" (a Full Takeout reads "An earlier Full Takeout stopped at …") with **Resume (28 left)** and **Discard**.
+40" (Export everything reads "An earlier Export everything stopped at …") with **Resume (28 left)** and **Discard**.
 When the export ran to the end and only failed items are left, it reads "An earlier Notes export
 finished with 3 failed." with **Retry (3)**, which does the same as Resume for those items. It appears only while the active tab is that
 notebook, no export is running, and something is left; it goes away when you switch to
@@ -310,13 +332,13 @@ while you are on a list, you stay there and a dot on the back arrow says it is w
 
 **Resume** looks the left-over and failed items up again in the notebook (by type and title,
 so a renamed or deleted item is not guessed at), then exports them as an ordinary new export:
-Sources, then Notes, then Artifacts, ending in one results panel. Items that are no longer in
+Sources, then Notes, then Artifacts, ending in one set of results. Items that are no longer in
 the notebook are listed there as "no longer in the notebook" and dropped from the banner;
 items that fail again stay in it. If the page looks only partly loaded (a list not drawn yet),
 those items are reported as "could not be checked" and stay in the banner instead of being
 dropped. The files come as new ZIPs or folders; a resume never
-adds to the earlier export's files. Resume uses your current Settings (citation detail,
-versions, ZIP), not the ones of the stopped export. **Discard** forgets the earlier export. Chat exports are
+adds to the earlier export's files. Resume uses what you chose in the sheet for the stopped export (preset and
+Save as), and your current Settings for the rest. An export from before 1.9.3 uses your current Settings. **Discard** forgets the earlier export. Chat exports are
 never resumed. Cancel stops a resume between its steps, too.
 
 Only one export, scan or download runs at a time. While one runs, the panel's other buttons
@@ -327,22 +349,24 @@ are disabled and a second click shows "… is still running".
 | Setting | Default | |
 |---|---|---|
 | Show download notifications | on | In-panel toast when a single download finishes (the extension sends no system notifications) |
-| Always use ZIP for batch downloads | off | Artifacts exported from the Generated tab go to one ZIP instead of a folder. Also the starting value of the ZIP checkbox next to Export everything on Home |
+| Default preset | Archive | Where the export sheet starts, and what the row download buttons use |
+| Default save | Folder | Where **Save as** in the export sheet starts. If you used "Always use ZIP for batch downloads" before 1.9.3 and had never turned off the ZIP checkbox on Export everything, it starts on ZIP |
 | Theme | Auto | Auto (match the browser), Light or Dark |
 | Slide deck format | PDF | PDF or PowerPoint |
-| Source versions | base + metadata | Any mix of: base, with AI summary & topics, each optionally with images |
-| Citation detail (notes and chat) | Full quotes | "Source titles only" skips reading each citation's popup: much faster, every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. |
+| Source versions | base + metadata | Any mix of: base, with AI summary & topics. The metadata version can include images. Image copies of the base version come from the preset; AI-ready, and Custom with Image copies off, leave out the metadata version's images too |
+| Citations (Custom only) | Full quotes | Shown when Default preset is Custom. Notes and chat. "Source titles only" skips reading each citation's popup: much faster, every [n] still links to its source (one line per source), without the quoted passage. "No citations" removes the [n] markers and the Sources section for clean text. |
+| Image copies (Custom only) | on | Shown when Default preset is Custom. Also writes a `-with-images` version of each note, source and chat that has images |
 | Citation style | Links | "Footnotes (Obsidian, Typora, …)" writes `[^n]` markers and one footnote definition per source instead of `<sup>` links (see below). Notes and chat, "Full quotes" or "Source titles only"; the code-blocks version keeps links. |
-| Obsidian-friendly file names | off | Strips `[ ] # ^ \| \ : * ? " < >` from note, source, chat and artifact file names and names single downloads `note - Title` and `mind-map - Title` instead of `[NOTE]_Title` and `[mind-map]_Title` (see below) |
+| Obsidian-friendly file names (Custom only) | off | Shown when Default preset is Custom. Strips `[ ] # ^ \| \ : * ? " < >` from note, source, chat and artifact file names and names single downloads `note - Title` and `mind-map - Title` instead of `[NOTE]_Title` and `[mind-map]_Title` (see below) |
 | Reuse citation quotes from earlier exports | on | Notes and chat answers that have not changed since an earlier full-quote export take their citation quotes from a local cache instead of hovering every marker again (much faster re-exports). Not used for "Source titles only", "No citations" or image versions; only complete reads are stored. **Clear citation cache** empties it, for example after you edit a source. The cache needs the "unlimitedStorage" permission (no install warning), so reused quotes are kept for up to 20 notebooks. The `_audit.md` and `_index.md` show "Citations from cache: N of M items" when it was used. |
-| Note versions | base + code blocks | Base always; code-block quotes and an image version are added only when a note has quotes or images |
+| Note versions | base + code blocks | Base always; code-block quotes are added only when a note has quotes. Image copies come from the preset |
 | Sources / notes per ZIP | 25 | Batch size for large exports |
 | Clean OCR artifacts from citations | on | Strips `~~~`, `:~:` and similar noise |
 
 The chat export uses the note version settings.
 
-**Reset to defaults** (bottom of Settings) puts every option above back to the values in this table,
-after a confirm. It keeps the citation cache, Full Takeout's own ZIP tick and saved exports to resume.
+**Reset to defaults** (bottom of Settings) puts every option above except Default save back to the values
+in this table, after a confirm. It keeps Default save as it shows, the citation cache and saved exports to resume.
 
 ### Footnote citations and Obsidian-friendly names
 
@@ -501,9 +525,10 @@ sidebar-sources.js    Sources tab: scan, list, source export jobs
 sidebar-chat.js       Chat tab: scan, chat export job
 sidebar-generated.js  Generated tab: list, export, download and delete
 sidebar-health.js     DOM health check panel and report
+sidebar-sheet.js      Export sheet: preset, Save as, estimate, Start export
 sidebar-list.js       List toolbar: filter, type chips, sort, select all visible, remembered state
 sidebar-results.js    Results panel (outcome, saved files, errors, Retry)
-sidebar-takeout.js    File writer (ZIP/folder/single), export shell and Full Takeout
+sidebar-takeout.js    File writer (ZIP/folder/single), export shell and Export everything
 takeout-job.js        The one export job runner: batching, cancel, errors (unit tested)
 styles.css            Side panel styles
 content.js            Runs in the notebook page: scanning, extraction, citation popups
@@ -532,7 +557,7 @@ DOM behaviour is verified in Chrome with the health check and real exports.
 
 ### Checking an export
 
-`tools/validate_export.py` checks finished exports: ZIPs, extracted folders, Full Takeout folders
+`tools/validate_export.py` checks finished exports: ZIPs, extracted folders, Export everything folders
 or single `.md` downloads. It never writes next to them (ZIPs are unpacked into a temp folder).
 
 ```bash
@@ -545,7 +570,7 @@ python3 -I tools/validate_export.py NEW.zip --baseline OLD.zip --allow '\$[^$\n]
   `_audit.md` counts ("N of M") are complete; `_index.md` / `_index.html` links open; `_index.md`
   has front matter (from 1.7.0); every footnote has exactly one definition; no internal markers
   are left; no `[object …]` text; PARTIAL and failed exports are explained from `errors.md`; split
-  exports have every part and no item file appears in two parts; in a Full Takeout, viewer.html
+  exports have every part and no item file appears in two parts; in an Export everything run, viewer.html
   has readable data and every file it links exists (the link check needs the artifacts folder, so
   it is skipped for a category ZIP checked alone).
 - **Against a baseline:** files are compared after removing run details (dates, times, version,
@@ -559,6 +584,8 @@ python3 -I tools/validate_export.py NEW.zip --baseline OLD.zip --allow '\$[^$\n]
 contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
+
+**1.9.3 (Nov 2026)**: every export starts from a sheet: Archive, AI-ready or Custom, and where to save, with the estimated time. A choice is for that export and its Retry and Resume. While an export runs, one calm view takes the place of the list: how many items are done, the time left, the current item and Cancel. Results take the same place, with Retry and **Done**, which goes back to where you started with your filter and selection intact. Settings keeps only defaults: **Default preset** and **Default save**. Citations, image copies and Obsidian names show there under Custom, and the old citation, image-copy and "Always use ZIP" rows are gone. An existing "Always use ZIP" still sets where Save as starts. Row downloads and Retry refuse, and say so, if the tab has moved to another notebook. **Under Archive, the default, tab and row exports now write `-with-images` files too, take longer, and don't reuse cached quotes, and the Chat tab's export becomes a ZIP with images.** Export everything already did. AI-ready or Custom with Image copies off avoids this.
 
 **1.9.2 (Nov 2026)**: a new notebook opens on a Home screen. **Export everything** (the Full Takeout, with its ZIP checkbox) sits at the top, with a row for Sources, Notes, Generated and Chat showing what each holds. A back arrow returns to Home, and reopening the panel on the same notebook returns to the last list. The Resume card moved onto Home, so a notebook with an export to resume opens there.
 
@@ -656,7 +683,7 @@ contract with Gemini Notebook, past drift and recipes.
   checkbox is gone.
 - ZIP exports of artifacts are split into parts of about 500 MB (`-part1.zip`, `-part2.zip`; in a
   takeout `artifacts/part-1/`, …), so a big notebook no longer builds one huge ZIP in memory.
-- Full Takeout always includes `-with-images` versions for items that have images, and puts
+- Full Takeout includes `-with-images` versions for items that have images (from 1.9.3, under the Archive preset), and puts
   notes and sources straight into `notes/` and `sources/` (no more `notes/notes/`).
 - Fixes: the takeout index keeps parts written before a failure and links folders that hold only
   errors; unreadable chats count the messages on the page; downloads keep their real file

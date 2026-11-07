@@ -65,7 +65,7 @@ let _notesScanSeq = 0;
 // Single-note export from a row button: loose .md files, no ZIP
 async function handleNoteRowExport(note) {
   // JOB_BUSY: runExclusive has already shown the "still running" toast
-  await runExclusive('Note export', async () => {
+  await runRowExport('Note export', async () => {
     try {
       await exportSingleNote(note);
       showToast(`Exported "${note.title}"`, 'success');
@@ -142,16 +142,26 @@ function renderNotesList(notes) {
 
 }
 
-// The Notes action: exports what the current list has selected
-async function exportSelectedNotes() {
-  const selected = _notesListController ? _notesListController.selectedItems() : [];
-
-  if (selected.length === 0) {
+// The Notes action: opens the sheet for the selection. Start exports what the list
+// has selected then: a rescan may have redrawn it under the sheet.
+function exportSelectedNotes() {
+  const n = _notesListController ? _notesListController.selectedCount() : 0;
+  if (n === 0) {
     showToast('Please select at least one note', 'error');
     return;
   }
-
-  await runExclusive('Notes export', () => exportNotesAsMarkdown(selected));
+  openExportSheet({
+    title: NLME.actionLabel(n, 'note'),
+    counts: { notes: n },
+    start: ({ overrides }) => runExclusive('Notes export', () => withRunSettings(overrides, async () => {
+      const selected = _notesListController ? _notesListController.selectedItems() : [];
+      if (selected.length === 0) {
+        showToast('Nothing is selected now, so nothing was exported', 'warning');
+        return;
+      }
+      await exportNotesAsMarkdown(selected);
+    }))
+  });
 }
 
 // Notes export (Milestone 3a): the shared export shell around runNotesJob.
@@ -244,7 +254,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
     },
     packageBatch: async (notes, info) => {
       packaged += notes.length;
-      shell.progress(`Creating ZIP ${info.batchIndex}/${info.totalBatches}...`, 1);
+      shell.progress(`Creating ZIP ${info.batchIndex}/${info.totalBatches}...`);
       // Every part gets an _audit.md for its own items (what was added since
       // the previous part); the last part (an errors-only ZIP too: the outcome
       // toast may point at it) adds the run-wide totals as a second section.
@@ -291,7 +301,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
       const batchStart = (batchIndex - 1) * perZip;
       const batchSize = Math.min(perZip, total - batchStart);
       shell.progress(`Batch ${batchIndex}/${totalBatches}: Processing ${done - batchStart + 1}/${batchSize}: ${item.title}`,
-        (done + 1) / total);
+        { done, total, item: item.title });
       console.log(`[NotebookLM Takeout] Processing note ${done + 1}/${total}:`, item.title, 'index:', item.index);
     }
   }).finally(endImageSession);

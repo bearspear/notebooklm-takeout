@@ -484,7 +484,7 @@ body {
   margin: 4px 0 12px;
 }
 
-/* Home: Export everything with its ZIP choice, then one row per list */
+/* Home: Export everything, then one row per list */
 .home-view {
   margin-bottom: 12px;
 }
@@ -601,8 +601,7 @@ body {
 
 .home-row:focus-visible,
 .header-icon-btn:focus-visible,
-.home-export .btn:focus-visible,
-.takeout-zip input:focus-visible {
+.home-export .btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -614,20 +613,222 @@ body {
   }
 }
 
-.takeout-zip {
+/* Export sheet: docked at the bottom, its middle scrolls, Start stays in view.
+   Under the settings panels and toasts (z-index 1000) */
+.export-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
   display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  cursor: pointer;
-  white-space: nowrap;
+  flex-direction: column;
+  justify-content: flex-end;
 }
 
-.takeout-zip input {
+.export-sheet[hidden] {
+  display: none;
+}
+
+.export-sheet-scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+  animation: sheet-fade 160ms ease-out;
+}
+
+.export-sheet-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 400px;
+  min-height: 0;
+  max-height: calc(100% - 24px);
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--bg);
+  border-radius: 14px 14px 0 0;
+  box-shadow: 0 -8px 24px var(--shadow);
+  outline: none;
+  animation: sheet-up 160ms ease-out;
+}
+
+@keyframes sheet-up {
+  from { opacity: 0.6; transform: translateY(24px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes sheet-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.export-sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 8px 16px;
+}
+
+.export-sheet-head h2 {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.export-sheet-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 16px 12px;
+}
+
+.sheet-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  border: none;
+}
+
+.sheet-group[hidden] {
+  display: none;
+}
+
+.sheet-group legend,
+.sheet-label {
+  margin-bottom: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.sheet-pair {
+  display: flex;
+  gap: 8px;
+}
+
+.sheet-pair .sheet-option {
+  flex: 1;
+  min-width: 0;
+}
+
+.sheet-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
   cursor: pointer;
-  width: 14px;
-  height: 14px;
-  margin: 0;
+}
+
+.sheet-option:has(input:checked) {
+  background: var(--soft);
+  border-color: var(--accent);
+}
+
+.sheet-option:has(input:focus-visible),
+.sheet-check:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The label shows the focus, so the input does not repeat it */
+.sheet-option input:focus-visible,
+.sheet-check input:focus-visible {
+  outline: none;
+}
+
+.sheet-option input,
+.sheet-check input {
+  flex-shrink: 0;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.sheet-option strong {
+  display: block;
+  font-weight: 600;
+}
+
+.sheet-option small {
+  display: block;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.sheet-select {
+  width: 100%;
+  margin-bottom: 4px;
+  padding: 8px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.sheet-select:focus-visible,
+#sheet-start:focus-visible,
+#sheet-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sheet-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.export-sheet-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--line);
+}
+
+.sheet-estimate {
+  font-variant-numeric: tabular-nums;
+}
+
+.sheet-blocked {
+  font-size: 11.5px;
+  color: var(--warn);
+}
+
+/* Stays rendered: a live region must exist before it speaks. No height, no gap */
+.sheet-blocked:empty {
+  margin-bottom: -8px;
+}
+
+#sheet-start {
+  width: 100%;
+  transition: background 120ms ease;
+}
+
+#sheet-start:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .export-sheet-scrim,
+  .export-sheet-panel {
+    animation: none;
+  }
+
+  #sheet-start {
+    transition: none;
+  }
 }
 
 /* Spinner Animation */
@@ -685,27 +886,34 @@ body {
   background: var(--line);
 }
 
-/* Download Progress Panel */
+/* Progress: one view in the list's place while an export runs. Results take the same
+   place after it. Neither destroys the list: see setDock (sidebar-results.js). */
+body.docked #home-view,
+body.docked .tabs,
+body.docked #back-btn,
+body.docked .tab-content.active,
+body.docked #action-bar {
+  display: none;
+}
+
 .download-progress {
-  background: var(--surface);
-  border-radius: 8px;
-  padding: 12px;
-  margin-bottom: 16px;
-  border: 1px solid var(--line);
+  padding: 16px 0;
 }
 
-.progress-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.progress-header h3 {
+.progress-title {
   font-size: 13px;
   font-weight: 600;
   color: var(--muted);
-  margin: 0;
+  margin: 0 0 4px;
+}
+
+.progress-count {
+  min-height: 32px;
+  font-size: 26px;
+  line-height: 32px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
 }
 
 .btn-icon-small {
@@ -731,22 +939,50 @@ body {
   width: 100%;
   height: 6px;
   background: var(--line);
-  border-radius: 3px;
+  border-radius: 6px;
   overflow: hidden;
-  margin-bottom: 8px;
+  margin: 8px 0;
 }
 
 .progress-fill {
   height: 100%;
   background: var(--accent);
-  border-radius: 3px;
-  transition: width 0.3s ease;
+  border-radius: 6px;
+  transition: width 160ms ease;
+}
+
+.progress-left {
+  min-height: 16px;
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--muted);
 }
 
 .progress-text {
-  font-size: 12px;
+  min-height: 20px;
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.progress-note {
+  margin: 8px 0 16px;
+  font-size: 11.5px;
+  line-height: 16px;
   color: var(--muted);
-  margin: 0;
+}
+
+/* Gone during the final save, which runs to the end */
+#cancel-download-btn[hidden] {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-fill {
+    transition: none;
+  }
 }
 
 /* Settings Panel */
@@ -1183,15 +1419,6 @@ body {
 .download-single-btn:disabled:hover {
   background: transparent;
   color: var(--muted);
-}
-
-/* Progress text improvements */
-.progress-text {
-  font-size: 12px;
-  color: var(--muted);
-  margin: 0;
-  text-align: center;
-  font-weight: 500;
 }
 
 /* Toast warning style */
@@ -1761,12 +1988,23 @@ body.job-running .list-row {
 
 /* ========== RESULTS PANEL ========== */
 .results-panel {
-  background: var(--surface);
-  border-radius: 8px;
-  padding: 12px;
-  margin-bottom: 16px;
-  border: 1px solid var(--line);
+  padding: 16px 0;
   font-size: 13px;
+}
+
+.results-notebook {
+  margin: 0 0 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.results-count {
+  font-size: 26px;
+  line-height: 32px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
 }
 
 .results-message {
@@ -1825,18 +2063,18 @@ body.job-running .list-row {
 .results-actions {
   display: flex;
   gap: 8px;
-  margin-top: 8px;
+  margin: 8px 0;
+}
+
+.results-actions .btn {
+  flex: 1 1 auto;
+  width: auto;
+  margin-top: 0;
 }
 
 .results-actions .btn:disabled {
   opacity: 0.6;
   cursor: default;
-}
-
-.chat-citation-info {
-  margin: 12px 0;
-  font-size: 12px;
-  color: var(--muted);
 }
 
 .dialog-note {
