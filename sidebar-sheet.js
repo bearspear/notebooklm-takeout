@@ -69,7 +69,7 @@ function openExportSheet({ title, counts, offerSaveAs = false, start }) {
     showToast('Please open NotebookLM first', 'error');
     return false;
   }
-  // They are not modal: a keyboard reaches the buttons behind them
+  // A cover (Settings, the health check) would sit over the sheet
   if (['settings-panel', 'health-check-panel'].some(id => getComputedStyle(document.getElementById(id)).display !== 'none')) {
     showToast('Close this panel to export', 'warning');
     return false;
@@ -80,7 +80,7 @@ function openExportSheet({ title, counts, offerSaveAs = false, start }) {
   paintSheetChoice();
   syncExportSheet();
   document.getElementById('export-sheet').hidden = false;
-  document.querySelector('.container').inert = true;
+  syncCoverInert();
   document.addEventListener('keydown', handleSheetKey, true);
   document.getElementById('export-sheet-body').scrollTop = 0;
   document.querySelector('#export-sheet-panel input[name="sheet-preset"]:checked').focus({ preventScroll: true });
@@ -102,7 +102,7 @@ function closeExportSheet({ switched = false } = {}) {
   _sheet = null;
   document.removeEventListener('keydown', handleSheetKey, true);
   document.getElementById('export-sheet').hidden = true;
-  document.querySelector('.container').inert = false;
+  syncCoverInert();
   returnSheetFocus(switched ? null : opener);
 }
 

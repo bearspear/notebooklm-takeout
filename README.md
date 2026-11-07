@@ -297,7 +297,7 @@ with their row's button.
 
 ### Cancelling
 
-Long exports show an overlay on the notebook page with progress and a **Cancel Export**
+Long exports show an overlay on the notebook page with progress and a **Cancel export**
 button; the side panel's progress view has a **Cancel** button too. The progress view takes the
 place of the list while the export runs: how many items are done, the time left once there is a
 pace to go by, and the current item. The list comes back afterwards as you left it. Cancel goes
@@ -584,6 +584,8 @@ python3 -I tools/validate_export.py NEW.zip --baseline OLD.zip --allow '\$[^$\n]
 contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
+
+**1.9.4 (Nov 2026)**: the overlay on the notebook page is redrawn as a small card in the panel's light or dark colours: what is being saved, how many items, the current item, a progress bar and **Cancel export**, which gives way to "Finishing up" during the final save. Delete, Delete Selected and Reset settings ask in the panel's own dialog instead of the browser's, and the "NotebookLM looks different" warning uses the same dialog. Escape or a click outside cancels, and a delete starts on Cancel. Notices at the foot of the panel carry an icon; warnings and errors stay 6 seconds, can be closed, and wait while the pointer or keyboard is on them. The panel works from the keyboard: every control shows a focus ring, the list tabs move with the arrow keys, Home and End (Enter opens one), and Settings and the health check take the focus when they open, close with Escape and give it back. Motion is short (at most 160 ms) and stops when the system asks for reduced motion. Delete Selected is a red button now, like the Delete in its dialog, and the empty status bubble on Generated rows is gone.
 
 **1.9.3 (Nov 2026)**: every export starts from a sheet: Archive, AI-ready or Custom, and where to save, with the estimated time. A choice is for that export and its Retry and Resume. While an export runs, one calm view takes the place of the list: how many items are done, the time left, the current item and Cancel. Results take the same place, with Retry and **Done**, which goes back to where you started with your filter and selection intact. Settings keeps only defaults: **Default preset** and **Default save**. Citations, image copies and Obsidian names show there under Custom, and the old citation, image-copy and "Always use ZIP" rows are gone. An existing "Always use ZIP" still sets where Save as starts. Row downloads and Retry refuse, and say so, if the tab has moved to another notebook. **Under Archive, the default, tab and row exports now write `-with-images` files too, take longer, and don't reuse cached quotes, and the Chat tab's export becomes a ZIP with images.** Export everything already did. AI-ready or Custom with Image copies off avoids this.
 

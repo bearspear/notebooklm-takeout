@@ -16,9 +16,9 @@ async function runHealthCheck() {
   const resultsEl = document.getElementById('health-check-results');
 
   // Show panel with loading state
-  panel.style.display = 'block';
   loadingEl.style.display = 'flex';
   resultsEl.style.display = 'none';
+  openCover(panel.id);
 
   try {
     // Get current tab

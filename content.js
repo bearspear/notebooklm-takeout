@@ -140,7 +140,7 @@
       font: inherit; font-size: 13px; font-weight: 500;
       padding: 8px 16px; border: none; border-radius: 8px; cursor: pointer;
       background: var(--soft); color: var(--accent);
-      transition: background 160ms ease;
+      transition: background 120ms ease;
     }
     .cancel:hover { background: color-mix(in srgb, var(--soft) 80%, var(--accent)); }
     .cancel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

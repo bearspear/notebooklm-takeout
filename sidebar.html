@@ -15,7 +15,7 @@
     <header class="panel-header">
       <button id="back-btn" class="header-icon-btn back-btn" type="button" title="Back to Home" aria-label="Back to Home" hidden><span data-icon="back"></span><span id="back-resume-dot" class="back-resume-dot" hidden></span></button>
       <span id="notebook-name" class="notebook-name" title="Open a notebook">Open a notebook</span>
-      <div id="status" class="status">
+      <div id="status" class="status" aria-live="polite">
         <span class="status-dot"></span>
         <span id="status-text">Checking...</span>
       </div>
@@ -52,17 +52,17 @@
       </div>
     </div>
 
-    <div class="tabs" hidden>
-      <button class="tab-btn" data-tab="sources">Sources <span class="tab-count" hidden></span></button>
-      <button class="tab-btn" data-tab="notes">Notes <span class="tab-count" hidden></span></button>
-      <button class="tab-btn" data-tab="studio">Generated <span class="tab-count" hidden></span></button>
-      <button class="tab-btn" data-tab="chat">Chat <span class="tab-count" hidden></span></button>
+    <div class="tabs" role="tablist" aria-label="Lists" hidden>
+      <button type="button" id="tab-sources" class="tab-btn" data-tab="sources" role="tab" aria-selected="false" aria-controls="panel-sources" tabindex="-1">Sources <span class="tab-count" hidden></span></button>
+      <button type="button" id="tab-notes" class="tab-btn" data-tab="notes" role="tab" aria-selected="false" aria-controls="panel-notes" tabindex="-1">Notes <span class="tab-count" hidden></span></button>
+      <button type="button" id="tab-studio" class="tab-btn" data-tab="studio" role="tab" aria-selected="false" aria-controls="panel-studio" tabindex="-1">Generated <span class="tab-count" hidden></span></button>
+      <button type="button" id="tab-chat" class="tab-btn" data-tab="chat" role="tab" aria-selected="false" aria-controls="panel-chat" tabindex="-1">Chat <span class="tab-count" hidden></span></button>
     </div>
 
     <!-- Stays in the page while empty: a live region must exist before it speaks -->
     <p id="resume-notice" class="resume-notice" role="status"></p>
 
-    <div class="tab-content" data-tab-content="notes">
+    <div id="panel-notes" class="tab-content" data-tab-content="notes" role="tabpanel" aria-labelledby="tab-notes">
       <section id="notes-section" class="section">
         <div id="notes-results" class="scan-results">
           <p class="scanning">Scanning...</p>
@@ -70,7 +70,7 @@
       </section>
     </div>
 
-    <div class="tab-content" data-tab-content="sources">
+    <div id="panel-sources" class="tab-content" data-tab-content="sources" role="tabpanel" aria-labelledby="tab-sources">
       <section id="sources-section" class="section">
         <div id="sources-scan-results" class="scan-results">
           <p class="scanning">Scanning...</p>
@@ -78,7 +78,7 @@
       </section>
     </div>
 
-    <div class="tab-content" data-tab-content="chat">
+    <div id="panel-chat" class="tab-content" data-tab-content="chat" role="tabpanel" aria-labelledby="tab-chat">
       <section id="chat-section" class="section">
         <div class="chat-load">
           <p class="info-text">Takeout scrolls your chat panel to the top to load every message. Your place in the chat will move.</p>
@@ -94,7 +94,7 @@
       </section>
     </div>
 
-    <div class="tab-content" data-tab-content="studio">
+    <div id="panel-studio" class="tab-content" data-tab-content="studio" role="tabpanel" aria-labelledby="tab-studio">
       <section id="studio-section" class="section">
         <div class="studio-info">
           <p class="info-text">Everything Gemini Notebook generated: Studio items plus the notes in the Sources panel.</p>
@@ -108,7 +108,7 @@
 
     <div id="action-bar" class="action-bar" hidden>
       <button id="action-btn" class="btn btn-primary" disabled></button>
-      <button id="studio-delete-selected-btn" class="btn btn-danger" hidden disabled>
+      <button id="studio-delete-selected-btn" class="btn btn-destructive" hidden disabled>
         <span data-icon="trash"></span>
         Delete Selected
       </button>

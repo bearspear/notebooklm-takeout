@@ -6,6 +6,7 @@
   --accent: #0b57d0; --on-accent: #ffffff; --soft: #dce8fb; --ok: #14724a;
   --warn: #8f5300; --warn-bg: #fbedd6; --danger: #b3261e;
   --shadow: rgba(0, 0, 0, 0.2); --scrim: rgba(0, 0, 0, 0.5);
+  --ring: var(--accent);
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -159,93 +160,11 @@ body {
   font-size: 12px;
 }
 
-/* Artifact Groups */
-.artifact-group {
-  background: var(--surface);
-  border-radius: 8px;
-  margin-bottom: 8px;
-  overflow: hidden;
-}
-
-.artifact-group.empty {
-  opacity: 0.6;
-}
-
-.artifact-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  background: var(--bg);
-  border-bottom: 1px solid var(--line);
-}
-
-.artifact-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  background: var(--soft);
-  border-radius: 6px;
-  color: var(--accent);
-}
-
-.artifact-title {
-  flex: 1;
-  font-weight: 500;
-}
-
-.artifact-list {
-  max-height: 150px;
-  overflow-y: auto;
-}
-
-.artifact-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--line);
-}
-
-.artifact-item:last-child {
-  border-bottom: none;
-}
-
-.artifact-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.artifact-name {
-  display: block;
-  font-size: 13px;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.artifact-meta {
-  font-size: 11px;
-  color: var(--muted);
-}
-
-/* Empty State */
-.empty-state {
-  text-align: center;
-  padding: 24px 16px;
-  color: var(--muted);
-}
-
-.empty-state p {
-  margin-bottom: 8px;
-}
-
-.empty-state .hint {
-  font-size: 12px;
-  color: var(--muted);
+/* Focus: one ring on every control, shown when the keyboard moves it.
+   :where() keeps it weak, so a label can wear its input's ring (the sheet). */
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 /* Buttons */
@@ -260,7 +179,7 @@ body {
   border: none;
   border-radius: 8px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: background 120ms ease, color 120ms ease;
 }
 
 .btn-primary {
@@ -281,17 +200,6 @@ body {
   background: color-mix(in srgb, var(--soft) 80%, var(--accent));
 }
 
-.btn-danger {
-  background: color-mix(in srgb, var(--danger) 16%, var(--bg));
-  color: var(--danger);
-  width: 100%;
-  margin-top: 8px;
-}
-
-.btn-danger:hover {
-  background: color-mix(in srgb, var(--danger) 24%, var(--bg));
-}
-
 .btn-icon {
   display: flex;
   align-items: center;
@@ -303,18 +211,12 @@ body {
   border-radius: 6px;
   cursor: pointer;
   color: var(--muted);
-  transition: all 0.2s;
+  transition: background 120ms ease, color 120ms ease;
 }
 
 .btn-icon:hover {
   background: var(--line);
   color: var(--accent);
-}
-
-.button-group {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
 }
 
 .btn-link {
@@ -342,9 +244,10 @@ body {
   width: max-content;
   max-width: calc(100vw - 32px);
   padding: 10px 14px;
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--ink);
   color: var(--bg);
+  --ring: currentColor; /* the accent is too faint on a toast */
   box-shadow: 0 4px 16px var(--shadow);
   font-size: 13px;
   line-height: 1.4;
@@ -396,11 +299,6 @@ body {
   background: color-mix(in srgb, currentColor 16%, transparent);
 }
 
-.toast-close:focus-visible {
-  outline: 2px solid currentColor;
-  outline-offset: 1px;
-}
-
 .toast-hide {
   animation: toast-out 160ms ease forwards;
 }
@@ -417,31 +315,6 @@ body {
     opacity: 0;
     transform: translateX(-50%) translateY(8px);
   }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .toast,
-  .toast-hide {
-    animation: none;
-  }
-}
-
-/* Scrollbar */
-.artifact-list::-webkit-scrollbar {
-  width: 6px;
-}
-
-.artifact-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.artifact-list::-webkit-scrollbar-thumb {
-  background: var(--line);
-  border-radius: 3px;
-}
-
-.artifact-list::-webkit-scrollbar-thumb:hover {
-  background: var(--muted);
 }
 
 /* Scan Results */
@@ -511,30 +384,6 @@ body {
   font-style: italic;
 }
 
-/* Debug Output */
-.debug-output {
-  font-size: 11px;
-  background: var(--surface);
-  border-radius: 6px;
-  padding: 12px;
-  margin-top: 8px;
-}
-
-.debug-output p {
-  margin: 4px 0;
-  font-weight: 500;
-}
-
-.debug-output pre {
-  background: var(--bg);
-  padding: 8px;
-  border-radius: 4px;
-  overflow-x: auto;
-  font-size: 10px;
-  max-height: 100px;
-  margin: 4px 0 12px;
-}
-
 /* Home: Export everything, then one row per list */
 .home-view {
   margin-bottom: 12px;
@@ -552,7 +401,7 @@ body {
   min-width: 0;
   padding: 12px 16px;
   font-size: 15px;
-  transition: background 140ms ease;
+  transition: background 120ms ease;
 }
 
 .home-notice[hidden] {
@@ -589,7 +438,7 @@ body {
   font-size: 13px;
   text-align: left;
   cursor: pointer;
-  transition: background 140ms ease;
+  transition: background 120ms ease;
 }
 
 .home-row:hover:not(:disabled) {
@@ -648,20 +497,6 @@ body {
   margin: 0;
   padding: 0;
   background: none;
-}
-
-.home-row:focus-visible,
-.header-icon-btn:focus-visible,
-.home-export .btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .home-row,
-  .home-export .btn {
-    transition: none;
-  }
 }
 
 /* Export sheet: docked at the bottom, its middle scrolls, Start stays in view.
@@ -785,7 +620,7 @@ body {
 
 .sheet-option:has(input:focus-visible),
 .sheet-check:has(input:focus-visible) {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
@@ -822,13 +657,6 @@ body {
   background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 6px;
-}
-
-.sheet-select:focus-visible,
-#sheet-start:focus-visible,
-#sheet-close:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 
 .sheet-check {
@@ -871,31 +699,6 @@ body {
   cursor: default;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .export-sheet-scrim,
-  .export-sheet-panel {
-    animation: none;
-  }
-
-  #sheet-start {
-    transition: none;
-  }
-}
-
-/* Spinner Animation */
-.spinner {
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 /* ============================================
    SIDEBAR MODE ENHANCEMENTS
    ============================================ */
@@ -930,7 +733,7 @@ body {
   background: var(--surface);
   border-radius: 8px;
   margin-bottom: 8px;
-  transition: background 0.2s;
+  transition: background 120ms ease;
 }
 
 .scan-item:hover:not(.disabled) {
@@ -975,10 +778,10 @@ body.docked #action-bar {
   height: 24px;
   background: transparent;
   border: none;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: pointer;
   color: var(--muted);
-  transition: all 0.2s;
+  transition: background 120ms ease, color 120ms ease;
 }
 
 .btn-icon-small:hover {
@@ -1028,12 +831,6 @@ body.docked #action-bar {
 /* Gone during the final save, which runs to the end */
 #cancel-download-btn[hidden] {
   display: none;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .progress-fill {
-    transition: none;
-  }
 }
 
 /* Settings Panel */
@@ -1168,7 +965,6 @@ body.docked #action-bar {
 }
 
 .number-input:focus {
-  outline: none;
   border-color: var(--accent);
 }
 
@@ -1186,26 +982,12 @@ body.docked #action-bar {
 .sidebar-mode::-webkit-scrollbar-thumb,
 .scan-results::-webkit-scrollbar-thumb {
   background: var(--line);
-  border-radius: 4px;
+  border-radius: 6px;
 }
 
 .sidebar-mode::-webkit-scrollbar-thumb:hover,
 .scan-results::-webkit-scrollbar-thumb:hover {
   background: var(--muted);
-}
-
-/* Animation for status dot */
-.status-dot.active {
-  animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.6;
-  }
 }
 
 /* Empty state enhancement */
@@ -1260,7 +1042,7 @@ body.docked #action-bar {
   cursor: pointer;
   font-weight: 500;
   color: var(--muted);
-  transition: all 0.2s ease;
+  transition: color 120ms ease, border-color 120ms ease;
 }
 
 .tab-btn:hover {
@@ -1316,12 +1098,6 @@ body.docked #action-bar {
   font-size: 13px;
 }
 
-.list-search:focus,
-.list-sort:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
 .list-chips {
   display: flex;
   flex-wrap: wrap;
@@ -1332,7 +1108,7 @@ body.docked #action-bar {
 .chip {
   padding: 3px 10px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 14px;
   background: var(--bg);
   color: var(--ink);
   font-size: 12px;
@@ -1347,11 +1123,6 @@ body.docked #action-bar {
   background: var(--soft);
   border-color: var(--accent);
   color: var(--accent);
-}
-
-.chip:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 .list-controls {
@@ -1419,6 +1190,11 @@ body.docked #action-bar {
   pointer-events: none;
 }
 
+/* Shown only while a row download says something */
+.download-status:empty {
+  display: none;
+}
+
 .download-status .icon {
   width: 10px;
   height: 10px;
@@ -1431,12 +1207,6 @@ body.docked #action-bar {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .download-status.downloading .icon {
-    animation: none;
-  }
 }
 
 .download-status.downloading {
@@ -1502,9 +1272,9 @@ body.docked #action-bar {
   border: none;
   cursor: pointer;
   padding: 4px;
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--accent);
-  transition: background-color 0.2s;
+  transition: background-color 120ms ease;
   flex-shrink: 0;
 }
 
@@ -1623,21 +1393,13 @@ body.docked #action-bar {
   color: var(--bg);
 }
 
+.btn-destructive:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .btn-destructive:hover {
   background: color-mix(in srgb, var(--danger) 85%, var(--ink));
-}
-
-.panel-dialog .btn:focus-visible,
-.panel-dialog-list:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .panel-dialog[open],
-  .panel-dialog[open]::backdrop {
-    animation: none;
-  }
 }
 
 /* ============================================
@@ -1710,7 +1472,7 @@ body.docked #action-bar {
   align-items: center;
   gap: 12px;
   padding: 16px;
-  border-radius: 12px;
+  border-radius: 14px;
   background: var(--surface);
 }
 
@@ -1827,7 +1589,7 @@ body.docked #action-bar {
   padding: 12px 16px;
   cursor: pointer;
   user-select: none;
-  transition: background 0.2s;
+  transition: background 120ms ease;
 }
 
 .health-category-header:hover {
@@ -1875,7 +1637,7 @@ body.docked #action-bar {
 
 .health-category-toggle {
   color: var(--muted);
-  transition: transform 0.2s;
+  transition: transform 120ms ease;
 }
 
 .health-category.expanded .health-category-toggle {
@@ -2007,9 +1769,9 @@ body.docked #action-bar {
   border: none;
   cursor: pointer;
   padding: 4px;
-  border-radius: 4px;
+  border-radius: 6px;
   color: var(--danger);
-  transition: background-color 0.2s;
+  transition: background-color 120ms ease;
   flex-shrink: 0;
 }
 
@@ -2163,12 +1925,6 @@ body.job-running .list-row {
   cursor: default;
 }
 
-.dialog-note {
-  font-size: 13px;
-  color: var(--muted);
-  margin: 0 0 8px;
-}
-
 /* The shared action bar: one button docked under the open tab's list */
 .action-bar {
   position: sticky;
@@ -2211,4 +1967,16 @@ body.job-running .list-row {
 
 .chat-load .info-text {
   margin: 0;
+}
+
+/* Reduced motion: nothing slides, fades or spins. Toasts leave on a timer, so they
+   need no animation to go. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after,
+  ::backdrop {
+    animation: none !important;
+    transition: none !important;
+  }
 }

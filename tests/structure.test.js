@@ -436,7 +436,7 @@ test('the panel has one tab per list, in order, and nothing left of the Artifact
 test('the first paint is Home: no tab active, no action bar, Back hidden', () => {
   const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8');
   assert.doesNotMatch(html, /tab-btn active|tab-content active/);
-  assert.match(html, /<div class="tabs" hidden>/);
+  assert.match(html, /<div class="tabs"[^>]* hidden>/);
   assert.match(html, /<div id="action-bar" class="action-bar" hidden>/);
   assert.match(html, /<button id="back-btn"[^>]* aria-label="Back to Home" hidden>/);
   assert.ok(html.indexOf('id="home-view"') < html.indexOf('class="tabs"'), 'Home comes before the tabs');
@@ -730,4 +730,180 @@ test('the dialog backdrop closes only on a press and click both on the backdrop'
   const src = fnSource('sidebar-core.js', 'showDialog');
   assert.match(src, /addEventListener\('mousedown', \(e\) => \{ pressedBackdrop = e\.target === dialog; \}\)/);
   assert.match(src, /if \(pressedBackdrop && e\.target === dialog\) dialog\.close\(\);/);
+});
+
+// ---- Motion, focus and the tab list (Task 9) ----
+
+const PANEL_CSS = () => fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+// The overlay's own stylesheet in content.js: the template literal OVERLAY_STYLE
+function overlayCss() {
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const start = content.indexOf('OVERLAY_STYLE = `');
+  assert.ok(start >= 0, 'OVERLAY_STYLE not found in content.js');
+  return content.slice(start, content.indexOf('`;', start));
+}
+// Loaders that loop are the one kind of motion allowed to run longer
+const LOOPS = new Set(['spin', 'slide']);
+
+function declarations(css, property) {
+  return [...css.matchAll(new RegExp(`(?:^|[;{\\s])${property}\\s*:\\s*([^;}]+)`, 'g'))].map(m => m[1].trim());
+}
+function durationsMs(value) {
+  return [...value.matchAll(/(\d*\.?\d+)(ms|s)\b/g)].map(m => Number(m[1]) * (m[2] === 's' ? 1000 : 1));
+}
+function checkMotion(css, where) {
+  for (const value of declarations(css, 'transition')) {
+    if (/^none\b/.test(value)) continue;
+    for (const ms of durationsMs(value)) assert.ok(ms >= 120 && ms <= 160, `${where}: transition "${value}" is ${ms}ms, not 120 to 160ms`);
+    assert.ok(durationsMs(value).length > 0, `${where}: transition "${value}" has no duration`);
+  }
+  for (const value of declarations(css, 'animation')) {
+    if (/^none\b/.test(value)) continue;
+    const name = value.split(/\s+/).find(word => /^[a-z][\w-]*$/i.test(word) && !/^(ease|ease-in|ease-out|ease-in-out|linear|infinite|forwards|backwards|both|alternate)$/.test(word));
+    if (/\binfinite\b/.test(value)) {
+      assert.ok(LOOPS.has(name), `${where}: "${value}" loops but is not a loader`);
+      continue;
+    }
+    for (const ms of durationsMs(value)) assert.ok(ms >= 120 && ms <= 160, `${where}: animation "${value}" is ${ms}ms, not 120 to 160ms`);
+  }
+}
+function reducedMotionBlocks(css) {
+  const blocks = [];
+  let at = css.indexOf('@media (prefers-reduced-motion: reduce)');
+  while (at >= 0) {
+    let depth = 0, i = css.indexOf('{', at);
+    const open = i;
+    for (; i < css.length; i++) {
+      if (css[i] === '{') depth++;
+      else if (css[i] === '}' && --depth === 0) break;
+    }
+    blocks.push(css.slice(open + 1, i));
+    at = css.indexOf('@media (prefers-reduced-motion: reduce)', i);
+  }
+  return blocks;
+}
+
+test('panel motion runs 120 to 160ms; only loaders loop', () => {
+  checkMotion(PANEL_CSS(), 'styles.css');
+});
+
+test('reduced motion stops every animation and transition in the panel', () => {
+  const blocks = reducedMotionBlocks(PANEL_CSS());
+  assert.equal(blocks.length, 1, 'one reduced-motion block, for the whole panel');
+  const [block] = blocks;
+  assert.match(block, /\*,\s*\*::before,\s*\*::after,\s*::backdrop\s*\{/);
+  assert.match(block, /animation:\s*none\s*!important/);
+  assert.match(block, /transition:\s*none\s*!important/);
+});
+
+test('the page overlay keeps the same motion rules in its own stylesheet', () => {
+  const css = overlayCss();
+  checkMotion(css, 'content.js overlay');
+  const blocks = reducedMotionBlocks(css);
+  assert.equal(blocks.length, 1);
+  for (const property of ['transition', 'animation']) {
+    for (const rule of [...css.matchAll(new RegExp(`([^{}]+)\\{[^}]*${property}\\s*:\\s*(?!none)[^;}]+`, 'g'))]) {
+      const selector = rule[1].trim();
+      if (selector.startsWith('@') || /^(from|to)\b/.test(selector)) continue;
+      // every selector that moves is stopped under reduced motion
+      for (const one of selector.split(',').map(s => s.trim()).filter(Boolean)) {
+        assert.ok(blocks[0].includes(one), `overlay: "${one}" has ${property} but reduced motion leaves it on`);
+      }
+    }
+  }
+});
+
+test('one focus ring for every control, drawn from the theme', () => {
+  const css = PANEL_CSS();
+  const ring = css.match(/:where\(([^)]*)\):focus-visible\s*\{([^}]*)\}/);
+  assert.ok(ring, 'a :where(...):focus-visible ring');
+  for (const control of ['button', 'a', 'input', 'select', 'textarea', 'summary', '[tabindex]']) {
+    assert.ok(ring[1].split(',').map(s => s.trim()).includes(control), `the ring covers ${control}`);
+  }
+  assert.match(ring[2], /outline:\s*2px solid var\(--ring\)/);
+  assert.match(ring[2], /outline-offset:\s*2px/);
+  assert.match(css, /:root\s*\{[^}]*--ring:\s*var\(--accent\)/);
+  // No control draws its own ring; a label may wear its input's ring
+  for (const rule of css.matchAll(/([^{}]+)\{([^}]*outline[^}]*)\}/g)) {
+    const selector = rule[1].trim();
+    if (selector.startsWith(':where(')) continue;
+    if (/:has\(input:focus-visible\)/.test(selector)) { assert.match(rule[2], /var\(--ring\)/); continue; }
+    assert.match(rule[2], /outline:\s*none/, `${selector} sets its own outline`);
+  }
+  // Nothing turns the ring off on a control the keyboard reaches
+  for (const rule of css.matchAll(/([^{}]+)\{([^}]*outline:\s*none[^}]*)\}/g)) {
+    const selector = rule[1].trim();
+    assert.ok(/^\.sheet-option input:focus-visible,\s*\.sheet-check input:focus-visible$/.test(selector) || selector === '.export-sheet-panel',
+      `${selector} hides the focus ring`);
+  }
+});
+
+test('one destructive button class', () => {
+  const readers = ['styles.css', 'sidebar.html', ...fs.readdirSync(ROOT).filter(f => /^sidebar-.*\.js$/.test(f))];
+  for (const file of readers) {
+    assert.doesNotMatch(fs.readFileSync(path.join(ROOT, file), 'utf8'), /btn-danger/, `${file} still names btn-danger`);
+  }
+  assert.match(PANEL_CSS(), /\.btn-destructive\s*\{/);
+});
+
+test('every class and id the panel stylesheet names has a reader', () => {
+  const css = PANEL_CSS();
+  const readers = ['sidebar.html', ...fs.readdirSync(ROOT).filter(f => /^(sidebar-|takeout-).*\.js$/.test(f))]
+    .map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
+  const names = new Set();
+  for (const m of css.matchAll(/([^{}]+)\{/g)) {
+    const selector = m[1].trim();
+    if (selector.startsWith('@') || /^(from|to|\d+%)\b/.test(selector)) continue;
+    for (const t of selector.matchAll(/[.#]([A-Za-z_][\w-]*)/g)) names.add(t[1]);
+  }
+  // Built by concatenation: toast-${type}, results-${level}
+  const built = /^(toast|results)-(success|info|warning|error)$/;
+  const dead = [...names].filter(name => !built.test(name) && !new RegExp(`(^|[^\\w-])${name}($|[^\\w-])`).test(readers));
+  assert.deepEqual(dead, []);
+});
+
+test('the list tabs are a tablist with a roving tabindex and arrow keys', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8');
+  assert.match(html, /<div class="tabs" role="tablist" aria-label="Lists" hidden>/);
+  for (const tab of ['sources', 'notes', 'studio', 'chat']) {
+    const button = html.match(new RegExp(`<button[^>]*data-tab="${tab}"[^>]*>`));
+    assert.ok(button, `tab ${tab}`);
+    assert.match(button[0], /role="tab"/);
+    assert.match(button[0], new RegExp(`id="tab-${tab}"`));
+    assert.match(button[0], new RegExp(`aria-controls="panel-${tab}"`));
+    assert.match(button[0], /aria-selected="false"/);
+    assert.match(button[0], /tabindex="-1"/);
+    const panel = html.match(new RegExp(`<div[^>]*data-tab-content="${tab}"[^>]*>`));
+    assert.match(panel[0], new RegExp(`id="panel-${tab}"`));
+    assert.match(panel[0], /role="tabpanel"/);
+    assert.match(panel[0], new RegExp(`aria-labelledby="tab-${tab}"`));
+  }
+  const show = fnSource('sidebar-core.js', 'showView');
+  assert.match(show, /btn\.setAttribute\('aria-selected', String\(on\)\)/);
+  assert.match(show, /btn\.tabIndex = on \? 0 : -1/);
+  const keys = fnSource('sidebar-core.js', 'handleTabKey');
+  for (const key of ['ArrowLeft', 'ArrowRight', 'Home', 'End']) assert.ok(keys.includes(`'${key}'`), key);
+  assert.match(fnSource('sidebar-core.js', 'setupTabSwitching'), /tabList\.addEventListener\('keydown', handleTabKey\)/);
+});
+
+test('the header status speaks only when it changes', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8');
+  assert.match(html, /<div id="status" class="status" aria-live="polite">/);
+  const check = fnSource('sidebar-core.js', 'checkStatus');
+  assert.doesNotMatch(check, /statusText\.textContent = /);
+  assert.match(fnSource('sidebar-core.js', 'setStatusText'), /if \(el\.textContent !== text\) el\.textContent = text;/);
+});
+
+test('Settings and the health check take the keyboard in and give it back', () => {
+  const core = fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8');
+  assert.doesNotMatch(core, /getElementById\('(settings-panel|health-check-panel)'\)\.style\.display = /);
+  assert.doesNotMatch(fs.readFileSync(path.join(ROOT, 'sidebar-health.js'), 'utf8'), /panel\.style\.display = 'block'/);
+  const open = fnSource('sidebar-core.js', 'openCover');
+  assert.match(open, /syncCoverInert\(\)/);
+  assert.match(open, /focus\(\{ preventScroll: true \}\)/);
+  const close = fnSource('sidebar-core.js', 'closeCover');
+  assert.match(close, /syncCoverInert\(\)/);
+  assert.match(fnSource('sidebar-core.js', 'handleCoverKey'), /'Escape'/);
+  // The export sheet gives inert back through the same rule, so a cover stays modal
+  assert.match(fnSource('sidebar-sheet.js', 'closeExportSheet'), /syncCoverInert\(\)/);
 });

@@ -647,7 +647,7 @@ function setupEventListeners() {
 
   document.getElementById('settings-btn').addEventListener('click', () => {
     closeExportSheet();
-    document.getElementById('settings-panel').style.display = 'block';
+    openCover('settings-panel');
   });
 
   document.getElementById('reset-settings-btn')?.addEventListener('click', async () => {
@@ -673,7 +673,7 @@ function setupEventListeners() {
   });
 
   document.getElementById('close-settings-btn').addEventListener('click', () => {
-    document.getElementById('settings-panel').style.display = 'none';
+    closeCover('settings-panel');
     // While writes are blocked there is nothing to save: each change already said so
     if (settingsStored) saveSettings();
   });
@@ -689,9 +689,8 @@ function setupEventListeners() {
     runExclusive('Health check', runHealthCheck);
   });
 
-  document.getElementById('close-health-check-btn').addEventListener('click', () => {
-    document.getElementById('health-check-panel').style.display = 'none';
-  });
+  document.getElementById('close-health-check-btn').addEventListener('click', () => closeCover('health-check-panel'));
+  document.addEventListener('keydown', handleCoverKey);
 
   document.getElementById('rerun-health-check-btn').addEventListener('click', () => {
     runExclusive('Health check', runHealthCheck);
@@ -774,6 +773,9 @@ function setupTabSwitching() {
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => openTab(btn.dataset.tab));
   });
+  const tabList = document.querySelector('.tabs');
+  tabList.addEventListener('keydown', handleTabKey);
+  tabList.addEventListener('focusout', (e) => { if (!tabList.contains(e.relatedTarget)) resetTabStops(); });
   // Chat's row only opens the tab: Load chat scrolls the page, so it stays a click there
   document.querySelectorAll('.home-row').forEach(row => {
     row.addEventListener('click', () => openTab(row.dataset.homeTab, { focus: true }));
@@ -782,6 +784,87 @@ function setupTabSwitching() {
     showView('home', { focus: true });
     return refreshHome(); // a count cleared since (a delete in Generated) is read again
   });
+}
+
+// The tab list: arrows, Home and End move the focus; Enter or Space opens the tab.
+// Opening scans the page, so moving along the tabs does not open each one.
+// Tab leaves for the open tab's list (one stop: the roving tabindex).
+const TAB_KEYS = { ArrowLeft: -1, ArrowRight: 1 };
+function handleTabKey(event) {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  const tabs = Array.from(document.querySelectorAll('.tab-btn'));
+  const at = tabs.indexOf(document.activeElement);
+  if (at < 0) return;
+  let next;
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') next = (at + TAB_KEYS[event.key] + tabs.length) % tabs.length;
+  else if (event.key === 'Home') next = 0;
+  else if (event.key === 'End') next = tabs.length - 1;
+  else return;
+  event.preventDefault();
+  tabs.forEach((btn, i) => { btn.tabIndex = i === next ? 0 : -1; });
+  tabs[next].focus();
+}
+
+// Back to one tab stop, on the open tab, when the focus leaves the list
+function resetTabStops() {
+  document.querySelectorAll('.tab-btn').forEach(btn => { btn.tabIndex = btn.classList.contains('active') ? 0 : -1; });
+}
+
+// ---- Covers: Settings and the health check fill the panel ----
+// What a cover hides leaves the tab order (inert), Escape closes the top one, and
+// the keyboard goes back to the button that opened it. Bottom to top:
+const COVERS = [
+  { id: 'settings-panel', close: 'close-settings-btn' },
+  { id: 'health-check-panel', close: 'close-health-check-btn' }
+];
+const _coverOpeners = {};
+
+function coverIsOpen(id) {
+  return getComputedStyle(document.getElementById(id)).display !== 'none';
+}
+
+// The one rule for what is inert: the lists under a cover or the export sheet,
+// and any cover under the top one
+function syncCoverInert() {
+  const open = COVERS.filter(cover => coverIsOpen(cover.id));
+  const top = open[open.length - 1];
+  document.querySelector('.container').inert = open.length > 0 || !!_sheet;
+  COVERS.forEach(cover => { document.getElementById(cover.id).inert = !!top && cover !== top; });
+}
+
+// Called again while open (Run Again): the opener stays the first one
+function openCover(id) {
+  const cover = COVERS.find(c => c.id === id);
+  const panel = document.getElementById(id);
+  if (!coverIsOpen(id)) _coverOpeners[id] = document.activeElement;
+  panel.style.display = 'block';
+  syncCoverInert();
+  const held = document.activeElement;
+  if (!panel.contains(held) || held.getClientRects().length === 0) {
+    document.getElementById(cover.close).focus({ preventScroll: true });
+  }
+}
+
+function closeCover(id) {
+  if (!coverIsOpen(id)) return;
+  document.getElementById(id).style.display = 'none';
+  syncCoverInert();
+  const opener = _coverOpeners[id];
+  delete _coverOpeners[id];
+  const usable = opener && opener.isConnected && !opener.disabled && opener.getClientRects().length > 0 && !opener.closest('[inert]');
+  if (usable) opener.focus({ preventScroll: true });
+  else focusView(panelView);
+}
+
+// Escape closes the top cover through its close button, so Settings still saves.
+// A dialog or the export sheet answers its own Escape.
+function handleCoverKey(event) {
+  if (event.key !== 'Escape' || event.defaultPrevented) return;
+  if (event.target?.closest?.('dialog') || document.querySelector('dialog[open]')) return;
+  const top = COVERS.filter(cover => coverIsOpen(cover.id)).pop();
+  if (!top) return;
+  event.preventDefault();
+  document.getElementById(top.close).click();
 }
 
 // Open a list, then scan it (not while a job runs)
@@ -832,7 +915,12 @@ function showView(view, { save = true, focus = false } = {}) {
   document.getElementById('home-view').hidden = !home;
   document.querySelector('.tabs').hidden = home;
   document.getElementById('back-btn').hidden = home;
-  document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === target));
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    const on = btn.dataset.tab === target;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', String(on));
+    btn.tabIndex = on ? 0 : -1;
+  });
   document.querySelectorAll('.tab-content').forEach(content => content.classList.toggle('active', content.dataset.tabContent === target));
   applyOpenTabAction();
   if (home) document.getElementById('resume-notice').textContent = ''; // the card itself shows here
@@ -1474,6 +1562,11 @@ async function mindmapFiles(stem, svgContent, treeData, title) {
   return files;
 }
 
+// #status is a live region and checkStatus runs on every tab event: same text, no news
+function setStatusText(el, text) {
+  if (el.textContent !== text) el.textContent = text;
+}
+
 async function checkStatus() {
   const statusDot = document.querySelector('.status-dot');
   const statusText = document.getElementById('status-text');
@@ -1489,20 +1582,20 @@ async function checkStatus() {
     if (isNotebookUrl(tab?.url)) {
       statusDot.classList.remove('inactive');
       statusDot.classList.add('active');
-      statusText.textContent = 'Connected';
+      setStatusText(statusText, 'Connected');
       statusText.title = 'Connected to NotebookLM';
       showOpenLink(false);
     } else {
       statusDot.classList.remove('active');
       statusDot.classList.add('inactive');
-      statusText.textContent = 'Not connected';
+      setStatusText(statusText, 'Not connected');
       statusText.title = 'Not on NotebookLM';
       showOpenLink(true);
     }
   } catch (error) {
     statusDot.classList.remove('active');
     statusDot.classList.add('inactive');
-    statusText.textContent = 'Unknown';
+    setStatusText(statusText, 'Unknown');
     statusText.title = 'Unable to check status';
     showOpenLink(false);
     homeOnSite = false;
