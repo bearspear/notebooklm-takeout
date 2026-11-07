@@ -47,7 +47,9 @@ async function scanChatPage() {
     // Show overlay on page
     await chrome.tabs.sendMessage(tab.id, {
       type: NLME.MSG.SHOW_EXPORT_OVERLAY,
-      message: 'Scanning chat history...'
+      message: 'Scanning chat history...',
+      ...NLME.overlayView('Scanning chat history...', null),
+      heading: 'Scanning chat'
     });
 
     // Trigger auto-scroll and scan

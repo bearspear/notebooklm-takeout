@@ -364,7 +364,8 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
     // Overlay on the page
     await chrome.tabs.sendMessage(tab.id, {
       type: NLME.MSG.SHOW_EXPORT_OVERLAY,
-      message: overlayMessage || 'Preparing to export...'
+      message: overlayMessage || 'Preparing to export...',
+      ...NLME.overlayView(overlayMessage || 'Preparing to export...', null)
     });
     overlayShown = true;
 
@@ -395,7 +396,11 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
         cancelBtn.disabled = true;
         cancelBtn.hidden = true;
         setProgressFinishing();
-        chrome.tabs.sendMessage(tabId, { type: NLME.MSG.UPDATE_EXPORT_OVERLAY, hideCancel: true }).catch(() => {});
+        chrome.tabs.sendMessage(tabId, {
+          type: NLME.MSG.UPDATE_EXPORT_OVERLAY,
+          hideCancel: true,
+          ...NLME.overlayView('', null, { finishing: true })
+        }).catch(() => {});
       },
       progress(text, count) {
         const percent = count ? setProgressCount(count.done, count.total, count.rest) : progressRun?.percent ?? 0;
@@ -403,7 +408,9 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
         chrome.tabs.sendMessage(tabId, {
           type: NLME.MSG.UPDATE_EXPORT_OVERLAY,
           message: text,
-          progress: percent
+          progress: percent,
+          // The panel's count: across a resume chain, not just this step
+          ...NLME.overlayView(text, count && progressRun ? { ...count, done: progressRun.done, total: progressRun.total } : count, { finishing: finishingStarted })
         }).catch(() => {}); // overlay is cosmetic; never abort the job
       },
       finish({ kind, selected, result = {}, auditOk = true, stoppedMessage, errorNote, saved = [], retry = null } = {}) {

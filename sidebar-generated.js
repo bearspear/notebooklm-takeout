@@ -333,7 +333,13 @@ async function handleStudioDownloadRow(item, btn) {
 async function handleStudioDeleteRow(item, btn) {
   if (!item || !isStudioItemDeletable(item)) return;
 
-  if (!confirm(`Delete "${item.label}"? This cannot be undone.`)) return;
+  const sure = await showDialog({
+    title: `Delete "${item.label}"?`,
+    body: 'It is removed from the notebook. This cannot be undone.',
+    confirmLabel: 'Delete',
+    danger: true
+  });
+  if (!sure) return;
 
   if (btn) btn.disabled = true;
   try {
@@ -361,8 +367,15 @@ async function handleStudioBulkDelete() {
     return;
   }
 
+  const n = deletable.length;
   const skippedNote = skipText ? `\n\n${skipText} will be skipped; delete those one by one.` : '';
-  if (!confirm(`Delete ${deletable.length} item(s)? This cannot be undone.${skippedNote}`)) return;
+  const sure = await showDialog({
+    title: n === 1 ? 'Delete 1 item?' : `Delete ${n} items?`,
+    body: `${n === 1 ? 'It is' : 'They are'} removed from the notebook. This cannot be undone.${skippedNote}`,
+    confirmLabel: `Delete ${n}`,
+    danger: true
+  });
+  if (!sure) return;
 
   const bulkBtn = document.getElementById('studio-delete-selected-btn');
   if (bulkBtn) bulkBtn.disabled = true;

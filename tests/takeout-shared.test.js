@@ -3398,3 +3398,37 @@ test('Reset keeps what Default save shows, from a stored autoZip too', () => {
   assert.equal(NLME.resetSettings({ ...NLME.DEFAULT_SETTINGS, autoZip: true, takeoutZip: false }).takeoutZip, false);
   assert.equal(NLME.resetSettings({ ...NLME.DEFAULT_SETTINGS }).takeoutZip, undefined);
 });
+
+test('overlayView names the category, part, count and item of a notes batch', () => {
+  assert.deepEqual(
+    NLME.overlayView('Notes: Batch 1/2: Processing 1/25: Celestial Hierarchy', { done: 0, total: 46, item: 'Celestial Hierarchy' }),
+    { heading: 'Exporting notes', line: 'Part 1 of 2 · 1 of 46', item: 'Celestial Hierarchy', percent: 0 }
+  );
+});
+
+test('overlayView takes the item from an Extracting text and leaves percent null without a count', () => {
+  assert.deepEqual(
+    NLME.overlayView('Sources: Batch 2/4: Extracting 3/25: A', null),
+    { heading: 'Exporting sources', line: 'Part 2 of 4', item: 'A', percent: null }
+  );
+});
+
+test('overlayView keeps an uncategorised text whole and counts from done + 1', () => {
+  assert.deepEqual(
+    NLME.overlayView('Processing message 4/10', { done: 3, total: 10 }),
+    { heading: 'Exporting', line: '4 of 10', item: 'Processing message 4/10', percent: 30 }
+  );
+});
+
+test('overlayView says Saving files while finishing', () => {
+  assert.deepEqual(
+    NLME.overlayView('Saving images...', null, { finishing: true }),
+    { heading: 'Saving files', line: '', item: 'Saving images...', percent: null }
+  );
+});
+
+test('overlayView caps the count at the total', () => {
+  const view = NLME.overlayView('', { done: 46, total: 46 });
+  assert.equal(view.line, '46 of 46');
+  assert.equal(view.percent, 100);
+});

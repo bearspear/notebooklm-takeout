@@ -408,13 +408,15 @@ test('a Generated export with one side empty runs only the other', async () => {
 });
 
 test('Generated keeps the delete guards', () => {
-  const generated = fs.readFileSync(path.join(ROOT, 'sidebar-generated.js'), 'utf8');
   const send = fnSource('sidebar-generated.js', 'sendStudioDelete');
   assert.match(send, /useIndex \? \{ label: item\.label, combinedIndex: item\.combinedIndex \} : \{ label: item\.label \}/);
   assert.match(fnSource('sidebar-generated.js', 'handleStudioBulkDelete'), /useIndex: false/);
   assert.match(fnSource('sidebar-generated.js', 'handleStudioBulkDelete'), /NLME\.bulkDeletePlan\(/);
-  assert.match(generated, /confirm\(`Delete "\$\{item\.label\}"\? This cannot be undone\.`\)/);
-  assert.match(generated, /confirm\(`Delete \$\{deletable\.length\} item\(s\)\? This cannot be undone\.\$\{skippedNote\}`\)/);
+  // Both deletes ask first, in the panel's own danger dialog
+  const row = fnSource('sidebar-generated.js', 'handleStudioDeleteRow');
+  assert.match(row, /await showDialog\(\{\s*title: `Delete "\$\{item\.label\}"\?`[\s\S]*danger: true[\s\S]*if \(!sure\) return;/);
+  const bulkDelete = fnSource('sidebar-generated.js', 'handleStudioBulkDelete');
+  assert.match(bulkDelete, /await showDialog\(\{[\s\S]*\$\{skippedNote\}[\s\S]*confirmLabel: `Delete \$\{n\}`[\s\S]*danger: true[\s\S]*if \(!sure\) return;/);
   // Hidden with its tab; off during a job
   const bulk = fnSource('sidebar-generated.js', 'updateStudioBulkButtonsState');
   assert.match(bulk, /deleteBulkBtn\.hidden = !controller \|\| openPanelTab\(\) !== 'studio'/);
@@ -641,4 +643,37 @@ test('a notebook switch closes the sheet, and Settings and Health Check do too',
   assert.match(core, /'settings-btn'\)\.addEventListener\('click', \(\) => \{\s+closeExportSheet\(\);/);
   const health = fs.readFileSync(path.join(ROOT, 'sidebar-health.js'), 'utf8');
   assert.match(health.slice(health.indexOf('function runHealthCheck(')), /^[^]*?closeExportSheet\(\);/);
+});
+
+test('side panel scripts use no native confirm, alert or prompt', () => {
+  const problems = [];
+  for (const file of fs.readdirSync(ROOT).filter(f => /^sidebar-.*\.js$/.test(f))) {
+    const source = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    for (const name of ['confirm', 'alert', 'prompt']) {
+      const re = new RegExp(`(^|[^\\w.$])(window\\.)?${name}\\(`, 'm');
+      if (re.test(source)) problems.push(`${file} calls ${name}()`);
+    }
+  }
+  assert.deepEqual(problems, []);
+});
+
+test('the page overlay lives in a shadow root with the new scrim', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  assert.match(source, /attachShadow\(/);
+  assert.equal(source.includes('rgba(0, 0, 0, 0.7)'), false);
+});
+
+test('toast rules in styles.css use only colour tokens', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8');
+  const problems = [];
+  for (const m of css.matchAll(/([^{}]*\.toast[^{}]*)\{([^}]*)\}/g)) {
+    const selector = m[1].trim();
+    for (const decl of m[2].split(';')) {
+      const [prop, ...rest] = decl.split(':');
+      if (!prop || !/color|background|border|fill|stroke|shadow|outline/.test(prop)) continue;
+      const value = rest.join(':');
+      if (/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(|\b(white|black)\b/i.test(value)) problems.push(`${selector} { ${decl.trim()} }`);
+    }
+  }
+  assert.deepEqual(problems, []);
 });

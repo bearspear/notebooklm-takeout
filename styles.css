@@ -330,48 +330,99 @@ body {
   text-decoration: underline;
 }
 
-/* Toast */
+/* Toast: one at a time, at the foot of the panel; it wraps rather than clip */
 .toast {
   position: fixed;
   bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  padding: 10px 14px;
+  border-radius: 10px;
   background: var(--ink);
   color: var(--bg);
-  padding: 10px 20px;
-  border-radius: 8px;
+  box-shadow: 0 4px 16px var(--shadow);
   font-size: 13px;
-  animation: slideUp 0.3s ease;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  animation: toast-in 160ms ease;
   z-index: 1000;
+}
+
+.toast .icon {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
 }
 
 .toast-error {
   background: var(--danger);
+  color: var(--bg);
+}
+
+.toast-warning {
+  background: var(--warn);
+  color: var(--on-accent);
+}
+
+.toast-close {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin: -4px -6px -4px 2px;
+  padding: 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.toast-close .icon {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+.toast-close:hover {
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.toast-close:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
 }
 
 .toast-hide {
-  animation: slideDown 0.3s ease forwards;
+  animation: toast-out 160ms ease forwards;
 }
 
-@keyframes slideUp {
+@keyframes toast-in {
   from {
     opacity: 0;
-    transform: translateX(-50%) translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
+    transform: translateX(-50%) translateY(8px);
   }
 }
 
-@keyframes slideDown {
-  from {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-  }
+@keyframes toast-out {
   to {
     opacity: 0;
-    transform: translateX(-50%) translateY(20px);
+    transform: translateX(-50%) translateY(8px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast,
+  .toast-hide {
+    animation: none;
   }
 }
 
@@ -1421,12 +1472,6 @@ body.docked #action-bar {
   color: var(--muted);
 }
 
-/* Toast warning style */
-.toast-warning {
-  background: var(--warn);
-  color: var(--on-accent);
-}
-
 /* ========== SOURCES TAB STYLES ========== */
 
 /* Sources list */
@@ -1508,50 +1553,91 @@ body.docked #action-bar {
   color: var(--warn);
 }
 
-/* Warning Dialog */
-.dom-warning-dialog {
-  position: fixed;
-  inset: 0;
-  z-index: 10000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+/* The panel's confirm dialog (showDialog): a modal <dialog> */
+.panel-dialog {
+  margin: auto;
+  padding: 0;
+  width: calc(100% - 32px);
+  max-width: 320px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 8px 32px var(--shadow);
 }
 
-.dom-warning-dialog .dialog-overlay {
-  position: absolute;
-  inset: 0;
+.panel-dialog[open],
+.panel-dialog[open]::backdrop {
+  animation: dialog-fade 160ms ease;
+}
+
+.panel-dialog::backdrop {
   background: var(--scrim);
 }
 
-.dom-warning-dialog .dialog-content {
-  position: relative;
-  background: var(--bg);
-  border-radius: 12px;
+@keyframes dialog-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.panel-dialog-card {
   padding: 20px;
-  max-width: 360px;
-  width: calc(100% - 24px);
-  box-shadow: 0 4px 20px var(--shadow);
 }
 
-.dom-warning-dialog h3 {
-  margin: 0 0 8px 0;
+.panel-dialog-title {
+  margin: 0 0 8px;
   font-size: 15px;
-  color: var(--ink);
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
-.dom-warning-dialog ul {
-  margin: 10px 0;
-  padding-left: 18px;
-  font-size: 12px;
+.panel-dialog-body p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.45;
   color: var(--muted);
 }
 
-.dom-warning-dialog .dialog-actions {
+.panel-dialog-list {
+  /* Six items, then it scrolls (showDialog measures wrapped items) */
+  max-height: calc(6 * 1.45em);
+  overflow-y: auto;
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.panel-dialog-actions {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+.btn-destructive {
+  background: var(--danger);
+  color: var(--bg);
+}
+
+.btn-destructive:hover {
+  background: color-mix(in srgb, var(--danger) 85%, var(--ink));
+}
+
+.panel-dialog .btn:focus-visible,
+.panel-dialog-list:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-dialog[open],
+  .panel-dialog[open]::backdrop {
+    animation: none;
+  }
 }
 
 /* ============================================

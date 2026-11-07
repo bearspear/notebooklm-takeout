@@ -1250,6 +1250,42 @@
     return rest;
   }
 
+  // The page overlay's fields from a progress text and count (Task 10).
+  // text: 'Notes: Batch 1/2: Processing 1/25: Title' and the like; count:
+  // { done, total, item } or null. Pure, so the content script only renders.
+  const OVERLAY_CATEGORIES = ['Sources', 'Notes', 'Chat', 'Generated', 'Artifacts'];
+  function overlayView(text, count, { finishing = false } = {}) {
+    let rest = String(text || '');
+    let heading = 'Exporting';
+    const colon = rest.indexOf(': ');
+    if (colon > 0 && OVERLAY_CATEGORIES.includes(rest.slice(0, colon))) {
+      heading = `Exporting ${rest.slice(0, colon).toLowerCase()}`;
+      rest = rest.slice(colon + 2);
+    }
+    if (finishing) heading = 'Saving files';
+
+    const parts = [];
+    const batch = /^Batch (\d+)\/(\d+):\s*/.exec(rest);
+    if (batch) {
+      parts.push(`Part ${batch[1]} of ${batch[2]}`);
+      rest = rest.slice(batch[0].length);
+    }
+    const total = count && Number(count.total) > 0 ? Number(count.total) : 0;
+    const done = total ? Math.max(0, Math.min(Number(count.done) || 0, total)) : 0;
+    if (total) parts.push(`${Math.min(done + 1, total)} of ${total}`);
+
+    let item = rest;
+    if (count && count.item) item = String(count.item);
+    else if (/^(Processing|Extracting) \d+\/\d+: /.test(rest)) item = rest.slice(rest.lastIndexOf(': ') + 2);
+
+    return {
+      heading,
+      line: parts.join(' · '),
+      item,
+      percent: total ? Math.round((done / total) * 100) : null
+    };
+  }
+
   // Seconds left, at least what the work left is expected to take. A run's pace so far
   // says little about what follows it: 142 sources at 2 s would promise 14 min with 39
   // min of notes and chat to go. rest: restCounts, or nothing when the run is one kind.
@@ -3041,6 +3077,7 @@ footer { margin-top: 3rem; }
     retryRefused,
     timeLeft,
     restCounts,
+    overlayView,
     honestTimeLeft,
     calmTimeLeft,
     progressLeftLine,

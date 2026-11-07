@@ -34,6 +34,8 @@ const ICON_PATHS = {
   download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
   trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/>',
   check: '<path d="M5 12l5 5 10-11"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  alert: '<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18h.01"/>',
   // Artifact types
   audio: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
   video: '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/>',
@@ -120,6 +122,93 @@ loadMindmapTemplate();
  * Placeholders: {{TITLE}} and {{SVG_CONTENT}}
  */
 
+let _dialogSeq = 0;
+
+/**
+ * The panel's one confirm: a modal <dialog> instead of the browser's native one.
+ * Escape and a click on the backdrop answer false. With danger, focus starts
+ * on Cancel and the confirm button is red. Text goes in as textContent only;
+ * a blank line in body starts a new paragraph.
+ * @returns {Promise<boolean>} true when the confirm button was chosen
+ */
+function showDialog({ title, body = '', list = [], confirmLabel = 'OK', cancelLabel = 'Cancel', danger = false } = {}) {
+  return new Promise((resolve) => {
+    const id = `panel-dialog-${++_dialogSeq}`;
+    const dialog = document.createElement('dialog');
+    dialog.className = 'panel-dialog';
+    dialog.setAttribute('aria-labelledby', `${id}-title`);
+    if (body) dialog.setAttribute('aria-describedby', `${id}-body`);
+
+    const card = document.createElement('div');
+    card.className = 'panel-dialog-card';
+
+    const heading = document.createElement('h2');
+    heading.className = 'panel-dialog-title';
+    heading.id = `${id}-title`;
+    heading.textContent = title || '';
+    card.appendChild(heading);
+
+    if (body) {
+      const bodyEl = document.createElement('div');
+      bodyEl.className = 'panel-dialog-body';
+      bodyEl.id = `${id}-body`;
+      for (const text of String(body).split(/\n\s*\n/)) {
+        const p = document.createElement('p');
+        p.textContent = text.trim();
+        bodyEl.appendChild(p);
+      }
+      card.appendChild(bodyEl);
+    }
+
+    if (list.length) {
+      const ul = document.createElement('ul');
+      ul.className = 'panel-dialog-list';
+      ul.tabIndex = 0; // it can scroll, so it can take focus
+      for (const entry of list) {
+        const li = document.createElement('li');
+        li.textContent = String(entry);
+        ul.appendChild(li);
+      }
+      card.appendChild(ul);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'panel-dialog-actions';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn btn-secondary';
+    cancelBtn.textContent = cancelLabel;
+    const confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button';
+    confirmBtn.className = danger ? 'btn btn-destructive' : 'btn btn-primary';
+    confirmBtn.textContent = confirmLabel;
+    actions.append(cancelBtn, confirmBtn);
+    card.appendChild(actions);
+    dialog.appendChild(card);
+
+    let answer = false;
+    cancelBtn.addEventListener('click', () => dialog.close());
+    confirmBtn.addEventListener('click', () => { answer = true; dialog.close(); });
+    // The card fills the dialog box, so a click that lands on the dialog
+    // itself is on the backdrop
+    dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+    dialog.addEventListener('close', () => {
+      dialog.remove();
+      resolve(answer);
+    }, { once: true });
+
+    document.body.appendChild(dialog);
+    dialog.showModal();
+    // Six items show, however they wrap; the rest scroll
+    const listEl = dialog.querySelector('.panel-dialog-list');
+    const sixth = listEl && listEl.children[5];
+    if (sixth && listEl.children.length > 6) {
+      listEl.style.maxHeight = `${sixth.getBoundingClientRect().bottom - listEl.getBoundingClientRect().top}px`;
+    }
+    (danger ? cancelBtn : confirmBtn).focus();
+  });
+}
+
 /**
  * Show a warning dialog for DOM compatibility issues
  * @param {string[]} issues - List of issues to display
@@ -127,41 +216,20 @@ loadMindmapTemplate();
  * @returns {Promise<boolean>} - Whether user wants to continue
  */
 function showDOMWarningDialog(issues, isMidExport = false) {
-  return new Promise((resolve) => {
-    const dialog = document.createElement('div');
-    dialog.className = 'dom-warning-dialog';
-    dialog.innerHTML = `
-      <div class="dialog-overlay"></div>
-      <div class="dialog-content">
-        <h3>${isMidExport ? 'Export Issues Detected' : 'Potential Compatibility Issues'}</h3>
-        <p class="dialog-note">
-          ${isMidExport
-            ? 'Multiple errors occurred. NotebookLM may have been updated.'
-            : 'Some expected elements were not found. The extension may need an update.'}
-        </p>
-        <ul>${issues.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>
-        <div class="dialog-actions">
-          <button class="btn btn-secondary" data-action="cancel">Cancel</button>
-          <button class="btn btn-primary" data-action="continue">
-            ${isMidExport ? 'Continue' : 'Try Anyway'}
-          </button>
-        </div>
-      </div>
-    `;
-
-    document.body.appendChild(dialog);
-
-    dialog.addEventListener('click', (e) => {
-      const action = e.target.dataset.action;
-      if (action === 'cancel' || e.target.classList.contains('dialog-overlay')) {
-        dialog.remove();
-        resolve(false);
-      } else if (action === 'continue') {
-        dialog.remove();
-        resolve(true);
-      }
+  return isMidExport
+    ? showDialog({
+      title: 'Errors keep happening',
+      body: 'NotebookLM may have changed while exporting.',
+      list: issues,
+      confirmLabel: 'Continue',
+      cancelLabel: 'Stop'
+    })
+    : showDialog({
+      title: 'NotebookLM looks different',
+      body: 'Some parts of the page were not found, so this export may miss items. The extension may need an update.',
+      list: issues,
+      confirmLabel: 'Try anyway'
     });
-  });
 }
 
 /**
@@ -569,7 +637,14 @@ function setupEventListeners() {
 
   document.getElementById('reset-settings-btn')?.addEventListener('click', async () => {
     if (jobLock.current()) { showToast(`${jobLock.current()} is still running`, 'warning'); return; }
-    if (!confirm('Reset all settings to their defaults? Default save, the citation cache and saved exports to resume are kept.')) return;
+    const reset = await showDialog({
+      title: 'Reset settings?',
+      body: 'Default save, the citation cache and saved exports to resume are kept.',
+      confirmLabel: 'Reset',
+      danger: true
+    });
+    if (!reset) return;
+    if (jobLock.current()) { showToast(`${jobLock.current()} is still running`, 'warning'); return; }
     settings = NLME.resetSettings(settings);
     applySettingsToUi();
     syncVersionChildStates();
@@ -2284,23 +2359,65 @@ function getIconForType(type) {
   return icon(names[type] || 'doc');
 }
 
+// One toast at a time, at the foot of the panel. Success and info leave after
+// 2.5 s; a warning or an error stays 6 s, can be closed, and is announced at
+// once. The timer waits while the pointer or focus is on the toast.
+const TOAST_ICONS = { success: 'check', info: 'info', warning: 'alert', error: 'alert' };
+let _toastTimer = null;
 function showToast(message, type = 'success') {
   const existing = document.querySelector('.toast');
   if (existing) existing.remove();
+  clearTimeout(_toastTimer);
 
+  const urgent = type === 'error' || type === 'warning';
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
-  toast.textContent = message;
+  toast.setAttribute('role', urgent ? 'alert' : 'status');
+  toast.innerHTML = icon(TOAST_ICONS[type] || 'info'); // a fixed SVG, no message text
+  const text = document.createElement('span');
+  text.className = 'toast-text';
+  text.textContent = message;
+  toast.appendChild(text);
+
+  let left = urgent ? 6000 : 2500;
+  let startedAt = 0;
+  let hovered = false;
+  let focused = false;
+  const dismiss = () => {
+    clearTimeout(_toastTimer);
+    if (!toast.isConnected) return;
+    toast.classList.add('toast-hide');
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    setTimeout(() => toast.remove(), reduced ? 0 : 160);
+  };
+  const run = () => {
+    startedAt = Date.now();
+    clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(dismiss, left);
+  };
+  const pause = () => {
+    if (!toast.isConnected) return;
+    clearTimeout(_toastTimer);
+    left = Math.max(800, left - (Date.now() - startedAt));
+  };
+  const resume = () => { if (!hovered && !focused && toast.isConnected) run(); };
+  toast.addEventListener('mouseenter', () => { hovered = true; pause(); });
+  toast.addEventListener('mouseleave', () => { hovered = false; resume(); });
+  toast.addEventListener('focusin', () => { focused = true; pause(); });
+  toast.addEventListener('focusout', () => { focused = false; resume(); });
+
+  if (urgent) {
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'toast-close';
+    close.setAttribute('aria-label', 'Dismiss');
+    close.innerHTML = icon('close');
+    close.addEventListener('click', dismiss);
+    toast.appendChild(close);
+  }
 
   document.body.appendChild(toast);
-
-  // Auto-hide after delay (longer for errors/warnings)
-  const duration = type === 'error' || type === 'warning' ? 4000 : 2000;
-
-  setTimeout(() => {
-    toast.classList.add('toast-hide');
-    setTimeout(() => toast.remove(), 300);
-  }, duration);
+  run();
 }
 
 function escapeHtml(text) {
