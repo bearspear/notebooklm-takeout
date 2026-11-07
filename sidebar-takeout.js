@@ -376,7 +376,10 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
 
     // Listen for cancellation (overlay Cancel or side-panel Cancel)
     cancelListener = (message) => {
-      if (message.type === NLME.MSG.CANCEL_EXPORT) cancelled = true;
+      if (message.type === NLME.MSG.CANCEL_EXPORT) {
+        cancelled = true;
+        closePanelDialogs('mid-export'); // Continue or Stop no longer means anything
+      }
     };
     chrome.runtime.onMessage.addListener(cancelListener);
 
@@ -409,8 +412,8 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
           type: NLME.MSG.UPDATE_EXPORT_OVERLAY,
           message: text,
           progress: percent,
-          // The panel's count: across a resume chain, not just this step
-          ...NLME.overlayView(text, count && progressRun ? { ...count, done: progressRun.done, total: progressRun.total } : count, { finishing: finishingStarted })
+          // The panel's count: across a resume chain, and kept for count-less texts
+          ...NLME.overlayView(text, NLME.overlayCount(count, progressRun, { finishing: finishingStarted }), { finishing: finishingStarted })
         }).catch(() => {}); // overlay is cosmetic; never abort the job
       },
       finish({ kind, selected, result = {}, auditOk = true, stoppedMessage, errorNote, saved = [], retry = null } = {}) {
@@ -434,6 +437,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
   } finally {
     if (cancelListener) chrome.runtime.onMessage.removeListener(cancelListener);
     activeShellTabId = null;
+    closePanelDialogs('mid-export');
 
     // Hide page overlay
     if (overlayShown) {

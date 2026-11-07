@@ -3432,3 +3432,34 @@ test('overlayView caps the count at the total', () => {
   assert.equal(view.line, '46 of 46');
   assert.equal(view.percent, 100);
 });
+
+test('overlayCount keeps the run count for a count-less text', () => {
+  const run = { done: 12, total: 46 };
+  assert.deepEqual(NLME.overlayCount(null, run), { done: 12, total: 46 });
+  const view = NLME.overlayView('Creating ZIP 2/3...', NLME.overlayCount(null, run));
+  assert.equal(view.line, '13 of 46');
+  assert.equal(view.percent, 26);
+  assert.equal(view.item, 'Creating ZIP 2/3...');
+});
+
+test('overlayCount is null before any count and while finishing', () => {
+  assert.equal(NLME.overlayCount(null, null), null);
+  assert.equal(NLME.overlayCount(null, { done: 0, total: 0 }), null);
+  assert.equal(NLME.overlayCount(null, { done: 46, total: 46 }, { finishing: true }), null);
+  assert.equal(NLME.overlayView('Saving images...', NLME.overlayCount(null, { done: 46, total: 46 }, { finishing: true }), { finishing: true }).percent, null);
+});
+
+test('overlayCount puts the run total on a given count and keeps its item', () => {
+  assert.deepEqual(NLME.overlayCount({ done: 1, total: 5, item: 'A' }, { done: 21, total: 40 }), { done: 21, total: 40, item: 'A' });
+  assert.deepEqual(NLME.overlayCount({ done: 1, total: 5, item: 'A' }, null), { done: 1, total: 5, item: 'A' });
+  assert.deepEqual(NLME.overlayCount({ done: 1, total: 5 }, { done: 1, total: 5 }, { finishing: true }), { done: 1, total: 5 });
+});
+
+test('sameDeleteTarget needs the same tab and the same notebook', () => {
+  const asked = { tabId: 7, notebookId: 'aaaa' };
+  assert.equal(NLME.sameDeleteTarget(asked, { tabId: 7, notebookId: 'aaaa' }), true);
+  assert.equal(NLME.sameDeleteTarget(asked, { tabId: 7, notebookId: 'bbbb' }), false);
+  assert.equal(NLME.sameDeleteTarget(asked, { tabId: 8, notebookId: 'aaaa' }), false);
+  assert.equal(NLME.sameDeleteTarget({ tabId: null, notebookId: '' }, { tabId: null, notebookId: '' }), false);
+  assert.equal(NLME.sameDeleteTarget(null, asked), false);
+});

@@ -414,9 +414,9 @@ test('Generated keeps the delete guards', () => {
   assert.match(fnSource('sidebar-generated.js', 'handleStudioBulkDelete'), /NLME\.bulkDeletePlan\(/);
   // Both deletes ask first, in the panel's own danger dialog
   const row = fnSource('sidebar-generated.js', 'handleStudioDeleteRow');
-  assert.match(row, /await showDialog\(\{\s*title: `Delete "\$\{item\.label\}"\?`[\s\S]*danger: true[\s\S]*if \(!sure\) return;/);
+  assert.match(row, /await showDialog\(\{\s*title: `Delete "\$\{item\.label\}"\?`[\s\S]*danger: true[\s\S]*if \(!sure \|\| !studioDeleteStillValid\(target\)\) return;/);
   const bulkDelete = fnSource('sidebar-generated.js', 'handleStudioBulkDelete');
-  assert.match(bulkDelete, /await showDialog\(\{[\s\S]*\$\{skippedNote\}[\s\S]*confirmLabel: `Delete \$\{n\}`[\s\S]*danger: true[\s\S]*if \(!sure\) return;/);
+  assert.match(bulkDelete, /await showDialog\(\{[\s\S]*\$\{skippedNote\}[\s\S]*confirmLabel: `Delete \$\{n\}`[\s\S]*danger: true[\s\S]*if \(!sure \|\| !studioDeleteStillValid\(target\)\) return;/);
   // Hidden with its tab; off during a job
   const bulk = fnSource('sidebar-generated.js', 'updateStudioBulkButtonsState');
   assert.match(bulk, /deleteBulkBtn\.hidden = !controller \|\| openPanelTab\(\) !== 'studio'/);
@@ -676,4 +676,58 @@ test('toast rules in styles.css use only colour tokens', () => {
     }
   }
   assert.deepEqual(problems, []);
+});
+
+// The overlay cannot read styles.css, so it carries copies of the panel tokens
+test('the page overlay colours match the panel tokens, light and dark', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8');
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const tokens = block => Object.fromEntries([...block.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(m => [m[1], m[2].trim()]));
+  const light = tokens(css.slice(css.indexOf(':root {'), css.indexOf('}', css.indexOf(':root {'))));
+  const darkStart = css.indexOf(':root[data-theme="dark"] {');
+  const dark = tokens(css.slice(darkStart, css.indexOf('}', darkStart)));
+  const style = content.slice(content.indexOf('const OVERLAY_STYLE'), content.indexOf('`;', content.indexOf('const OVERLAY_STYLE')));
+  const scrimStart = style.indexOf('.scrim {');
+  const overlayLight = tokens(style.slice(scrimStart, style.indexOf('}', scrimStart)));
+  const mediaStart = style.indexOf('@media (prefers-color-scheme: dark)');
+  const overlayDark = tokens(style.slice(mediaStart, style.indexOf('}', mediaStart)));
+  assert.ok(Object.keys(overlayLight).length >= 8, Object.keys(overlayLight).join());
+  assert.deepEqual(Object.keys(overlayDark).sort(), Object.keys(overlayLight).sort());
+  for (const [name, value] of Object.entries(overlayLight)) assert.equal(value, light[name], `light ${name}`);
+  for (const [name, value] of Object.entries(overlayDark)) assert.equal(value, dark[name], `dark ${name}`);
+});
+
+test('the page overlay is modal to assistive tech and focuses Cancel without scrolling', () => {
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  assert.match(content, /card\.setAttribute\('aria-modal', 'true'\)/);
+  assert.match(content, /querySelector\('\.cancel'\)\?\.focus\(\{ preventScroll: true \}\)/);
+  assert.doesNotMatch(content, /\.inert\s*=/);
+});
+
+test('a delete reaches only the tab and notebook it was asked about', () => {
+  for (const name of ['handleStudioDeleteRow', 'handleStudioBulkDelete']) {
+    const src = fnSource('sidebar-generated.js', name);
+    const asked = src.indexOf('const target = studioDeleteTarget()');
+    const dialog = src.indexOf('await showDialog(');
+    assert.ok(asked >= 0 && asked < dialog, `${name} captures its target before the dialog`);
+    assert.match(src, /if \(!sure \|\| !studioDeleteStillValid\(target\)\) return;/);
+    assert.match(src, /sendStudioDelete\(item, \{[^}]*tabId: target\.tabId \}\)/);
+  }
+  assert.match(fnSource('sidebar-generated.js', 'handleStudioBulkDelete'), /if \(!NLME\.sameDeleteTarget\(target, studioDeleteTarget\(\)\)\)/);
+  // A notebook switch closes every open dialog, answering false
+  assert.match(fnSource('sidebar-core.js', 'resetChatPanel'), /closePanelDialogs\(\);/);
+  assert.match(fnSource('sidebar-core.js', 'notePageMove'), /closePanelDialogs\(\);/);
+});
+
+test('an export that is cancelled or over closes its mid-export dialog', () => {
+  const shell = fnSource('sidebar-takeout.js', 'withExportShell');
+  assert.match(shell, /cancelled = true;\s*closePanelDialogs\('mid-export'\)/);
+  assert.match(shell, /\} finally \{[\s\S]*closePanelDialogs\('mid-export'\)/);
+  assert.match(fnSource('sidebar-core.js', 'showDOMWarningDialog'), /kind: 'mid-export'/);
+});
+
+test('the dialog backdrop closes only on a press and click both on the backdrop', () => {
+  const src = fnSource('sidebar-core.js', 'showDialog');
+  assert.match(src, /addEventListener\('mousedown', \(e\) => \{ pressedBackdrop = e\.target === dialog; \}\)/);
+  assert.match(src, /if \(pressedBackdrop && e\.target === dialog\) dialog\.close\(\);/);
 });

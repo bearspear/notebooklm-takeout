@@ -131,11 +131,12 @@ let _dialogSeq = 0;
  * a blank line in body starts a new paragraph.
  * @returns {Promise<boolean>} true when the confirm button was chosen
  */
-function showDialog({ title, body = '', list = [], confirmLabel = 'OK', cancelLabel = 'Cancel', danger = false } = {}) {
+function showDialog({ title, body = '', list = [], confirmLabel = 'OK', cancelLabel = 'Cancel', danger = false, kind = '' } = {}) {
   return new Promise((resolve) => {
     const id = `panel-dialog-${++_dialogSeq}`;
     const dialog = document.createElement('dialog');
     dialog.className = 'panel-dialog';
+    if (kind) dialog.dataset.kind = kind;
     dialog.setAttribute('aria-labelledby', `${id}-title`);
     if (body) dialog.setAttribute('aria-describedby', `${id}-body`);
 
@@ -189,9 +190,15 @@ function showDialog({ title, body = '', list = [], confirmLabel = 'OK', cancelLa
     let answer = false;
     cancelBtn.addEventListener('click', () => dialog.close());
     confirmBtn.addEventListener('click', () => { answer = true; dialog.close(); });
-    // The card fills the dialog box, so a click that lands on the dialog
-    // itself is on the backdrop
-    dialog.addEventListener('click', (e) => { if (e.target === dialog) dialog.close(); });
+    // The card fills the dialog box, so a press that lands on the dialog itself
+    // is on the backdrop. Both ends must be there: a text drag out of the card
+    // ends with a click on the dialog too.
+    let pressedBackdrop = false;
+    dialog.addEventListener('mousedown', (e) => { pressedBackdrop = e.target === dialog; });
+    dialog.addEventListener('click', (e) => {
+      if (pressedBackdrop && e.target === dialog) dialog.close();
+      pressedBackdrop = false;
+    });
     dialog.addEventListener('close', () => {
       dialog.remove();
       resolve(answer);
@@ -209,6 +216,13 @@ function showDialog({ title, body = '', list = [], confirmLabel = 'OK', cancelLa
   });
 }
 
+// Close open panel dialogs, each answering false: all of them, or one kind
+function closePanelDialogs(kind) {
+  document.querySelectorAll('dialog.panel-dialog').forEach(dialog => {
+    if (!kind || dialog.dataset.kind === kind) dialog.close();
+  });
+}
+
 /**
  * Show a warning dialog for DOM compatibility issues
  * @param {string[]} issues - List of issues to display
@@ -222,7 +236,8 @@ function showDOMWarningDialog(issues, isMidExport = false) {
       body: 'NotebookLM may have changed while exporting.',
       list: issues,
       confirmLabel: 'Continue',
-      cancelLabel: 'Stop'
+      cancelLabel: 'Stop',
+      kind: 'mid-export'
     })
     : showDialog({
       title: 'NotebookLM looks different',
@@ -1062,6 +1077,7 @@ let lastPanelNotebookId = '';
 // not reach the new notebook: they belong to the notebook that was scanned.
 function resetChatPanel() {
   closeExportSheet({ switched: true }); // first: its Start would reach the new notebook
+  closePanelDialogs(); // a Delete asked about the old notebook must not reach the new one
   releasePageLoad(); // the panel has caught up with the tab; the caller's settle takes over
   resultsLeftNotebook();
   window._currentChatData = null;
@@ -1344,6 +1360,7 @@ function notePageMove({ url, status }) {
     return;
   }
   closeExportSheet({ switched: true });
+  closePanelDialogs();
   if (status === 'loading') holdForPageLoad();
 }
 

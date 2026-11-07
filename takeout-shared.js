@@ -1286,6 +1286,23 @@
     };
   }
 
+  // The count the overlay shows. With a count: the panel's run (done/total across
+  // a resume chain) when it has one. Without one, the run so far, so a count-less
+  // text ('Creating ZIP...') keeps the bar and 'n of total' where they were; while
+  // finishing, or before any count, nothing (the bar goes indeterminate).
+  function overlayCount(count, run, { finishing = false } = {}) {
+    const runTotal = run && Number(run.total) > 0 ? run : null;
+    if (count) return runTotal ? { ...count, done: runTotal.done, total: runTotal.total } : count;
+    if (finishing || !runTotal) return null;
+    return { done: runTotal.done, total: runTotal.total };
+  }
+
+  // A delete asked about one notebook's tab may only reach that tab: true when
+  // the panel still shows the same notebook in the same tab as when it asked.
+  function sameDeleteTarget(asked, now) {
+    return !!asked && !!now && asked.tabId != null && asked.tabId === now.tabId && asked.notebookId === now.notebookId;
+  }
+
   // Seconds left, at least what the work left is expected to take. A run's pace so far
   // says little about what follows it: 142 sources at 2 s would promise 14 min with 39
   // min of notes and chat to go. rest: restCounts, or nothing when the run is one kind.
@@ -3078,6 +3095,8 @@ footer { margin-top: 3rem; }
     timeLeft,
     restCounts,
     overlayView,
+    overlayCount,
+    sameDeleteTarget,
     honestTimeLeft,
     calmTimeLeft,
     progressLeftLine,

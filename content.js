@@ -170,6 +170,7 @@
     const scrim = el('div', 'scrim');
     const card = el('div', 'card');
     card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-modal', 'true');
     card.setAttribute('aria-labelledby', 'overlay-heading');
 
     const live = el('div');
@@ -252,6 +253,8 @@
     const overlay = createExportOverlay();
     renderExportOverlay(overlayFields(message, null, fields));
     document.body.appendChild(overlay);
+    // Keyboard users land on the overlay's one control, not the page behind it
+    overlay.shadowRoot.querySelector('.cancel')?.focus({ preventScroll: true });
   }
 
   function updateExportOverlay(message, progress, fields) {

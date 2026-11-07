@@ -201,13 +201,25 @@ function isStudioItemDeletable(item) {
   return !!item;
 }
 
+// The notebook and tab a delete is asked about, to check again after the dialog
+function studioDeleteTarget() {
+  return { tabId: _studioTabId, notebookId: lastPanelNotebookId };
+}
+
+// False, with a warning, when the panel moved to another notebook or tab
+function studioDeleteStillValid(asked) {
+  if (NLME.sameDeleteTarget(asked, studioDeleteTarget())) return true;
+  showToast('The notebook changed, so nothing was deleted', 'warning');
+  return false;
+}
+
 // One delete request for a Generated item; throws on failure. Bulk delete passes
 // useIndex false for Studio items: by label only, a stale index could hit another item.
-async function sendStudioDelete(item, { useIndex = true } = {}) {
+async function sendStudioDelete(item, { useIndex = true, tabId = _studioTabId } = {}) {
   const message = item.kind === 'source-note'
     ? { type: NLME.MSG.DELETE_SOURCE_NOTE, data: { sourceIndex: item.sourceIndex, title: item.label } }
     : { type: NLME.MSG.DELETE_STUDIO_ITEM, data: useIndex ? { label: item.label, combinedIndex: item.combinedIndex } : { label: item.label } };
-  const response = await chrome.tabs.sendMessage(_studioTabId, message);
+  const response = await chrome.tabs.sendMessage(tabId, message);
   if (!response || !response.success) {
     throw new Error(response?.error || 'Delete failed');
   }
@@ -333,17 +345,18 @@ async function handleStudioDownloadRow(item, btn) {
 async function handleStudioDeleteRow(item, btn) {
   if (!item || !isStudioItemDeletable(item)) return;
 
+  const target = studioDeleteTarget();
   const sure = await showDialog({
     title: `Delete "${item.label}"?`,
     body: 'It is removed from the notebook. This cannot be undone.',
     confirmLabel: 'Delete',
     danger: true
   });
-  if (!sure) return;
+  if (!sure || !studioDeleteStillValid(target)) return;
 
   if (btn) btn.disabled = true;
   try {
-    await sendStudioDelete(item);
+    await sendStudioDelete(item, { tabId: target.tabId });
     showToast(`Deleted "${item.label}"`, 'success');
     if (item.kind !== 'artifact') setTabCount('notes', null); // recounted when Notes rescans
     // Refresh the list so indices are re-aligned with the DOM (always a redraw).
@@ -369,13 +382,14 @@ async function handleStudioBulkDelete() {
 
   const n = deletable.length;
   const skippedNote = skipText ? `\n\n${skipText} will be skipped; delete those one by one.` : '';
+  const target = studioDeleteTarget();
   const sure = await showDialog({
     title: n === 1 ? 'Delete 1 item?' : `Delete ${n} items?`,
     body: `${n === 1 ? 'It is' : 'They are'} removed from the notebook. This cannot be undone.${skippedNote}`,
     confirmLabel: `Delete ${n}`,
     danger: true
   });
-  if (!sure) return;
+  if (!sure || !studioDeleteStillValid(target)) return;
 
   const bulkBtn = document.getElementById('studio-delete-selected-btn');
   if (bulkBtn) bulkBtn.disabled = true;
@@ -391,8 +405,12 @@ async function handleStudioBulkDelete() {
   let okCount = 0;
   for (let i = 0; i < queue.length; i++) {
     const item = queue[i];
+    if (!NLME.sameDeleteTarget(target, studioDeleteTarget())) {
+      showToast(`The notebook changed: deleted ${okCount}/${queue.length}, stopped there`, 'warning');
+      return;
+    }
     try {
-      await sendStudioDelete(item, { useIndex: false });
+      await sendStudioDelete(item, { useIndex: false, tabId: target.tabId });
       okCount++;
     } catch (e) {
       console.warn('[NotebookLM Takeout] Bulk delete skipped:', item.label, e?.message || e);
