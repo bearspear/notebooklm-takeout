@@ -117,22 +117,28 @@ function displayHealthCheckResults(results) {
     const categoryEl = document.createElement('div');
     categoryEl.className = 'health-category';
 
-    const headerEl = document.createElement('div');
+    // A button, so the keyboard can open a category too
+    const headerEl = document.createElement('button');
+    headerEl.type = 'button';
     headerEl.className = 'health-category-header';
+    headerEl.setAttribute('aria-expanded', 'false');
+    headerEl.setAttribute('aria-controls', `health-checks-${categoryKey}`);
     headerEl.innerHTML = `
-      <div class="health-category-title">
+      <span class="health-category-title">
         <span class="health-category-status ${categoryData.healthy ? 'passed' : 'failed'}"></span>
-        <span>${categoryLabels[categoryKey] || categoryKey}</span>
-      </div>
+        <span>${escapeHtml(categoryLabels[categoryKey] || categoryKey)}</span>
+      </span>
       <span class="health-category-toggle">${icon('chevron')}</span>
     `;
 
     headerEl.addEventListener('click', () => {
-      categoryEl.classList.toggle('expanded');
+      const expanded = categoryEl.classList.toggle('expanded');
+      headerEl.setAttribute('aria-expanded', String(expanded));
     });
 
     const checksEl = document.createElement('div');
     checksEl.className = 'health-category-checks';
+    checksEl.id = `health-checks-${categoryKey}`;
 
     if (categoryData.error) {
       checksEl.innerHTML = `
@@ -186,6 +192,7 @@ function displayHealthCheckResults(results) {
     // Auto-expand failed categories
     if (!categoryData.healthy) {
       categoryEl.classList.add('expanded');
+      headerEl.setAttribute('aria-expanded', 'true');
     }
   }
 

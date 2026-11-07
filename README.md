@@ -471,7 +471,7 @@ check means that export is likely broken. Please
 | Citations missing or wrong | Run the health check and check **Citations**; export a single note to compare |
 | A viewer stays open after an export | Close it in Gemini Notebook; run the health check and check "Studio header close control" |
 | Download failed | Download that item on its own; check Chrome's download permissions and disk space |
-| Overlay won't go away | Click **Cancel Export**, or refresh the notebook tab |
+| Overlay won't go away | Click **Cancel export**, or refresh the notebook tab |
 
 Logs: open DevTools on the notebook tab (content script), right-click the side panel →
 **Inspect** (side panel), or **Service worker** under the extension in `chrome://extensions/`.

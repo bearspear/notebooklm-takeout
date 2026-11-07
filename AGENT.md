@@ -629,7 +629,9 @@ repeats become `-2`, `-3` (`NLME.uniqueStems`).
      - Note path: produces 1+ markdown variants based on Note settings (full citation
        extraction included, identical to Notes tab output).
 4. Row Delete:
-   - Sidebar `confirm()` first.
+   - Sidebar `showDialog({ danger: true })` first (focus starts on Cancel). The handler captures
+     `studioDeleteTarget()` (tab and notebook) before the dialog and sends only if
+     `studioDeleteStillValid(target)` after it, to `target.tabId`; a notebook switch closes the dialog.
    - Message `DELETE_STUDIO_ITEM` with `{label, combinedIndex}`.
    - Content opens the More menu, calls `findMenuItemByText('delete')`, clicks it.
    - Polls for confirmation dialog via `findConfirmDialogButton` (matches

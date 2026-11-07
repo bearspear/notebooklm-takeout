@@ -907,3 +907,22 @@ test('Settings and the health check take the keyboard in and give it back', () =
   // The export sheet gives inert back through the same rule, so a cover stays modal
   assert.match(fnSource('sidebar-sheet.js', 'closeExportSheet'), /syncCoverInert\(\)/);
 });
+
+test('a health-check category opens from the keyboard and says whether it is open', () => {
+  const src = fnSource('sidebar-health.js', 'displayHealthCheckResults');
+  assert.match(src, /const headerEl = document\.createElement\('button'\);\s*headerEl\.type = 'button';/);
+  assert.match(src, /headerEl\.setAttribute\('aria-expanded', 'false'\)/);
+  assert.match(src, /headerEl\.setAttribute\('aria-expanded', String\(expanded\)\)/);
+  assert.match(src, /headerEl\.setAttribute\('aria-controls', `health-checks-\$\{categoryKey\}`\)/);
+  assert.match(src, /checksEl\.id = `health-checks-\$\{categoryKey\}`/);
+  // A failed category starts open, and says so
+  assert.match(src, /categoryEl\.classList\.add\('expanded'\);\s*headerEl\.setAttribute\('aria-expanded', 'true'\);/);
+});
+
+test('a disabled button does not change on hover', () => {
+  const css = PANEL_CSS();
+  for (const name of ['btn-primary', 'btn-secondary', 'btn-destructive', 'header-icon-btn', 'btn-icon', 'btn-icon-small']) {
+    assert.doesNotMatch(css, new RegExp(`^\\.${name}:hover\\s*\\{`, 'm'), `.${name}:hover needs :not(:disabled)`);
+    assert.match(css, new RegExp(`\\.${name}:hover:not\\(:disabled\\)\\s*\\{`));
+  }
+});

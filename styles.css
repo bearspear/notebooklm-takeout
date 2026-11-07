@@ -111,7 +111,7 @@ body {
   justify-content: center;
 }
 
-.header-icon-btn:hover {
+.header-icon-btn:hover:not(:disabled) {
   background: var(--surface);
   color: var(--ink);
 }
@@ -187,7 +187,7 @@ body {
   color: var(--on-accent);
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 85%, var(--ink));
 }
 
@@ -196,7 +196,7 @@ body {
   color: var(--accent);
 }
 
-.btn-secondary:hover {
+.btn-secondary:hover:not(:disabled) {
   background: color-mix(in srgb, var(--soft) 80%, var(--accent));
 }
 
@@ -214,7 +214,7 @@ body {
   transition: background 120ms ease, color 120ms ease;
 }
 
-.btn-icon:hover {
+.btn-icon:hover:not(:disabled) {
   background: var(--line);
   color: var(--accent);
 }
@@ -784,7 +784,7 @@ body.docked #action-bar {
   transition: background 120ms ease, color 120ms ease;
 }
 
-.btn-icon-small:hover {
+.btn-icon-small:hover:not(:disabled) {
   background: var(--line);
   color: var(--danger);
 }
@@ -1398,7 +1398,7 @@ body.docked #action-bar {
   cursor: default;
 }
 
-.btn-destructive:hover {
+.btn-destructive:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 85%, var(--ink));
 }
 
@@ -1579,14 +1579,21 @@ body.docked #action-bar {
 .health-category {
   background: var(--surface);
   border-radius: 8px;
-  overflow: hidden;
 }
 
+/* A button that looks like the row it heads; no overflow clip, so the focus ring shows */
 .health-category-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  width: 100%;
   padding: 12px 16px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
   user-select: none;
   transition: background 120ms ease;
