@@ -385,12 +385,14 @@
 
   // Condition waits instead of fixed sleeps (Milestone 1, Speed): resolve once
   // the measured size stops changing; on timeout continue with what is there.
-  // The current request's titleOrdinal (NLME.stampTitleOrdinals): how many items
-  // of its title came before it when the panel scanned. Set by each extract and
+  // The current request's place among items of its title when the panel scanned
+  // (NLME.stampTitleOrdinals: titleOrdinal, titleCount). Set by each extract and
   // download request, like citationDetailMode; null when the panel sent none.
   let requestTitleOrdinal = null;
   function titleOrdinalOf(data) {
-    return data && Number.isInteger(data.titleOrdinal) ? data.titleOrdinal : null;
+    return data && Number.isInteger(data.titleOrdinal)
+      ? { ordinal: data.titleOrdinal, count: Number.isInteger(data.titleCount) ? data.titleCount : null }
+      : null;
   }
 
   async function waitForStable(measure, { interval = 50, checks = 2, minLength = 1, timeout = 5000 } = {}) {
@@ -963,7 +965,10 @@
     });
 
     console.log(`[NotebookLM Takeout] Total sources found: ${sources.length} (${skippedNotes} note(s) skipped)`);
-    return { sources: sources, skippedNotes };
+    // The list extractSourceContent resolves over, hidden rows included: the panel
+    // counts each source's place among its title there
+    const titles = Array.from(sourceContainers).map(c => (isNoteSourceContainer(c) ? '' : getSourceContainerTitle(c)));
+    return { sources: sources, skippedNotes, titles };
   }
 
   // Helper function to wait for an element

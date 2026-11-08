@@ -371,7 +371,7 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
         noteTitle: note.title,
         sourceIndex: note.sourceIndex,
         // the scan's place among notes of this title (NLME.stampTitleOrdinals)
-        ...(Number.isInteger(note._titleOrdinal) ? { titleOrdinal: note._titleOrdinal } : {}),
+        ...NLME.titlePlace(note),
         // Only download images if user has enabled an image version
         includeCitationImages: !!variantSettings.exportNoteWithImages,
         citationDetail: settings.citationDetail,
@@ -519,6 +519,7 @@ async function exportSingleNote(note) {
           noteIndex: note.index,
           noteTitle: note.title,
           sourceIndex: note.sourceIndex,
+          ...NLME.titlePlace(note),
           includeCitationImages: needsImages,
           citationDetail: settings.citationDetail,
           reuseCitations: settings.reuseCitations !== false

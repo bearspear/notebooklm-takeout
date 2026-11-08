@@ -1314,16 +1314,20 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined out
   never saves one twin twice; `fetchNoMenuSafe` keeps that message.
 - **Shifted lists (1.9.5, Task 2b).** An item that finishes generating (or a source added) above two same-titled
   items shifts every index below it by one, and the second twin's old index then holds the first twin, title and all.
-  So the panel stamps each scanned item with its title ordinal (`NLME.stampTitleOrdinals`: how many items of its
-  title came before it, non-enumerable `_titleOrdinal`; `scanArtifactsData`, `scanSourcesData`, `scanNotesData` /
-  `scanNotesSettled` via `stampNoteOrdinals`, and `generatedExportPlan` over the whole Studio list) and sends it as
-  `titleOrdinal` with DOWNLOAD_ARTIFACT, EXTRACT_NOTE (job notes) and EXTRACT_SOURCE. content.js keeps it per request
-  (`requestTitleOrdinal`, like `citationDetailMode`) and passes it to every `pickByIndexThenTitleStrict` call. The scanned
-  index is kept only while its title AND ordinal (`titleOrdinalAt`) still match. Otherwise a unique title is followed
+  So the panel stamps each scanned item with its place among items of its title (`NLME.stampTitleOrdinals`:
+  `_titleOrdinal`, how many came before it, and `_titleCount`, how many there were, both non-enumerable;
+  `scanArtifactsData`, `scanSourcesData` (counted over the page's own container list, `titles` in the SCAN_SOURCES
+  answer, hidden rows included), `scanNotesData` / `scanNotesSettled` via `stampNoteOrdinals`, and `generatedExportPlan`
+  over the whole Studio list) and sends both (`NLME.titlePlace`: `titleOrdinal`, `titleCount`) with DOWNLOAD_ARTIFACT,
+  EXTRACT_NOTE and EXTRACT_SOURCE, single-row downloads included (the Studio row takes its place from
+  `generatedExportPlan([item], _studioItems)`). content.js keeps it per request (`requestTitleOrdinal` = `{ ordinal,
+  count }`, like `citationDetailMode`) and passes it to every `pickByIndexThenTitleStrict` call. The scanned index is
+  kept only while its title, its ordinal (`titleOrdinalAt`) AND the page's count of that title still match: a
+  same-title row inserted directly above, or deleted above, keeps the ordinal but changes the count. Otherwise a unique title is followed
   as before, and two or more rows of the title are refused with `NLME.SAME_TITLE_SHIFTED` ("The list changed and another
   item has the same title, so this one cannot be found safely. Resume finds it again."). Every caller fails the item
   (the note path rethrows the refusal instead of "Note not found"); `retryDownload` does not retry it; Resume rescans
-  and finds each by its fresh index. A single-row download sends no ordinal and keeps the title-only check. Each skip is `{ type: 'skipped_ambiguous', title, message: 'still being
+  and finds each by its fresh index. A request with no place keeps the title-only check. Each skip is `{ type: 'skipped_ambiguous', title, message: 'still being
   generated or has no menu; a ready item has the same title' }`; errors.md heads it "Skipped: same title as another
   item" (`ERROR_HEADINGS`), and it counts as an error (`countExportErrors`), so the checker WARNs. Full Takeout seeds the
   warnings into `runArtifactsJob` (`seedErrors`), so they lead `artifacts/errors.md` and the root one; skips are in

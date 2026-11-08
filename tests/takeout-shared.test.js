@@ -3756,3 +3756,61 @@ test('the Studio export plan sends each artifact and note its ordinal over the w
   const plan = NLME.generatedExportPlan([rows[1], rows[3]], rows);
   assert.deepEqual([plan.artifacts[0]._titleOrdinal, plan.notes[0]._titleOrdinal], [1, 1]);
 });
+
+// ---- Task 2b fix round 1: the scan-time count of the title catches inserts and deletes ----
+
+const SHIFTED = err => err.message === NLME.SAME_TITLE_SHIFTED;
+const place = (ordinal, count) => ({ ordinal, count });
+
+test('a same-title row inserted directly above is caught by the count, for artifacts, notes and sources', () => {
+  // Artifacts: scanned More rows [Deck(ready)] (the no-More twin was skipped): index 0, 1 of 1.
+  // The twin finishes above it: [Deck(new), Deck(ready)]
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(['Deck', 'Deck'], 0, 'Deck', place(0, 1)), SHIFTED);
+  // Notes and sources: the same insert above
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(['Ideas', 'Ideas', 'Other'], 0, 'Ideas', place(0, 1)), SHIFTED);
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(['', 'Paper.pdf', 'Paper.pdf'], 1, 'Paper.pdf', place(0, 1)), SHIFTED);
+  // The ordinal alone missed it (the old check)
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Deck', 'Deck'], 0, 'Deck', 0), 0);
+});
+
+test('a same-title row deleted above is caught by the count, for artifacts, notes and sources', () => {
+  // [a, X, b] all "Deck": X is index 1, 1 of 3. Delete a: [X, b]; index 1 is now b
+  for (const rows of [['Deck', 'Deck'], ['Ideas', 'Ideas'], ['', 'Paper.pdf', 'Paper.pdf']]) {
+    const title = rows[rows.length - 1];
+    const index = rows.length - 1;
+    assert.throws(() => NLME.pickByIndexThenTitleStrict(rows, index, title, place(1, 3)), SHIFTED, title);
+  }
+});
+
+test('with the count, an unchanged list keeps every index, and a unique title still follows', () => {
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Deck', 'Deck', 'Other'], 1, 'Deck', place(1, 2)), 1);
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Deck', 'Deck', 'Other'], 2, 'Other', place(0, 1)), 2);
+  // A unique title that moved: followed, whatever the count said
+  assert.equal(NLME.pickByIndexThenTitleStrict(['New', 'Other'], 0, 'Other', place(0, 1)), 1);
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Deck'], 0, 'Deck', place(0, 2)), 0, 'its twin was deleted: one left, followed');
+});
+
+test('stampTitleOrdinals stamps the count, and counts over the page list when given one', () => {
+  const items = [{ index: 0, title: 'Deck' }, { index: 1, title: 'Deck' }, { index: 2, title: 'Other' }];
+  NLME.stampTitleOrdinals(items, { titleOf: i => i.title, indexOf: i => i.index });
+  assert.deepEqual(items.map(i => [i._titleOrdinal, i._titleCount]), [[0, 2], [1, 2], [0, 1]]);
+  assert.deepEqual(items.map(NLME.titlePlace), [{ titleOrdinal: 0, titleCount: 2 }, { titleOrdinal: 1, titleCount: 2 }, { titleOrdinal: 0, titleCount: 1 }]);
+  assert.deepEqual(NLME.titlePlace({ index: 0 }), {});
+  // Sources: a hidden "Paper.pdf" at 1 is not in the scan but is on the page's list
+  const sources = [{ index: 2, title: 'Paper.pdf' }];
+  NLME.stampTitleOrdinals(sources, { titleOf: s => s.title, indexOf: s => s.index, titles: ['', 'Paper.pdf', 'Paper.pdf'] });
+  assert.deepEqual([sources[0]._titleOrdinal, sources[0]._titleCount], [1, 2]);
+  assert.equal(NLME.pickByIndexThenTitleStrict(['', 'Paper.pdf', 'Paper.pdf'], 2, 'Paper.pdf', { ordinal: 1, count: 2 }), 2, 'no false refusal');
+  assert.equal(JSON.stringify(items[0]), '{"index":0,"title":"Deck"}');
+});
+
+test('the Studio export plan stamps the count over the whole list', () => {
+  const rows = [
+    { kind: 'artifact', label: 'Deck', moreIndex: 0, downloadable: true, type: 'Slides' },
+    { kind: 'artifact', label: 'Deck', moreIndex: 1, downloadable: true, type: 'Slides' },
+    { kind: 'note', label: 'Ideas', kindIndex: 0, type: 'Note' }
+  ];
+  const plan = NLME.generatedExportPlan([rows[1], rows[2]], rows);
+  assert.deepEqual(NLME.titlePlace(plan.artifacts[0]), { titleOrdinal: 1, titleCount: 2 });
+  assert.deepEqual(NLME.titlePlace(plan.notes[0]), { titleOrdinal: 0, titleCount: 1 });
+});

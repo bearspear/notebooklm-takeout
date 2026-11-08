@@ -564,22 +564,26 @@
   // added above it): with one row of that title it is followed, with two or more
   // it is refused (SAME_TITLE_SHIFTED), since the first match is right only by
   // luck. Every caller fails the item on a throw; Resume rescans.
-  // ordinal (stampTitleOrdinals): how many rows of this title came before the item
-  // when it was scanned. A shift can put the item's twin at its old index; the
-  // title still matches there, but the count before it does not, so that index is
-  // stale too. Without an ordinal (a single-row download) the title check alone
-  // decides, as before.
-  function pickByIndexThenTitleStrict(titles, index, title, ordinal = null) {
+  // place (stampTitleOrdinals; a number is an ordinal alone): { ordinal, count },
+  // how many rows of this title came before the item when it was scanned, and how
+  // many there were in all. A shift can put the item's twin at its old index; the
+  // title still matches there, but the ordinal or (a same-title row added or
+  // removed above) the count does not, so that index is stale too. With no place
+  // the title check alone decides, as before.
+  function pickByIndexThenTitleStrict(titles, index, title, place = null) {
+    const { ordinal = null, count = null } = typeof place === 'number' ? { ordinal: place } : (place || {});
     const list = titles || [];
     const inRange = Number.isInteger(index) && index >= 0 && index < list.length;
     if (!normalizeTitle(title)) {
       if (inRange) return index;
       throw new Error(`Item changed: index ${index} is out of range`);
     }
+    const matches = list.filter(t => titlesMatch(t, title)).length;
     if (inRange && titlesMatch(list[index], title) &&
-      (!Number.isInteger(ordinal) || titleOrdinalAt(list, index, title) === ordinal)) return index;
+      (!Number.isInteger(ordinal) || titleOrdinalAt(list, index, title) === ordinal) &&
+      (!Number.isInteger(count) || matches === count)) return index;
     const byTitle = list.findIndex(t => titlesMatch(t, title));
-    if (byTitle !== -1 && list.filter(t => titlesMatch(t, title)).length > 1) {
+    if (byTitle !== -1 && matches > 1) {
       throw new Error(Number.isInteger(index) && index >= 0 ? SAME_TITLE_SHIFTED : SAME_TITLE_REFUSED);
     }
     if (byTitle !== -1) return byTitle;
@@ -2206,10 +2210,7 @@
     const withMenu = (allItems || []).filter(item => item && item.kind === 'artifact' && item.moreIndex >= 0);
     const notesAll = (allItems || []).filter(item => item && item.kind === 'note');
     const ordinalIn = (list, item, indexOf) => list.filter(other => indexOf(other) < indexOf(item) && titlesMatch(other.label, item.label)).length;
-    const withOrdinal = (out, ordinal) => {
-      Object.defineProperty(out, '_titleOrdinal', { value: ordinal, configurable: true, writable: true });
-      return out;
-    };
+    const countIn = (list, item) => list.filter(other => titlesMatch(other.label, item.label)).length;
     for (const item of items || []) {
       if (!item) continue;
       if (isStudioItemUnavailable(item)) {
@@ -2221,9 +2222,9 @@
           plan.noMenuWarnings.push(skippedNoMenuWarning(item.label, namesakes.length > 0, namesakes.some(other => other.moreIndex >= 0)));
         }
       } else if (item.kind === 'artifact') {
-        plan.artifacts.push(withOrdinal(asArtifact(item), ordinalIn(withMenu, item, row => row.moreIndex)));
+        plan.artifacts.push(setTitlePlace(asArtifact(item), ordinalIn(withMenu, item, row => row.moreIndex), countIn(withMenu, item)));
       } else if (item.kind === 'note') {
-        plan.notes.push(withOrdinal(keyed({ index: item.kindIndex, title: item.label, type: item.type }, item), ordinalIn(notesAll, item, row => row.kindIndex)));
+        plan.notes.push(setTitlePlace(keyed({ index: item.kindIndex, title: item.label, type: item.type }, item), ordinalIn(notesAll, item, row => row.kindIndex), countIn(notesAll, item)));
       } else if (item.kind === 'source-note') {
         plan.notes.push(keyed({ index: -1, sourceIndex: item.sourceIndex, title: item.label, type: item.type }, item));
       } else {
@@ -2258,15 +2259,36 @@
     return n;
   }
 
-  // Stamps each item with an index of its own (indexOf >= 0) with its ordinal
-  // among the items of its title, by index: the `ordinal` pickByIndexThenTitleStrict
-  // checks. Non-enumerable (_titleOrdinal), like _listKey: never in a file.
-  function stampTitleOrdinals(items, { titleOf, indexOf }) {
+  // An item's place among the rows of its title: _titleOrdinal (rows of that title
+  // before it) and _titleCount (rows of that title in all). Non-enumerable, like
+  // _listKey: never in a file.
+  function setTitlePlace(item, ordinal, count) {
+    Object.defineProperty(item, '_titleOrdinal', { value: ordinal, configurable: true, writable: true });
+    Object.defineProperty(item, '_titleCount', { value: count, configurable: true, writable: true });
+    return item;
+  }
+
+  // What a request sends of it: { titleOrdinal, titleCount }, or nothing unstamped
+  function titlePlace(item) {
+    return item && Number.isInteger(item._titleOrdinal) && Number.isInteger(item._titleCount)
+      ? { titleOrdinal: item._titleOrdinal, titleCount: item._titleCount } : {};
+  }
+
+  // Stamps each item with an index of its own (indexOf >= 0) with its place among
+  // the items of its title, by index: what pickByIndexThenTitleStrict checks. With
+  // `titles` (the page's own list, by index), counted there, so rows the scan left
+  // out still count, as on the page.
+  function stampTitleOrdinals(items, { titleOf, indexOf, titles = null }) {
     const placed = (items || []).filter(item => item && Number.isInteger(indexOf(item)) && indexOf(item) >= 0)
       .sort((a, b) => indexOf(a) - indexOf(b));
     placed.forEach((item, i) => {
-      const ordinal = placed.slice(0, i).filter(other => titlesMatch(titleOf(other), titleOf(item))).length;
-      Object.defineProperty(item, '_titleOrdinal', { value: ordinal, configurable: true, writable: true });
+      const title = titleOf(item);
+      if (Array.isArray(titles)) {
+        setTitlePlace(item, titleOrdinalAt(titles, indexOf(item), title), titles.filter(t => titlesMatch(t, title)).length);
+      } else {
+        setTitlePlace(item, placed.slice(0, i).filter(other => titlesMatch(titleOf(other), title)).length,
+          placed.filter(other => titlesMatch(titleOf(other), title)).length);
+      }
     });
     return items;
   }
@@ -3273,6 +3295,8 @@ footer { margin-top: 3rem; }
     SAME_TITLE_SHIFTED,
     isSameTitleRefusal,
     titleOrdinalAt,
+    titlePlace,
+    setTitlePlace,
     stampTitleOrdinals,
     skippedNoMenuWarning,
     artifactExportPlan,

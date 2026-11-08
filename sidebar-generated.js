@@ -333,15 +333,18 @@ async function handleStudioDownloadRow(item, btn) {
   if (!item || NLME.isStudioItemUnavailable(item)) return;
   setStudioRowStatus(btn, 'pending');
   try {
+    // The row's place among rows of its title in the whole list, so the page can
+    // tell a shifted list (NLME.generatedExportPlan stamps it)
+    const planned = NLME.generatedExportPlan([item], _studioItems);
     if (item.kind === 'artifact') {
       // moreIndex: same index space as DOWNLOAD_ARTIFACT. With retries; says its own failure
-      await triggerItemDownload(_studioTabId, item.moreIndex, item.label, item.type);
+      await triggerItemDownload(_studioTabId, item.moreIndex, item.label, item.type, NLME.titlePlace(planned.artifacts[0]));
     } else if (item.kind === 'source-note') {
       // A note from the Sources panel: EXTRACT_NOTE opens it by sourceIndex (as the Notes tab does)
       await exportSingleNote({ index: -1, sourceIndex: item.sourceIndex, title: item.label, type: item.type });
     } else {
       // kind === 'note' — regular note or mindmap
-      await exportSingleNote({ index: item.kindIndex, title: item.label, type: item.type });
+      await exportSingleNote(planned.notes[0] || { index: item.kindIndex, title: item.label, type: item.type });
     }
     setStudioRowStatus(btn, 'success');
   } catch (error) {

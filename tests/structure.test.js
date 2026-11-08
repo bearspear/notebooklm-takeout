@@ -1126,12 +1126,26 @@ test('artifact, note and source picks all go through the strict resolver, and th
   assert.equal([...content.matchAll(/requestTitleOrdinal = titleOrdinalOf\(message\.data\);/g)].length, 3);
   // The panel stamps the scans and sends the ordinal with the job's requests
   assert.match(fs.readFileSync(path.join(ROOT, 'sidebar-artifacts.js'), 'utf8'), /return NLME\.stampTitleOrdinals\(items, \{ titleOf: item => item\.label, indexOf: item => item\.index \}\);/);
-  assert.match(fs.readFileSync(path.join(ROOT, 'sidebar-sources.js'), 'utf8'), /NLME\.stampTitleOrdinals\(response\.sources \|\| \[\], \{ titleOf: s => s\.title, indexOf: s => s\.index \}\)/);
+  assert.match(fs.readFileSync(path.join(ROOT, 'sidebar-sources.js'), 'utf8'), /NLME\.stampTitleOrdinals\(response\.sources \|\| \[\], \{ titleOf: s => s\.title, indexOf: s => s\.index, titles: Array\.isArray\(response\.titles\) \? response\.titles : null \}\)/);
+  // The page sends the list its source resolver counts over, hidden rows included
+  const scan = content.slice(content.indexOf('async function scanForSources()'), content.indexOf('function waitForElement('));
+  assert.match(scan, /const titles = Array\.from\(sourceContainers\)\.map\(c => \(isNoteSourceContainer\(c\) \? '' : getSourceContainerTitle\(c\)\)\);/);
+  assert.match(scan, /return \{ sources: sources, skippedNotes, titles \};/);
+  // The page reads the count with the ordinal
+  assert.match(content, /\? \{ ordinal: data\.titleOrdinal, count: Number\.isInteger\(data\.titleCount\) \? data\.titleCount : null \}/);
   assert.match(fnSource('sidebar-notes.js', 'scanNotesData'), /return stampNoteOrdinals\(/);
   assert.match(fnSource('sidebar-notes.js', 'scanNotesSettled'), /return stampNoteOrdinals\(/);
-  for (const [file, fn] of [['sidebar-artifacts.js', 'fetchArtifactFiles'], ['sidebar-notes.js', 'extractNoteItem'], ['sidebar-sources.js', 'extractSourceItem']]) {
-    assert.match(fnSource(file, fn), /\._titleOrdinal\) \? \{ titleOrdinal: \w+\._titleOrdinal \} : \{\}/, fn);
+  assert.match(fnSource('sidebar-artifacts.js', 'fetchArtifactFiles'), /const ordinal = NLME\.titlePlace\(item\);/);
+  for (const [file, fn] of [['sidebar-notes.js', 'extractNoteItem'], ['sidebar-notes.js', 'exportSingleNote'], ['sidebar-sources.js', 'extractSourceItem']]) {
+    assert.match(fnSource(file, fn), /\.\.\.NLME\.titlePlace\(\w+\)/, fn);
   }
+  // Single-row downloads send it too: the Studio row through the plan over the whole list
+  const row = fnSource('sidebar-generated.js', 'handleStudioDownloadRow');
+  assert.match(row, /const planned = NLME\.generatedExportPlan\(\[item\], _studioItems\);/);
+  assert.match(row, /triggerItemDownload\(_studioTabId, item\.moreIndex, item\.label, item\.type, NLME\.titlePlace\(planned\.artifacts\[0\]\)\)/);
+  assert.match(row, /exportSingleNote\(planned\.notes\[0\] \|\|/);
+  assert.match(fnSource('sidebar-artifacts.js', 'downloadArtifact'), /NLME\.setTitlePlace\(item, place\.titleOrdinal, place\.titleCount\)/);
+  assert.match(fnSource('sidebar-artifacts.js', 'triggerItemDownload'), /downloadArtifact\(tabId, itemIndex, artifactType, artifactName, place\)/);
   assert.equal([...content.matchAll(/pickByIndexThenTitleStrict\(/g)].length, 4);
   assert.match(fnSource('sidebar-artifacts.js', 'fetchNoMenuSafe'), /NLME\.isSameTitleRefusal\(error\)/);
 });

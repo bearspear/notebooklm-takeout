@@ -85,7 +85,7 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
   const { index, type, label } = item;
   const format = slidesFormat === 'pptx' ? 'pptx' : 'pdf';
   // the scan's place among items of this title (NLME.stampTitleOrdinals)
-  const ordinal = Number.isInteger(item._titleOrdinal) ? { titleOrdinal: item._titleOrdinal } : {};
+  const ordinal = NLME.titlePlace(item);
   logger.info('Download', `Downloading artifact ${index} (${type})`, label);
   await ensureContentScriptLoaded(tabId);
 
@@ -215,12 +215,13 @@ async function fetchSlideFormats(item, formats, fetchOne, ctx) {
  * names ([report]_Title.md, [audio-overview]_Title.m4a, ...); a Data Table
  * or mind map is one ZIP ([data-table]_Title.zip, [mind-map]_Title.zip).
  */
-async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName) {
+// place: { titleOrdinal, titleCount } from the list the row came from (NLME.titlePlace)
+async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName, place = {}) {
   const obsidian = !!settings.obsidianNames;
   const stem = NLME.prefixedStem(getArtifactTypePrefix(artifactType), artifactName, { obsidian });
-  const { files } = await fetchArtifactFiles(tabId,
-    { index: artifactIndex, type: artifactType, label: artifactName },
-    { stem, mode: 'single' });
+  const item = { index: artifactIndex, type: artifactType, label: artifactName };
+  if (Number.isInteger(place.titleOrdinal) && Number.isInteger(place.titleCount)) NLME.setTitlePlace(item, place.titleOrdinal, place.titleCount);
+  const { files } = await fetchArtifactFiles(tabId, item, { stem, mode: 'single' });
   // Data Tables and mind maps are several files: one ZIP, as before 3a
   const pkg = NLME.singleArtifactPackage({ type: artifactType, title: artifactName, files, obsidian });
   if (pkg) await saveFiles(pkg.entries, { zipName: pkg.zipName });
@@ -749,13 +750,13 @@ function citationTitlesFromHtml(html) {
   return [...byNumber.values()];
 }
 
-async function triggerItemDownload(tabId, itemIndex, artifactName, artifactType) {
+async function triggerItemDownload(tabId, itemIndex, artifactName, artifactType, place = {}) {
   try {
     logger.info('Download', `Triggering download for ${artifactName}`, { itemIndex, artifactType });
 
     // Use new message-based download with retry logic (2 retries for individual downloads)
     await retryDownload(
-      () => downloadArtifact(tabId, itemIndex, artifactType, artifactName),
+      () => downloadArtifact(tabId, itemIndex, artifactType, artifactName, place),
       2,
       artifactName
     );

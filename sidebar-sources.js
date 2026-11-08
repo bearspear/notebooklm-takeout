@@ -164,7 +164,8 @@ async function scanSourcesData(tabId) {
   if (!response) throw new Error('No response from the page');
   if (response.error) throw new ScanError(response.error);
   // Each source's place among sources of its title (NLME.stampTitleOrdinals)
-  const sources = NLME.stampTitleOrdinals(response.sources || [], { titleOf: s => s.title, indexOf: s => s.index });
+  // counted over the page's whole container list (titles), hidden rows included
+  const sources = NLME.stampTitleOrdinals(response.sources || [], { titleOf: s => s.title, indexOf: s => s.index, titles: Array.isArray(response.titles) ? response.titles : null });
   return { sources, skippedNotes: response.skippedNotes || 0 };
 }
 
@@ -430,7 +431,7 @@ async function extractSourceItem(shell, source, ctx, state, variantSettings = se
     sourceData = await retryOperation(
       () => chrome.tabs.sendMessage(shell.tab.id, {
         type: NLME.MSG.EXTRACT_SOURCE,
-        data: { sourceIndex: source.index, title: source.title, needsGuide: needsMeta, ...(Number.isInteger(source._titleOrdinal) ? { titleOrdinal: source._titleOrdinal } : {}) }
+        data: { sourceIndex: source.index, title: source.title, needsGuide: needsMeta, ...NLME.titlePlace(source) }
       }),
       2, // maxRetries
       1500, // baseDelay (1.5s)
