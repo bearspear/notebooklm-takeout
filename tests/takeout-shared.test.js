@@ -3125,7 +3125,7 @@ test('sheetOverrides gives the keys a run may set, so nothing else reaches a job
 test('estimateLine says what it left out', () => {
   assert.equal(NLME.estimateLine({ sources: 30, notes: 100, chat: null }, 'quotes'), 'Estimated time: about 13 min, not counting chat');
   assert.equal(NLME.estimateLine({ sources: 30, notes: 100, chat: 10 }, 'titles'), 'Estimated time: about 2 min');
-  assert.equal(NLME.estimateLine({ sources: 3, notes: null, generated: null, chat: null }, 'quotes'), 'Estimated time: under 30 sec, not counting notes, generated items and chat');
+  assert.equal(NLME.estimateLine({ sources: 3, notes: null, generated: null, chat: null }, 'quotes'), 'Estimated time: under 30 sec, not counting notes, Studio items and chat');
   assert.equal(NLME.estimateLine({ sources: null, notes: 500, chat: undefined }, 'quotes'), 'Estimated time: about 58 min, not counting sources and chat');
 });
 
@@ -3462,4 +3462,11 @@ test('sameDeleteTarget needs the same tab and the same notebook', () => {
   assert.equal(NLME.sameDeleteTarget(asked, { tabId: 8, notebookId: 'aaaa' }), false);
   assert.equal(NLME.sameDeleteTarget({ tabId: null, notebookId: '' }, { tabId: null, notebookId: '' }), false);
   assert.equal(NLME.sameDeleteTarget(null, asked), false);
+});
+
+test('overlayView calls the Studio list "Studio items", also under its 1.9.1 to 1.9.3 name', () => {
+  assert.equal(NLME.overlayView('Studio: Processing 1/3: Deck', null).heading, 'Exporting Studio items');
+  assert.equal(NLME.overlayView('Generated: Processing 1/3: Deck', null).heading, 'Exporting Studio items');
+  assert.equal(NLME.overlayView('Artifacts: Processing 1/3: Deck', null).heading, 'Exporting artifacts');
+  assert.equal(NLME.overlayView('constructor: x', null).heading, 'Exporting');
 });

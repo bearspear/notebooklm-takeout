@@ -31,7 +31,7 @@ function forgetStudioList() {
   _studioScanSeq++;
   dropStudioList();
   const resultsEl = document.getElementById('studio-scan-results');
-  if (resultsEl) resultsEl.innerHTML = '<p class="scanning">Scanning generated items...</p>';
+  if (resultsEl) resultsEl.innerHTML = '<p class="scanning">Scanning Studio items...</p>';
 }
 
 // The Generated list's items, no UI (the list, and its count on Home, so the two
@@ -73,7 +73,7 @@ async function scanStudioPage() {
   const seq = ++_studioScanSeq;
   // A live list is not blanked while rescanning: the redraw (if any) happens below
   const listLive = () => !!_studioListController && !!resultsEl.querySelector('.studio-list');
-  if (!listLive()) resultsEl.innerHTML = '<p class="scanning">Scanning generated items...</p>';
+  if (!listLive()) resultsEl.innerHTML = '<p class="scanning">Scanning Studio items...</p>';
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -124,11 +124,11 @@ async function scanStudioPage() {
       }
     }
   } catch (error) {
-    console.error('[NotebookLM Takeout] Generated scan failed:', error);
+    console.error('[NotebookLM Takeout] Studio scan failed:', error);
     if (seq !== _studioScanSeq) return;
     dropStudioList();
     setTabCount('studio', null);
-    resultsEl.innerHTML = `<p class="error-message">Generated scan failed: ${escapeHtml(error.message || String(error))}</p>`;
+    resultsEl.innerHTML = `<p class="error-message">Studio scan failed: ${escapeHtml(error.message || String(error))}</p>`;
   }
 }
 
@@ -140,7 +140,7 @@ function renderStudioList(items) {
   setTabCount('studio', items.length);
 
   if (items.length === 0) {
-    resultsEl.innerHTML = '<p class="empty-message">No generated items found. Generate content in NotebookLM first.</p>';
+    resultsEl.innerHTML = '<p class="empty-message">No Studio items found. Generate content in NotebookLM first.</p>';
     return;
   }
 
@@ -184,13 +184,13 @@ function renderStudioList(items) {
     if (downloadBtn) {
       // The item now: a rescan may replace _studioItems while the job lock is awaited
       const item = _studioItems[parseInt(downloadBtn.dataset.idx, 10)];
-      runRowExport('Generated download', () => handleStudioDownloadRow(item, downloadBtn));
+      runRowExport('Studio download', () => handleStudioDownloadRow(item, downloadBtn));
       return;
     }
     const deleteBtn = e.target.closest('.studio-delete-btn');
     if (deleteBtn) {
       const item = _studioItems[parseInt(deleteBtn.dataset.idx, 10)];
-      runExclusive('Generated delete', () => handleStudioDeleteRow(item, deleteBtn));
+      runExclusive('Studio delete', () => handleStudioDeleteRow(item, deleteBtn));
     }
   });
 }
@@ -260,7 +260,7 @@ function exportSelectedGenerated() {
     title: NLME.generatedActionLabel(plan),
     counts: { generated: n },
     offerSaveAs: plan.artifacts.length > 0,
-    start: ({ overrides, zip }) => runExclusive('Generated export', () => withRunSettings(overrides, () => runGeneratedExport(zip)))
+    start: ({ overrides, zip }) => runExclusive('Studio export', () => withRunSettings(overrides, () => runGeneratedExport(zip)))
   });
 }
 
@@ -336,7 +336,7 @@ async function handleStudioDownloadRow(item, btn) {
     }
     setStudioRowStatus(btn, 'success');
   } catch (error) {
-    console.error('[NotebookLM Takeout] Generated download failed:', error);
+    console.error('[NotebookLM Takeout] Studio download failed:', error);
     if (item.kind !== 'artifact') showToast(`Failed to download ${item.label}: ${error.message || error}`, 'error');
     setStudioRowStatus(btn, 'error');
   }
@@ -363,7 +363,7 @@ async function handleStudioDeleteRow(item, btn) {
     _studioSignature = null;
     await scanStudioPage();
   } catch (error) {
-    console.error('[NotebookLM Takeout] Generated delete failed:', error);
+    console.error('[NotebookLM Takeout] Studio delete failed:', error);
     showToast(`Failed to delete ${item.label}: ${error.message || error}`, 'error');
     if (btn) btn.disabled = false;
   }
@@ -423,7 +423,7 @@ async function handleStudioBulkDelete() {
   }
 
   const skippedText = skipText ? `, skipped ${skipText}` : '';
-  showToast(`Deleted ${okCount}/${queue.length} generated item(s)${skippedText}`, okCount === queue.length && !skipText ? 'success' : 'warning');
+  showToast(`Deleted ${okCount}/${queue.length} Studio item(s)${skippedText}`, okCount === queue.length && !skipText ? 'success' : 'warning');
   if (queue.some(item => item.kind !== 'artifact')) setTabCount('notes', null); // recounted when Notes rescans
   _studioSignature = null; // always a redraw
   await scanStudioPage();

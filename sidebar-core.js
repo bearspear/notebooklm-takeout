@@ -765,7 +765,7 @@ function setupEventListeners() {
   // Generated tab's Delete, beside the action bar (internal id 'studio')
   const studioDeleteSelectedBtn = document.getElementById('studio-delete-selected-btn');
   if (studioDeleteSelectedBtn) {
-    studioDeleteSelectedBtn.addEventListener('click', () => runExclusive('Generated delete', handleStudioBulkDelete));
+    studioDeleteSelectedBtn.addEventListener('click', () => runExclusive('Studio delete', handleStudioBulkDelete));
   }
 }
 

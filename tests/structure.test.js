@@ -611,7 +611,7 @@ test('every export reaches its job through the sheet or the run settings, under 
   assert.match(fnSource('sidebar-core.js', 'runRowExport'), /runExclusive\(name, async \(\) => \{\s+if \(await rowMayStart\(\)\) return withRunSettings\(NLME\.runOverrides\(settings\), fn\);/);
   assert.match(read('sidebar-notes.js'), /runRowExport\('Note export', /);
   assert.match(read('sidebar-sources.js'), /runRowExport\('Sources export', \(\) => exportSources\(\[source\], \{ record: false \}\)\)/);
-  assert.match(read('sidebar-generated.js'), /runRowExport\('Generated download', \(\) => handleStudioDownloadRow\(item, downloadBtn\)\)/);
+  assert.match(read('sidebar-generated.js'), /runRowExport\('Studio download', \(\) => handleStudioDownloadRow\(item, downloadBtn\)\)/);
   assert.doesNotMatch(read('sidebar-notes.js') + read('sidebar-sources.js') + read('sidebar-generated.js'), /presetOverrides/);
 });
 
@@ -925,4 +925,19 @@ test('a disabled button does not change on hover', () => {
     assert.doesNotMatch(css, new RegExp(`^\\.${name}:hover\\s*\\{`, 'm'), `.${name}:hover needs :not(:disabled)`);
     assert.match(css, new RegExp(`\\.${name}:hover:not\\(:disabled\\)\\s*\\{`));
   }
+});
+
+test('the list is called Studio wherever a person reads it (1.9.4)', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+  // Text between tags, and the attributes a person reads or hears
+  const text = [...html.replace(/<script[\s\S]*?<\/script>/g, '').matchAll(/>([^<]+)</g)].map(m => m[1]).join(' ');
+  const attrs = [...html.matchAll(/\b(?:title|aria-label|placeholder|alt)="([^"]*)"/g)].map(m => m[1]).join(' ');
+  assert.doesNotMatch(text + ' ' + attrs, /\bGenerated\b/);
+  assert.match(html, /<span class="home-label">Studio<\/span>/);
+  assert.match(html, /data-tab="studio"[^>]*>Studio <span class="tab-count"/);
+  const generated = fs.readFileSync(path.join(ROOT, 'sidebar-generated.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/ .*$/gm, '');
+  // Strings a person sees: list states, busy names, toasts
+  const strings = [...generated.matchAll(/(['`])((?:\\.|(?!\1)[^\\])*)\1/g)].map(m => m[2]).filter(s => !s.startsWith('[NotebookLM Takeout]'));
+  assert.deepEqual(strings.filter(s => /\b[Gg]enerated\b/.test(s) && !/^Generated: /.test(s)), []);
 });

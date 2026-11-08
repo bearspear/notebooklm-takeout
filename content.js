@@ -3519,7 +3519,7 @@
     const { label, combinedIndex } = data || {};
     const all = Array.from(document.querySelectorAll('artifact-library-item, artifact-library-note'));
     if (all.length === 0) {
-      throw new Error('No Generated items found on the page');
+      throw new Error('No Studio items found on the page');
     }
 
     // Resolve target. The title of the element must equal the label whenever a
@@ -3544,7 +3544,7 @@
       target = all[combinedIndex];
     }
     if (!target) {
-      throw new Error(`Generated item not found${label ? ` (label: "${label}")` : ''}`);
+      throw new Error(`Studio item not found${label ? ` (label: "${label}")` : ''}`);
     }
 
     const moreButton = target.querySelector('button[aria-label="More"]');

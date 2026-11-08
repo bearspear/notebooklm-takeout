@@ -1220,7 +1220,7 @@
   // with no usable number is not known yet, counts as 0 and is named; an absent key is
   // not part of the run. With nothing known there is no number: a short time would
   // be a guess.
-  const ESTIMATE_NAMES = [['sources', 'sources'], ['notes', 'notes'], ['generated', 'generated items'], ['chat', 'chat']];
+  const ESTIMATE_NAMES = [['sources', 'sources'], ['notes', 'notes'], ['generated', 'Studio items'], ['chat', 'chat']];
   function estimateLine(counts, citationDetail) {
     const asked = ESTIMATE_NAMES.filter(([key]) => counts && key in counts);
     const unknown = asked.filter(([key]) => !(Number.isFinite(counts[key]) && counts[key] >= 0)).map(([, name]) => name);
@@ -1253,13 +1253,15 @@
   // The page overlay's fields from a progress text and count (Task 10).
   // text: 'Notes: Batch 1/2: Processing 1/25: Title' and the like; count:
   // { done, total, item } or null. Pure, so the content script only renders.
-  const OVERLAY_CATEGORIES = ['Sources', 'Notes', 'Chat', 'Generated', 'Artifacts'];
+  // Progress category -> what the heading calls it. 'Generated' is the list's name
+  // before 1.9.4 (now Studio).
+  const OVERLAY_CATEGORIES = { Sources: 'sources', Notes: 'notes', Chat: 'chat', Studio: 'Studio items', Generated: 'Studio items', Artifacts: 'artifacts' };
   function overlayView(text, count, { finishing = false } = {}) {
     let rest = String(text || '');
     let heading = 'Exporting';
     const colon = rest.indexOf(': ');
-    if (colon > 0 && OVERLAY_CATEGORIES.includes(rest.slice(0, colon))) {
-      heading = `Exporting ${rest.slice(0, colon).toLowerCase()}`;
+    if (colon > 0 && Object.hasOwn(OVERLAY_CATEGORIES, rest.slice(0, colon))) {
+      heading = `Exporting ${OVERLAY_CATEGORIES[rest.slice(0, colon)]}`;
       rest = rest.slice(colon + 2);
     }
     if (finishing) heading = 'Saving files';
