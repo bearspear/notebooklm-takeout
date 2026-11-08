@@ -1498,3 +1498,53 @@ test('build_viewer warns when a framed mind map of an older export fetches a web
   const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
   assert.match(readme, /build_viewer\.js[^\n]*web font|web font[^\n]*build_viewer\.js/);
 });
+
+// ---------- collapsed Thoughts (1.9.7) ----------
+
+const THOUGHTS_ANSWER = '<details>\n<summary>Thoughts</summary>\n\n**Defining Sizing Concepts**\n\nI am now exploring sizing.\n\n**Searched your sources**\n\n</details>\n\nSizing is the cardinality of a model.';
+
+test('sanitizeHtml keeps <details>/<summary> and strips every attribute, so the section is closed on load', () => {
+  assert.equal(clean('<details><summary>Thoughts</summary><p>x</p></details>'), '<details><summary>Thoughts</summary><p>x</p></details>');
+  const out = clean('<details open ontoggle="alert(1)" class="c" id="d"><summary onclick="x()" style="color:red" title="t">Thoughts</summary><p title="k">x</p></details>');
+  assert.equal(out, '<details><summary>Thoughts</summary><p title="k">x</p></details>');
+  assert.doesNotMatch(out, /open|ontoggle|onclick|style/);
+});
+
+test('viewer data: an answer with Thoughts keeps the section as written, so Copy gives it as Markdown', () => {
+  const chat = ['# Chat', '', '## Q: What does sizing mean?', '', '**A:**', '', THOUGHTS_ANSWER, '', '---', ''].join('\n');
+  const d = V.buildViewerData({ 'chat/chat.md': chat }, manifestOpts);
+  assert.equal(d.pairs[0].a, THOUGHTS_ANSWER);
+  assert.equal(app.copyMarkdown(d.pairs[0].a), THOUGHTS_ANSWER);
+});
+
+test('viewer page styles the Thoughts section (muted summary, chevron that turns when open)', () => {
+  const tpl = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-template.html'), 'utf8');
+  assert.match(tpl, /\.md summary \{[^}]*color: var\(--muted\)/);
+  assert.match(tpl, /\.md summary::before \{[^}]*border-right/);
+  assert.match(tpl, /\.md details\[open\] > summary::before \{ transform: rotate\(45deg\)/);
+  // the rule and indent sit on the open section, so lists and code inside keep their own padding
+  assert.match(tpl, /\.md details \{ margin: 0 0 12px; padding-left: 14px; border-left: 3px solid transparent; \}/);
+  assert.match(tpl, /\.md details\[open\] \{ border-left-color: var\(--line\); \}/);
+  assert.match(tpl, /\.md details > :not\(summary\) \{ color: var\(--muted\); \}/);
+  assert.match(tpl, /\.md summary::-webkit-details-marker \{ display: none; \}/);
+});
+
+test('Search this chat matches the text, not the Thoughts markup', () => {
+  const pairs = [
+    { q: 'What does sizing mean?', a: THOUGHTS_ANSWER },
+    { q: 'Second?', a: 'A summary of the details.' },
+    { q: 'Third?', a: '**Bold** answer about *sizing*' }
+  ];
+  assert.deepEqual(app.filterPairs(pairs, 'summary'), [1]);
+  assert.deepEqual(app.filterPairs(pairs, 'details'), [1]);
+  assert.deepEqual(app.filterPairs(pairs, 'Sizing'), [0, 2]);
+  assert.deepEqual(app.filterPairs(pairs, 'searched your sources'), [0]);
+  assert.deepEqual(app.filterPairs(pairs, 'bold answer'), [2]);
+  assert.deepEqual(app.filterPairs(pairs, ''), [0, 1, 2]);
+  // the cache gives the same result
+  const flat = [];
+  assert.deepEqual(app.filterPairs(pairs, 'summary', flat), [1]);
+  assert.deepEqual(app.filterPairs(pairs, 'summary', flat), [1]);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8');
+  assert.match(src, /idx = filterPairs\(D\.pairs, q \|\| '', pairText\)/);
+});

@@ -545,8 +545,16 @@ side panel.
      `stats.thoughtsUnread` ("Message N: Thoughts could not be read"), which
      `NLME.chatScanErrors` puts in errors.md. After a Cancel the rest are counted in
      `stats.thoughtsCancelled` only (a scan-summary note, no errors.md entry). The chat
-     converter's `chatThoughts` rule writes `NLME.thoughtsMarkdown` (a `> **Thoughts**`
-     blockquote) at the placeholder, or nothing when they were not read. Thoughts are not in
+     converter's `chatThoughts` rule writes `NLME.thoughtsMarkdown` at the placeholder, or
+     nothing when they were not read. From 1.9.7 the section is collapsed: `<details>` (never
+     `open`), `<summary>Thoughts</summary>`, then each step's `**title**` and body as plain
+     Markdown, blank lines between; `convertChatToMarkdown` puts a blank line after `**A:**`
+     when an answer opens with it. The viewer's `sanitizeHtml` strips every attribute of
+     `details`/`summary`, so they are closed on load; `markQuote` opens one that holds a
+     search hit. `<details`/`</details`/`<summary`/`</summary` written in a thought become `&lt;…` outside code
+     spans and fences (`escapeSectionTags`), so a thought cannot open or close the section. The viewer's
+     "Search this chat" filters on `searchText` (`filterPairs`), so tag names never match. (1.9.6 wrote a
+     `> **Thoughts**` blockquote.) Thoughts are not in
      the answer HTML, so the audit (`countPageContent`) and the citation reading never
      count them. A thought body whose blocks miss part of its text (`NLME.blocksCoverText`)
      is converted whole: their texts joined must equal the body's text, whitespace aside.
@@ -1181,7 +1189,13 @@ Found while checking real exports after #8; the export bugs below predate it.
   extension. Seen Nov 2026 across 8 notebooks: `drive_pdf`, `image`, `video_youtube`, `video_audio_call`
   (uploaded audio), `markdown`, `description`, `article`. Written as `source_type`; `sourceKind` in
   `viewer/viewer-app.js` maps it for the viewer, then falls back to the extension and the url.
-- **Web sources (1.9.6):** a web or web-PDF source has no type icon, only `img.favicon-icon` whose src is
+- **Web sources (1.9.6, fixed 1.9.7):** a web or web-PDF source has no type icon, only a favicon. Live, it is
+  `<img class="source-item-source-icon favicon-icon">`: it carries the type-icon class, so 1.9.6's
+  `querySelector('.source-item-source-icon')` took the `<img>` for the type icon and never read the URL.
+  `NLME.sourceRowIcon(container)` (1.9.7) reads the type from a non-`<img>` type icon only and the URL from
+  `img.favicon-icon` when there is none. From 1.9.7 the source Markdown has `**Web Page:** <url>`, an angle-bracket
+  autolink so a trailing `.` or `)` stays in the link (`**Web PDF:**`
+  for web_pdf) under the title, like `**YouTube Video:**` (`NLME.sourceWebLine`, all variants). The favicon src is
   `google.com/s2/favicons?domain=<original URL>`, the URL raw (chat favicons: percent-encoded); read up to
   `&sz=`, decoded once only when encoded, never through URLSearchParams (`+` stays `+`). Google-hosted
   download and redirect links (`*.usercontent.google.com`, `*.googleusercontent.com`, `google.com/url`,

@@ -58,6 +58,11 @@ function sanitizeHtml(html, parser) {
   doc.querySelectorAll('*').forEach(function (n) {
     var tag = String(n.tagName).toLowerCase();
     if (SMIL_TAGS.test(tag)) { n.remove(); return; }
+    // A collapsed section (chat Thoughts) keeps no attribute, so it is closed on load
+    if (tag === 'details' || tag === 'summary') {
+      Array.prototype.slice.call(n.attributes).forEach(function (a) { n.removeAttribute(a.name); });
+      return;
+    }
     var loads = LOADING_TAGS.test(tag);
     Array.prototype.slice.call(n.attributes).forEach(function (a) {
       var name = a.name;
@@ -194,7 +199,7 @@ function showCopyResult(btn, ok, icons, later, cancel) {
   }, 1500);
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
+if (typeof module === 'object' && module.exports) module.exports = { copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
 // A source's kind for its icon: the type icon the page showed, which also covers
 // titles with no extension, then the title's extension, then the url. A generic
 // document icon comes after the extension, which may say more ("plan.docx").
@@ -238,6 +243,20 @@ function searchText(md) {
     .replace(/[*_`#>\\]/g, '')
     .replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
     .replace(/\s+/g, ' ').trim();
+}
+
+// Search this chat: the pairs whose question or answer holds the query, matched on their
+// text as searchText reads it (no markup, so "summary" does not match every Thoughts section).
+// flat: optional cache, one searchText per pair. Returns pair indexes.
+function filterPairs(pairs, query, flat) {
+  var low = searchText(query).toLowerCase(), idx = [];
+  pairs.forEach(function (p, i) {
+    if (!low) { idx.push(i); return; }
+    var text = flat && flat[i] != null ? flat[i] : searchText(p.q + ' ' + p.a).toLowerCase();
+    if (flat) flat[i] = text;
+    if (text.indexOf(low) > -1) idx.push(i);
+  });
+  return idx;
 }
 
 function buildSearchIndex(data) {
@@ -382,6 +401,8 @@ if (typeof document !== 'undefined') (function () {
       var m = document.createElement('mark'); r.surroundContents(m); first = m;
     }
     if (first) {
+      // A quote inside a closed section (Thoughts): open it so the mark shows
+      for (var d = first.closest('details'); d && box.contains(d); d = d.parentElement && d.parentElement.closest('details')) d.open = true;
       var sc = box.closest('.scroll'), mr = first.getBoundingClientRect(), sr = sc.getBoundingClientRect();
       sc.scrollTop += mr.top - sr.top - sc.clientHeight * 0.25;
     }
@@ -503,9 +524,9 @@ if (typeof document !== 'undefined') (function () {
   addEventListener('pagehide', function () {
     try { sessionStorage.setItem(CHAT_TOP_KEY, String($('chatscroll').scrollTop)); } catch (e) { /* no storage */ }
   });
+  var pairText = [];
   function renderChat(q) {
-    var low = (q || '').toLowerCase(), idx = [];
-    D.pairs.forEach(function (p, i) { if (!low || (p.q + ' ' + p.a).toLowerCase().indexOf(low) > -1) idx.push(i); });
+    var low = (q || '').toLowerCase(), idx = filterPairs(D.pairs, q || '', pairText);
     var top = low ? '' : (D.emoji ? '<div class="nb-emoji">' + esc(D.emoji) + '</div>' : '') + '<div class="nb-title">' + esc(D.notebook) + '</div><div class="nb-meta">' + D.sources.length + ' sources</div>' + (D.summary ? '<div class="md">' + md(D.summary) + '</div>' : '');
     var box = $('chat');
     box.innerHTML = top;

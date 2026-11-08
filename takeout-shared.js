@@ -1533,6 +1533,23 @@
     return isGoogleDownloadUrl(url) ? null : url.href;
   }
 
+  // One source row of the panel: its type icon and, for a web source, the
+  // original URL. The type is the text of the row's type icon, a mat-icon
+  // (video_youtube, drive_pdf, ...), 'document' when there is none. Live
+  // (1.9.7), a web row's favicon is <img class="source-item-source-icon
+  // favicon-icon">: it carries the type-icon class but is no type icon, so an
+  // <img> is never read as one. A row without a type icon gets webUrl from
+  // its img.favicon-icon (the decoded URL only, never the favicon address).
+  // container: an element with querySelector(All). { type, webUrl|null }
+  function sourceRowIcon(container) {
+    if (!container) return { type: 'document', webUrl: null };
+    const iconEl = Array.from(container.querySelectorAll('.source-item-source-icon') || [])
+      .find(el => el.tagName !== 'IMG') || null;
+    const type = String(iconEl?.textContent || '').trim() || 'document';
+    const webUrl = iconEl ? null : sourceUrlFromFavicon(container.querySelector('img.favicon-icon')?.getAttribute('src'));
+    return { type, webUrl };
+  }
+
   // Google-hosted downloads and redirects: *.usercontent.google.com,
   // *.googleusercontent.com, google.com/url, and *.google.com links that
   // download (private, short-lived; never a source's original page)
@@ -1555,6 +1572,20 @@
     const s = source || {};
     if (s.webUrl) return { sourceType: webSourceType(s.webUrl), sourceUrl: s.webUrl };
     return { sourceType: s.type === 'document' ? null : s.type || null, sourceUrl: null };
+  }
+
+  // A web source's line under the title of its Markdown, like a YouTube
+  // source's "**YouTube Video:** <url>" (1.9.7): "**Web Page:** <url>" or,
+  // for web_pdf, "**Web PDF:** <url>", the URL in angle brackets (an
+  // autolink), so a trailing "." or ")" stays part of the link. url.href
+  // never holds a space, < or >. fields: NLME.sourceTypeFields'
+  // { sourceType, sourceUrl }. Any other source: ''.
+  function sourceWebLine(fields) {
+    const { sourceType, sourceUrl } = fields || {};
+    if (!sourceUrl) return '';
+    if (sourceType === 'web') return `**Web Page:** <${sourceUrl}>\n\n`;
+    if (sourceType === 'web_pdf') return `**Web PDF:** <${sourceUrl}>\n\n`;
+    return '';
   }
 
   // A web source's line in the Sources _index.md: its URL as a link (the
@@ -1698,11 +1729,30 @@
   // what 1.9.5 wrote.
   const THOUGHTS_PLACEHOLDER_HTML = '<div data-nlme-thoughts="">Thoughts</div>';
 
-  // A chat answer's Thoughts as one blockquote section: "> **Thoughts**",
-  // then per thought its bold title and its body, every line quoted and the
-  // parts separated by ">" lines. thoughts: [{ title, body }]; a step line
-  // ("Searched your sources") is a title with an empty body. Icon names are
-  // left out. No thoughts: ''.
+  // A thought that writes about the tags themselves must not open or close
+  // the section: <details, </details, <summary and </summary (any case)
+  // become &lt;... outside code spans and fenced code, where they stay as
+  // written (code shows them literally anyway).
+  function escapeSectionTags(text) {
+    // a code span (a run of backticks up to the same run) is kept; a tag outside one is escaped
+    const spanOrTag = /(`+)[^`]*?(?:`(?!\1)[^`]*?)*?\1(?!`)|<(\/?)(details|summary)\b/gi;
+    let fence = null;
+    return String(text).split('\n').map(line => {
+      const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+      if (fence) {
+        if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !line.slice(marker[0].length).trim()) fence = null;
+        return line;
+      }
+      if (marker) { fence = marker[1]; return line; }
+      return line.replace(spanOrTag, (match, ticks, slash, name) => (ticks ? match : `&lt;${slash}${name}`));
+    }).join('\n');
+  }
+
+  // A chat answer's Thoughts as one collapsed section (1.9.7): a <details>
+  // block without "open" whose summary is "Thoughts", then per thought its
+  // bold title and its body as Markdown, parts separated by blank lines.
+  // thoughts: [{ title, body }]; a step line ("Searched your sources") is a
+  // title with an empty body. Icon names are left out. No thoughts: ''.
   function thoughtsMarkdown(thoughts) {
     const blocks = [];
     for (const thought of Array.isArray(thoughts) ? thoughts : []) {
@@ -1711,11 +1761,11 @@
       const body = String(thought?.body || '').replace(/\r\n?/g, '\n')
         .split('\n').map(line => line.replace(/\s+$/, '')).join('\n')
         .trim().replace(/\n{3,}/g, '\n\n');
-      if (title) blocks.push(`**${title}**`);
-      if (body.trim()) blocks.push(body);
+      if (title) blocks.push(`**${escapeSectionTags(title)}**`);
+      if (body.trim()) blocks.push(escapeSectionTags(body));
     }
     if (blocks.length === 0) return '';
-    return toBlockquote(['**Thoughts**', ...blocks].join('\n\n'));
+    return ['<details>\n<summary>Thoughts</summary>', ...blocks, '</details>'].join('\n\n');
   }
 
   // Scan problems that lead a chat export's errors.md: messages that could
@@ -3635,6 +3685,8 @@ footer { margin-top: 3rem; }
     toBlockquote,
     isThoughtIconName,
     sourceUrlFromFavicon,
+    sourceRowIcon,
+    sourceWebLine,
     webSourceType,
     sourceTypeFields,
     sourceOriginalLine,

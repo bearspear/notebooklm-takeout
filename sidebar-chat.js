@@ -765,8 +765,10 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
     aiResponseMarkdown = aiResponseMarkdown.replace(/\\>\s*</g, '');
 
     console.log(`[Chat Export] Message ${idx + 1} markdown length:`, aiResponseMarkdown.length);
-    // Use newline after A: to ensure tables/lists at start of response parse correctly
-    markdown += `**A:**\n${aiResponseMarkdown}\n\n`;
+    // Use newline after A: to ensure tables/lists at start of response parse correctly.
+    // An answer that opens with its collapsed Thoughts gets a blank line, so the
+    // <details> block stands on its own in every renderer (1.9.7)
+    markdown += `**A:**\n${aiResponseMarkdown.startsWith('<details>') ? '\n' : ''}${aiResponseMarkdown}\n\n`;
 
     // Footnotes: one definition per cited number, the read sources plus a
     // placeholder for any marker whose popup could not be read. (The

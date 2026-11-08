@@ -23,32 +23,38 @@ test('thoughtsMarkdown: an empty or missing list writes nothing', () => {
   assert.equal(NLME.thoughtsMarkdown([{ title: '  ', body: '' }]), '');
 });
 
-test('thoughtsMarkdown: one blockquote section, titles bold, bodies quoted, thoughts separated by ">"', () => {
+test('thoughtsMarkdown: one collapsed <details> section without "open", titles bold, parts separated by blank lines', () => {
   const md = NLME.thoughtsMarkdown([
     { title: 'Investigating Paul Cohen', body: 'I am looking at forcing.\n\nThen the continuum hypothesis.' },
     { title: 'Searched your sources', body: '' },
     { title: 'Drafting the answer', body: 'One line.' }
   ]);
   assert.equal(md, [
-    '> **Thoughts**',
-    '>',
-    '> **Investigating Paul Cohen**',
-    '>',
-    '> I am looking at forcing.',
-    '>',
-    '> Then the continuum hypothesis.',
-    '>',
-    '> **Searched your sources**',
-    '>',
-    '> **Drafting the answer**',
-    '>',
-    '> One line.'
+    '<details>',
+    '<summary>Thoughts</summary>',
+    '',
+    '**Investigating Paul Cohen**',
+    '',
+    'I am looking at forcing.',
+    '',
+    'Then the continuum hypothesis.',
+    '',
+    '**Searched your sources**',
+    '',
+    '**Drafting the answer**',
+    '',
+    'One line.',
+    '',
+    '</details>'
   ].join('\n'));
+  // collapsed by default: never "open", and no blockquote any more
+  assert.doesNotMatch(md, /\bopen\b/);
+  assert.doesNotMatch(md, /^>/m);
 });
 
 test('thoughtsMarkdown: whitespace in titles collapses, body edges are trimmed, a body without a title stays', () => {
   const md = NLME.thoughtsMarkdown([{ title: '  Two\n words ', body: '\n\n  text  \n\n' }, { title: '', body: 'Untitled body' }]);
-  assert.equal(md, '> **Thoughts**\n>\n> **Two words**\n>\n> text\n>\n> Untitled body');
+  assert.equal(md, '<details>\n<summary>Thoughts</summary>\n\n**Two words**\n\ntext\n\nUntitled body\n\n</details>');
 });
 
 test('thoughtsMarkdown: Material icon names never appear', () => {
@@ -57,12 +63,12 @@ test('thoughtsMarkdown: Material icon names never appear', () => {
     { title: 'document_search', body: '' },
     { title: 'Searched your sources', body: '' }
   ]);
-  assert.equal(md, '> **Thoughts**\n>\n> **Searched your sources**');
+  assert.equal(md, '<details>\n<summary>Thoughts</summary>\n\n**Searched your sources**\n\n</details>');
   assert.doesNotMatch(md, /neurology|document_search/);
   // A thought whose only content is an icon name is dropped entirely
   assert.equal(NLME.thoughtsMarkdown([{ title: 'neurology', body: '' }]), '');
   // An icon name as the title of a real thought: the body stays, the name goes
-  assert.equal(NLME.thoughtsMarkdown([{ title: 'neurology', body: 'Body' }]), '> **Thoughts**\n>\n> Body');
+  assert.equal(NLME.thoughtsMarkdown([{ title: 'neurology', body: 'Body' }]), '<details>\n<summary>Thoughts</summary>\n\nBody\n\n</details>');
 });
 
 test('isThoughtIconName: only the icon names a Thoughts section shows, never another one-word title', () => {
@@ -73,7 +79,7 @@ test('isThoughtIconName: only the icon names a Thoughts section shows, never ano
     assert.equal(NLME.isThoughtIconName(text), false, text);
   }
   // A one-word lower-case title is kept
-  assert.equal(NLME.thoughtsMarkdown([{ title: 'summarizing', body: '' }]), '> **Thoughts**\n>\n> **summarizing**');
+  assert.equal(NLME.thoughtsMarkdown([{ title: 'summarizing', body: '' }]), '<details>\n<summary>Thoughts</summary>\n\n**summarizing**\n\n</details>');
 });
 
 // ---------- scan warnings ----------
@@ -159,7 +165,8 @@ test('a chat answer with Thoughts: the section sits where "Thoughts" was, withou
   const md = fixedDate(() => sandbox.convertChatToMarkdown('Book', null, [
     { userMessage: 'Expand on Skolem’s paradox.', aiResponseHTML: `${PLACEHOLDER}<p>Skolem’s paradox stems from…</p>`, thoughts, sources: [] }
   ], false));
-  assert.match(md, /\*\*A:\*\*\n> \*\*Thoughts\*\*\n>\n> \*\*Investigating Paul Cohen\*\*\n>\n> Forcing\.\n>\n> \*\*Searched your sources\*\*\n\nSkolem’s paradox stems from…\n\n$/);
+  // a blank line before and after the block, so the Markdown around it renders
+  assert.match(md, /\*\*A:\*\*\n\n<details>\n<summary>Thoughts<\/summary>\n\n\*\*Investigating Paul Cohen\*\*\n\nForcing\.\n\n\*\*Searched your sources\*\*\n\n<\/details>\n\nSkolem’s paradox stems from…\n\n$/);
   assert.doesNotMatch(md, /^Thoughts$/m);
 });
 
@@ -170,6 +177,23 @@ test('a chat answer whose Thoughts could not be read: no section and no stray "T
   ], false));
   assert.match(md, /\*\*A:\*\*\nAnswer\n\n$/);
   assert.doesNotMatch(md, /Thoughts/);
+});
+
+test('collapsed Thoughts (1.9.7): the exact section for a 2-step answer, the same in every chat variant and citation mode', () => {
+  const sandbox = loadConverter();
+  sandbox.settings.citationStyle = 'links';
+  const thoughts = [{ title: 'Defining Sizing Concepts', body: 'I am now exploring "sizing".' }, { title: 'Searched your sources', body: '' }];
+  const section = '<details>\n<summary>Thoughts</summary>\n\n**Defining Sizing Concepts**\n\nI am now exploring "sizing".\n\n**Searched your sources**\n\n</details>';
+  assert.equal(NLME.thoughtsMarkdown(thoughts), section);
+  const msg = { userMessage: 'What does sizing mean?', aiResponseHTML: `${PLACEHOLDER}<p>Sizing is…</p>`, thoughts, sources: [] };
+  // (codeBlocks, dropCitations, groupTitles, citationStyle): the base and
+  // code-blocks variants, citations none / titles / footnotes
+  const variants = [[false], [true], [false, true], [false, false, true], [false, false, false, 'footnotes']];
+  for (const args of variants) {
+    const md = fixedDate(() => sandbox.convertChatToMarkdown('Book', null, [msg], ...args));
+    assert.ok(md.includes(`**A:**\n\n${section}\n\nSizing is…\n\n`), `${JSON.stringify(args)}: ${md}`);
+    assert.doesNotMatch(md, /<details open|> \*\*Thoughts\*\*/);
+  }
 });
 
 test('Thoughts belong to their own answer only', () => {
@@ -240,4 +264,29 @@ test('blocksCoverText: blocks that miss part of the body text do not cover it', 
   const heading = 'H'.repeat(40);
   assert.equal(NLME.blocksCoverText([paragraph], `${heading}\n${paragraph}`), false);
   assert.equal(NLME.blocksCoverText([heading, paragraph], `${heading}\n${paragraph}`), true);
+});
+
+// ---------- review fix: a thought about the tags themselves ----------
+
+test('thoughtsMarkdown: <details>/<summary> written in a thought cannot open or close the section', () => {
+  const md = NLME.thoughtsMarkdown([
+    { title: 'Using <details>', body: 'Wrap it in <details> and end with </DETAILS>; the <summary class="x"> goes first, then </summary>.' },
+    { title: 'Next step', body: 'Still inside.' }
+  ]);
+  assert.equal(md, '<details>\n<summary>Thoughts</summary>\n\n**Using &lt;details>**\n\n' +
+    'Wrap it in &lt;details> and end with &lt;/DETAILS>; the &lt;summary class="x"> goes first, then &lt;/summary>.\n\n' +
+    '**Next step**\n\nStill inside.\n\n</details>');
+  // exactly one opening and one closing tag: the section's own
+  assert.equal(md.match(/<details>/gi).length, 1);
+  assert.equal(md.match(/<\/details>/gi).length, 1);
+  assert.equal(md.match(/<\/?summary>/gi).length, 2);
+});
+
+test('thoughtsMarkdown: tags inside code spans and fenced code stay as written; other tags are untouched', () => {
+  const body = 'Inline `<details>` and ``a ` </summary> b`` stay.\n\n```html\n<details>\n<summary>S</summary>\n</details>\n```\n\n~~~\n</details>\n~~~\n\nAfter the fence </details> is escaped; <detailsx>, <div> and <sum> are not.';
+  const md = NLME.thoughtsMarkdown([{ title: 'Code', body }]);
+  assert.ok(md.includes('Inline `<details>` and ``a ` </summary> b`` stay.'), md);
+  assert.ok(md.includes('```html\n<details>\n<summary>S</summary>\n</details>\n```'), md);
+  assert.ok(md.includes('~~~\n</details>\n~~~'), md);
+  assert.ok(md.includes('After the fence &lt;/details> is escaped; <detailsx>, <div> and <sum> are not.'), md);
 });

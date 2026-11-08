@@ -294,7 +294,8 @@ test('a source file records the type the page shows, and leaves out the scan def
   assert.match(src, /source_type: sourceType/);
   assert.match(src, /sourceFrontMatter\(meta, \{ title: source\.title, variant, youtubeUrl: source\.youtubeUrl, sourceType: source\.sourceType, sourceUrl: source\.sourceUrl \}\)/);
   // the scan default 'document' left out (web sources: tests/web-source.test.js)
-  assert.match(src, /\.\.\.NLME\.sourceTypeFields\(source\)/);
+  assert.match(src, /const typeFields = NLME\.sourceTypeFields\(source\);/);
+  assert.match(src, /\.\.\.typeFields,/);
   assert.deepEqual(NLME.sourceTypeFields({ type: 'document' }), { sourceType: null, sourceUrl: null });
 });
 

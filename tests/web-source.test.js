@@ -94,13 +94,80 @@ test('sourceOriginalLine: the _index.md line, a link the checker skips', () => {
   assert.equal(NLME.sourceOriginalLine(''), '');
 });
 
-test('the scan reads the favicon only where there is no type icon, and keeps only the decoded URL', () => {
+// ---------- one source row as the page draws it (1.9.7) ----------
+
+// A source row as a tiny element tree: the elements of the HTML in document
+// order, with querySelector(All) for "tag", ".class" and "tag.class.class"
+// selectors, matched on tag and class the way the browser does. Enough to
+// run NLME.sourceRowIcon on the real row structure.
+function fakeRow(html) {
+  const els = [];
+  const re = /<([a-z][\w-]*)((?:\s+[\w-]+(?:="[^"]*")?)*)\s*\/?>([^<]*)/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    const attrs = {};
+    m[2].replace(/([\w-]+)(?:="([^"]*)")?/g, (_, k, v) => { attrs[k] = (v ?? '').replace(/&amp;/g, '&'); return ''; });
+    els.push({
+      tagName: m[1].toUpperCase(),
+      classList: { contains: c => (attrs.class || '').split(/\s+/).includes(c) },
+      textContent: m[3],
+      getAttribute: k => (k in attrs ? attrs[k] : null)
+    });
+  }
+  const matches = (el, sel) => {
+    const [tag, ...classes] = sel.split('.');
+    return (!tag || el.tagName === tag.toUpperCase()) && classes.every(c => el.classList.contains(c));
+  };
+  return {
+    querySelectorAll: sel => els.filter(el => matches(el, sel)),
+    querySelector: sel => els.find(el => matches(el, sel)) || null
+  };
+}
+
+const ROW = icon => `<div class="single-source-container"><div class="source-item-icon">${icon}</div><div class="source-title">T</div></div>`;
+const LIVE_FAVICON = 'https://www.google.com/s2/favicons?domain=https://ncatlab.org/nlab/show/L%C3%B6wenheim-Skolem+theorem&sz=32';
+
+test('sourceRowIcon: the live web row (favicon <img> with the type-icon class) gives its URL, type stays document', () => {
+  const row = fakeRow(ROW(`<img class="source-item-source-icon favicon-icon" src="${LIVE_FAVICON}">`));
+  // the class the 1.9.6 scan read as the type icon is on the <img>
+  assert.equal(row.querySelector('.source-item-source-icon').tagName, 'IMG');
+  assert.deepEqual(NLME.sourceRowIcon(row), { type: 'document', webUrl: NLAB });
+  assert.deepEqual(NLME.sourceTypeFields(NLME.sourceRowIcon(row)), { sourceType: 'web', sourceUrl: NLAB });
+  // a web PDF
+  const pdf = fakeRow(ROW(`<img class="source-item-source-icon favicon-icon" src="https://www.google.com/s2/favicons?domain=${PDF}&amp;sz=32">`));
+  assert.deepEqual(NLME.sourceTypeFields(NLME.sourceRowIcon(pdf)), { sourceType: 'web_pdf', sourceUrl: PDF });
+  // the favicon address itself is never kept
+  assert.doesNotMatch(JSON.stringify(NLME.sourceRowIcon(row)), /favicons/);
+});
+
+test('sourceRowIcon: a row with a mat-icon type icon is unchanged', () => {
+  const yt = fakeRow(ROW('<mat-icon class="mat-icon notranslate source-item-source-icon">video_youtube</mat-icon>'));
+  assert.deepEqual(NLME.sourceRowIcon(yt), { type: 'video_youtube', webUrl: null });
+  assert.deepEqual(NLME.sourceTypeFields(NLME.sourceRowIcon(yt)), { sourceType: 'video_youtube', sourceUrl: null });
+  for (const type of ['drive_pdf', 'markdown', 'article']) {
+    assert.deepEqual(NLME.sourceRowIcon(fakeRow(ROW(`<mat-icon class="source-item-source-icon">${type}</mat-icon>`))), { type, webUrl: null });
+  }
+  // a typed row that also shows a favicon keeps its type and gets no URL
+  const both = fakeRow(ROW(`<mat-icon class="source-item-source-icon">drive_pdf</mat-icon><img class="favicon-icon" src="${LIVE_FAVICON}">`));
+  assert.deepEqual(NLME.sourceRowIcon(both), { type: 'drive_pdf', webUrl: null });
+});
+
+test('sourceRowIcon: no icon at all, or a favicon without a usable URL: document, no URL', () => {
+  assert.deepEqual(NLME.sourceRowIcon(fakeRow(ROW(''))), { type: 'document', webUrl: null });
+  assert.deepEqual(NLME.sourceRowIcon(fakeRow(ROW('<img class="source-item-source-icon favicon-icon" src="https://www.google.com/s2/favicons?sz=32">'))), { type: 'document', webUrl: null });
+  assert.deepEqual(NLME.sourceRowIcon(fakeRow(ROW('<img class="source-item-source-icon favicon-icon">'))), { type: 'document', webUrl: null });
+  // the 1.9.6 fixture (favicon without the type-icon class) still works
+  assert.deepEqual(NLME.sourceRowIcon(fakeRow(ROW(`<img class="favicon-icon" src="${LIVE_FAVICON}">`))), { type: 'document', webUrl: NLAB });
+  assert.deepEqual(NLME.sourceRowIcon(null), { type: 'document', webUrl: null });
+});
+
+test('the scan reads a row\'s type and URL with NLME.sourceRowIcon, and keeps only the decoded URL', () => {
   const src = read('content.js');
   const start = src.indexOf('  async function scanForSources(');
   const body = src.slice(start, src.indexOf('\n  }\n', start));
-  assert.match(body, /img\.favicon-icon/);
-  assert.match(body, /NLME\.sourceUrlFromFavicon\(/);
-  assert.match(body, /if \(!iconEl\)/);
+  assert.match(body, /NLME\.sourceRowIcon\(container\)/);
+  // the old lookup that took the favicon <img> for the type icon is gone
+  assert.doesNotMatch(body, /querySelector\('\.source-item-source-icon'\)/);
   // the source object never holds the favicon src
   assert.doesNotMatch(body, /favicon: |faviconSrc|\.src\b(?!\))/);
   const sidebar = read('sidebar-sources.js');
@@ -161,4 +228,72 @@ test('sourceUrlFromFavicon: Google-hosted download and redirect links are never 
   }
   // an ordinary Google page is fine
   assert.equal(NLME.sourceUrlFromFavicon(fav('https://research.google.com/pubs/x')), 'https://research.google.com/pubs/x');
+});
+
+// ---------- the original URL in the source Markdown (1.9.7) ----------
+
+test('sourceWebLine: "**Web Page:**" / "**Web PDF:**" like the YouTube line; other sources nothing', () => {
+  assert.equal(NLME.sourceWebLine({ sourceType: 'web', sourceUrl: NLAB }), `**Web Page:** <${NLAB}>\n\n`);
+  assert.equal(NLME.sourceWebLine({ sourceType: 'web_pdf', sourceUrl: PDF }), `**Web PDF:** <${PDF}>\n\n`);
+  assert.equal(NLME.sourceWebLine({ sourceType: 'video_youtube', sourceUrl: null }), '');
+  assert.equal(NLME.sourceWebLine({ sourceType: null, sourceUrl: null }), '');
+  assert.equal(NLME.sourceWebLine(undefined), '');
+  // trailing punctuation and parentheses stay inside the link
+  assert.equal(NLME.sourceWebLine({ sourceType: 'web', sourceUrl: 'https://en.wikipedia.org/wiki/Washington,_D.C.' }), '**Web Page:** <https://en.wikipedia.org/wiki/Washington,_D.C.>\n\n');
+  assert.equal(NLME.sourceWebLine({ sourceType: 'web', sourceUrl: 'https://x.org/wiki/Foo_(bar)' }), '**Web Page:** <https://x.org/wiki/Foo_(bar)>\n\n');
+});
+
+test('the Web Page line links the whole URL in the viewer\'s Markdown renderer', () => {
+  const { marked } = (() => { const sandbox = {}; vm.createContext(sandbox); vm.runInContext(read('viewer/marked.min.js'), sandbox); return sandbox; })();
+  for (const url of ['https://en.wikipedia.org/wiki/Washington,_D.C.', 'https://x.org/faq?', 'https://x.org/wiki/Foo)', NLAB, PDF]) {
+    const html = marked.parse(NLME.sourceWebLine({ sourceType: NLME.webSourceType(url), sourceUrl: url }), { gfm: true });
+    assert.ok(html.includes(`href="${url.replace(/&/g, '&amp;')}"`), html);
+  }
+});
+
+// sidebar-sources.js's buildSourceData, run as is with stand-ins for the
+// converter and the image download (one image, so every variant is built)
+function buildSourceData() {
+  const src = read('sidebar-sources.js');
+  const start = src.indexOf('async function buildSourceData(');
+  const sandbox = {
+    NLME,
+    console: { log() {}, warn() {}, error() {} },
+    settings: {},
+    convertCounted: (audit, html, fn) => fn(),
+    convertToMarkdown: html => `Body of ${html}. ![fig](https://x.org/f.png)`,
+    stripImagesFromMarkdown: md => md.replace(/!\[[^\]]*\]\([^)]*\)/g, ''),
+    embedImagesInMarkdown: async md => ({ markdown: md.replace('https://x.org/f.png', 'data:image/png;base64,AAAA'), imagesFound: 1, imagesEmbedded: 1, failures: [] }),
+    reportImageFailures() {}
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(src.slice(start, src.indexOf('\n}\n', start) + 3), sandbox);
+  return (source, data) => sandbox.buildSourceData(source, { html: 'page', guideMarkdown: 'A guide.', keyTopics: ['One'], ...data },
+    { warn() {} }, null, true, { exportSourceWithImages: true, exportSourcePlusMetaWithImages: true });
+}
+
+test('source Markdown: a web source gets "**Web Page:**" / "**Web PDF:**" under its title in every variant', async () => {
+  const build = buildSourceData();
+  for (const [url, label, type] of [[NLAB, 'Web Page', 'web'], [PDF, 'Web PDF', 'web_pdf']]) {
+    const data = await build({ title: 'W', type: 'document', webUrl: url }, {});
+    assert.equal(data.sourceType, type);
+    assert.equal(data.sourceUrl, url);
+    for (const key of ['base', 'plusMeta', 'withImages', 'plusMetaWithImages']) {
+      assert.ok(data.versions[key].startsWith(`# W\n\n**${label}:** <${url}>\n\n`), `${key}: ${data.versions[key]}`);
+      assert.doesNotMatch(data.versions[key], /favicons/);
+    }
+  }
+});
+
+test('source Markdown: YouTube and other sources are byte-identical to 1.9.6', async () => {
+  const build = buildSourceData();
+  const yt = await build({ title: 'Y', type: 'video_youtube' }, { youtubeUrl: 'https://youtu.be/x' });
+  assert.equal(yt.versions.base, '# Y\n\n**YouTube Video:** https://youtu.be/x\n\n## Content\n\nBody of page. ');
+  assert.equal(yt.versions.plusMeta, '# Y\n\n**YouTube Video:** https://youtu.be/x\n\n## Summary\n\nA guide.\n\n## Key Topics\n\n- One\n\n## Content\n\nBody of page. ');
+  const doc = await build({ title: 'D', type: 'drive_pdf' }, {});
+  assert.equal(doc.versions.base, '# D\n\n## Content\n\nBody of page. ');
+  assert.equal(doc.versions.withImages, '# D\n\n## Content\n\nBody of page. ![fig](data:image/png;base64,AAAA)');
+  const plain = await build({ title: 'P', type: 'document' }, {});
+  assert.equal(plain.versions.base, '# P\n\n## Content\n\nBody of page. ');
+  assert.equal(plain.sourceUrl, null);
 });
