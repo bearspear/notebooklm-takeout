@@ -678,11 +678,14 @@
     const start = now();
     let last = null;
     let since = 0;
+    let first = true;
     for (;;) {
       const snap = read() || {};
       const summary = String(snap.summary || '').trim();
       const t = now();
-      if (summary && t === start) return { status: 'settled', waitedMs: 0 };
+      // Text at the very first read: a finished guide, saved at once
+      if (summary && first) return { status: 'settled', waitedMs: 0 };
+      first = false;
       if (summary) {
         const key = `${snap.keyTopics || 0}\u0000${summary}`;
         if (key !== last) {
