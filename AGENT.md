@@ -1168,6 +1168,12 @@ Found while checking real exports after #8; the export bugs below predate it.
   extension. Seen Nov 2026 across 8 notebooks: `drive_pdf`, `image`, `video_youtube`, `video_audio_call`
   (uploaded audio), `markdown`, `description`, `article`. Written as `source_type`; `sourceKind` in
   `viewer/viewer-app.js` maps it for the viewer, then falls back to the extension and the url.
+- **Web sources (1.9.6):** a web or web-PDF source has no type icon, only `img.favicon-icon` whose src is
+  `google.com/s2/favicons?domain=<URL-encoded original URL>`. The scan keeps only
+  `NLME.sourceUrlFromFavicon(src)` as `webUrl` (never the favicon URL); `NLME.sourceTypeFields` gives
+  `source_type: "web"` (`"web_pdf"` when the path ends in `.pdf`) and `source_url`. `_index.md` shows it with
+  `NLME.sourceOriginalLine`; the viewer reads `source_url` as the source's url ("Open original page"; YouTube
+  keeps "Open original video"). The open source viewer itself shows no original link.
 - **Viewer links open in a new tab.** The sanitizer does it for Markdown links; every `<a>` the viewer writes
   itself needs `target="_blank"` too. `download` is unreliable on a page opened from disk, so it cannot be
   relied on to keep the viewer open.

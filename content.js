@@ -960,6 +960,10 @@
       // Get source icon to determine type
       const iconEl = container.querySelector('.source-item-source-icon');
       const iconType = iconEl?.textContent?.trim() || 'document';
+      // A web source has no type icon, only a favicon whose src holds the
+      // original URL; only the decoded URL is kept (1.9.6)
+      let webUrl = null;
+      if (!iconEl) webUrl = NLME.sourceUrlFromFavicon(container.querySelector('img.favicon-icon')?.getAttribute('src'));
 
       // Only process if visible
       const rect = container.getBoundingClientRect();
@@ -971,7 +975,8 @@
         sources.push({
           title: title,
           index: index,
-          type: iconType
+          type: iconType,
+          ...(webUrl ? { webUrl } : {})
         });
 
         console.log(`[NotebookLM Takeout] Found source: "${title}" (${iconType})`);

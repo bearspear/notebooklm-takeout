@@ -292,8 +292,10 @@ test('artifact and takeout manifests count errors, not notices', () => {
 test('a source file records the type the page shows, and leaves out the scan default', () => {
   const src = fs.readFileSync(path.join(ROOT, 'sidebar-sources.js'), 'utf8');
   assert.match(src, /source_type: sourceType/);
-  assert.match(src, /sourceFrontMatter\(meta, \{ title: source\.title, variant, youtubeUrl: source\.youtubeUrl, sourceType: source\.sourceType \}\)/);
-  assert.match(src, /sourceType: source\.type === 'document' \? null : source\.type \|\| null/);
+  assert.match(src, /sourceFrontMatter\(meta, \{ title: source\.title, variant, youtubeUrl: source\.youtubeUrl, sourceType: source\.sourceType, sourceUrl: source\.sourceUrl \}\)/);
+  // the scan default 'document' left out (web sources: tests/web-source.test.js)
+  assert.match(src, /\.\.\.NLME\.sourceTypeFields\(source\)/);
+  assert.deepEqual(NLME.sourceTypeFields({ type: 'document' }), { sourceType: null, sourceUrl: null });
 });
 
 test('Full Takeout gives the viewer the notebook emoji, shown on the cover and the tab', () => {

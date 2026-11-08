@@ -1492,6 +1492,58 @@
     return (blockTexts || []).map(squeeze).join('') === squeeze(wholeText);
   }
 
+  // ---------- Web sources (1.9.6) ----------
+  // A web or web-PDF source shows no type icon in the source list, only a
+  // favicon: https://www.google.com/s2/favicons?domain=<URL-encoded original
+  // URL>. The original URL (never the favicon URL) goes into the export.
+  // null for anything that is not http(s) or has no domain; a bare host
+  // gives its root, https://<host>/.
+  function sourceUrlFromFavicon(src) {
+    let favicon;
+    try { favicon = new URL(String(src || '')); } catch (error) { return null; }
+    if (!/^https?:$/.test(favicon.protocol)) return null;
+    const value = (favicon.searchParams.get('domain') || '').trim();
+    if (!value) return null;
+    let candidate;
+    if (/^[a-z][\w+.-]*:/i.test(value)) {
+      if (!/^https?:\/\//i.test(value)) return null;
+      candidate = value;
+    } else if (/^[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/\S*)?$/i.test(value)) {
+      candidate = `https://${value}`;
+    } else {
+      return null;
+    }
+    try {
+      const url = new URL(candidate);
+      return /^https?:$/.test(url.protocol) && url.hostname ? url.href : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // 'web_pdf' when the URL's path ends in .pdf, else 'web'
+  function webSourceType(url) {
+    try { return /\.pdf$/i.test(new URL(url).pathname) ? 'web_pdf' : 'web'; } catch (error) { return 'web'; }
+  }
+
+  // A scanned source's front matter type and URL. A web source (webUrl from
+  // its favicon): web / web_pdf and the URL. Others: the page's type icon,
+  // with the scan's default 'document' left out, and no URL (as before 1.9.6).
+  function sourceTypeFields(source) {
+    const s = source || {};
+    if (s.webUrl) return { sourceType: webSourceType(s.webUrl), sourceUrl: s.webUrl };
+    return { sourceType: s.type === 'document' ? null : s.type || null, sourceUrl: null };
+  }
+
+  // A web source's line in the Sources _index.md: its URL as a link (the
+  // target's parentheses encoded so the link stays whole)
+  function sourceOriginalLine(url) {
+    if (!url) return '';
+    const text = String(url).replace(/([\\`*_[\]<>])/g, '\\$1');
+    const target = String(url).replace(/\(/g, '%28').replace(/\)/g, '%29').replace(/\s/g, '%20');
+    return `**Original:** [${text}](${target})\n\n`;
+  }
+
   // ---------- Source import cards (1.9.6) ----------
   // A chat answer's a2ui-source-import-card: "Report & Outside sources (5)",
   // the names ("Research Report, Open Logic Project, and nLab, +2"), a status
@@ -3546,6 +3598,10 @@ footer { margin-top: 3rem; }
     fenceFor,
     toBlockquote,
     isThoughtIconName,
+    sourceUrlFromFavicon,
+    webSourceType,
+    sourceTypeFields,
+    sourceOriginalLine,
     importCardFromLines,
     importCardMarkdown,
     isFaviconServiceUrl,

@@ -480,7 +480,7 @@ if (typeof document !== 'undefined') (function () {
     view.source = i;
     reveal('l', Math.round(innerWidth * 0.36));
     $('left').innerHTML = '<div class="p-head"><button class="icon-btn" id="srcback" aria-label="Back to sources">' + icon(BACK) + '</button><h2 style="flex:1">' + esc(s.title) + '</h2>' + copyButton('source', i) + colBtn('l') + '</div><div class="scroll"><div class="reader md" id="srcbody">' +
-      (isWebUrl(s.url) ? '<p><a class="ext" href="' + esc(s.url) + '" target="_blank" rel="noopener">Open original video</a></p>' : '') + md(s.md) + '</div></div>';
+      (isWebUrl(s.url) ? '<p><a class="ext" href="' + esc(s.url) + '" target="_blank" rel="noopener">' + (sourceKind(s.type, s.title, s.url) === 'youtube' ? 'Open original video' : 'Open original page') + '</a></p>' : '') + md(s.md) + '</div></div>';
     applyCols();
     if (quote) setTimeout(function () { markQuote($('srcbody'), quote, ignoreCase); }, 200);
     saveView();

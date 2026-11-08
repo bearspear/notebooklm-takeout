@@ -244,6 +244,16 @@ class ValidateTests(Base):
         self.assertEqual(r.status, 'PASS', [str(f) for f in r.findings])
         self.assertEqual(r.version, '1.7.0')
 
+    def test_web_source_front_matter_and_index_link_pass(self):
+        url = 'https://en.wikipedia.org/wiki/X_%28y%29'
+        src = ('---\ntitle: "W"\nexporter: "Takeout for Gemini Notebook 1.9.6"\nkind: "source"\n'
+               f'variant: "base"\nsource_type: "web"\nsource_url: "{url}"\n---\n\n# W\n\nBody\n')
+        index = FM + f'# Sources\n\n### W\n\n**Original:** [https://en.wikipedia.org/wiki/X\\_(y)]({url})\n\n- [W](sources/W.md)\n'
+        root = make_export(os.path.join(self.tmp, 'e'), files={'sources/W.md': src}, index=index,
+                           audit='# Sources Export Audit\n\n- items: 1 of 1\n', manifest={'kind': 'sources', 'counts': {'sources': 1}})
+        [r] = self.check(root)
+        self.assertEqual(r.status, 'PASS', [str(f) for f in r.findings])
+
     def test_not_an_export(self):
         d = os.path.join(self.tmp, 'empty')
         os.makedirs(d)
