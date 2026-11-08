@@ -2248,7 +2248,7 @@ test('headerName shows the notebook name only on a notebook page', () => {
   assert.equal(NLME.headerName('https://example.com/', 'X'), 'Open a notebook');
   assert.equal(NLME.headerName('https://notebooklm.google.com/', 'X'), 'Open a notebook');
   assert.equal(NLME.headerName(nb, 'New Physics'), 'New Physics');
-  assert.equal(NLME.headerName(nb, ''), 'NotebookLM');
+  assert.equal(NLME.headerName(nb, ''), 'Notebook');
 });
 
 test('actionLabel', () => {

@@ -233,14 +233,14 @@ function showDOMWarningDialog(issues, isMidExport = false) {
   return isMidExport
     ? showDialog({
       title: 'Errors keep happening',
-      body: 'NotebookLM may have changed while exporting.',
+      body: 'Gemini Notebook may have changed while exporting.',
       list: issues,
       confirmLabel: 'Continue',
       cancelLabel: 'Stop',
       kind: 'mid-export'
     })
     : showDialog({
-      title: 'NotebookLM looks different',
+      title: 'Gemini Notebook looks different',
       body: 'Some parts of the page were not found, so this export may miss items. The extension may need an update.',
       list: issues,
       confirmLabel: 'Try anyway'
@@ -1305,7 +1305,7 @@ async function paintNotebookName(tab, retry = true) {
     if (seq !== notebookNameSeq || id !== lastPanelNotebookId) return;
     const real = name !== NAME_FALLBACK;
     if (real || paintedName.id !== id || !paintedName.real) {
-      setNotebookName(NLME.headerName(tab.url, name));
+      setNotebookName(NLME.headerName(tab.url, real ? name : '')); // the fallback name is for files only
       paintedName = { id, real };
     }
     if (!real && retry) setTimeout(() => repaintActiveName(false), 1500);
@@ -1583,13 +1583,13 @@ async function checkStatus() {
       statusDot.classList.remove('inactive');
       statusDot.classList.add('active');
       setStatusText(statusText, 'Connected');
-      statusText.title = 'Connected to NotebookLM';
+      statusText.title = 'Connected to Gemini Notebook';
       showOpenLink(false);
     } else {
       statusDot.classList.remove('active');
       statusDot.classList.add('inactive');
       setStatusText(statusText, 'Not connected');
-      statusText.title = 'Not on NotebookLM';
+      statusText.title = 'Not on Gemini Notebook';
       showOpenLink(true);
     }
   } catch (error) {
@@ -2077,7 +2077,7 @@ async function requestCancel() {
 // The Studio list is not in the page while one of its items is open, so a scan
 // would show nothing or only part of it
 // Sources and Notes on another site; refreshForTab rescans a list showing it
-const NOTEBOOK_PROMPT_HTML = '<p class="empty-message" data-needs-notebook>Please open NotebookLM first</p>';
+const NOTEBOOK_PROMPT_HTML = '<p class="empty-message" data-needs-notebook>Open a notebook first.</p>';
 const STUDIO_ITEM_OPEN_HTML = '<p class="empty-message">An item is open in Studio, which hides this list.<br><span class="hint">Close it, then click Refresh.</span></p>';
 // Home's one line, by NLME.homeNotice
 const HOME_NOTICE_HTML = {

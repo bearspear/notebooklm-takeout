@@ -125,7 +125,7 @@ async function scanSourcesPage() {
     const resultsDiv = document.getElementById('sources-scan-results');
     if (resultsDiv) resultsDiv.innerHTML = NOTEBOOK_PROMPT_HTML;
     setTabCount('sources', null);
-    showToast('Please open NotebookLM first', 'error');
+    showToast('Open a notebook first.', 'error');
     return;
   }
 

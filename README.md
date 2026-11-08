@@ -1,4 +1,6 @@
-# NotebookLM Takeout
+# Takeout for Gemini Notebook
+
+Formerly NotebookLM Takeout.
 
 A Chrome extension that exports everything from a Google **Gemini Notebook** (formerly
 NotebookLM) to local files: sources, notes, chat history, and Studio artifacts such as
@@ -65,7 +67,7 @@ The extension is not on the Chrome Web Store. Load it from source:
 4. Open a notebook at [notebook.google.com](https://notebook.google.com). The Takeout side
    panel opens next to it.
 
-**Updating:** after `git pull`, open `chrome://extensions/`, toggle **NotebookLM Takeout**
+**Updating:** after `git pull`, open `chrome://extensions/`, toggle **Takeout for Gemini Notebook**
 off and on, then refresh the notebook tab. The reload icon alone does not pick up new
 permissions or content scripts.
 
@@ -465,7 +467,7 @@ check means that export is likely broken. Please
 
 | Problem | Try |
 |---|---|
-| "Please open NotebookLM first", or the panel stays empty | Make sure the tab is a notebook on `notebook.google.com`; refresh it |
+| "Open a notebook first.", or the panel stays empty | Make sure the tab is a notebook on `notebook.google.com`; refresh it |
 | Behaviour didn't change after updating | Toggle the extension off/on in `chrome://extensions/`, then refresh the notebook tab |
 | Nothing found / scan returns 0 | Wait for the notebook to finish loading, then scan again |
 | Citations missing or wrong | Run the health check and check **Citations**; export a single note to compare |
@@ -585,7 +587,7 @@ contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
 
-**1.9.4 (Nov 2026)**: the Generated tab is called **Studio** again, Gemini Notebook's own name for that pane (it still lists the notes in the Sources panel too). The overlay on the notebook page is redrawn as a small card in the panel's light or dark colours: what is being saved, how many items, the current item, a progress bar and **Cancel export**, which gives way to "Finishing up" during the final save. Delete, Delete Selected and Reset settings ask in the panel's own dialog instead of the browser's, and the "NotebookLM looks different" warning uses the same dialog. Escape or a click outside cancels, and a delete starts on Cancel. Notices at the foot of the panel carry an icon; warnings and errors stay 6 seconds, can be closed, and wait while the pointer or keyboard is on them. The panel works from the keyboard: every control shows a focus ring, the list tabs move with the arrow keys, Home and End (Enter opens one), and Settings and the health check take the focus when they open, close with Escape and give it back. Motion is short (at most 160 ms) and stops when the system asks for reduced motion. Delete Selected is a red button now, like the Delete in its dialog, and the empty status bubble on Studio rows is gone.
+**1.9.4 (Nov 2026)**: the extension is now **Takeout for Gemini Notebook**, after Google renamed NotebookLM, and the panel and page overlay say Gemini Notebook. Exported files are unchanged: their `exporter` line still reads `NotebookLM Takeout <version>`, and a notebook whose name can't be read still saves under the `NotebookLM` name. The Generated tab is called **Studio** again, Gemini Notebook's own name for that pane (it still lists the notes in the Sources panel too). The overlay on the notebook page is redrawn as a small card in the panel's light or dark colours: what is being saved, how many items, the current item, a progress bar and **Cancel export**, which gives way to "Finishing up" during the final save. Delete, Delete Selected and Reset settings ask in the panel's own dialog instead of the browser's, and the "NotebookLM looks different" warning uses the same dialog. Escape or a click outside cancels, and a delete starts on Cancel. Notices at the foot of the panel carry an icon; warnings and errors stay 6 seconds, can be closed, and wait while the pointer or keyboard is on them. The panel works from the keyboard: every control shows a focus ring, the list tabs move with the arrow keys, Home and End (Enter opens one), and Settings and the health check take the focus when they open, close with Escape and give it back. Motion is short (at most 160 ms) and stops when the system asks for reduced motion. Delete Selected is a red button now, like the Delete in its dialog, and the empty status bubble on Studio rows is gone.
 
 **1.9.3 (Nov 2026)**: every export starts from a sheet: Archive, AI-ready or Custom, and where to save, with the estimated time. A choice is for that export and its Retry and Resume. While an export runs, one calm view takes the place of the list: how many items are done, the time left, the current item and Cancel. Results take the same place, with Retry and **Done**, which goes back to where you started with your filter and selection intact. Settings keeps only defaults: **Default preset** and **Default save**. Citations, image copies and Obsidian names show there under Custom, and the old citation, image-copy and "Always use ZIP" rows are gone. An existing "Always use ZIP" still sets where Save as starts. Row downloads and Retry refuse, and say so, if the tab has moved to another notebook. **Under Archive, the default, tab and row exports now write `-with-images` files too, take longer, and don't reuse cached quotes, and the Chat tab's export becomes a ZIP with images.** Export everything already did. AI-ready or Custom with Image copies off avoids this.
 

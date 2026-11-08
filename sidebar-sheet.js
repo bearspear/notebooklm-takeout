@@ -66,7 +66,7 @@ function openExportSheet({ title, counts, offerSaveAs = false, start }) {
     return false;
   }
   if (!homeNotebookOpen) {
-    showToast('Please open NotebookLM first', 'error');
+    showToast('Open a notebook first.', 'error');
     return false;
   }
   // A cover (Settings, the health check) would sit over the sheet

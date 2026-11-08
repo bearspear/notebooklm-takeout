@@ -199,7 +199,7 @@
     footer.appendChild(cancelButton);
 
     card.append(
-      el('p', 'label', 'NotebookLM Takeout'),
+      el('p', 'label', 'Takeout for Gemini Notebook'),
       live,
       item,
       bar,
@@ -1209,7 +1209,7 @@
         selector: selectors[0],
         passed: false,
         critical: false,
-        note: `Primary selector "${selectors[0]}" missed; using fallback "${matchedSelector}". Extension may be drifting behind NotebookLM UI changes.`
+        note: `Primary selector "${selectors[0]}" missed; using fallback "${matchedSelector}". Extension may be drifting behind Gemini Notebook UI changes.`
       });
     }
 
@@ -1518,7 +1518,7 @@
 
     // Generate recommendations
     if (!results.overallHealthy) {
-      results.recommendations.push('NotebookLM may have been updated. Check for extension updates.');
+      results.recommendations.push('Gemini Notebook may have been updated. Check for extension updates.');
       results.recommendations.push('Try refreshing the page and running the check again.');
 
       // Specific recommendations based on failures

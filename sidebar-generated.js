@@ -80,7 +80,7 @@ async function scanStudioPage() {
     if (seq !== _studioScanSeq) return;
     if (!isNotebookUrl(tab?.url)) {
       dropStudioList();
-      resultsEl.innerHTML = '<p class="empty-message">Please open NotebookLM first.</p>';
+      resultsEl.innerHTML = '<p class="empty-message">Open a notebook first.</p>';
       setTabCount('studio', null);
       return;
     }
@@ -140,7 +140,7 @@ function renderStudioList(items) {
   setTabCount('studio', items.length);
 
   if (items.length === 0) {
-    resultsEl.innerHTML = '<p class="empty-message">No Studio items found. Generate content in NotebookLM first.</p>';
+    resultsEl.innerHTML = '<p class="empty-message">No Studio items found. Create something in Studio first.</p>';
     return;
   }
 

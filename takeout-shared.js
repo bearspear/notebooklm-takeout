@@ -1768,7 +1768,7 @@
   // which has a notebook host but no notebook id).
   function headerName(url, projectName) {
     if (!isNotebookUrl(url) || !notebookIdFromUrl(url)) return 'Open a notebook';
-    return String(projectName || '').trim() || 'NotebookLM';
+    return String(projectName || '').trim() || 'Notebook';
   }
 
   // ---- List view helpers (filter / sort / select toolbar) ----

@@ -941,3 +941,28 @@ test('the list is called Studio wherever a person reads it (1.9.4)', () => {
   const strings = [...generated.matchAll(/(['`])((?:\\.|(?!\1)[^\\])*)\1/g)].map(m => m[2]).filter(s => !s.startsWith('[NotebookLM Takeout]'));
   assert.deepEqual(strings.filter(s => /\b[Gg]enerated\b/.test(s) && !/^Generated: /.test(s)), []);
 });
+
+test('the panel says Gemini Notebook, not NotebookLM (1.9.4)', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+  assert.doesNotMatch(html, /NotebookLM/);
+  assert.match(html, /<title>Takeout for Gemini Notebook<\/title>/);
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
+  assert.equal(manifest.name, 'Takeout for Gemini Notebook');
+  assert.match(manifest.description, /Gemini Notebook \(formerly NotebookLM\)/);
+  assert.ok(manifest.description.length <= 132);
+  // Every string in the panel scripts. Kept: the console prefix, the bare
+  // 'NotebookLM' fallback name, which goes into export file and folder names, and
+  // an error text that can reach errors.md.
+  const kept = new Set(['NotebookLM', 'NotebookLM tab not active']);
+  for (const file of fs.readdirSync(ROOT).filter(f => /^sidebar-.*\.js$/.test(f))) {
+    const src = fs.readFileSync(path.join(ROOT, file), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/ .*$/gm, '');
+    const strings = [...src.matchAll(/(['`])((?:\\.|(?!\1)[^\\])*)\1/g)].map(m => m[2])
+      .filter(s => /NotebookLM/.test(s) && !s.startsWith('[NotebookLM Takeout]') && !kept.has(s));
+    assert.deepEqual(strings, [], file);
+  }
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  assert.match(content, /el\('p', 'label', 'Takeout for Gemini Notebook'\)/);
+  // Export output keeps the old name, byte for byte
+  assert.match(fs.readFileSync(path.join(ROOT, 'takeout-shared.js'), 'utf8'), /exporter: `NotebookLM Takeout \$\{version\}`/);
+});

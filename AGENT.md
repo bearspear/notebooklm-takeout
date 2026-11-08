@@ -4,6 +4,18 @@ Single-document reference for any LLM/engineer picking up this extension. Optimi
 context recovery — dense pointers, not narrative. Read top to bottom once; after that, use
 the table of contents to jump.
 
+- **Name (1.9.4):** the extension is "Takeout for Gemini Notebook" (formerly NotebookLM Takeout;
+  Google renamed NotebookLM to Gemini Notebook in Jul 2026). The panel, the page overlay, the
+  manifest name and the health report heading use the new name, and panel messages say "Gemini
+  Notebook" or "notebook", never NotebookLM (tests/structure.test.js checks sidebar.html and the
+  strings of sidebar-*.js). **Rule: export output keeps the old name byte for byte**: the
+  `exporter: "NotebookLM Takeout <ver>"` field, index and viewer text, errors.md, file and folder
+  names, the `'NotebookLM'` fallback project name (content.js GET_PROJECT_NAME, getProjectName,
+  sidebar-artifacts' folder). An error text that can land in errors.md keeps its wording too
+  ('NotebookLM tab not active', content.js's "Sources page in NotebookLM"). Also unchanged: the
+  `[NotebookLM Takeout]` console prefix, message types, storage keys, ids, file names, the repo and
+  tools/validate_export.py. The header shows "Notebook" when the name can't be read (the
+  `NotebookLM` fallback is for files only).
 - Repo root: `/Users/mbehringer/Downloads/notebooklm-exporter`
 - Remote: `git@github.com-personal:bearspear/notebooklm-takeout.git`
 - Manifest: V3 Chrome extension, no build step

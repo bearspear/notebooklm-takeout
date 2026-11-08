@@ -24,7 +24,7 @@ async function runHealthCheck() {
     // Get current tab
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!isNotebookUrl(tab?.url)) {
-      displayHealthCheckError('Please open NotebookLM first');
+      displayHealthCheckError('Open a notebook first.');
       return;
     }
 
@@ -210,7 +210,7 @@ function generateHealthReport(results) {
   const lines = [];
   const timestamp = new Date().toISOString();
 
-  lines.push('# NotebookLM Takeout - DOM Health Check Report');
+  lines.push('# Takeout for Gemini Notebook - DOM Health Check Report');
   lines.push(`Generated: ${timestamp}`);
   lines.push('');
 

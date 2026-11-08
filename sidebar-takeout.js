@@ -320,7 +320,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
       // Results that are up stay: a retry on a closed tab keeps its Retry button
       showToast(requestedTabId != null
         ? 'The notebook tab for this export is closed. Open it and try again.'
-        : 'Please open NotebookLM first', 'error');
+        : 'Open a notebook first.', 'error');
       return { aborted: true };
     }
 
@@ -635,7 +635,7 @@ function takeoutRootFiles({ meta, summary, errors, partial, viewerHtml }) {
 async function runFullTakeout({ zip = NLME.takeoutZipChoice(settings) } = {}) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!isNotebookUrl(tab?.url)) {
-    showToast('Please open NotebookLM first', 'error');
+    showToast('Open a notebook first.', 'error');
     return;
   }
   // The shell's health check needs the content script (first action after a reload)
@@ -643,7 +643,7 @@ async function runFullTakeout({ zip = NLME.takeoutZipChoice(settings) } = {}) {
     await ensureContentScriptLoaded(tab.id);
   } catch (error) {
     console.error('[NotebookLM Takeout] Full Takeout: content script unavailable:', error);
-    showToast('Export failed. Please refresh the NotebookLM page and try again.', 'error');
+    showToast('Export failed. Please refresh the notebook page and try again.', 'error');
     return;
   }
 

@@ -52,7 +52,7 @@ async function scanNotesPage() {
   } catch (error) {
     if (seq !== _notesScanSeq) return;
     console.error('Error scanning for notes:', error);
-    notesResults.innerHTML = '<p class="error-message">Failed to scan for notes. Please refresh the NotebookLM page and try again.</p>';
+    notesResults.innerHTML = '<p class="error-message">Failed to scan for notes. Please refresh the notebook page and try again.</p>';
     setTabCount('notes', null);
   }
 }
@@ -454,7 +454,7 @@ function downloadBlob(blob, filename) {
 async function exportSingleNote(note) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!isNotebookUrl(tab?.url)) {
-    throw new Error('NotebookLM tab not active');
+    throw new Error('NotebookLM tab not active'); // kept: an error text can reach errors.md
   }
 
   await ensureContentScriptLoaded(tab.id);
