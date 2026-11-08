@@ -128,3 +128,37 @@ test('viewer: web is the web icon, web_pdf the pdf icon, and a non-YouTube link 
   assert.match(src, /Open original video/);
   assert.match(src, /Open original page/);
 });
+
+// ---------- review M1/M2 ----------
+
+test('sourceUrlFromFavicon: the live favicon carries the URL raw; a raw + stays a +', () => {
+  // seen live: domain= holds the original URL as is, not percent-encoded
+  assert.equal(NLME.sourceUrlFromFavicon('https://www.google.com/s2/favicons?domain=https://www.cs.nmsu.edu/historical-projects/Projects/Skolem.pdf&sz=32'),
+    'https://www.cs.nmsu.edu/historical-projects/Projects/Skolem.pdf');
+  assert.equal(NLME.sourceUrlFromFavicon('https://www.google.com/s2/favicons?domain=https://ncatlab.org/nlab/show/L%C3%B6wenheim-Skolem+theorem&sz=32'),
+    'https://ncatlab.org/nlab/show/L%C3%B6wenheim-Skolem+theorem');
+  // a raw URL with its own query string: up to &sz=
+  assert.equal(NLME.sourceUrlFromFavicon('https://www.google.com/s2/favicons?domain=https://x.org/a?b=1&c=2&sz=32'), 'https://x.org/a?b=1&c=2');
+  assert.equal(NLME.sourceUrlFromFavicon('https://www.google.com/s2/favicons?domain=https://x.org/a?b=1&c=2'), 'https://x.org/a?b=1&c=2');
+  // encoded (as in chat favicons): decoded once; an encoded + is a +
+  assert.equal(NLME.sourceUrlFromFavicon(`https://www.google.com/s2/favicons?domain=${encodeURIComponent('https://ncatlab.org/nlab/show/Skolem+theorem')}&sz=32`),
+    'https://ncatlab.org/nlab/show/Skolem+theorem');
+  assert.equal(NLME.sourceUrlFromFavicon('https://www.google.com/s2/favicons?sz=32&domain=ncatlab.org'), 'https://ncatlab.org/');
+});
+
+test('sourceUrlFromFavicon: Google-hosted download and redirect links are never a source_url', () => {
+  for (const url of [
+    'https://contribution.usercontent.google.com/download?c=Cgpub3&filename=r.md',
+    'https://lh3.googleusercontent.com/abc',
+    'https://doc-0k-4c-docs.googleusercontent.com/docs/securesc/x',
+    'https://www.google.com/url?q=https://example.org',
+    'https://google.com/url?q=x',
+    'https://drive.google.com/uc?export=download&id=1',
+    'https://docs.google.com/document/d/1/export?format=pdf&download=1'
+  ]) {
+    assert.equal(NLME.sourceUrlFromFavicon(`https://www.google.com/s2/favicons?domain=${encodeURIComponent(url)}&sz=32`), null, url);
+    assert.equal(NLME.sourceUrlFromFavicon(`https://www.google.com/s2/favicons?domain=${url}`), null, `${url} (raw)`);
+  }
+  // an ordinary Google page is fine
+  assert.equal(NLME.sourceUrlFromFavicon(fav('https://research.google.com/pubs/x')), 'https://research.google.com/pubs/x');
+});

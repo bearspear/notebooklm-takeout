@@ -1494,15 +1494,29 @@
 
   // ---------- Web sources (1.9.6) ----------
   // A web or web-PDF source shows no type icon in the source list, only a
-  // favicon: https://www.google.com/s2/favicons?domain=<URL-encoded original
-  // URL>. The original URL (never the favicon URL) goes into the export.
-  // null for anything that is not http(s) or has no domain; a bare host
-  // gives its root, https://<host>/.
+  // favicon: https://www.google.com/s2/favicons?domain=<original URL>. The
+  // original URL (never the favicon URL) goes into the export.
+  // Live, the source list's favicon carries the URL raw (its own ? & + left
+  // as they are), the chat's percent-encoded: the text after domain= up to
+  // &sz= (or the end) is read as written, and decoded once only when it is
+  // encoded (no "://" but %XX). URLSearchParams is not used: it reads + as a
+  // space. null for anything that is not http(s), has no domain, or is a
+  // Google-hosted download or redirect link (never a source's public page);
+  // a bare host gives its root, https://<host>/.
   function sourceUrlFromFavicon(src) {
+    const text = String(src || '');
     let favicon;
-    try { favicon = new URL(String(src || '')); } catch (error) { return null; }
+    try { favicon = new URL(text); } catch (error) { return null; }
     if (!/^https?:$/.test(favicon.protocol)) return null;
-    const value = (favicon.searchParams.get('domain') || '').trim();
+    const at = text.search(/[?&]domain=/);
+    if (at < 0) return null;
+    const rest = text.slice(at + '?domain='.length);
+    const stop = rest.indexOf('&sz=');
+    let value = (stop >= 0 ? rest.slice(0, stop) : rest).replace(/#.*$/, '').trim();
+    if (!value.includes('://') && /%[0-9a-f]{2}/i.test(value)) {
+      try { value = decodeURIComponent(value); } catch (error) { return null; }
+    }
+    value = value.trim();
     if (!value) return null;
     let candidate;
     if (/^[a-z][\w+.-]*:/i.test(value)) {
@@ -1513,12 +1527,20 @@
     } else {
       return null;
     }
-    try {
-      const url = new URL(candidate);
-      return /^https?:$/.test(url.protocol) && url.hostname ? url.href : null;
-    } catch (error) {
-      return null;
-    }
+    let url;
+    try { url = new URL(candidate); } catch (error) { return null; }
+    if (!/^https?:$/.test(url.protocol) || !url.hostname) return null;
+    return isGoogleDownloadUrl(url) ? null : url.href;
+  }
+
+  // Google-hosted downloads and redirects: *.usercontent.google.com,
+  // *.googleusercontent.com, google.com/url, and *.google.com links that
+  // download (private, short-lived; never a source's original page)
+  function isGoogleDownloadUrl(url) {
+    const host = url.hostname.toLowerCase();
+    if (/(^|\.)usercontent\.google\.com$/.test(host) || /(^|\.)googleusercontent\.com$/.test(host)) return true;
+    if ((host === 'google.com' || host === 'www.google.com') && /^\/url\b/.test(url.pathname)) return true;
+    return /(^|\.)google\.com$/.test(host) && /download/i.test(url.pathname + url.search);
   }
 
   // 'web_pdf' when the URL's path ends in .pdf, else 'web'
