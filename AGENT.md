@@ -1299,7 +1299,7 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined out
   `settings.slidesFormat = pptx` request keeps the old fallback, so such a deck still gets its PDF. Tab
   downloads keep the single `settings.slidesFormat`.
 - **Formula audit (1.9.5).** "Written" is what the converter wrote, not a re-read of the Markdown. The KaTeX
-  rule marks each formula it writes (`NLME.markWrittenFormula`, a private-use `\uE002`); `convert()` takes the
+  rule marks each formula it writes (`NLME.markWrittenFormula`, a private-use `\uE002` before its `$`); `convert()` takes the
   marks out of its final text and counts them (`NLME.takeFormulaMarks`, `NLMEMarkdown.formulasWritten()`), and
   `convertCounted` reads that total before and after. Output a nested list or table rule converted and threw
   away never reaches the final text, so each formula counts once. A price range drawn as math

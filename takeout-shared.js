@@ -1549,17 +1549,21 @@
   // table rule converted and then threw away never reaches that text, so
   // every formula counts once. A price range the page drew as math is left
   // unmarked, as countPageContent leaves it out of the page's count.
-  const FORMULA_MARK = '';
+  const FORMULA_MARK = '\uE002';
+  const FORMULA_MARK_BEFORE_DOLLAR = /\uE002(?=\$)/g;
 
   function markWrittenFormula(markdown, dataMath) {
     if (!markdown || isPriceRangeFragment(dataMath)) return markdown;
     return FORMULA_MARK + markdown;
   }
 
-  // { text without marks, formulas: how many were marked }
+  // { text without marks, formulas: how many were marked }. A mark always
+  // precedes the formula's opening $; a U+E002 anywhere else is the page's own
+  // text and stays.
   function takeFormulaMarks(text) {
-    const parts = String(text ?? '').split(FORMULA_MARK);
-    return { text: parts.join(''), formulas: parts.length - 1 };
+    let formulas = 0;
+    const out = String(text ?? '').replace(FORMULA_MARK_BEFORE_DOLLAR, () => { formulas++; return ''; });
+    return { text: out, formulas };
   }
 
   // Formulas in final Markdown ($$...$$ and $...$), each counted once,

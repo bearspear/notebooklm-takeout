@@ -1920,6 +1920,9 @@ function convertCounted(audit, html, convert, page = null) {
   const counts = page || countPageContent(html);
   const before = NLMEMarkdown.formulasWritten();
   const markdown = convert();
+  if (markdown && typeof markdown.then === 'function') {
+    throw new Error('convertCounted: convert must be synchronous (the formula count reads a running total)');
+  }
   audit.expected.formulas += counts.formulas;
   audit.written.formulas += NLMEMarkdown.formulasWritten() - before;
   return markdown;

@@ -21,9 +21,25 @@ const katex = tex => ({
   querySelector: () => null
 });
 
-// Content is a list of text strings, KaTeX nodes and { list: [...] }. A list
-// converts its children, throws that away and converts them again, as the
-// list and table rules do (turndown(li.innerHTML))
+// Content is a list of text strings, KaTeX nodes, lists (ul) and tables.
+// Lists and tables go through the real listsWithWrappers and tables rules,
+// which convert each item or cell again (turndown(li.innerHTML)) after
+// Turndown has converted their content, which the rules throw away
+const ul = (...items) => {
+  const node = { nodeName: 'UL', fake: 'list' };
+  const lis = items.map(parts => ({ parentElement: node, innerHTML: parts }));
+  node.querySelectorAll = () => lis;
+  return node;
+};
+const table = (...rows) => ({
+  nodeName: 'TABLE',
+  fake: 'table',
+  querySelectorAll: () => rows.map(cells => ({ querySelectorAll: () => cells.map(parts => ({ innerHTML: parts })) }))
+});
+const childParts = node => (node.fake === 'list'
+  ? node.querySelectorAll('li').flatMap(li => li.innerHTML)
+  : node.querySelectorAll('tr').flatMap(tr => tr.querySelectorAll('th, td').flatMap(c => c.innerHTML)));
+
 class FakeTurndown {
   constructor(options) { this.options = options; this.rules = {}; }
   escape(text) { return text; }
@@ -31,9 +47,10 @@ class FakeTurndown {
   turndown(parts) {
     return parts.map(part => {
       if (typeof part === 'string') return part;
-      if (part.list) {
-        this.turndown(part.list);
-        return this.turndown(part.list);
+      if (part.fake) {
+        const content = this.turndown(childParts(part));
+        const rule = part.fake === 'list' ? this.rules.listsWithWrappers : this.rules.tables;
+        return rule.replacement(content, part, { bulletListMarker: '*' });
       }
       return this.rules.katexMath.replacement('', part);
     }).join('');
@@ -51,7 +68,7 @@ function loadPanel() {
     assert.ok(start >= 0, `${name} not found`);
     return core.slice(start, core.indexOf('\n}\n', start) + 3);
   };
-  const katexNodes = parts => parts.flatMap(p => (typeof p === 'string' ? [] : p.list ? katexNodes(p.list) : [p]));
+  const katexNodes = parts => parts.flatMap(p => (typeof p === 'string' ? [] : p.fake ? katexNodes(childParts(p)) : [p]));
   sandbox.DOMParser = class {
     parseFromString(parts) {
       return { querySelectorAll: selector => (selector === '.katex' ? katexNodes(parts || []) : []) };
@@ -91,9 +108,16 @@ test('adjacent formulas count one each', () => {
   assert.deepEqual(r.formulas, [3, 3]);
 });
 
-test('a formula in a nested list counts once, though the list converts it twice', () => {
-  const r = audit([{ list: ['Top ', katex('a+b'), { list: ['Inner ', katex('c_1')] }] }]);
-  assert.equal(r.markdown, 'Top $a+b$Inner $c_1$');
+test('a formula in a nested list counts once, though the list rules convert it again', () => {
+  const r = audit([ul(['Top ', katex('a+b'), ul(['Inner ', katex('c_1')])], ['Second ', katex('e')])]);
+  // (the fake Turndown leaves the blank lines its postprocess would trim)
+  assert.equal(r.markdown.trim(), '* Top $a+b$\n  * Inner $c_1$\n* Second $e$');
+  assert.deepEqual(r.formulas, [3, 3]);
+});
+
+test('a formula in a table cell, and in a list in a cell, counts once', () => {
+  const r = audit([table([['Name'], ['Value']], [[katex('\\alpha')], [ul([katex('b|c')])]])]);
+  assert.equal(r.markdown.trim(), '| Name | Value |\n| --- | --- |\n| $\\alpha$ | * $b\\|c$ |');
   assert.deepEqual(r.formulas, [2, 2]);
 });
 
@@ -126,6 +150,19 @@ test('markWrittenFormula marks a written formula, not an empty one or a price ra
   assert.equal(NLME.markWrittenFormula('$x$', undefined), '$x$');
   assert.equal(NLME.markWrittenFormula('', 'x'), '');
   assert.equal(NLME.markWrittenFormula('$3-$', '3-'), '$3-$');
+});
+
+test("a U+E002 in the page's own text stays in the export and is not counted", () => {
+  const r = audit(['warning \uE002 sign, ', katex('x'), ' and \uE002 again']);
+  assert.equal(r.markdown, 'warning \uE002 sign, $x$ and \uE002 again');
+  assert.deepEqual(r.formulas, [1, 1]);
+  assert.deepEqual(NLME.takeFormulaMarks('\uE002 a \uE002\uE002$y$ \uE002'), { text: '\uE002 a \uE002$y$ \uE002', formulas: 1 });
+});
+
+test('convertCounted refuses an asynchronous convert', () => {
+  const panel = loadPanel();
+  const counts = { expected: { formulas: 0 }, written: { formulas: 0 } };
+  assert.throws(() => panel.convertCounted(counts, [], () => Promise.resolve('')), /must be synchronous/);
 });
 
 test('takeFormulaMarks counts the marks and takes them out', () => {
