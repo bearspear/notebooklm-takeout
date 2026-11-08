@@ -34,6 +34,8 @@ const ICON_PATHS = {
   download: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
   trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/>',
   check: '<path d="M5 12l5 5 10-11"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  alert: '<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18h.01"/>',
   // Artifact types
   audio: '<path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/>',
   video: '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3z"/>',
@@ -120,6 +122,107 @@ loadMindmapTemplate();
  * Placeholders: {{TITLE}} and {{SVG_CONTENT}}
  */
 
+let _dialogSeq = 0;
+
+/**
+ * The panel's one confirm: a modal <dialog> instead of the browser's native one.
+ * Escape and a click on the backdrop answer false. With danger, focus starts
+ * on Cancel and the confirm button is red. Text goes in as textContent only;
+ * a blank line in body starts a new paragraph.
+ * @returns {Promise<boolean>} true when the confirm button was chosen
+ */
+function showDialog({ title, body = '', list = [], confirmLabel = 'OK', cancelLabel = 'Cancel', danger = false, kind = '' } = {}) {
+  return new Promise((resolve) => {
+    const id = `panel-dialog-${++_dialogSeq}`;
+    const dialog = document.createElement('dialog');
+    dialog.className = 'panel-dialog';
+    if (kind) dialog.dataset.kind = kind;
+    dialog.setAttribute('aria-labelledby', `${id}-title`);
+    if (body) dialog.setAttribute('aria-describedby', `${id}-body`);
+
+    const card = document.createElement('div');
+    card.className = 'panel-dialog-card';
+
+    const heading = document.createElement('h2');
+    heading.className = 'panel-dialog-title';
+    heading.id = `${id}-title`;
+    heading.textContent = title || '';
+    card.appendChild(heading);
+
+    if (body) {
+      const bodyEl = document.createElement('div');
+      bodyEl.className = 'panel-dialog-body';
+      bodyEl.id = `${id}-body`;
+      for (const text of String(body).split(/\n\s*\n/)) {
+        const p = document.createElement('p');
+        p.textContent = text.trim();
+        bodyEl.appendChild(p);
+      }
+      card.appendChild(bodyEl);
+    }
+
+    if (list.length) {
+      const ul = document.createElement('ul');
+      ul.className = 'panel-dialog-list';
+      ul.tabIndex = 0; // it can scroll, so it can take focus
+      for (const entry of list) {
+        const li = document.createElement('li');
+        li.textContent = String(entry);
+        ul.appendChild(li);
+      }
+      card.appendChild(ul);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'panel-dialog-actions';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn btn-secondary';
+    cancelBtn.textContent = cancelLabel;
+    const confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button';
+    confirmBtn.className = danger ? 'btn btn-destructive' : 'btn btn-primary';
+    confirmBtn.textContent = confirmLabel;
+    actions.append(cancelBtn, confirmBtn);
+    card.appendChild(actions);
+    dialog.appendChild(card);
+
+    let answer = false;
+    cancelBtn.addEventListener('click', () => dialog.close());
+    confirmBtn.addEventListener('click', () => { answer = true; dialog.close(); });
+    // The card fills the dialog box, so a press that lands on the dialog itself
+    // is on the backdrop. Both ends must be there: a text drag out of the card
+    // ends with a click on the dialog too.
+    let pressedBackdrop = false;
+    dialog.addEventListener('mousedown', (e) => { pressedBackdrop = e.target === dialog; });
+    dialog.addEventListener('click', (e) => {
+      if (pressedBackdrop && e.target === dialog) dialog.close();
+      pressedBackdrop = false;
+    });
+    dialog.addEventListener('close', () => {
+      dialog.remove();
+      resolve(answer);
+    }, { once: true });
+
+    document.body.appendChild(dialog);
+    dialog.showModal();
+    // Six items show, however they wrap; the rest scroll
+    const listEl = dialog.querySelector('.panel-dialog-list');
+    const sixth = listEl && listEl.children[5];
+    if (sixth && listEl.children.length > 6) {
+      listEl.style.maxHeight = `${sixth.getBoundingClientRect().bottom - listEl.getBoundingClientRect().top}px`;
+    }
+    (danger ? cancelBtn : confirmBtn).focus();
+  });
+}
+
+// Close open panel dialogs, each answering false: all of them, or one kind
+function closePanelDialogs(kind) {
+  document.querySelectorAll('dialog.panel-dialog').forEach(dialog => {
+    if (!kind || dialog.dataset.kind === kind) dialog.close();
+  });
+}
+
 /**
  * Show a warning dialog for DOM compatibility issues
  * @param {string[]} issues - List of issues to display
@@ -127,41 +230,21 @@ loadMindmapTemplate();
  * @returns {Promise<boolean>} - Whether user wants to continue
  */
 function showDOMWarningDialog(issues, isMidExport = false) {
-  return new Promise((resolve) => {
-    const dialog = document.createElement('div');
-    dialog.className = 'dom-warning-dialog';
-    dialog.innerHTML = `
-      <div class="dialog-overlay"></div>
-      <div class="dialog-content">
-        <h3>${isMidExport ? 'Export Issues Detected' : 'Potential Compatibility Issues'}</h3>
-        <p class="dialog-note">
-          ${isMidExport
-            ? 'Multiple errors occurred. NotebookLM may have been updated.'
-            : 'Some expected elements were not found. The extension may need an update.'}
-        </p>
-        <ul>${issues.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>
-        <div class="dialog-actions">
-          <button class="btn btn-secondary" data-action="cancel">Cancel</button>
-          <button class="btn btn-primary" data-action="continue">
-            ${isMidExport ? 'Continue' : 'Try Anyway'}
-          </button>
-        </div>
-      </div>
-    `;
-
-    document.body.appendChild(dialog);
-
-    dialog.addEventListener('click', (e) => {
-      const action = e.target.dataset.action;
-      if (action === 'cancel' || e.target.classList.contains('dialog-overlay')) {
-        dialog.remove();
-        resolve(false);
-      } else if (action === 'continue') {
-        dialog.remove();
-        resolve(true);
-      }
+  return isMidExport
+    ? showDialog({
+      title: 'Errors keep happening',
+      body: 'Gemini Notebook may have changed while exporting.',
+      list: issues,
+      confirmLabel: 'Continue',
+      cancelLabel: 'Stop',
+      kind: 'mid-export'
+    })
+    : showDialog({
+      title: 'Gemini Notebook looks different',
+      body: 'Some parts of the page were not found, so this export may miss items. The extension may need an update.',
+      list: issues,
+      confirmLabel: 'Try anyway'
     });
-  });
 }
 
 /**
@@ -564,12 +647,19 @@ function setupEventListeners() {
 
   document.getElementById('settings-btn').addEventListener('click', () => {
     closeExportSheet();
-    document.getElementById('settings-panel').style.display = 'block';
+    openCover('settings-panel');
   });
 
   document.getElementById('reset-settings-btn')?.addEventListener('click', async () => {
     if (jobLock.current()) { showToast(`${jobLock.current()} is still running`, 'warning'); return; }
-    if (!confirm('Reset all settings to their defaults? Default save, the citation cache and saved exports to resume are kept.')) return;
+    const reset = await showDialog({
+      title: 'Reset settings?',
+      body: 'Default save, the citation cache and saved exports to resume are kept.',
+      confirmLabel: 'Reset',
+      danger: true
+    });
+    if (!reset) return;
+    if (jobLock.current()) { showToast(`${jobLock.current()} is still running`, 'warning'); return; }
     settings = NLME.resetSettings(settings);
     applySettingsToUi();
     syncVersionChildStates();
@@ -583,7 +673,7 @@ function setupEventListeners() {
   });
 
   document.getElementById('close-settings-btn').addEventListener('click', () => {
-    document.getElementById('settings-panel').style.display = 'none';
+    closeCover('settings-panel');
     // While writes are blocked there is nothing to save: each change already said so
     if (settingsStored) saveSettings();
   });
@@ -599,9 +689,8 @@ function setupEventListeners() {
     runExclusive('Health check', runHealthCheck);
   });
 
-  document.getElementById('close-health-check-btn').addEventListener('click', () => {
-    document.getElementById('health-check-panel').style.display = 'none';
-  });
+  document.getElementById('close-health-check-btn').addEventListener('click', () => closeCover('health-check-panel'));
+  document.addEventListener('keydown', handleCoverKey);
 
   document.getElementById('rerun-health-check-btn').addEventListener('click', () => {
     runExclusive('Health check', runHealthCheck);
@@ -676,7 +765,7 @@ function setupEventListeners() {
   // Generated tab's Delete, beside the action bar (internal id 'studio')
   const studioDeleteSelectedBtn = document.getElementById('studio-delete-selected-btn');
   if (studioDeleteSelectedBtn) {
-    studioDeleteSelectedBtn.addEventListener('click', () => runExclusive('Generated delete', handleStudioBulkDelete));
+    studioDeleteSelectedBtn.addEventListener('click', () => runExclusive('Studio delete', handleStudioBulkDelete));
   }
 }
 
@@ -684,6 +773,9 @@ function setupTabSwitching() {
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => openTab(btn.dataset.tab));
   });
+  const tabList = document.querySelector('.tabs');
+  tabList.addEventListener('keydown', handleTabKey);
+  tabList.addEventListener('focusout', (e) => { if (!tabList.contains(e.relatedTarget)) resetTabStops(); });
   // Chat's row only opens the tab: Load chat scrolls the page, so it stays a click there
   document.querySelectorAll('.home-row').forEach(row => {
     row.addEventListener('click', () => openTab(row.dataset.homeTab, { focus: true }));
@@ -692,6 +784,87 @@ function setupTabSwitching() {
     showView('home', { focus: true });
     return refreshHome(); // a count cleared since (a delete in Generated) is read again
   });
+}
+
+// The tab list: arrows, Home and End move the focus; Enter or Space opens the tab.
+// Opening scans the page, so moving along the tabs does not open each one.
+// Tab leaves for the open tab's list (one stop: the roving tabindex).
+const TAB_KEYS = { ArrowLeft: -1, ArrowRight: 1 };
+function handleTabKey(event) {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  const tabs = Array.from(document.querySelectorAll('.tab-btn'));
+  const at = tabs.indexOf(document.activeElement);
+  if (at < 0) return;
+  let next;
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') next = (at + TAB_KEYS[event.key] + tabs.length) % tabs.length;
+  else if (event.key === 'Home') next = 0;
+  else if (event.key === 'End') next = tabs.length - 1;
+  else return;
+  event.preventDefault();
+  tabs.forEach((btn, i) => { btn.tabIndex = i === next ? 0 : -1; });
+  tabs[next].focus();
+}
+
+// Back to one tab stop, on the open tab, when the focus leaves the list
+function resetTabStops() {
+  document.querySelectorAll('.tab-btn').forEach(btn => { btn.tabIndex = btn.classList.contains('active') ? 0 : -1; });
+}
+
+// ---- Covers: Settings and the health check fill the panel ----
+// What a cover hides leaves the tab order (inert), Escape closes the top one, and
+// the keyboard goes back to the button that opened it. Bottom to top:
+const COVERS = [
+  { id: 'settings-panel', close: 'close-settings-btn' },
+  { id: 'health-check-panel', close: 'close-health-check-btn' }
+];
+const _coverOpeners = {};
+
+function coverIsOpen(id) {
+  return getComputedStyle(document.getElementById(id)).display !== 'none';
+}
+
+// The one rule for what is inert: the lists under a cover or the export sheet,
+// and any cover under the top one
+function syncCoverInert() {
+  const open = COVERS.filter(cover => coverIsOpen(cover.id));
+  const top = open[open.length - 1];
+  document.querySelector('.container').inert = open.length > 0 || !!_sheet;
+  COVERS.forEach(cover => { document.getElementById(cover.id).inert = !!top && cover !== top; });
+}
+
+// Called again while open (Run Again): the opener stays the first one
+function openCover(id) {
+  const cover = COVERS.find(c => c.id === id);
+  const panel = document.getElementById(id);
+  if (!coverIsOpen(id)) _coverOpeners[id] = document.activeElement;
+  panel.style.display = 'block';
+  syncCoverInert();
+  const held = document.activeElement;
+  if (!panel.contains(held) || held.getClientRects().length === 0) {
+    document.getElementById(cover.close).focus({ preventScroll: true });
+  }
+}
+
+function closeCover(id) {
+  if (!coverIsOpen(id)) return;
+  document.getElementById(id).style.display = 'none';
+  syncCoverInert();
+  const opener = _coverOpeners[id];
+  delete _coverOpeners[id];
+  const usable = opener && opener.isConnected && !opener.disabled && opener.getClientRects().length > 0 && !opener.closest('[inert]');
+  if (usable) opener.focus({ preventScroll: true });
+  else focusView(panelView);
+}
+
+// Escape closes the top cover through its close button, so Settings still saves.
+// A dialog or the export sheet answers its own Escape.
+function handleCoverKey(event) {
+  if (event.key !== 'Escape' || event.defaultPrevented) return;
+  if (event.target?.closest?.('dialog') || document.querySelector('dialog[open]')) return;
+  const top = COVERS.filter(cover => coverIsOpen(cover.id)).pop();
+  if (!top) return;
+  event.preventDefault();
+  document.getElementById(top.close).click();
 }
 
 // Open a list, then scan it (not while a job runs)
@@ -742,7 +915,12 @@ function showView(view, { save = true, focus = false } = {}) {
   document.getElementById('home-view').hidden = !home;
   document.querySelector('.tabs').hidden = home;
   document.getElementById('back-btn').hidden = home;
-  document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === target));
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    const on = btn.dataset.tab === target;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', String(on));
+    btn.tabIndex = on ? 0 : -1;
+  });
   document.querySelectorAll('.tab-content').forEach(content => content.classList.toggle('active', content.dataset.tabContent === target));
   applyOpenTabAction();
   if (home) document.getElementById('resume-notice').textContent = ''; // the card itself shows here
@@ -987,6 +1165,7 @@ let lastPanelNotebookId = '';
 // not reach the new notebook: they belong to the notebook that was scanned.
 function resetChatPanel() {
   closeExportSheet({ switched: true }); // first: its Start would reach the new notebook
+  closePanelDialogs(); // a Delete asked about the old notebook must not reach the new one
   releasePageLoad(); // the panel has caught up with the tab; the caller's settle takes over
   resultsLeftNotebook();
   window._currentChatData = null;
@@ -1126,7 +1305,7 @@ async function paintNotebookName(tab, retry = true) {
     if (seq !== notebookNameSeq || id !== lastPanelNotebookId) return;
     const real = name !== NAME_FALLBACK;
     if (real || paintedName.id !== id || !paintedName.real) {
-      setNotebookName(NLME.headerName(tab.url, name));
+      setNotebookName(NLME.headerName(tab.url, name)); // the file-name fallback shows as "Notebook"
       paintedName = { id, real };
     }
     if (!real && retry) setTimeout(() => repaintActiveName(false), 1500);
@@ -1269,6 +1448,7 @@ function notePageMove({ url, status }) {
     return;
   }
   closeExportSheet({ switched: true });
+  closePanelDialogs();
   if (status === 'loading') holdForPageLoad();
 }
 
@@ -1382,6 +1562,11 @@ async function mindmapFiles(stem, svgContent, treeData, title) {
   return files;
 }
 
+// #status is a live region and checkStatus runs on every tab event: same text, no news
+function setStatusText(el, text) {
+  if (el.textContent !== text) el.textContent = text;
+}
+
 async function checkStatus() {
   const statusDot = document.querySelector('.status-dot');
   const statusText = document.getElementById('status-text');
@@ -1397,20 +1582,20 @@ async function checkStatus() {
     if (isNotebookUrl(tab?.url)) {
       statusDot.classList.remove('inactive');
       statusDot.classList.add('active');
-      statusText.textContent = 'Connected';
-      statusText.title = 'Connected to NotebookLM';
+      setStatusText(statusText, 'Connected');
+      statusText.title = 'Connected to Gemini Notebook';
       showOpenLink(false);
     } else {
       statusDot.classList.remove('active');
       statusDot.classList.add('inactive');
-      statusText.textContent = 'Not connected';
-      statusText.title = 'Not on NotebookLM';
+      setStatusText(statusText, 'Not connected');
+      statusText.title = 'Not on Gemini Notebook';
       showOpenLink(true);
     }
   } catch (error) {
     statusDot.classList.remove('active');
     statusDot.classList.add('inactive');
-    statusText.textContent = 'Unknown';
+    setStatusText(statusText, 'Unknown');
     statusText.title = 'Unable to check status';
     showOpenLink(false);
     homeOnSite = false;
@@ -1892,7 +2077,7 @@ async function requestCancel() {
 // The Studio list is not in the page while one of its items is open, so a scan
 // would show nothing or only part of it
 // Sources and Notes on another site; refreshForTab rescans a list showing it
-const NOTEBOOK_PROMPT_HTML = '<p class="empty-message" data-needs-notebook>Please open NotebookLM first</p>';
+const NOTEBOOK_PROMPT_HTML = '<p class="empty-message" data-needs-notebook>Open a notebook first.</p>';
 const STUDIO_ITEM_OPEN_HTML = '<p class="empty-message">An item is open in Studio, which hides this list.<br><span class="hint">Close it, then click Refresh.</span></p>';
 // Home's one line, by NLME.homeNotice
 const HOME_NOTICE_HTML = {
@@ -2284,23 +2469,65 @@ function getIconForType(type) {
   return icon(names[type] || 'doc');
 }
 
+// One toast at a time, at the foot of the panel. Success and info leave after
+// 2.5 s; a warning or an error stays 6 s, can be closed, and is announced at
+// once. The timer waits while the pointer or focus is on the toast.
+const TOAST_ICONS = { success: 'check', info: 'info', warning: 'alert', error: 'alert' };
+let _toastTimer = null;
 function showToast(message, type = 'success') {
   const existing = document.querySelector('.toast');
   if (existing) existing.remove();
+  clearTimeout(_toastTimer);
 
+  const urgent = type === 'error' || type === 'warning';
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
-  toast.textContent = message;
+  toast.setAttribute('role', urgent ? 'alert' : 'status');
+  toast.innerHTML = icon(TOAST_ICONS[type] || 'info'); // a fixed SVG, no message text
+  const text = document.createElement('span');
+  text.className = 'toast-text';
+  text.textContent = message;
+  toast.appendChild(text);
+
+  let left = urgent ? 6000 : 2500;
+  let startedAt = 0;
+  let hovered = false;
+  let focused = false;
+  const dismiss = () => {
+    clearTimeout(_toastTimer);
+    if (!toast.isConnected) return;
+    toast.classList.add('toast-hide');
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    setTimeout(() => toast.remove(), reduced ? 0 : 160);
+  };
+  const run = () => {
+    startedAt = Date.now();
+    clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(dismiss, left);
+  };
+  const pause = () => {
+    if (!toast.isConnected) return;
+    clearTimeout(_toastTimer);
+    left = Math.max(800, left - (Date.now() - startedAt));
+  };
+  const resume = () => { if (!hovered && !focused && toast.isConnected) run(); };
+  toast.addEventListener('mouseenter', () => { hovered = true; pause(); });
+  toast.addEventListener('mouseleave', () => { hovered = false; resume(); });
+  toast.addEventListener('focusin', () => { focused = true; pause(); });
+  toast.addEventListener('focusout', () => { focused = false; resume(); });
+
+  if (urgent) {
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'toast-close';
+    close.setAttribute('aria-label', 'Dismiss');
+    close.innerHTML = icon('close');
+    close.addEventListener('click', dismiss);
+    toast.appendChild(close);
+  }
 
   document.body.appendChild(toast);
-
-  // Auto-hide after delay (longer for errors/warnings)
-  const duration = type === 'error' || type === 'warning' ? 4000 : 2000;
-
-  setTimeout(() => {
-    toast.classList.add('toast-hide');
-    setTimeout(() => toast.remove(), 300);
-  }, duration);
+  run();
 }
 
 function escapeHtml(text) {

@@ -320,7 +320,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
       // Results that are up stay: a retry on a closed tab keeps its Retry button
       showToast(requestedTabId != null
         ? 'The notebook tab for this export is closed. Open it and try again.'
-        : 'Please open NotebookLM first', 'error');
+        : 'Open a notebook first.', 'error');
       return { aborted: true };
     }
 
@@ -364,7 +364,8 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
     // Overlay on the page
     await chrome.tabs.sendMessage(tab.id, {
       type: NLME.MSG.SHOW_EXPORT_OVERLAY,
-      message: overlayMessage || 'Preparing to export...'
+      message: overlayMessage || 'Preparing to export...',
+      ...NLME.overlayView(overlayMessage || 'Preparing to export...', null)
     });
     overlayShown = true;
 
@@ -375,7 +376,10 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
 
     // Listen for cancellation (overlay Cancel or side-panel Cancel)
     cancelListener = (message) => {
-      if (message.type === NLME.MSG.CANCEL_EXPORT) cancelled = true;
+      if (message.type === NLME.MSG.CANCEL_EXPORT) {
+        cancelled = true;
+        closePanelDialogs('mid-export'); // Continue or Stop no longer means anything
+      }
     };
     chrome.runtime.onMessage.addListener(cancelListener);
 
@@ -395,7 +399,11 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
         cancelBtn.disabled = true;
         cancelBtn.hidden = true;
         setProgressFinishing();
-        chrome.tabs.sendMessage(tabId, { type: NLME.MSG.UPDATE_EXPORT_OVERLAY, hideCancel: true }).catch(() => {});
+        chrome.tabs.sendMessage(tabId, {
+          type: NLME.MSG.UPDATE_EXPORT_OVERLAY,
+          hideCancel: true,
+          ...NLME.overlayView('', null, { finishing: true })
+        }).catch(() => {});
       },
       progress(text, count) {
         const percent = count ? setProgressCount(count.done, count.total, count.rest) : progressRun?.percent ?? 0;
@@ -403,7 +411,9 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
         chrome.tabs.sendMessage(tabId, {
           type: NLME.MSG.UPDATE_EXPORT_OVERLAY,
           message: text,
-          progress: percent
+          progress: percent,
+          // The panel's count: across a resume chain, and kept for count-less texts
+          ...NLME.overlayView(text, NLME.overlayCount(count, progressRun, { finishing: finishingStarted }), { finishing: finishingStarted })
         }).catch(() => {}); // overlay is cosmetic; never abort the job
       },
       finish({ kind, selected, result = {}, auditOk = true, stoppedMessage, errorNote, saved = [], retry = null } = {}) {
@@ -427,6 +437,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
   } finally {
     if (cancelListener) chrome.runtime.onMessage.removeListener(cancelListener);
     activeShellTabId = null;
+    closePanelDialogs('mid-export');
 
     // Hide page overlay
     if (overlayShown) {
@@ -624,7 +635,7 @@ function takeoutRootFiles({ meta, summary, errors, partial, viewerHtml }) {
 async function runFullTakeout({ zip = NLME.takeoutZipChoice(settings) } = {}) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!isNotebookUrl(tab?.url)) {
-    showToast('Please open NotebookLM first', 'error');
+    showToast('Open a notebook first.', 'error');
     return;
   }
   // The shell's health check needs the content script (first action after a reload)
@@ -632,7 +643,7 @@ async function runFullTakeout({ zip = NLME.takeoutZipChoice(settings) } = {}) {
     await ensureContentScriptLoaded(tab.id);
   } catch (error) {
     console.error('[NotebookLM Takeout] Full Takeout: content script unavailable:', error);
-    showToast('Export failed. Please refresh the NotebookLM page and try again.', 'error');
+    showToast('Export failed. Please refresh the notebook page and try again.', 'error');
     return;
   }
 

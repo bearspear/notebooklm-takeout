@@ -58,10 +58,12 @@ function resultsLeftNotebook() {
   dockOrigin = 'home';
   dockScroll = 0;
   const panel = document.getElementById('results-panel');
-  if (dockMode !== 'results' || !dockRun?.name || panel.querySelector('.results-notebook')) return;
+  if (dockMode !== 'results' || !dockRun || panel.querySelector('.results-notebook')) return;
   const line = document.createElement('p');
   line.className = 'results-notebook';
-  line.textContent = `From ${dockRun.name}`;
+  // An unreadable title (the file-name fallback) still says these are not this notebook's
+  const name = NLME.shownNotebookName(dockRun.name);
+  line.textContent = name ? `From ${name}` : 'From another notebook';
   panel.prepend(line);
 }
 

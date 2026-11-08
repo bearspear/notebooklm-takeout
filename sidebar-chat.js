@@ -30,7 +30,7 @@ async function scanChatPage() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   if (!isNotebookUrl(tab?.url)) {
-    showToast('Please open NotebookLM first', 'error');
+    showToast('Open a notebook first.', 'error');
     return;
   }
 
@@ -47,7 +47,9 @@ async function scanChatPage() {
     // Show overlay on page
     await chrome.tabs.sendMessage(tab.id, {
       type: NLME.MSG.SHOW_EXPORT_OVERLAY,
-      message: 'Scanning chat history...'
+      message: 'Scanning chat history...',
+      ...NLME.overlayView('Scanning chat history...', null),
+      heading: 'Scanning chat'
     });
 
     // Trigger auto-scroll and scan
@@ -91,7 +93,7 @@ function renderChatSummary(chatData) {
   const chatResults = document.getElementById('chat-scan-results');
 
   if (chatData.messagePairs.length === 0) {
-    chatResults.innerHTML = '<p class="empty-message">No chat messages found. Start a conversation with NotebookLM.</p>';
+    chatResults.innerHTML = '<p class="empty-message">No chat messages found. Start a chat in the notebook first.</p>';
     setTabCount('chat', 0);
     idleTabAction('chat');
     return;

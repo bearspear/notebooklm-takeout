@@ -408,13 +408,15 @@ test('a Generated export with one side empty runs only the other', async () => {
 });
 
 test('Generated keeps the delete guards', () => {
-  const generated = fs.readFileSync(path.join(ROOT, 'sidebar-generated.js'), 'utf8');
   const send = fnSource('sidebar-generated.js', 'sendStudioDelete');
   assert.match(send, /useIndex \? \{ label: item\.label, combinedIndex: item\.combinedIndex \} : \{ label: item\.label \}/);
   assert.match(fnSource('sidebar-generated.js', 'handleStudioBulkDelete'), /useIndex: false/);
   assert.match(fnSource('sidebar-generated.js', 'handleStudioBulkDelete'), /NLME\.bulkDeletePlan\(/);
-  assert.match(generated, /confirm\(`Delete "\$\{item\.label\}"\? This cannot be undone\.`\)/);
-  assert.match(generated, /confirm\(`Delete \$\{deletable\.length\} item\(s\)\? This cannot be undone\.\$\{skippedNote\}`\)/);
+  // Both deletes ask first, in the panel's own danger dialog
+  const row = fnSource('sidebar-generated.js', 'handleStudioDeleteRow');
+  assert.match(row, /await showDialog\(\{\s*title: `Delete "\$\{item\.label\}"\?`[\s\S]*danger: true[\s\S]*if \(!sure \|\| !studioDeleteStillValid\(target\)\) return;/);
+  const bulkDelete = fnSource('sidebar-generated.js', 'handleStudioBulkDelete');
+  assert.match(bulkDelete, /await showDialog\(\{[\s\S]*\$\{skippedNote\}[\s\S]*confirmLabel: `Delete \$\{n\}`[\s\S]*danger: true[\s\S]*if \(!sure \|\| !studioDeleteStillValid\(target\)\) return;/);
   // Hidden with its tab; off during a job
   const bulk = fnSource('sidebar-generated.js', 'updateStudioBulkButtonsState');
   assert.match(bulk, /deleteBulkBtn\.hidden = !controller \|\| openPanelTab\(\) !== 'studio'/);
@@ -434,7 +436,7 @@ test('the panel has one tab per list, in order, and nothing left of the Artifact
 test('the first paint is Home: no tab active, no action bar, Back hidden', () => {
   const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8');
   assert.doesNotMatch(html, /tab-btn active|tab-content active/);
-  assert.match(html, /<div class="tabs" hidden>/);
+  assert.match(html, /<div class="tabs"[^>]* hidden>/);
   assert.match(html, /<div id="action-bar" class="action-bar" hidden>/);
   assert.match(html, /<button id="back-btn"[^>]* aria-label="Back to Home" hidden>/);
   assert.ok(html.indexOf('id="home-view"') < html.indexOf('class="tabs"'), 'Home comes before the tabs');
@@ -609,7 +611,7 @@ test('every export reaches its job through the sheet or the run settings, under 
   assert.match(fnSource('sidebar-core.js', 'runRowExport'), /runExclusive\(name, async \(\) => \{\s+if \(await rowMayStart\(\)\) return withRunSettings\(NLME\.runOverrides\(settings\), fn\);/);
   assert.match(read('sidebar-notes.js'), /runRowExport\('Note export', /);
   assert.match(read('sidebar-sources.js'), /runRowExport\('Sources export', \(\) => exportSources\(\[source\], \{ record: false \}\)\)/);
-  assert.match(read('sidebar-generated.js'), /runRowExport\('Generated download', \(\) => handleStudioDownloadRow\(item, downloadBtn\)\)/);
+  assert.match(read('sidebar-generated.js'), /runRowExport\('Studio download', \(\) => handleStudioDownloadRow\(item, downloadBtn\)\)/);
   assert.doesNotMatch(read('sidebar-notes.js') + read('sidebar-sources.js') + read('sidebar-generated.js'), /presetOverrides/);
 });
 
@@ -641,4 +643,361 @@ test('a notebook switch closes the sheet, and Settings and Health Check do too',
   assert.match(core, /'settings-btn'\)\.addEventListener\('click', \(\) => \{\s+closeExportSheet\(\);/);
   const health = fs.readFileSync(path.join(ROOT, 'sidebar-health.js'), 'utf8');
   assert.match(health.slice(health.indexOf('function runHealthCheck(')), /^[^]*?closeExportSheet\(\);/);
+});
+
+test('side panel scripts use no native confirm, alert or prompt', () => {
+  const problems = [];
+  for (const file of fs.readdirSync(ROOT).filter(f => /^sidebar-.*\.js$/.test(f))) {
+    const source = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    for (const name of ['confirm', 'alert', 'prompt']) {
+      const re = new RegExp(`(^|[^\\w.$])(window\\.)?${name}\\(`, 'm');
+      if (re.test(source)) problems.push(`${file} calls ${name}()`);
+    }
+  }
+  assert.deepEqual(problems, []);
+});
+
+test('the page overlay lives in a shadow root with the new scrim', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  assert.match(source, /attachShadow\(/);
+  assert.equal(source.includes('rgba(0, 0, 0, 0.7)'), false);
+});
+
+test('toast rules in styles.css use only colour tokens', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8');
+  const problems = [];
+  for (const m of css.matchAll(/([^{}]*\.toast[^{}]*)\{([^}]*)\}/g)) {
+    const selector = m[1].trim();
+    for (const decl of m[2].split(';')) {
+      const [prop, ...rest] = decl.split(':');
+      if (!prop || !/color|background|border|fill|stroke|shadow|outline/.test(prop)) continue;
+      const value = rest.join(':');
+      if (/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(|\b(white|black)\b/i.test(value)) problems.push(`${selector} { ${decl.trim()} }`);
+    }
+  }
+  assert.deepEqual(problems, []);
+});
+
+// The overlay cannot read styles.css, so it carries copies of the panel tokens
+test('the page overlay colours match the panel tokens, light and dark', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8');
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const tokens = block => Object.fromEntries([...block.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(m => [m[1], m[2].trim()]));
+  const light = tokens(css.slice(css.indexOf(':root {'), css.indexOf('}', css.indexOf(':root {'))));
+  const darkStart = css.indexOf(':root[data-theme="dark"] {');
+  const dark = tokens(css.slice(darkStart, css.indexOf('}', darkStart)));
+  const style = content.slice(content.indexOf('const OVERLAY_STYLE'), content.indexOf('`;', content.indexOf('const OVERLAY_STYLE')));
+  const scrimStart = style.indexOf('.scrim {');
+  const overlayLight = tokens(style.slice(scrimStart, style.indexOf('}', scrimStart)));
+  const mediaStart = style.indexOf('@media (prefers-color-scheme: dark)');
+  const overlayDark = tokens(style.slice(mediaStart, style.indexOf('}', mediaStart)));
+  assert.ok(Object.keys(overlayLight).length >= 8, Object.keys(overlayLight).join());
+  assert.deepEqual(Object.keys(overlayDark).sort(), Object.keys(overlayLight).sort());
+  for (const [name, value] of Object.entries(overlayLight)) assert.equal(value, light[name], `light ${name}`);
+  for (const [name, value] of Object.entries(overlayDark)) assert.equal(value, dark[name], `dark ${name}`);
+});
+
+test('the page overlay is modal to assistive tech and focuses Cancel without scrolling', () => {
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  assert.match(content, /card\.setAttribute\('aria-modal', 'true'\)/);
+  assert.match(content, /querySelector\('\.cancel'\)\?\.focus\(\{ preventScroll: true \}\)/);
+  assert.doesNotMatch(content, /\.inert\s*=/);
+});
+
+test('a delete reaches only the tab and notebook it was asked about', () => {
+  for (const name of ['handleStudioDeleteRow', 'handleStudioBulkDelete']) {
+    const src = fnSource('sidebar-generated.js', name);
+    const asked = src.indexOf('const target = studioDeleteTarget()');
+    const dialog = src.indexOf('await showDialog(');
+    assert.ok(asked >= 0 && asked < dialog, `${name} captures its target before the dialog`);
+    assert.match(src, /if \(!sure \|\| !studioDeleteStillValid\(target\)\) return;/);
+    assert.match(src, /sendStudioDelete\(item, \{[^}]*tabId: target\.tabId \}\)/);
+  }
+  assert.match(fnSource('sidebar-generated.js', 'handleStudioBulkDelete'), /if \(!NLME\.sameDeleteTarget\(target, studioDeleteTarget\(\)\)\)/);
+  // A notebook switch closes every open dialog, answering false
+  assert.match(fnSource('sidebar-core.js', 'resetChatPanel'), /closePanelDialogs\(\);/);
+  assert.match(fnSource('sidebar-core.js', 'notePageMove'), /closePanelDialogs\(\);/);
+});
+
+test('an export that is cancelled or over closes its mid-export dialog', () => {
+  const shell = fnSource('sidebar-takeout.js', 'withExportShell');
+  assert.match(shell, /cancelled = true;\s*closePanelDialogs\('mid-export'\)/);
+  assert.match(shell, /\} finally \{[\s\S]*closePanelDialogs\('mid-export'\)/);
+  assert.match(fnSource('sidebar-core.js', 'showDOMWarningDialog'), /kind: 'mid-export'/);
+});
+
+test('the dialog backdrop closes only on a press and click both on the backdrop', () => {
+  const src = fnSource('sidebar-core.js', 'showDialog');
+  assert.match(src, /addEventListener\('mousedown', \(e\) => \{ pressedBackdrop = e\.target === dialog; \}\)/);
+  assert.match(src, /if \(pressedBackdrop && e\.target === dialog\) dialog\.close\(\);/);
+});
+
+// ---- Motion, focus and the tab list (Task 9) ----
+
+const PANEL_CSS = () => fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+// The overlay's own stylesheet in content.js: the template literal OVERLAY_STYLE
+function overlayCss() {
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const start = content.indexOf('OVERLAY_STYLE = `');
+  assert.ok(start >= 0, 'OVERLAY_STYLE not found in content.js');
+  return content.slice(start, content.indexOf('`;', start));
+}
+// Loaders that loop are the one kind of motion allowed to run longer
+const LOOPS = new Set(['spin', 'slide']);
+
+function declarations(css, property) {
+  return [...css.matchAll(new RegExp(`(?:^|[;{\\s])${property}\\s*:\\s*([^;}]+)`, 'g'))].map(m => m[1].trim());
+}
+function durationsMs(value) {
+  return [...value.matchAll(/(\d*\.?\d+)(ms|s)\b/g)].map(m => Number(m[1]) * (m[2] === 's' ? 1000 : 1));
+}
+function checkMotion(css, where) {
+  for (const value of declarations(css, 'transition')) {
+    if (/^none\b/.test(value)) continue;
+    for (const ms of durationsMs(value)) assert.ok(ms >= 120 && ms <= 160, `${where}: transition "${value}" is ${ms}ms, not 120 to 160ms`);
+    assert.ok(durationsMs(value).length > 0, `${where}: transition "${value}" has no duration`);
+  }
+  for (const value of declarations(css, 'animation')) {
+    if (/^none\b/.test(value)) continue;
+    const name = value.split(/\s+/).find(word => /^[a-z][\w-]*$/i.test(word) && !/^(ease|ease-in|ease-out|ease-in-out|linear|infinite|forwards|backwards|both|alternate)$/.test(word));
+    if (/\binfinite\b/.test(value)) {
+      assert.ok(LOOPS.has(name), `${where}: "${value}" loops but is not a loader`);
+      continue;
+    }
+    for (const ms of durationsMs(value)) assert.ok(ms >= 120 && ms <= 160, `${where}: animation "${value}" is ${ms}ms, not 120 to 160ms`);
+  }
+}
+function reducedMotionBlocks(css) {
+  const blocks = [];
+  let at = css.indexOf('@media (prefers-reduced-motion: reduce)');
+  while (at >= 0) {
+    let depth = 0, i = css.indexOf('{', at);
+    const open = i;
+    for (; i < css.length; i++) {
+      if (css[i] === '{') depth++;
+      else if (css[i] === '}' && --depth === 0) break;
+    }
+    blocks.push(css.slice(open + 1, i));
+    at = css.indexOf('@media (prefers-reduced-motion: reduce)', i);
+  }
+  return blocks;
+}
+
+test('panel motion runs 120 to 160ms; only loaders loop', () => {
+  checkMotion(PANEL_CSS(), 'styles.css');
+});
+
+test('reduced motion stops every animation and transition in the panel', () => {
+  const blocks = reducedMotionBlocks(PANEL_CSS());
+  assert.equal(blocks.length, 1, 'one reduced-motion block, for the whole panel');
+  const [block] = blocks;
+  assert.match(block, /\*,\s*\*::before,\s*\*::after,\s*::backdrop\s*\{/);
+  assert.match(block, /animation:\s*none\s*!important/);
+  assert.match(block, /transition:\s*none\s*!important/);
+});
+
+test('the page overlay keeps the same motion rules in its own stylesheet', () => {
+  const css = overlayCss();
+  checkMotion(css, 'content.js overlay');
+  const blocks = reducedMotionBlocks(css);
+  assert.equal(blocks.length, 1);
+  for (const property of ['transition', 'animation']) {
+    for (const rule of [...css.matchAll(new RegExp(`([^{}]+)\\{[^}]*${property}\\s*:\\s*(?!none)[^;}]+`, 'g'))]) {
+      const selector = rule[1].trim();
+      if (selector.startsWith('@') || /^(from|to)\b/.test(selector)) continue;
+      // every selector that moves is stopped under reduced motion
+      for (const one of selector.split(',').map(s => s.trim()).filter(Boolean)) {
+        assert.ok(blocks[0].includes(one), `overlay: "${one}" has ${property} but reduced motion leaves it on`);
+      }
+    }
+  }
+});
+
+test('one focus ring for every control, drawn from the theme', () => {
+  const css = PANEL_CSS();
+  const ring = css.match(/:where\(([^)]*)\):focus-visible\s*\{([^}]*)\}/);
+  assert.ok(ring, 'a :where(...):focus-visible ring');
+  for (const control of ['button', 'a', 'input', 'select', 'textarea', 'summary', '[tabindex]']) {
+    assert.ok(ring[1].split(',').map(s => s.trim()).includes(control), `the ring covers ${control}`);
+  }
+  assert.match(ring[2], /outline:\s*2px solid var\(--ring\)/);
+  assert.match(ring[2], /outline-offset:\s*2px/);
+  assert.match(css, /:root\s*\{[^}]*--ring:\s*var\(--accent\)/);
+  // No control draws its own ring; a label may wear its input's ring
+  for (const rule of css.matchAll(/([^{}]+)\{([^}]*outline[^}]*)\}/g)) {
+    const selector = rule[1].trim();
+    if (selector.startsWith(':where(')) continue;
+    if (/:has\(input:focus-visible\)/.test(selector)) { assert.match(rule[2], /var\(--ring\)/); continue; }
+    assert.match(rule[2], /outline:\s*none/, `${selector} sets its own outline`);
+  }
+  // Nothing turns the ring off on a control the keyboard reaches
+  for (const rule of css.matchAll(/([^{}]+)\{([^}]*outline:\s*none[^}]*)\}/g)) {
+    const selector = rule[1].trim();
+    assert.ok(/^\.sheet-option input:focus-visible,\s*\.sheet-check input:focus-visible$/.test(selector) || selector === '.export-sheet-panel',
+      `${selector} hides the focus ring`);
+  }
+});
+
+test('one destructive button class', () => {
+  const readers = ['styles.css', 'sidebar.html', ...fs.readdirSync(ROOT).filter(f => /^sidebar-.*\.js$/.test(f))];
+  for (const file of readers) {
+    assert.doesNotMatch(fs.readFileSync(path.join(ROOT, file), 'utf8'), /btn-danger/, `${file} still names btn-danger`);
+  }
+  assert.match(PANEL_CSS(), /\.btn-destructive\s*\{/);
+});
+
+test('every class and id the panel stylesheet names has a reader', () => {
+  const css = PANEL_CSS();
+  const readers = ['sidebar.html', ...fs.readdirSync(ROOT).filter(f => /^(sidebar-|takeout-).*\.js$/.test(f))]
+    .map(f => fs.readFileSync(path.join(ROOT, f), 'utf8')).join('\n');
+  const names = new Set();
+  for (const m of css.matchAll(/([^{}]+)\{/g)) {
+    const selector = m[1].trim();
+    if (selector.startsWith('@') || /^(from|to|\d+%)\b/.test(selector)) continue;
+    for (const t of selector.matchAll(/[.#]([A-Za-z_][\w-]*)/g)) names.add(t[1]);
+  }
+  // Built by concatenation: toast-${type}, results-${level}
+  const built = /^(toast|results)-(success|info|warning|error)$/;
+  const dead = [...names].filter(name => !built.test(name) && !new RegExp(`(^|[^\\w-])${name}($|[^\\w-])`).test(readers));
+  assert.deepEqual(dead, []);
+});
+
+test('the list tabs are a tablist with a roving tabindex and arrow keys', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8');
+  assert.match(html, /<div class="tabs" role="tablist" aria-label="Lists" hidden>/);
+  for (const tab of ['sources', 'notes', 'studio', 'chat']) {
+    const button = html.match(new RegExp(`<button[^>]*data-tab="${tab}"[^>]*>`));
+    assert.ok(button, `tab ${tab}`);
+    assert.match(button[0], /role="tab"/);
+    assert.match(button[0], new RegExp(`id="tab-${tab}"`));
+    assert.match(button[0], new RegExp(`aria-controls="panel-${tab}"`));
+    assert.match(button[0], /aria-selected="false"/);
+    assert.match(button[0], /tabindex="-1"/);
+    const panel = html.match(new RegExp(`<div[^>]*data-tab-content="${tab}"[^>]*>`));
+    assert.match(panel[0], new RegExp(`id="panel-${tab}"`));
+    assert.match(panel[0], /role="tabpanel"/);
+    assert.match(panel[0], new RegExp(`aria-labelledby="tab-${tab}"`));
+  }
+  const show = fnSource('sidebar-core.js', 'showView');
+  assert.match(show, /btn\.setAttribute\('aria-selected', String\(on\)\)/);
+  assert.match(show, /btn\.tabIndex = on \? 0 : -1/);
+  const keys = fnSource('sidebar-core.js', 'handleTabKey');
+  for (const key of ['ArrowLeft', 'ArrowRight', 'Home', 'End']) assert.ok(keys.includes(`'${key}'`), key);
+  assert.match(fnSource('sidebar-core.js', 'setupTabSwitching'), /tabList\.addEventListener\('keydown', handleTabKey\)/);
+});
+
+test('the header status speaks only when it changes', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8');
+  assert.match(html, /<div id="status" class="status" aria-live="polite">/);
+  const check = fnSource('sidebar-core.js', 'checkStatus');
+  assert.doesNotMatch(check, /statusText\.textContent = /);
+  assert.match(fnSource('sidebar-core.js', 'setStatusText'), /if \(el\.textContent !== text\) el\.textContent = text;/);
+});
+
+test('Settings and the health check take the keyboard in and give it back', () => {
+  const core = fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8');
+  assert.doesNotMatch(core, /getElementById\('(settings-panel|health-check-panel)'\)\.style\.display = /);
+  assert.doesNotMatch(fs.readFileSync(path.join(ROOT, 'sidebar-health.js'), 'utf8'), /panel\.style\.display = 'block'/);
+  const open = fnSource('sidebar-core.js', 'openCover');
+  assert.match(open, /syncCoverInert\(\)/);
+  assert.match(open, /focus\(\{ preventScroll: true \}\)/);
+  const close = fnSource('sidebar-core.js', 'closeCover');
+  assert.match(close, /syncCoverInert\(\)/);
+  assert.match(fnSource('sidebar-core.js', 'handleCoverKey'), /'Escape'/);
+  // The export sheet gives inert back through the same rule, so a cover stays modal
+  assert.match(fnSource('sidebar-sheet.js', 'closeExportSheet'), /syncCoverInert\(\)/);
+});
+
+test('a health-check category opens from the keyboard and says whether it is open', () => {
+  const src = fnSource('sidebar-health.js', 'displayHealthCheckResults');
+  assert.match(src, /const headerEl = document\.createElement\('button'\);\s*headerEl\.type = 'button';/);
+  assert.match(src, /headerEl\.setAttribute\('aria-expanded', 'false'\)/);
+  assert.match(src, /headerEl\.setAttribute\('aria-expanded', String\(expanded\)\)/);
+  assert.match(src, /headerEl\.setAttribute\('aria-controls', `health-checks-\$\{categoryKey\}`\)/);
+  assert.match(src, /checksEl\.id = `health-checks-\$\{categoryKey\}`/);
+  // A failed category starts open, and says so
+  assert.match(src, /categoryEl\.classList\.add\('expanded'\);\s*headerEl\.setAttribute\('aria-expanded', 'true'\);/);
+});
+
+test('a disabled button does not change on hover', () => {
+  const css = PANEL_CSS();
+  for (const name of ['btn-primary', 'btn-secondary', 'btn-destructive', 'header-icon-btn', 'btn-icon', 'btn-icon-small']) {
+    assert.doesNotMatch(css, new RegExp(`^\\.${name}:hover\\s*\\{`, 'm'), `.${name}:hover needs :not(:disabled)`);
+    assert.match(css, new RegExp(`\\.${name}:hover:not\\(:disabled\\)\\s*\\{`));
+  }
+});
+
+test('the list is called Studio wherever a person reads it (1.9.4)', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+  // Text between tags, and the attributes a person reads or hears
+  const text = [...html.replace(/<script[\s\S]*?<\/script>/g, '').matchAll(/>([^<]+)</g)].map(m => m[1]).join(' ');
+  const attrs = [...html.matchAll(/\b(?:title|aria-label|placeholder|alt)="([^"]*)"/g)].map(m => m[1]).join(' ');
+  assert.doesNotMatch(text + ' ' + attrs, /\bGenerated\b/);
+  assert.match(html, /<span class="home-label">Studio<\/span>/);
+  assert.match(html, /data-tab="studio"[^>]*>Studio <span class="tab-count"/);
+  const generated = fs.readFileSync(path.join(ROOT, 'sidebar-generated.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/ .*$/gm, '');
+  // Strings a person sees: list states, busy names, toasts
+  const strings = [...generated.matchAll(/(['`])((?:\\.|(?!\1)[^\\])*)\1/g)].map(m => m[2]).filter(s => !s.startsWith('[NotebookLM Takeout]'));
+  assert.deepEqual(strings.filter(s => /\b[Gg]enerated\b/.test(s) && !/^Generated: /.test(s)), []);
+});
+
+test('the panel says Gemini Notebook, not NotebookLM (1.9.4)', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '');
+  assert.doesNotMatch(html, /NotebookLM/);
+  assert.match(html, /<title>Takeout for Gemini Notebook<\/title>/);
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
+  assert.equal(manifest.name, 'Takeout for Gemini Notebook');
+  assert.match(manifest.description, /Gemini Notebook \(formerly NotebookLM\)/);
+  assert.ok(manifest.description.length <= 132);
+  // Every string in the panel scripts. Kept: the console prefix, and the bare
+  // 'NotebookLM' fallback name, which goes into export file and folder names.
+  const kept = new Set(['NotebookLM']);
+  for (const file of fs.readdirSync(ROOT).filter(f => /^sidebar-.*\.js$/.test(f))) {
+    const src = fs.readFileSync(path.join(ROOT, file), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/ .*$/gm, '');
+    const strings = [...src.matchAll(/(['`])((?:\\.|(?!\1)[^\\])*)\1/g)].map(m => m[2])
+      .filter(s => /NotebookLM/.test(s) && !s.startsWith('[NotebookLM Takeout]') && !kept.has(s));
+    assert.deepEqual(strings, [], file);
+  }
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  assert.match(content, /el\('p', 'label', 'Takeout for Gemini Notebook'\)/);
+  // Export output keeps the old name, byte for byte
+  assert.match(fs.readFileSync(path.join(ROOT, 'takeout-shared.js'), 'utf8'), /exporter: `NotebookLM Takeout \$\{version\}`/);
+});
+
+// content.js is one indented IIFE: its functions start at two spaces
+function contentFn(name) {
+  const src = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const start = src.search(new RegExp(`^  function ${name}\\(`, 'm'));
+  assert.ok(start >= 0, `${name} not found in content.js`);
+  return src.slice(start, src.indexOf('\n  }\n', start) + 4);
+}
+
+test('an overlay Cancel never leaves a dead card when the extension was reloaded', () => {
+  // The send is guarded: no extension id, or a throw, means the context is gone
+  const send = contentFn('sendCancelExport');
+  assert.match(send, /if \(!chrome\.runtime\?\.id\) return false;/);
+  assert.match(send, /try \{[\s\S]*chrome\.runtime\.sendMessage\(\{ type: NLME\.MSG\.CANCEL_EXPORT \}\)[\s\S]*\} catch \(_\) \{\s*return false;\s*\}/);
+  assert.match(send, /\.catch\(\(\) => \{\}\)/);
+  // The card goes first, then the send; a lost context leaves a note, not the card
+  const overlay = contentFn('createExportOverlay');
+  assert.match(overlay, /exportCancelled = true;\s*removeExportOverlay\(\);\s*if \(!sendCancelExport\(\)\) showReloadedNote\(\);/);
+  assert.doesNotMatch(overlay, /chrome\.runtime\.sendMessage/);
+  const note = contentFn('showReloadedNote');
+  assert.match(fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8'), /const RELOADED_TEXT = 'This export stopped when the extension was reloaded\. Refresh the page to use Takeout again\.';/);
+  // Announced: the status region is in the page empty, then filled; Dismiss is described by it
+  assert.match(note, /document\.body\.appendChild\(host\);[\s\S]*setTimeout\(\(\) => \{ text\.textContent = RELOADED_TEXT; \}, 100\);/);
+  assert.match(note, /dismiss\.setAttribute\('aria-describedby', 'reloaded-text'\)/);
+  // It waits while the pointer or focus is on it
+  for (const event of ['mouseenter', 'mouseleave', 'focusin', 'focusout']) assert.ok(note.includes(`'${event}'`), event);
+  assert.doesNotMatch(note, /dismiss\.focus\(/); // focus on it would hold it open
+  assert.match(note, /attachShadow/);
+  assert.match(note, /timer = setTimeout\(remove, left\)/);
+  assert.match(note, /'Dismiss'/);
+  assert.match(fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8'), /const RELOADED_NOTE_MS = 6000;/);
+  // The side panel's Cancel goes through the same guard
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const handler = content.slice(content.indexOf('[NLME.MSG.REQUEST_EXPORT_CANCEL]'), content.indexOf('[NLME.MSG.EXTRACT_NOTE]'));
+  assert.match(handler, /exportCancelled = true;\s*removeExportOverlay\(\);\s*sendCancelExport\(\);/);
 });

@@ -1220,7 +1220,7 @@
   // with no usable number is not known yet, counts as 0 and is named; an absent key is
   // not part of the run. With nothing known there is no number: a short time would
   // be a guess.
-  const ESTIMATE_NAMES = [['sources', 'sources'], ['notes', 'notes'], ['generated', 'generated items'], ['chat', 'chat']];
+  const ESTIMATE_NAMES = [['sources', 'sources'], ['notes', 'notes'], ['generated', 'Studio items'], ['chat', 'chat']];
   function estimateLine(counts, citationDetail) {
     const asked = ESTIMATE_NAMES.filter(([key]) => counts && key in counts);
     const unknown = asked.filter(([key]) => !(Number.isFinite(counts[key]) && counts[key] >= 0)).map(([, name]) => name);
@@ -1248,6 +1248,61 @@
       rest[key] = (rest[key] || 0) + n;
     }
     return rest;
+  }
+
+  // The page overlay's fields from a progress text and count (Task 10).
+  // text: 'Notes: Batch 1/2: Processing 1/25: Title' and the like; count:
+  // { done, total, item } or null. Pure, so the content script only renders.
+  // Progress category -> what the heading calls it: the prefixes Export everything
+  // and the tab exports write (a Studio export runs as artifacts, then notes)
+  const OVERLAY_CATEGORIES = { Sources: 'sources', Notes: 'notes', Chat: 'chat', Artifacts: 'artifacts' };
+  function overlayView(text, count, { finishing = false } = {}) {
+    let rest = String(text || '');
+    let heading = 'Exporting';
+    const colon = rest.indexOf(': ');
+    if (colon > 0 && Object.hasOwn(OVERLAY_CATEGORIES, rest.slice(0, colon))) {
+      heading = `Exporting ${OVERLAY_CATEGORIES[rest.slice(0, colon)]}`;
+      rest = rest.slice(colon + 2);
+    }
+    if (finishing) heading = 'Saving files';
+
+    const parts = [];
+    const batch = /^Batch (\d+)\/(\d+):\s*/.exec(rest);
+    if (batch) {
+      parts.push(`Part ${batch[1]} of ${batch[2]}`);
+      rest = rest.slice(batch[0].length);
+    }
+    const total = count && Number(count.total) > 0 ? Number(count.total) : 0;
+    const done = total ? Math.max(0, Math.min(Number(count.done) || 0, total)) : 0;
+    if (total) parts.push(`${Math.min(done + 1, total)} of ${total}`);
+
+    let item = rest;
+    if (count && count.item) item = String(count.item);
+    else if (/^(Processing|Extracting) \d+\/\d+: /.test(rest)) item = rest.slice(rest.lastIndexOf(': ') + 2);
+
+    return {
+      heading,
+      line: parts.join(' · '),
+      item,
+      percent: total ? Math.round((done / total) * 100) : null
+    };
+  }
+
+  // The count the overlay shows. With a count: the panel's run (done/total across
+  // a resume chain) when it has one. Without one, the run so far, so a count-less
+  // text ('Creating ZIP...') keeps the bar and 'n of total' where they were; while
+  // finishing, or before any count, nothing (the bar goes indeterminate).
+  function overlayCount(count, run, { finishing = false } = {}) {
+    const runTotal = run && Number(run.total) > 0 ? run : null;
+    if (count) return runTotal ? { ...count, done: runTotal.done, total: runTotal.total } : count;
+    if (finishing || !runTotal) return null;
+    return { done: runTotal.done, total: runTotal.total };
+  }
+
+  // A delete asked about one notebook's tab may only reach that tab: true when
+  // the panel still shows the same notebook in the same tab as when it asked.
+  function sameDeleteTarget(asked, now) {
+    return !!asked && !!now && asked.tabId != null && asked.tabId === now.tabId && asked.notebookId === now.notebookId;
   }
 
   // Seconds left, at least what the work left is expected to take. A run's pace so far
@@ -1713,7 +1768,16 @@
   // which has a notebook host but no notebook id).
   function headerName(url, projectName) {
     if (!isNotebookUrl(url) || !notebookIdFromUrl(url)) return 'Open a notebook';
-    return String(projectName || '').trim() || 'NotebookLM';
+    return shownNotebookName(projectName) || 'Notebook';
+  }
+
+  // The notebook's name as the panel shows it, '' when unknown. 'NotebookLM' is
+  // getProjectName's fallback for export file names (kept for byte-identical
+  // exports), never a name to show.
+  const FILE_NAME_FALLBACK = 'NotebookLM';
+  function shownNotebookName(projectName) {
+    const name = String(projectName || '').trim();
+    return name === FILE_NAME_FALLBACK ? '' : name;
   }
 
   // ---- List view helpers (filter / sort / select toolbar) ----
@@ -2957,6 +3021,7 @@ footer { margin-top: 3rem; }
     homeNotice,
     loadWithRetry,
     headerName,
+    shownNotebookName,
     listItemKeys,
     jobRecordKey,
     newJobRecord,
@@ -3041,6 +3106,9 @@ footer { margin-top: 3rem; }
     retryRefused,
     timeLeft,
     restCounts,
+    overlayView,
+    overlayCount,
+    sameDeleteTarget,
     honestTimeLeft,
     calmTimeLeft,
     progressLeftLine,

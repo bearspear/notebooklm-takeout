@@ -81,143 +81,281 @@
   let citationDetailMode = 'quotes';   // 'quotes' (hover each marker) | 'titles' (no hovering; also used for 'none')
   let reuseCitations = false;          // Milestone 3c: reuse cached citation quotes from earlier exports (quotes mode, no images)
 
-  function createExportOverlay() {
-    if (exportOverlay) return exportOverlay;
+  // The page overlay lives in a shadow root, so NotebookLM's styles cannot
+  // reach it and its own styles stay out of the page. Colours mirror the
+  // side panel's tokens (styles.css :root). Fields come from NLME.overlayView,
+  // computed by the side panel; a bare message/progress still renders.
+  const OVERLAY_STYLE = `
+    :host { all: initial; }
+    .scrim {
+      position: fixed; inset: 0; z-index: 999999;
+      display: flex; align-items: center; justify-content: center;
+      padding: 16px; box-sizing: border-box;
+      background: rgba(0,0,0,0.45);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --bg: #fbfcfd; --surface: #f0f3f7; --line: #dde3ea; --ink: #172029; --muted: #5a6672;
+      --accent: #0b57d0; --soft: #dce8fb; --shadow: rgba(0, 0, 0, 0.2);
+      color-scheme: light;
+    }
+    @media (prefers-color-scheme: dark) {
+      .scrim {
+        --bg: #12161b; --surface: #1c2229; --line: #2e3640; --ink: #e8edf2; --muted: #9aa6b2;
+        --accent: #a8c7fa; --soft: #223757; --shadow: rgba(0, 0, 0, 0.6);
+        color-scheme: dark;
+      }
+    }
+    .card {
+      box-sizing: border-box; width: 100%; max-width: 360px;
+      padding: 24px; border-radius: 14px;
+      background: var(--bg); color: var(--ink);
+      border: 1px solid var(--line);
+      box-shadow: 0 8px 32px var(--shadow);
+      text-align: left; line-height: 1.4;
+    }
+    .label { margin: 0 0 12px; font-size: 12px; font-weight: 500; color: var(--muted); letter-spacing: 0.01em; }
+    .heading { margin: 0; font-size: 15px; font-weight: 600; color: var(--ink); }
+    .line { margin: 2px 0 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .line:empty { display: none; }
+    .item {
+      margin: 10px 0 0; font-size: 13px; color: var(--ink);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .item:empty { display: none; }
+    .bar {
+      position: relative; height: 6px; margin: 14px 0 0; overflow: hidden;
+      border-radius: 3px; background: var(--surface);
+    }
+    .fill {
+      height: 100%; width: 0%; border-radius: 3px; background: var(--accent);
+      transition: width 160ms ease;
+    }
+    .bar.indeterminate .fill {
+      position: absolute; left: 0; top: 0; width: 35%;
+      animation: slide 1.4s ease-in-out infinite;
+    }
+    @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+    .note { margin: 16px 0 0; font-size: 12px; color: var(--muted); }
+    .footer { display: flex; justify-content: flex-end; align-items: center; min-height: 36px; margin-top: 16px; }
+    .cancel {
+      font: inherit; font-size: 13px; font-weight: 500;
+      padding: 8px 16px; border: none; border-radius: 8px; cursor: pointer;
+      background: var(--soft); color: var(--accent);
+      transition: background 120ms ease;
+    }
+    .cancel:hover { background: color-mix(in srgb, var(--soft) 80%, var(--accent)); }
+    .cancel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .finishing { margin: 0; font-size: 13px; color: var(--muted); }
+    @media (prefers-reduced-motion: reduce) {
+      .fill, .cancel { transition: none; }
+      .bar.indeterminate .fill { animation: none; width: 100%; opacity: 0.35; }
+    }
+  `;
 
-    // Create overlay container
-    exportOverlay = document.createElement('div');
-    exportOverlay.id = 'notebooklm-export-overlay';
-    exportOverlay.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0, 0, 0, 0.7);
-      z-index: 999999;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-family: 'Google Sans', Arial, sans-serif;
-    `;
-
-    // Create content box
-    const contentBox = document.createElement('div');
-    contentBox.style.cssText = `
-      background: white;
-      border-radius: 16px;
-      padding: 32px;
-      max-width: 400px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-      text-align: center;
-    `;
-
-    // Create title
-    const title = document.createElement('h2');
-    title.textContent = 'Exporting...';
-    title.style.cssText = `
-      margin: 0 0 16px 0;
-      font-size: 24px;
-      font-weight: 500;
-      color: #202124;
-    `;
-
-    // Create progress text
-    const progressText = document.createElement('p');
-    progressText.id = 'export-progress-text';
-    progressText.textContent = 'Preparing export...';
-    progressText.style.cssText = `
-      margin: 0 0 24px 0;
-      font-size: 14px;
-      color: #5f6368;
-    `;
-
-    // Create progress bar
-    const progressBarContainer = document.createElement('div');
-    progressBarContainer.style.cssText = `
-      width: 100%;
-      height: 4px;
-      background: #e8eaed;
-      border-radius: 2px;
-      margin-bottom: 24px;
-      overflow: hidden;
-    `;
-
-    const progressBar = document.createElement('div');
-    progressBar.id = 'export-progress-bar';
-    progressBar.style.cssText = `
-      height: 100%;
-      width: 0%;
-      background: #1a73e8;
-      border-radius: 2px;
-      transition: width 0.3s ease;
-    `;
-    progressBarContainer.appendChild(progressBar);
-
-    // Create cancel button
-    const cancelButton = document.createElement('button');
-    cancelButton.id = 'export-cancel-button';
-    cancelButton.textContent = 'Cancel Export';
-    cancelButton.style.cssText = `
-      background: transparent;
-      border: 1px solid #dadce0;
-      border-radius: 8px;
-      padding: 10px 24px;
-      font-size: 14px;
-      font-weight: 500;
-      color: #1a73e8;
-      cursor: pointer;
-      transition: background 0.2s;
-    `;
-    cancelButton.onmouseover = () => {
-      cancelButton.style.background = '#f8f9fa';
-    };
-    cancelButton.onmouseout = () => {
-      cancelButton.style.background = 'transparent';
-    };
-    cancelButton.onclick = () => {
-      exportCancelled = true;
-      chrome.runtime.sendMessage({ type: NLME.MSG.CANCEL_EXPORT });
-      removeExportOverlay();
-    };
-
-    // Assemble
-    contentBox.appendChild(title);
-    contentBox.appendChild(progressText);
-    contentBox.appendChild(progressBarContainer);
-    contentBox.appendChild(cancelButton);
-    exportOverlay.appendChild(contentBox);
-
-    return exportOverlay;
-  }
-
-  function showExportOverlay(message = 'Preparing export...') {
-    exportCancelled = false;
-    const overlay = createExportOverlay();
-    const progressText = overlay.querySelector('#export-progress-text');
-    const progressBar = overlay.querySelector('#export-progress-bar');
-
-    if (progressText) progressText.textContent = message;
-    if (progressBar) progressBar.style.width = '0%';
-
-    if (!overlay.parentNode) {
-      document.body.appendChild(overlay);
+  // The extension can be reloaded, updated or turned off under an open page. This
+  // script is then cut off: chrome.runtime has no id and sendMessage throws
+  // "Extension context invalidated". Returns whether the cancel went out.
+  function sendCancelExport() {
+    if (!chrome.runtime?.id) return false;
+    try {
+      const sent = chrome.runtime.sendMessage({ type: NLME.MSG.CANCEL_EXPORT });
+      if (sent && typeof sent.catch === 'function') sent.catch(() => {}); // no panel listening
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
-  function updateExportOverlay(message, progress) {
-    if (!exportOverlay) return;
+  // In the overlay's place when its export died with a reload: a small note at the
+  // foot of the page, not blocking it. It goes on Dismiss, or after RELOADED_NOTE_MS
+  // with the pointer and focus elsewhere (it waits while either is on it, like the
+  // panel's notices). The overlay's own styles and tokens, in its own shadow root.
+  // The text goes in after the empty status region is in the page, so it is announced.
+  // It does not take focus (focus would hold it open): the Cancel that had it is gone,
+  // so focus is on the page, as before; Dismiss is one Tab away at the end of the page.
+  const RELOADED_NOTE_MS = 6000;
+  const RELOADED_TEXT = 'This export stopped when the extension was reloaded. Refresh the page to use Takeout again.';
+  function showReloadedNote() {
+    document.getElementById('notebooklm-export-reloaded')?.remove();
+    const host = document.createElement('div');
+    host.id = 'notebooklm-export-reloaded';
+    const shadow = host.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = OVERLAY_STYLE + `
+      .scrim.reloaded { inset: auto 0 16px 0; align-items: flex-end; background: none; pointer-events: none; }
+      .reloaded .card { pointer-events: auto; padding: 16px; }
+      .reloaded .heading { font-size: 13px; }
+      .reloaded .footer { margin-top: 12px; min-height: 0; }
+    `;
+    const scrim = document.createElement('div');
+    scrim.className = 'scrim reloaded';
+    const card = document.createElement('div');
+    card.className = 'card';
+    const label = document.createElement('p');
+    label.className = 'label';
+    label.textContent = 'Takeout for Gemini Notebook';
+    const text = document.createElement('p');
+    text.className = 'heading';
+    text.id = 'reloaded-text';
+    text.setAttribute('role', 'status');
+    const footer = document.createElement('div');
+    footer.className = 'footer';
+    const dismiss = document.createElement('button');
+    dismiss.type = 'button';
+    dismiss.className = 'cancel';
+    dismiss.textContent = 'Dismiss';
+    dismiss.setAttribute('aria-describedby', 'reloaded-text');
+    footer.appendChild(dismiss);
+    card.append(label, text, footer);
+    scrim.appendChild(card);
+    shadow.append(style, scrim);
+    document.body.appendChild(host);
 
-    const progressText = exportOverlay.querySelector('#export-progress-text');
-    const progressBar = exportOverlay.querySelector('#export-progress-bar');
+    let timer = null;
+    let left = RELOADED_NOTE_MS;
+    let startedAt = 0;
+    let hovered = false;
+    let focused = false;
+    const remove = () => { clearTimeout(timer); host.remove(); };
+    const run = () => { startedAt = Date.now(); clearTimeout(timer); timer = setTimeout(remove, left); };
+    const pause = () => { clearTimeout(timer); left = Math.max(800, left - (Date.now() - startedAt)); };
+    const resume = () => { if (!hovered && !focused && host.isConnected) run(); };
+    card.addEventListener('mouseenter', () => { hovered = true; pause(); });
+    card.addEventListener('mouseleave', () => { hovered = false; resume(); });
+    card.addEventListener('focusin', () => { focused = true; pause(); });
+    card.addEventListener('focusout', () => { focused = false; resume(); });
+    dismiss.addEventListener('click', remove);
 
-    if (progressText) progressText.textContent = message;
-    if (progressBar) progressBar.style.width = `${progress}%`;
+    run();
+    setTimeout(() => { text.textContent = RELOADED_TEXT; }, 100);
   }
 
+  function createExportOverlay() {
+    if (exportOverlay) return exportOverlay;
+
+    exportOverlay = document.createElement('div');
+    exportOverlay.id = 'notebooklm-export-overlay';
+    const shadow = exportOverlay.attachShadow({ mode: 'open' });
+    const el = (tag, className, text) => {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text) node.textContent = text;
+      return node;
+    };
+
+    const style = el('style');
+    style.textContent = OVERLAY_STYLE;
+
+    const scrim = el('div', 'scrim');
+    const card = el('div', 'card');
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-modal', 'true');
+    card.setAttribute('aria-labelledby', 'overlay-heading');
+
+    const live = el('div');
+    live.setAttribute('aria-live', 'polite');
+    const heading = el('p', 'heading', 'Exporting');
+    heading.id = 'overlay-heading';
+    const line = el('p', 'line');
+    live.append(heading, line);
+
+    const item = el('p', 'item');
+    const bar = el('div', 'bar');
+    bar.setAttribute('role', 'progressbar');
+    bar.setAttribute('aria-label', 'Export progress');
+    bar.setAttribute('aria-valuemin', '0');
+    bar.setAttribute('aria-valuemax', '100');
+    bar.appendChild(el('div', 'fill'));
+
+    const footer = el('div', 'footer');
+    const cancelButton = el('button', 'cancel', 'Cancel export');
+    cancelButton.type = 'button';
+    cancelButton.addEventListener('click', () => {
+      exportCancelled = true;
+      removeExportOverlay();
+      if (!sendCancelExport()) showReloadedNote();
+    });
+    footer.appendChild(cancelButton);
+
+    card.append(
+      el('p', 'label', 'Takeout for Gemini Notebook'),
+      live,
+      item,
+      bar,
+      el('p', 'note', 'Keep this tab open. You can watch progress in the side panel.'),
+      footer
+    );
+    scrim.appendChild(card);
+    shadow.append(style, scrim);
+    return exportOverlay;
+  }
+
+  // fields: { heading, line, item, percent } from NLME.overlayView. Without
+  // them (an older side panel) the message and progress number are shown.
+  function overlayFields(message, progress, fields = {}) {
+    if (fields && typeof fields.heading === 'string') return fields;
+    const view = typeof NLME.overlayView === 'function'
+      ? NLME.overlayView(message || '', null)
+      : { heading: 'Exporting', line: '', item: message || '' };
+    return { ...view, percent: Number.isFinite(progress) ? progress : null };
+  }
+
+  function renderExportOverlay({ heading, line, item, percent }) {
+    if (!exportOverlay) return;
+    const root = exportOverlay.shadowRoot;
+    const set = (selector, text) => {
+      const node = root.querySelector(selector);
+      if (node && node.textContent !== text) node.textContent = text;
+      return node;
+    };
+    set('.heading', heading || 'Exporting');
+    set('.line', line || '');
+    const itemNode = set('.item', item || '');
+    if (itemNode) itemNode.title = item || '';
+    const bar = root.querySelector('.bar');
+    const fill = root.querySelector('.fill');
+    if (Number.isFinite(percent)) {
+      const value = Math.max(0, Math.min(100, Math.round(percent)));
+      bar.classList.remove('indeterminate');
+      bar.setAttribute('aria-valuenow', String(value));
+      fill.style.width = `${value}%`;
+    } else {
+      bar.classList.add('indeterminate');
+      bar.removeAttribute('aria-valuenow');
+      fill.style.width = '';
+    }
+  }
+
+  function showExportOverlay(message = 'Preparing export...', fields) {
+    exportCancelled = false;
+    removeExportOverlay(); // a fresh card: Cancel back, no stale finishing note
+    const overlay = createExportOverlay();
+    renderExportOverlay(overlayFields(message, null, fields));
+    document.body.appendChild(overlay);
+    // Keyboard users land on the overlay's one control, not the page behind it
+    overlay.shadowRoot.querySelector('.cancel')?.focus({ preventScroll: true });
+  }
+
+  function updateExportOverlay(message, progress, fields) {
+    if (!exportOverlay) return;
+    renderExportOverlay(overlayFields(message, progress, fields));
+  }
+
+  // The final save runs to the end: swap Cancel for a plain note
   function hideExportCancel() {
-    const button = exportOverlay && exportOverlay.querySelector('#export-cancel-button');
-    if (button) button.style.display = 'none';
+    const root = exportOverlay && exportOverlay.shadowRoot;
+    const footer = root && root.querySelector('.footer');
+    if (!footer || footer.querySelector('.finishing')) return;
+    const note = document.createElement('p');
+    note.className = 'finishing';
+    note.textContent = "Finishing up. This can't be cancelled.";
+    footer.replaceChildren(note);
+  }
+
+  // The optional view fields of a SHOW/UPDATE_EXPORT_OVERLAY message, or null
+  function overlayMessageFields(message) {
+    if (typeof message.heading !== 'string') return null;
+    const { heading, line = '', item = '', percent = null } = message;
+    return { heading, line, item, percent };
   }
 
   function removeExportOverlay() {
@@ -319,8 +457,8 @@
       run(message, sender, sendResponse) {
         // Side panel Cancel button: same effect as the overlay's Cancel
         exportCancelled = true;
-        chrome.runtime.sendMessage({ type: NLME.MSG.CANCEL_EXPORT }).catch(() => {});
         removeExportOverlay();
+        sendCancelExport();
         sendResponse({ success: true });
       }
     },
@@ -376,7 +514,7 @@
     [NLME.MSG.SHOW_EXPORT_OVERLAY]: {
       async: true,
       run(message, sender, sendResponse) {
-        showExportOverlay(message.message || 'Preparing export...');
+        showExportOverlay(message.message || 'Preparing export...', overlayMessageFields(message));
         sendResponse({ success: true });
       }
     },
@@ -384,7 +522,9 @@
       async: true,
       run(message, sender, sendResponse) {
         if (message.hideCancel) hideExportCancel();
-        else updateExportOverlay(message.message, message.progress || 0);
+        if (typeof message.heading === 'string' || !message.hideCancel) {
+          updateExportOverlay(message.message, message.progress || 0, overlayMessageFields(message));
+        }
         sendResponse({ success: true });
       }
     },
@@ -1147,7 +1287,7 @@
         selector: selectors[0],
         passed: false,
         critical: false,
-        note: `Primary selector "${selectors[0]}" missed; using fallback "${matchedSelector}". Extension may be drifting behind NotebookLM UI changes.`
+        note: `Primary selector "${selectors[0]}" missed; using fallback "${matchedSelector}". Extension may be drifting behind Gemini Notebook UI changes.`
       });
     }
 
@@ -1456,7 +1596,7 @@
 
     // Generate recommendations
     if (!results.overallHealthy) {
-      results.recommendations.push('NotebookLM may have been updated. Check for extension updates.');
+      results.recommendations.push('Gemini Notebook may have been updated. Check for extension updates.');
       results.recommendations.push('Try refreshing the page and running the check again.');
 
       // Specific recommendations based on failures
@@ -3457,7 +3597,7 @@
     const { label, combinedIndex } = data || {};
     const all = Array.from(document.querySelectorAll('artifact-library-item, artifact-library-note'));
     if (all.length === 0) {
-      throw new Error('No Generated items found on the page');
+      throw new Error('No Studio items found on the page');
     }
 
     // Resolve target. The title of the element must equal the label whenever a
@@ -3482,7 +3622,7 @@
       target = all[combinedIndex];
     }
     if (!target) {
-      throw new Error(`Generated item not found${label ? ` (label: "${label}")` : ''}`);
+      throw new Error(`Studio item not found${label ? ` (label: "${label}")` : ''}`);
     }
 
     const moreButton = target.querySelector('button[aria-label="More"]');

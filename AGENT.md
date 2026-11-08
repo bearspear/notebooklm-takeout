@@ -4,6 +4,18 @@ Single-document reference for any LLM/engineer picking up this extension. Optimi
 context recovery — dense pointers, not narrative. Read top to bottom once; after that, use
 the table of contents to jump.
 
+- **Name (1.9.4):** the extension is "Takeout for Gemini Notebook" (formerly NotebookLM Takeout;
+  Google renamed NotebookLM to Gemini Notebook in Jul 2026). The panel, the page overlay, the
+  manifest name and the health report heading use the new name, and panel messages say "Gemini
+  Notebook" or "notebook", never NotebookLM (tests/structure.test.js checks sidebar.html and the
+  strings of sidebar-*.js). **Rule: export output keeps the old name byte for byte**: the
+  `exporter: "NotebookLM Takeout <ver>"` field, index and viewer text, errors.md, file and folder
+  names, the `'NotebookLM'` fallback project name (content.js GET_PROJECT_NAME, getProjectName,
+  sidebar-artifacts' folder). An error text that can land in errors.md keeps its wording too
+  ('NotebookLM tab not active', content.js's "Sources page in NotebookLM"). Also unchanged: the
+  `[NotebookLM Takeout]` console prefix, message types, storage keys, ids, file names, the repo and
+  tools/validate_export.py. The header shows "Notebook" when the name can't be read (the
+  `NotebookLM` fallback is for files only).
 - Repo root: `/Users/mbehringer/Downloads/notebooklm-exporter`
 - Remote: `git@github.com-personal:bearspear/notebooklm-takeout.git`
 - Manifest: V3 Chrome extension, no build step
@@ -48,7 +60,7 @@ The per-milestone contracts (Milestone 2 to 3d) sit between "Drift patterns" and
 
 A Chrome side-panel extension that scrapes content out of `notebook.google.com` (formerly
 `notebooklm.google.com`, renamed to "Gemini Notebook" in Aug 2026) into local
-files. Four tabs: Sources, Notes, Generated (internal id `studio`) and Chat. The Generated tab gives a unified
+files. Four tabs: Sources, Notes, Studio (internal id `studio`; labelled Generated from 1.9.1 to 1.9.3) and Chat. The Studio tab gives a unified
 flat list of artifacts and notes with per-item Download / Delete, one Export action and Delete Selected; everything
 else uses tab-specific batch exports producing ZIPs. An Export everything button (`#full-takeout-btn`) on Home
 runs all four categories in one go.
@@ -194,7 +206,7 @@ Line numbers drift with every change, so anchors are names: `grep -n "<name>" <f
 | Extract / build / scan data | `extractSourceItem` / `buildSourcesFiles`, `extractNoteItem` / `buildNotesFiles`, `extractChatPair` / `buildChatAuditDoc` / `buildChatFiles`, `fetchArtifactFiles`; `scanSourcesData`, `scanNotesData`, `scanChatData`, `scanArtifactsData` (one per tab file) |
 | File writer, shell, Export everything | `saveFiles`, `fetchDownload`, `withExportShell`, `runFullTakeout` (sidebar-takeout.js); `NLME.runExportJob` (takeout-job.js) |
 | Note Markdown (citations, Sources section) | `function convertToMarkdown` (sidebar-core.js) |
-| Generated tab (id `studio`) | `scanGeneratedItems` (also Home's count), `scanStudioPage`, `handleStudioDownloadRow` (sidebar-generated.js), `exportSingleNote` (sidebar-notes.js) |
+| Studio tab (id `studio`) | `scanGeneratedItems` (also Home's count), `scanStudioPage`, `handleStudioDownloadRow` (sidebar-generated.js), `exportSingleNote` (sidebar-notes.js) |
 | Content message dispatcher | `chrome.runtime.onMessage.addListener` near the top of content.js |
 | Note extraction | `extractNoteContent`, `extractTailwindNoteContent`, `extractSourcesPanelNote` (content.js) |
 | Citation hover | `extractSingleCitationWithRetry` (content.js) |
@@ -289,7 +301,7 @@ Storage: `chrome.storage.local`, single key `settings`. Defaults in the frozen `
   exportPreset: 'archive',                   // Default preset: 'archive' | 'ai' | 'custom'
   customImages: true,                        // Custom's image copies
   showNotifications: true,                   // toast on download completion
-  refreshInterval: 10,                       // seconds, auto-refresh while Generated is open
+  refreshInterval: 10,                       // seconds, auto-refresh while Studio is open
 
   // Source export variants (any combo, ≥1 required)
   exportSourceBase: true,                    // base, no metadata, no images
@@ -340,7 +352,7 @@ in `setupEventListeners` (`sourceParentChildPairs` / `noteParentChildPairs`).
 
 ## Tab system
 
-Two kinds of view: Home (`#home-view`, the default) and four tabs, in this order: `sources`, `notes`, `studio` (labelled Generated), `chat`. `settings.showStudioTab` (a stored value from before 1.9.1) is ignored.
+Two kinds of view: Home (`#home-view`, the default) and four tabs, in this order: `sources`, `notes`, `studio` (labelled Studio; Generated in 1.9.1 to 1.9.3), `chat`. `settings.showStudioTab` (a stored value from before 1.9.1) is ignored.
 
 Views (1.9.2): `showView(view, { save, focus })` in sidebar-core.js is the one switch; it does not scan. `panelView` holds the view. On Home no `.tab-btn` is active, so `openPanelTab()` is `''` and everything keyed on the open tab (`applyOpenTabAction`, `rescanGeneratedIfOpen`, `openListShows`, `setTabAction`) leaves Home alone; `.tabs` and the action bar are hidden. `sidebar.html` ships with Home showing and no tab active, so the first paint has no action bar. `#back-btn` (header, hidden on Home) returns Home. `#download-progress` and `#results-panel` sit outside every view and hide the open one (`setDock`), so a job's panels show on Home and on every list.
 
@@ -348,7 +360,7 @@ Views (1.9.2): `showView(view, { save, focus })` in sidebar-core.js is the one s
 
 Home's counts: `refreshHome({ force })` runs `HOME_SCANS` in order (`scanSourcesData`, `scanNotesData`, `scanGeneratedItems`), plain DOM reads, painting through `setTabCount`, which paints the tab label and the Home row, so the two cannot differ and a delete in Generated reaches Home. Generated's count is `scanGeneratedItems`, the list's own data, not `scanArtifactsData` (artifacts only). A `null` count shows as "—" (`NLME.homeCountText`). Chat is never scanned from Home: its row shows Load and only opens the tab. Without `force`, `refreshHome` does nothing while all three counts are known. It skips on a list and during a job (`afterJobChecks` calls it); during a settle wait (`settleWaits`) it only remembers a force (`homeForceOwed`) for the wait's owner to run. `readHomeCounts` is one pass; each await rechecks `homeGate` (`NLME.createLatestGate`, bumped by `resetChatPanel`), the job lock, the view, the settle and `lastPanelNotebookId`, and asks the tab's URL too, since the panel hears of a navigation late. `syncHomeControls` (from `checkStatus`, a scan, a job or settle's start and end) repaints the rows, disables them and Export everything without a notebook id, disables Export everything during a settle, and shows one line by `NLME.homeNotice`. Off a notebook rows show "—" (`aria-label` "not available") and the counts stay in `_tabCounts`.
 
-A page draws its lists after it reports complete, and an undrawn list reads as 0. So a 0 is not known (`homeCountsKnown`): `NLME.homeCountRead` shows it as "—" and re-reads on a timer (`HOME_REREAD_WAITS`: reads at 0, 1.5 s and 4 s, all three lists each pass). A job, a view change or a newer read ends the re-reads. When the attempts run out a 0 is believed and goes in `_homeZeroConfirmed`, so an empty notebook settles and stays settled until `complete` or a switch clears the set, or items are found. A failed read is `null`, never 0; after the attempts Home shows the read-failed line with the Refresh hint. `scanNotesData(tabId, { strict: true })` (Home, Generated) and `scanGeneratedItems` throw on an error or a missing response; Export everything keeps the default, where a missing response reads as no notes ("none in notebook") and only a rejected message is a failed scan. A switch reported by `complete` gets the settle too (`PAGE_SETTLE_MS`), like in-app navigation.
+A page draws its lists after it reports complete, and an undrawn list reads as 0. So a 0 is not known (`homeCountsKnown`): `NLME.homeCountRead` shows it as "—" and re-reads on a timer (`HOME_REREAD_WAITS`: reads at 0, 1.5 s and 4 s, all three lists each pass). A job, a view change or a newer read ends the re-reads. When the attempts run out a 0 is believed and goes in `_homeZeroConfirmed`, so an empty notebook settles and stays settled until `complete` or a switch clears the set, or items are found. A failed read is `null`, never 0; after the attempts Home shows the read-failed line with the Refresh hint. `scanNotesData(tabId, { strict: true })` (Home, Studio) and `scanGeneratedItems` throw on an error or a missing response; Export everything keeps the default, where a missing response reads as no notes ("none in notebook") and only a rejected message is a failed scan. A switch reported by `complete` gets the settle too (`PAGE_SETTLE_MS`), like in-app navigation.
 
 A same-notebook tab event, and `focus` on the panel window (`handlePanelFocus`), read Home again though the counts are known (`refreshHomeFresh`, throttled by `HOME_READ_THROTTLE_MS`). Neither runs during a job, while hidden (focus) or on a list. Refresh on Home goes through `reconcileHome` -> `refreshForTab(activeTab, { homeForce })`, so a notebook the panel missed is picked up. `handleTabChange` ignores `onActivated` from other windows: the tab must be the panel window's active tab.
 
@@ -362,7 +374,7 @@ Markup (`sidebar.html`):
 <div class="tabs">
   <button class="tab-btn active" data-tab="sources">Sources</button>
   <button class="tab-btn" data-tab="notes">Notes</button>
-  <button class="tab-btn" data-tab="studio">Generated</button>
+  <button class="tab-btn" data-tab="studio">Studio</button>
   <button class="tab-btn" data-tab="chat">Chat</button>
 </div>
 
@@ -463,7 +475,7 @@ side panel.
 
 1. `scanNotesPage` → `SCAN_NOTES` → content returns notes from the Studio list
    (`artifact-library-note`, icon in `NLME.NOTE_ICONS`) plus Sources-panel notes
-   (`index: -1`, `sourceIndex`, `elementType: 'source-note'`; the Generated tab reads those entries too). Mind maps are Studio artifacts now.
+   (`index: -1`, `sourceIndex`, `elementType: 'source-note'`; the Studio tab reads those entries too). Mind maps are Studio artifacts now.
 2. `exportNotesAsMarkdown(selected)`:
    - Pre-flight: `CHECK_DOM_HEALTH` with type=notes; if unhealthy, show warning dialog.
    - Show page overlay (`SHOW_EXPORT_OVERLAY`).
@@ -528,7 +540,7 @@ in every answer, so sources must never be keyed by number across answers.
 ### Artifacts
 
 1. `scanArtifactsData` (Export everything, Resume) sends `SCAN_STUDIO_ITEMS` and keeps `kind === 'artifact'`
-   rows (`index` = `moreIndex`). The Generated tab lists the same rows; Flashcards and Quiz have no Download there.
+   rows (`index` = `moreIndex`). The Studio tab lists the same rows; Flashcards and Quiz have no Download there.
 2. Type = `NLME.resolveArtifactType({iconText, buttonLabel})`: the stretched button's
    aria-label when it names a type ("Data Table", "Report", …; "Artifact" is ignored),
    else the icon:
@@ -539,7 +551,7 @@ in every answer, so sources must never be keyed by number across answers.
    videocam → Video Overview          copy → Flashcards (not downloadable)
    quiz → Quiz (not downloadable)
    ```
-3. Each row renders with a per-item Download button. Bulk: the Generated action, through the export sheet, whose Save as gives ZIP or folder.
+3. Each row renders with a per-item Download button. Bulk: the Studio action, through the export sheet, whose Save as gives ZIP or folder.
 4. `downloadArtifact(tabId, artifactIndex, artifactType, artifactName)` (sidebar-artifacts.js):
    - **Reports / Data Tables**: skip More button. Message `DOWNLOAD_ARTIFACT` with
      `skipMoreButton: true`. Content opens the item (`resolveArtifactItem`) and extracts
@@ -563,7 +575,7 @@ in every answer, so sources must never be keyed by number across answers.
      the proper filename. The extension comes from the URL's `filename` parameter
      (`NLME.extensionFromDownloadUrl`; `.pptx` vs `.pdf`). A download that is never captured
      now fails ("Download was not captured") instead of reporting success.
-   - **The Generated action's artifact side** (ticked rows only; `downloadAllArtifacts(tabId, items, { updateRecord, zip })` → `runArtifactsJob`, on `runExportJob`; `zip` is the sheet's Save as, default `NLME.takeoutZipChoice(settings)`, kept by its job record and Retry) writes
+   - **The Studio action's artifact side** (ticked rows only; `downloadAllArtifacts(tabId, items, { updateRecord, zip })` → `runArtifactsJob`, on `runExportJob`; `zip` is the sheet's Save as, default `NLME.takeoutZipChoice(settings)`, kept by its job record and Retry) writes
      `<type folder>/<stem>.<ext>` plus `_index.md`, `manifest.json` and `errors.md`. Type
      folders: `audio/ video/ slides/ infographics/ reports/ tables/ mind-maps/`
      (`NLME.artifactFolder`); stems unique per folder (`NLME.artifactStems`; Data Tables
@@ -615,9 +627,9 @@ repeats become `-2`, `-3` (`NLME.uniqueStems`).
    - `combinedIndex` — position in the combined DOM walk (stable identifier for delete)
    - `kindIndex` — position within its own kind (`artifact` or `note`)
    - `moreIndex` — index among `artifact-library-item`s that have a More button; this is
-     the index every artifact download uses (Generated tab, batch)
+     the index every artifact download uses (Studio tab, batch)
    - `downloadable` — false for Flashcards / Quiz. By type only (`NLME.isDownloadableType`): it says
-     nothing about an item still generating; Generated also refuses `moreIndex < 0`
+     nothing about an item still generating; Studio also refuses `moreIndex < 0`
    - `kind` — `'artifact'` | `'note'`
    - `label` (title), `details`, `type`, `hasMoreButton`
 3. Row Download:
@@ -629,7 +641,9 @@ repeats become `-2`, `-3` (`NLME.uniqueStems`).
      - Note path: produces 1+ markdown variants based on Note settings (full citation
        extraction included, identical to Notes tab output).
 4. Row Delete:
-   - Sidebar `confirm()` first.
+   - Sidebar `showDialog({ danger: true })` first (focus starts on Cancel). The handler captures
+     `studioDeleteTarget()` (tab and notebook) before the dialog and sends only if
+     `studioDeleteStillValid(target)` after it, to `target.tabId`; a notebook switch closes the dialog.
    - Message `DELETE_STUDIO_ITEM` with `{label, combinedIndex}`.
    - Content opens the More menu, calls `findMenuItemByText('delete')`, clicks it.
    - Polls for confirmation dialog via `findConfirmDialogButton` (matches
@@ -941,7 +955,7 @@ checks.push({
 Then register a recommendation in `runComprehensiveHealthCheck` if the failure should suggest
 something specific.
 
-## Studio tab internals (the Generated tab)
+## Studio tab internals
 
 Already covered in [Export pipelines](#export-pipelines-deep), but the wiring:
 
@@ -962,7 +976,7 @@ Already covered in [Export pipelines](#export-pipelines-deep), but the wiring:
   same-titled ready item and report success). `scanArtifactsData`, so Export everything, does not apply it. Skipped items
   stay selectable for delete (default selection is `none` for that
   reason). `exportSelectedGenerated` runs `runRetryChain` with `GENERATED_EXPORT_STEPS` (artifacts, then notes, as
-  fresh exports, on `_studioTabId`) under `runExclusive('Generated export')` + `runChain`: a Cancel or a declined
+  fresh exports, on `_studioTabId`) under `runExclusive('Studio export')` + `runChain`: a Cancel or a declined
   health check in the first side leaves the second in `notRun`. One side alone keeps its own panel; both end in one
   `NLME.combineRetryOutcomes` panel, so the second side's shell cannot lose the first side's
   failures. Its Retry is `takeoutRetry`, covering failed items and a side not run. Artifacts a Cancel left unstarted are
@@ -1345,18 +1359,21 @@ download (`triggerItemDownload`); it is not a system notification.
 
 ## Milestone 3b contracts (v1.5.0)
 
-- Generated tab (id `studio`, user-facing name only changed): `scanStudioPage` appends the `elementType === 'source-note'` entries of `scanNotesData` as `{ kind: 'source-note', label, type: 'Note (Sources panel)', sourceIndex }` after the `SCAN_STUDIO_ITEMS` items (a failed notes scan only logs a warning); they download through `exportSingleNote({ index: -1, sourceIndex })` and, until Milestone 3c, were never deletable. 3c made them deletable, see "Milestone 3c contracts".
+- Studio tab (id `studio`; the code keeps `generated` names from when it was labelled Generated, 1.9.1 to 1.9.3): `scanStudioPage` appends the `elementType === 'source-note'` entries of `scanNotesData` as `{ kind: 'source-note', label, type: 'Note (Sources panel)', sourceIndex }` after the `SCAN_STUDIO_ITEMS` items (a failed notes scan only logs a warning); they download through `exportSingleNote({ index: -1, sourceIndex })` and, until Milestone 3c, were never deletable. 3c made them deletable, see "Milestone 3c contracts".
 
 - **Presets and run settings (1.9.3).** `settings.exportPreset` is `'archive'`, `'ai'` or `'custom'` (default Archive). `NLME.presetOverrides(preset, custom)` gives `{ citationDetail, obsidianNames, exportNoteWithImages, exportSourceWithImages }`, plus `exportSourcePlusMetaWithImages: false` for AI-ready and Custom with images off only: elsewhere that key stays out, so Archive output does not change; Custom's remembered values are the stored `citationDetail` and `obsidianNames` plus `customImages`. Always go from settings to overrides with `NLME.runOverrides(settings)`, so callers cannot drift. `loadSettings` fills a missing preset with `NLME.migratePreset(stored.settings)` (raw stored settings): non-default citations or Obsidian names become Custom, so that person's Export everything keeps the same files. Nothing is written during load; the preset reaches storage with the next save.
 - `withRunSettings(overrides, fn)` (sidebar-core.js) gives one job its own `settings`, async work included, and restores in the `finally`, also on a throw. Call it inside `runExclusive`, so a refused job swaps nothing. `currentRunOverrides` is null outside a run. A nested run adds to the outer one and keeps the outermost saved settings. While a job runs, `settings` is the job's copy and `realSettings()` is what the person has: every write of settings goes through `realSettings()` (`saveSettings` and `writeSettings` start with it, `applyTheme`, `applySettingsToUi` and `paintExportDefaults` read it). A change made during a job is stored at once and takes effect when the job ends; the job keeps its own values. `writeSettings` does not retry the load while a job holds the lock or a run is on, since a load would replace the job's settings; the failed-load write block still holds.
 - A Retry keeps the run's options after the run ended: `rememberRunSettings()` captures `currentRunOverrides` when the panel is built, for `retryFor` and `takeoutRetry`. Outside a run it adds nothing. Every export runs in a run: a sheet's `start` on what it chose, a row download on `NLME.runOverrides(settings)` (never `presetOverrides(settings.exportPreset)`, which drops Custom's values), inside the job lock. So every Retry keeps its preset.
-- `NLME.estimateSeconds(counts, citationDetail)` and `NLME.formatEstimate(seconds)`: see `ESTIMATE_SECONDS` for the rates and where they come from. `NLME.estimateLine(counts, citationDetail)` is the sheet's line: a key present with no usable number is named ("not counting chat"), an absent key is not part of the run, and with nothing known it shows no number. `NLME.homeEstimateCounts(tabCounts, chatCount)` is Export everything's counts: Generated's list holds the notes too, so `generated` is `studio - notes`.
-- **Export sheet (1.9.3, `sidebar-sheet.js`).** `openExportSheet({ title, counts, offerSaveAs, start })` and `closeExportSheet({ switched })`. It refuses during a job, off a notebook, and while Settings or Health Check shows: those are not modal, so a keyboard reaches the buttons behind them. Choosing changes only that run: the state is `_sheet.choice` (from `NLME.sheetChoice(realSettings())`), and `NLME.sheetOverrides(choice, settings)` gives `{ overrides, zip }`. Nothing in the sheet writes settings. Start closes the sheet, so a second click finds it closed, then checks the active tab (`tabStillOnPanelNotebook`) and calls `start({ overrides, zip })`, reading nothing from the DOM; `start` is `runExclusive(name, () => withRunSettings(overrides, ...))`. A list's `start` reads its selection there, from the current controller, and says so and stops if it is empty: a rescan may have redrawn the list under the sheet. A new export goes through the sheet this way.
-  - Modal: `#export-sheet` sits outside `.container`, which is `inert` while it is open. Focus goes to the checked preset, Tab wraps (`handleSheetKey`), Escape, the scrim and Close close it, and focus returns to the opener, or the open view if the opener went away.
+- `NLME.estimateSeconds(counts, citationDetail)` and `NLME.formatEstimate(seconds)`: see `ESTIMATE_SECONDS` for the rates and where they come from. `NLME.estimateLine(counts, citationDetail)` is the sheet's line: a key present with no usable number is named ("not counting chat"), an absent key is not part of the run, and with nothing known it shows no number. `NLME.homeEstimateCounts(tabCounts, chatCount)` is Export everything's counts: Studio's list holds the notes too, so `generated` is `studio - notes`.
+- **Export sheet (1.9.3, `sidebar-sheet.js`).** `openExportSheet({ title, counts, offerSaveAs, start })` and `closeExportSheet({ switched })`. It refuses during a job, off a notebook, and while Settings or Health Check shows: the sheet would open behind them. Choosing changes only that run: the state is `_sheet.choice` (from `NLME.sheetChoice(realSettings())`), and `NLME.sheetOverrides(choice, settings)` gives `{ overrides, zip }`. Nothing in the sheet writes settings. Start closes the sheet, so a second click finds it closed, then checks the active tab (`tabStillOnPanelNotebook`) and calls `start({ overrides, zip })`, reading nothing from the DOM; `start` is `runExclusive(name, () => withRunSettings(overrides, ...))`. A list's `start` reads its selection there, from the current controller, and says so and stops if it is empty: a rescan may have redrawn the list under the sheet. A new export goes through the sheet this way.
+  - Modal: `#export-sheet` sits outside `.container`, which is `inert` while it is open (`syncCoverInert`, the one rule for `.container.inert`). Focus goes to the checked preset, Tab wraps (`handleSheetKey`), Escape, the scrim and Close close it, and focus returns to the opener, or the open view if the opener went away.
   - **The tab can be ahead of the panel.** A full load reports `{ status: 'loading', url }` at once and `complete` later or never, and the panel only moves on `complete`. On any URL from the active tab, `notePageMove` closes the sheet if `NLME.tabLeftPanelNotebook(url, lastPanelNotebookId)`, and a load also takes `holdForPageLoad`: one more `settleWaits`, so Export everything and Home's reads stop, plus `pageLoadHold`, which `applyAction` turns into a disabled list action. Ways out: `complete`, a URL back on the panel's notebook, another tab (`handleTabChange`), a switch (`resetChatPanel`), and after `PAGE_LOAD_HOLD_MS` without `complete`, `endStalledPageLoad`, which refreshes by the URL. Tab events can still lag, so the Export everything click and Start ask the tab themselves (`tabStillOnPanelNotebook`), refuse and say so. Row downloads do not recheck.
+  - **Covers (1.9.4).** Settings and Health Check fill the panel: `openCover(id)` and `closeCover(id)` in sidebar-core.js. `syncCoverInert()` makes `.container` inert while a cover or the sheet is open, and a cover under the top one inert too. Focus goes to the cover's close button and back to its opener (or `focusView`). Escape (`handleCoverKey`) clicks the top cover's close button, so Settings still saves; it leaves Escape to an open `<dialog>`. Never set a cover's `style.display` directly.
+  - **Tabs (1.9.4).** `.tabs` is a `role="tablist"`; each `.tab-btn` is a `role="tab"` with `aria-controls` on its `role="tabpanel"`. `showView` keeps `aria-selected` and a roving `tabIndex` (0 on the open tab). `handleTabKey`: Left/Right wrap, Home/End; they move focus only, and Enter or Space opens the tab (opening scans the page). Focus leaving the list puts the tab stop back on the open tab.
+  - **Focus and motion (1.9.4).** One ring in styles.css, `:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible`, colour `--ring` (`--accent`; a toast sets it to `currentColor`). Don't add a control-specific outline: tests/structure.test.js refuses one. Hover and tab 120ms, sheet, dialog, toast and progress 160ms; only the `spin` and overlay `slide` loaders loop. One `prefers-reduced-motion` block at the end turns every animation and transition off; the overlay (content.js `OVERLAY_STYLE`) has its own. Destructive buttons are `.btn-destructive` (`.btn-danger` is gone).
   - What closes it: `resetChatPanel` (a notebook switch), `notePageMove`, `#settings-btn`, `runHealthCheck`. A same-notebook tab event or Auto-refresh does not: they repaint nothing in it. `syncExportSheet` (from `syncHomeControls` and `runExclusive`) disables Start and says why during a job, off a notebook or during a settle; the panel holds the focus meanwhile.
 
-- Save as is the sheet's, for Export everything and Generated (shown when artifacts are selected). It starts on `NLME.takeoutZipChoice(settings)`: `settings.takeoutZip` when it is a boolean, else `!!settings.autoZip`. A choice does not change either. `runFullTakeout({ zip })` and `downloadAllArtifacts`' `zip` take it, and it stays with the run: `newJobRecord` stores `zip` beside `overrides`, `NLME.jobRecordZip(record)` reads it for a Resume, and `showTakeoutResults` / `takeoutRetry` / `runRetryChain` pass it to their Artifacts step. An old record has none, and its artifacts take `NLME.takeoutZipChoice(settings)`, as does any path with no sheet choice. The steps for Sources and Notes are always ZIP.
+- Save as is the sheet's, for Export everything and Studio (shown when artifacts are selected). It starts on `NLME.takeoutZipChoice(settings)`: `settings.takeoutZip` when it is a boolean, else `!!settings.autoZip`. A choice does not change either. `runFullTakeout({ zip })` and `downloadAllArtifacts`' `zip` take it, and it stays with the run: `newJobRecord` stores `zip` beside `overrides`, `NLME.jobRecordZip(record)` reads it for a Resume, and `showTakeoutResults` / `takeoutRetry` / `runRetryChain` pass it to their Artifacts step. An old record has none, and its artifacts take `NLME.takeoutZipChoice(settings)`, as does any path with no sheet choice. The steps for Sources and Notes are always ZIP.
 
 - Size-split artifacts ZIPs: `NLME.runExportJob` takes optional `maxBatchBytes` and `sizeOf(result) -> bytes`
   (both needed). The size is checked after each item; when the batch total reaches the cap the batch is
@@ -1384,7 +1401,7 @@ restoreListState` in `takeout-shared.js` (unit tested).
 `createListController({ tab, container, items, titleOf, typeOf, defaultSelected, rowHtml,
 onChange, canSelect }) -> { items, selectedItems(), selectedCount(), destroy() }`
 
-- `tab` is `'notes'|'sources'|'studio'`. (A stored `nlme.list.<id>.artifacts` from before 1.9.1 is read by nothing and goes with its notebook in `pruneListStates`; its default-all selection is deliberately not carried into Generated, whose selection also drives delete.) `container` is the results element and the
+- `tab` is `'notes'|'sources'|'studio'`. (A stored `nlme.list.<id>.artifacts` from before 1.9.1 is read by nothing and goes with its notebook in `pruneListStates`; its default-all selection is deliberately not carried into Studio, whose selection also drives delete.) `container` is the results element and the
   controller owns its contents (put action buttons outside it). A second controller on the same
   container destroys the first.
 - Toolbar: search box, type chips (only with 2+ types), sort select, "Select all visible"
@@ -1415,18 +1432,18 @@ onChange, canSelect }) -> { items, selectedItems(), selectedCount(), destroy() }
   `handleNoteRowExport` -> `exportSingleNote` (loose `.md` files, no ZIP) under `runExclusive`.
 - Sources (`renderSourcesList`, `'all'`) and Studio (`renderStudioList`, `'none'`) use the same pattern: list
   container (`.sources-list` / `.studio-list`), the action bar, row buttons via a delegated click handler,
-  the action reflects the selection in `onChange`. Generated: `startAutoRefresh` rescans every few seconds while
+  the action reflects the selection in `onChange`. Studio: `startAutoRefresh` rescans every few seconds while
   that tab is open, so `scanStudioPage` keeps a signature of the last scan and leaves an unchanged list alone
   (see [Studio tab internals](#studio-tab-internals-the-generated-tab)).
 
-- Scans of Sources, Notes and Generated have a sequence (`_sourcesScanSeq`, `_notesScanSeq`, `_studioScanSeq`): the newest
+- Scans of Sources, Notes and Studio have a sequence (`_sourcesScanSeq`, `_notesScanSeq`, `_studioScanSeq`): the newest
   wins, and `resetChatPanel` bumps them, so a scan of the old notebook cannot draw. Off a notebook, Sources and Notes drop
   their list and show `NOTEBOOK_PROMPT_HTML`; `refreshForTab` rescans a list showing it once a notebook is back, and
   `afterJobChecks` (end of `runExclusive`) rescans an open list still on "Scanning...", or Home with a count unknown. Neither touches a drawn list.
 
 - Notebook switch: `refreshForTab` (tab activation, `complete`, or history-API `changeInfo.url` with no
   status, after a 1.5 s settle) compares `NLME.notebookIdFromUrl(tab.url)` with `lastPanelNotebookId`. A new
-  notebook clears Chat, opens Home (`showView('home')`) and runs `rescanOpenPanelTab()` after the settle; the same one runs `refreshHomeFresh()` on Home, else only refreshes Generated, if open (`rescanGeneratedIfOpen`); a non-notebook tab
+  notebook clears Chat, opens Home (`showView('home')`) and runs `rescanOpenPanelTab()` after the settle; the same one runs `refreshHomeFresh()` on Home, else only refreshes Studio, if open (`rescanGeneratedIfOpen`); a non-notebook tab
   is no change. During a job nothing runs: `pendingNotebookCheck` re-checks once when `runExclusive` ends.
 
 ### Progress and results (`sidebar-results.js`)
@@ -1436,7 +1453,7 @@ One place, in front of the open view (1.9.3). `setDock(mode)` sets `dockMode` (`
 - `withExportShell` calls `showProgressView()` after the health check and sets `dockRun` `{ id, tabId, name }`, the run's notebook. Opening replaces results in one step, so the list does not show between them, and a declined health check keeps them. The title is the job lock's name.
 - `shell.progress(text, count)`: `text` goes to the page overlay as ever and to `#progress-text` unless `count.item` is given. `count` `{ done, total, item }` is items finished so far, so runners pass `done`, not `done + 1`. A call with no count leaves the count alone: a ZIP in the middle of a run must not jump the bar. Pre-1.9.3 `fraction` is gone.
 - `NLME.progressFigures(done, total)` caps "N of M" at M - 1 and the bar at 99: only the results say M of M, since the save follows the last item. The overlay gets the same percent.
-- A takeout's M is every category that has work (`NLME.takeoutCount`), chat's messages included. `takeoutCount` is null after a scan that failed with nothing found, and `combineRetryOutcomes`' `count` is null when a Resume has `scan_failed` or `not_ready` items: such items are in neither number, so no "N of M" shows; `catShell` adds up what earlier categories finished. A chain's M is `runRetryChain`'s items, and `chainProgress` adds up the steps. `runChain` (`chainHolds`) keeps the view up between exports, and `holdStepResults` keeps each step's `showResults` back, so a chain ends on one panel. When one Generated side stands alone, `showHeldStepResults` shows its own. `runRetryChain` also rechecks the tab before each later step (`chainTabOnRunNotebook`).
+- A takeout's M is every category that has work (`NLME.takeoutCount`), chat's messages included. `takeoutCount` is null after a scan that failed with nothing found, and `combineRetryOutcomes`' `count` is null when a Resume has `scan_failed` or `not_ready` items: such items are in neither number, so no "N of M" shows; `catShell` adds up what earlier categories finished. A chain's M is `runRetryChain`'s items, and `chainProgress` adds up the steps. `runChain` (`chainHolds`) keeps the view up between exports, and `holdStepResults` keeps each step's `showResults` back, so a chain ends on one panel. When one Studio-export side stands alone, `showHeldStepResults` shows its own. `runRetryChain` also rechecks the tab before each later step (`chainTabOnRunNotebook`).
 - Time left: `NLME.timeLeft(done, total, elapsed)` is null until three items, then scales. Elapsed starts at the first count, so a takeout's scan does not count. `NLME.honestTimeLeft` takes the larger of that and `NLME.estimateSeconds` of what is left: `count.rest` (`NLME.restCounts`) from `catShell`, or the running step and later steps from `chainProgress`. So it reads high on a cached run, never low. A single list passes no rest. `NLME.calmTimeLeft` counts the shown time down and moves a quarter of the way to each new figure: categories run at different paces and it must not jump about. `NLME.progressLeftLine` says "Finishing" with nothing left, never "0 left".
 - `#progress-text` is the only live region in the view, and `paintProgressText` writes it once in `PROGRESS_ANNOUNCE_MS` at most, ending on the newest text. The count and bar change freely. `#results-panel` keeps its own `role="status"`.
 - `shell.finishing()` hides Cancel for the final save; the shell's `finally` gives it back.
@@ -1458,7 +1475,7 @@ they stay in `#results-panel` until the next export starts or the user clicks Do
   (first-seen order); `{ heading, count, entries: [{ item, message }], more }`.
 - `showResults({ message, count, lines = [], level, saved = [], errors = [], retry = null, notify = true })`
   (global). `count` `{ done, total }` is the "N of M" on top: `shell.finish` gives exported of selected,
-  a takeout `NLME.takeoutCount`, a combined panel `combined.count`, and Generated counts skipped items in M.
+  a takeout `NLME.takeoutCount`, a combined panel `combined.count`, and a Studio export counts skipped items in M.
   Order: count, message, lines, saved, Retry and Done, then the error groups.
   `lines` are extra plain-text lines (escaped) under the message, one
   per category in an Export everything run retry's combined panel. A short toast (`NLME.resultsToast`) carries the level, and says "finished" only for success
@@ -1489,7 +1506,7 @@ they stay in `#results-panel` until the next export starts or the user clicks Do
   panels shown while the chain runs are replaced by the combined one.
 - Side-panel Cancel (`requestCancel`, sidebar-core.js) sends `REQUEST_EXPORT_CANCEL` to
   `activeShellTabId` (the running shell's tab, sidebar-takeout.js), else `jobTabId` (the active tab
-  when the job started), else the current tab. Retries and the action bar's Generated export run on the tab they
+  when the job started), else the current tab. Retries and the action bar's Studio export run on the tab they
   were scanned on, which need not be the active one. The content script there broadcasts
   `CANCEL_EXPORT`, which the shell's own listener receives.
 
@@ -1530,7 +1547,7 @@ they stay in `#results-panel` until the next export starts or the user clicks Do
 - **Store only complete reads.** Notes: no warnings, not cancelled, one source per marker, each with a filename and a non-empty quote. Chat: the response has no errors and every source index came back with a non-empty quote. Otherwise nothing is stored.
 - **`EXTRACT_NOTE`** takes `data.reuseCitations` (boolean; the content script treats anything but `true` as off, the side panel sends `settings.reuseCitations !== false` from the notes job and `exportSingleNote`). On a hit the response has `fromCache: true` and `errors: []`. No new message types.
 - **Visibility.** `newAudit()` has `cacheHits` and `cachedItems` (items that had citations to read); `auditMarkdown` prints "Citations from cache: N of M items" only when N > 0. Chat: `extractChatPair`'s ProcessedMessage carries `fromCache`; `buildChatAuditDoc` derives both counts from the messages. The `_index.md` "Export statistics" block gets the same line from `citationCacheTally` (reset in `startExportTiming`).
-- **Job records (Task 3).** Each unfinished export keeps one record per notebook at `NLME.jobRecordKey(id)` = `nlme.job.<notebookId>` in `chrome.storage.local`: `{ id, kind, label, notebookId, startedAt, updatedAt, remaining: { [category]: keys }, failed: { [category]: keys }, overrides?, zip? }`. `kind` is `'notes' | 'sources' | 'artifacts' | 'takeout'` (categories `notes`, `sources`, `artifacts`; a takeout has all three, an empty or failed-scan category has `[]`); chat is never recorded. Keys only, never payloads: `NLME.listItemKeys` with the tab lists' accessors (notes `title`/`type`, sources `title`/`type`, artifacts `label`/`type`), so they match a fresh scan. `createListController` stamps each item with a non-enumerable `_listKey` (its key in the whole list) and `jobItemKeys` (sidebar-core.js) prefers it, so a selected subset or a retry keeps the "#n" suffix of duplicates; Keys must be stamped over the full fresh scan before any subset is taken (computed over a subset, duplicates get different "#n" suffixes); Task 4's Resume depends on this (see Resume below). Single-item row exports (the Sources row download) never record, so a one-shot download cannot replace or clear a pending record. Export everything stamps its scans the same way (`stampJobKeys`); its artifacts keys are computed over the unfiltered scan (disabled items included, as the Generated tab lists them) and only the enabled items are recorded. `id` = `` `${kind}-${Date.now()}` ``. Pure helpers (takeout-shared.js): `newJobRecord`, `markJobItem(record, category, key, { failed, now })` (a success clears an earlier failure), `jobRemainingCount` (remaining + failed), `jobRecordFinished`.
+- **Job records (Task 3).** Each unfinished export keeps one record per notebook at `NLME.jobRecordKey(id)` = `nlme.job.<notebookId>` in `chrome.storage.local`: `{ id, kind, label, notebookId, startedAt, updatedAt, remaining: { [category]: keys }, failed: { [category]: keys }, overrides?, zip? }`. `kind` is `'notes' | 'sources' | 'artifacts' | 'takeout'` (categories `notes`, `sources`, `artifacts`; a takeout has all three, an empty or failed-scan category has `[]`); chat is never recorded. Keys only, never payloads: `NLME.listItemKeys` with the tab lists' accessors (notes `title`/`type`, sources `title`/`type`, artifacts `label`/`type`), so they match a fresh scan. `createListController` stamps each item with a non-enumerable `_listKey` (its key in the whole list) and `jobItemKeys` (sidebar-core.js) prefers it, so a selected subset or a retry keeps the "#n" suffix of duplicates; Keys must be stamped over the full fresh scan before any subset is taken (computed over a subset, duplicates get different "#n" suffixes); Task 4's Resume depends on this (see Resume below). Single-item row exports (the Sources row download) never record, so a one-shot download cannot replace or clear a pending record. Export everything stamps its scans the same way (`stampJobKeys`); its artifacts keys are computed over the unfiltered scan (disabled items included, as the Studio tab lists them) and only the enabled items are recorded. `id` = `` `${kind}-${Date.now()}` ``. Pure helpers (takeout-shared.js): `newJobRecord`, `markJobItem(record, category, key, { failed, now })` (a success clears an earlier failure), `jobRemainingCount` (remaining + failed), `jobRecordFinished`.
 - **Write rules.** `startJobRecord` / `withJobRecord` (sidebar-core.js) wrap `NLME.createJobRecorder` (takeout-job.js). With no notebook id, or nothing to do, nothing is recorded. A fresh export writes the record at the start, replacing a record of that notebook unless `NLME.jobRecordMode(stored, kind)` says `'update'` (the stored record is usable, of a DIFFERENT kind and has items left): then the export runs in update mode and only marks the keys that record holds, so a cancelled takeout keeps its Resume offer through a small Sources export. Same kind, a finished record, or an Export everything run (it supersedes partial tab-export records): replaced as before. A retry or resume (`updateRecord: true` on `exportNotesAsMarkdown` / `exportSources` / `downloadAllArtifacts`, set by every Retry button, the takeout retry chain and, in Task 4, Resume) never creates or replaces a record: it loads the notebook's existing one (none: writes nothing) and marks its items done or failed on it with `NLME.markJobItems(record, category, keys, { failed, now })`, which ignores keys the record does not hold; an id-guarded removal still happens when every key is cleared. A failed item is marked from the runner's `afterEach(item, { failed })`; a success is only staged there and applied by `commit()` in `packageBatch` after the package is saved, so a record never claims an item that is not on disk. Writes are throttled to one per second (`createJobRecorder` intervalMs); a held-back change gets one trailing write when the interval ends (injectable `setTimer` / `clearTimer`), and `finish` clears that timer before the id-guarded removal, then makes the final write. `finish({ clean })`: clean (not cancelled or stopped) and `jobRecordFinished` reads the stored record first and removes it only if its `id` equals this job's; otherwise the held-back state is flushed and the record stays. A runner that throws before saving a package calls `discard()` (also in the takeout's per-category catch), so staged successes never leak into the next category's `commit()`. Every storage call is caught and logged; recording never fails an export.
 - **Overrides in the record.** A record made in a run stores `overrides` (`currentRunOverrides`, through `newJobRecord`) and, for a job with a save choice, `zip`; an update never changes them. `NLME.jobRecordOverrides(record, settings)` is what a Resume runs on: the record's overrides, what the person chose then and not the current default. An older record has none and resumes with `{}`, today's settings, except a `takeout` record, which uses `NLME.runOverrides(settings)` for its image copies. `jobRecordUsable` does not look at them.
 - **Resume (Task 4).** The record also has `total` (keys it started with; `newJobRecord`); a record without it counts what is left as the total (`NLME.jobResumeProgress(record) -> { done, total, left }`). Pure helpers: `NLME.matchResumeItems(keys, items, { titleOf, typeOf }) -> { matched, missing }` (keys re-derived with `listItemKeys` over the FRESH FULL scan; `matched` in scan order, `missing` in `keys` order; a key never matches an item with a different key, so a "#2" whose duplicate is gone is missing, not the first one), `jobResumeKeys(record, category)` (remaining then failed, no repeats), `jobRecordUsable(record, notebookId)` (storage data validated: shape, notebook, items left), `jobKeyTitle(key)`, and `combineRetryOutcomes({ steps, notRun, verb: 'Retry'|'Resume', extraErrors })`.
@@ -1538,7 +1555,7 @@ they stay in `#results-panel` until the next export starts or the user clicks Do
 - **`resumeJob(record)` (sidebar-takeout.js)** runs under `runExclusive('Resume')` and `withRunSettings(NLME.jobRecordOverrides(record, settings), …)`: re-checks the active tab's notebook and the stored record's id, scans each category in the record (`RESUME_CATEGORIES`: sources, notes, artifacts), `stampJobKeys` over the full scan (artifacts: unfiltered, then only enabled matches run; a disabled match stays in the record and is reported), `matchResumeItems`, then `clearMissingFromRecord` (missing keys are marked resolved; the record is removed if that empties it), then the shared `runRetryChain` (the same steps as `takeoutRetry`, `updateRecord: true`) and one combined panel via `showTakeoutResults`. Missing keys appear as `{ type: 'not_found', title: <category>, message: '<title> is no longer in the notebook' }`. Missing is decided by `NLME.planResume(keys, items, { titleOf, typeOf, regionOfType })`: a scan that matches nothing (empty, still drawing, wrong page) makes every key `unknown`, and for notes a key counts as missing only if the scan shows its own region (Studio notes vs type 'Note (Sources panel)'), else `unknown`. Unknown keys and scan failures are reported (`scan_failed`, `not_ready` for a disabled artifact) and stay in the record. `not_found`, `not_ready` and `scan_failed` are in `PANEL_ONLY_ERROR_TYPES`: `groupErrorsForPanel` lists them all (they are in no errors.md). `resumeJob` re-checks the tab's notebook id (`chrome.tabs.get`) before and after each scan. In-app navigation (`refreshForTab` with `settleMs`) hides the banner at once and re-checks it only after the settle wait; `discardJobRecord` bumps `resumeBannerSeq`. Banner wording: `NLME.resumeBannerLabel` ("Notes export", but a takeout's label as is) and `NLME.resumeBannerView(record) -> { text, actionLabel, failedOnly }`: "stopped at N of M" + "Resume (K left)", or, with nothing remaining and only failed keys, "finished with K failed" + "Retry (K)" (same action). Like a retry it makes ordinary tab exports and never writes into the original takeout tree. The record after a resume is whatever the exports left: successes cleared, failures and un-run items kept.
 - **Chain cancel flag.** `chainActive` / `chainCancelRequested` (sidebar-core.js). `runChain(fn)` (sidebar-takeout.js) sets `chainActive` and resets the flag at start and end. `requestCancel` sets `chainCancelRequested` whenever a chain is active, whether or not a shell is running (it still sends `REQUEST_EXPORT_CANCEL`, which cancels a running step by its own path; the flag is what stops the NEXT step when no shell is active between steps). `runRetryChain` checks it before each step (later steps go to `notRun`) and `resumeJob` checks it before each scan. Both `takeoutRetry` and `resumeJob` use `runChain`.
 - **Windowed quotes and naming polish (Task 5).** `NLME.markWindowedQuote(text, { min = 990 })` runs once, on `quoteMarkdown` in content.js `extractSingleCitationWithRetry` (notes and chat share it): a quote of at least `min` characters gets a leading "…" if it starts with a lower-case letter or digit and a trailing "…" if it ends in a letter or digit (a cut transcript window); shorter or sentence-ending quotes are untouched. Cached quotes carry the marks; quotes cached before this change have none (⚙️ Clear citation cache resets them). Chat in 'titles' mode groups its Sources like notes (`NLME.groupedSourcesMarkdown(entries, anchorPrefix)`, shared with `convertToMarkdown`; `convertChatToMarkdown`'s `groupTitles` parameter); 'quotes' and 'none' are unchanged. `exportSingleNote` names a mind map `[mind-map]_<Title>` (the lowercase scheme of `artifactTypePrefix`).
-- **Delete Sources-panel notes (Task 6).** `isStudioItemDeletable` is true for every Generated item. `sendStudioDelete(item, { useIndex })` (sidebar-generated.js) routes `kind === 'source-note'` to `DELETE_SOURCE_NOTE { sourceIndex, title: item.label }` and everything else to `DELETE_STUDIO_ITEM` as before (bulk: by label only). Content script `deleteSourceNote`: checks the title guard first (no click on a mismatch), closes an open Studio viewer, clicks `button[aria-label="More"]` in the container, opens the menu through the trigger's `aria-controls` binding (`openMenuForTrigger`: waits for `aria-expanded="true"`, takes the panel by id, never "the first panel"), clicks `.more-menu-delete-source-button` ("Remove note"), clicks the confirm button if `findConfirmDialogButton()` finds one (not observed in recon), and polls up to 5 s until fewer note containers with that title are left (re-found by title each poll). On any failure it clicks every `.cdk-overlay-backdrop` (Escape does not close the menu). **Menu binding (safety):** a regular source's "Remove source" item has the same class (`more-menu-delete-source-button`) and the confirm auto-clicks, so a wrong menu would delete a real source. Both delete flows therefore (1) `closeOpenMenus()` first (refuse with "Close the open menu and try again" if one stays open ~1 s), (2) `openMenuForTrigger(trigger)`: click, wait for `aria-expanded="true"`, take the panel via `document.getElementById(aria-controls)` (no fallback to the first panel), (3) pick the item only inside that panel (notes: class + text "remove note", never text with "source"; Studio: text "delete"), (4) snapshot the dialog panes before the click and let `findConfirmDialogButton(exclude)` confirm only a NEW pane. `deleteSourceNote` also re-checks `container.isConnected && isNoteSourceContainer && title` right before the More click. `isNoteSourceContainer` uses `NLME.isNotesHeaderText` (`/^Notes(\s*\(\d+\))?$/` on the header text without mat-icons). Row delete runs under `runExclusive('Generated delete')`. Bulk delete: Studio items first (1 s apart), then Sources-panel notes from the highest `sourceIndex` down; the confirm counts the deletable selected items. Untitled Studio items (`untitled: true` from `scanStudioItems`, label made up as "Item N") are skipped by bulk delete and counted as skipped in the confirm and toast; row delete refuses them. Content-script delete errors say "Generated item".
+- **Delete Sources-panel notes (Task 6).** `isStudioItemDeletable` is true for every Studio item. `sendStudioDelete(item, { useIndex })` (sidebar-generated.js) routes `kind === 'source-note'` to `DELETE_SOURCE_NOTE { sourceIndex, title: item.label }` and everything else to `DELETE_STUDIO_ITEM` as before (bulk: by label only). Content script `deleteSourceNote`: checks the title guard first (no click on a mismatch), closes an open Studio viewer, clicks `button[aria-label="More"]` in the container, opens the menu through the trigger's `aria-controls` binding (`openMenuForTrigger`: waits for `aria-expanded="true"`, takes the panel by id, never "the first panel"), clicks `.more-menu-delete-source-button` ("Remove note"), clicks the confirm button if `findConfirmDialogButton()` finds one (not observed in recon), and polls up to 5 s until fewer note containers with that title are left (re-found by title each poll). On any failure it clicks every `.cdk-overlay-backdrop` (Escape does not close the menu). **Menu binding (safety):** a regular source's "Remove source" item has the same class (`more-menu-delete-source-button`) and the confirm auto-clicks, so a wrong menu would delete a real source. Both delete flows therefore (1) `closeOpenMenus()` first (refuse with "Close the open menu and try again" if one stays open ~1 s), (2) `openMenuForTrigger(trigger)`: click, wait for `aria-expanded="true"`, take the panel via `document.getElementById(aria-controls)` (no fallback to the first panel), (3) pick the item only inside that panel (notes: class + text "remove note", never text with "source"; Studio: text "delete"), (4) snapshot the dialog panes before the click and let `findConfirmDialogButton(exclude)` confirm only a NEW pane. `deleteSourceNote` also re-checks `container.isConnected && isNoteSourceContainer && title` right before the More click. `isNoteSourceContainer` uses `NLME.isNotesHeaderText` (`/^Notes(\s*\(\d+\))?$/` on the header text without mat-icons). Row delete runs under `runExclusive('Generated delete')`. Bulk delete: Studio items first (1 s apart), then Sources-panel notes from the highest `sourceIndex` down; the confirm counts the deletable selected items. Untitled Studio items (`untitled: true` from `scanStudioItems`, label made up as "Item N") are skipped by bulk delete and counted as skipped in the confirm and toast; row delete refuses them. Content-script delete errors say "Generated item".
 
 ## Milestone 3d contracts (v1.7.0)
 
@@ -1556,13 +1573,13 @@ before `sidebar-takeout.js` (`sidebar-sheet.js`, from 1.9.3, comes right after `
 | `sidebar-notes.js` | note scanning and list, `exportNotesAsMarkdown`, `runNotesJob`, `extractNoteItem`, `exportSingleNote`, `buildNotesFiles` |
 | `sidebar-sources.js` | the sources scan, list, `runSourcesJob`, `extractSourceItem`, `buildSourcesFiles` |
 | `sidebar-chat.js` | the chat scan, `runChatJob`, `extractChatPair`, `buildChatFiles`, `convertChatToMarkdown` |
-| `sidebar-generated.js` | the Generated tab (id `studio`): list, row and bulk download and delete |
+| `sidebar-generated.js` | the Studio tab (id `studio`): list, row and bulk download and delete |
 | `sidebar-health.js` | the DOM health check panel and report |
 
 Rules:
 
 - **Placement.** A helper used by two or more tabs lives in `sidebar-core.js`; code only one tab
-  uses lives in that tab's file. The Generated tab calls the artifact and notes exporters
+  uses lives in that tab's file. The Studio tab calls the artifact and notes exporters
   (`fetchArtifactFiles`, `exportSingleNote`, ...) across files; that is by design.
 - **Load-time code.** Only `sidebar-core.js` runs statements at load: `loadMindmapTemplate()`, the
   `DOMContentLoaded` listener that calls `init`, `chrome.runtime.onMessage.addListener(...)` and the
@@ -1769,7 +1786,7 @@ loose files in `mind-maps/`. This asymmetry is intentional but worth knowing.
 
 ### 7. Flashcards and Quiz are not exportable
 
-They have no Download item in the More menu. The Generated tab lists them: their row Download is
+They have no Download item in the More menu. The Studio tab lists them: their row Download is
 disabled (as for an artifact with no More button), the action does not count them (`skipped`), and they stay selectable for delete.
 
 ### 8. Follow-ups from the PR #2 review (deferred, minor)
@@ -1882,14 +1899,14 @@ Export checks that catch real bugs (scripted against the unzipped export):
 3. Run the 🩺 health check. All categories should pass.
 4. Export one source. Open the resulting `.md`, confirm content + citations look right.
 5. Export one note (Notes tab). Confirm `.md` has citations and `## Sources` block.
-6. Export one mind map (Generated tab). Confirm the ZIP has SVG + JSON + HTML and the
+6. Export one mind map (Studio tab). Confirm the ZIP has SVG + JSON + HTML and the
    viewer closed.
 7. Export one artifact of each type. Confirm files land with correct prefix and extension.
 8. Export chat. Confirm filename uses the real project title.
 
-### Generated tab check (when touching Studio code)
+### Studio tab check (when touching Studio code)
 
-1. Open the Generated tab. Confirm the list mirrors NotebookLM's right column plus the notes in the Sources panel's "Notes" group.
+1. Open the Studio tab. Confirm the list mirrors NotebookLM's right column plus the notes in the Sources panel's "Notes" group.
 2. Row download for each kind: artifact, note, mindmap.
 3. Row delete on a disposable note. Confirm the sidebar confirm appears, NotebookLM's
    dialog auto-confirms, the row disappears, and the rescan completes.
