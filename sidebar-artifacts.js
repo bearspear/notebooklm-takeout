@@ -780,14 +780,18 @@ const ARTIFACT_ZIP_MAX_BYTES = 500 * 1024 * 1024;
 // without one); its job record and its Retry keep this run's choice.
 // seedErrors: warnings that lead errors.md (items the caller skipped, see
 // NLME.artifactExportPlan); none for an export that skipped nothing.
-async function downloadAllArtifacts(tabId, items, { updateRecord = false, zip = NLME.takeoutZipChoice(settings), seedErrors = [] } = {}) {
+// recordFailed: those skipped items, kept in the job record as failed (Resume).
+async function downloadAllArtifacts(tabId, items, { updateRecord = false, zip = NLME.takeoutZipChoice(settings), seedErrors = [], recordFailed = [] } = {}) {
   await preflightWarn(tabId, 'artifacts');
   startExportTiming();
 
   return withExportShell({ label: 'artifacts', overlayMessage: 'Preparing to download artifacts...', tabId }, async shell => {
     const folder = zip ? null : (shell.projectName || 'NotebookLM');
-    const { result, zips, savedOutside } = await withJobRecord(shell, 'artifacts', 'Artifacts', 'artifacts', items,
-      tracker => runArtifactsJob(shell, items, { folder, tracker, seedErrors }), { update: updateRecord, zip });
+    const { result, zips, savedOutside } = await withJobRecord(shell, 'artifacts', 'Artifacts', 'artifacts', [...items, ...recordFailed],
+      tracker => {
+        if (tracker) recordFailed.forEach(item => tracker.fail('artifacts', item));
+        return runArtifactsJob(shell, items, { folder, tracker, seedErrors });
+      }, { update: updateRecord, zip });
 
     return shell.finish({
       kind: 'artifacts',

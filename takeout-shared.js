@@ -449,12 +449,16 @@
       ? `${verb} stopped before ${notRun.map(n => n.name.toLowerCase()).join(' and ')}`
       : `${verb} finished`;
     if (remainingCount > 0) message += ` \u2014 ${remainingCount} still failed`;
+    // Skips are in no step's count (neither N nor M): they are said here
+    const skippedCount = [...steps.flatMap(s => s.errors || []), ...extraErrors]
+      .filter(e => normalizeExportError(e).type === SKIPPED_NO_MENU_TYPE).length;
+    if (skippedCount > 0) message += ` \u2014 ${skippedCount} skipped`;
 
     const done = steps.reduce((sum, s) => sum + (s.exported || 0), 0);
     const ranTotal = steps.reduce((sum, s) => sum + (s.selected ?? (s.exported || 0) + (s.failedItems || []).length), 0);
     const notRunTotal = notRun.reduce((sum, n) => sum + (n.failedItems || []).length, 0);
     // Items that could not be checked or taken are in neither side of the sum
-    const uncounted = extraErrors.some(e => ['scan_failed', 'not_ready', 'not_found', SKIPPED_NO_MENU_TYPE].includes(e.type));
+    const uncounted = extraErrors.some(e => ['scan_failed', 'not_ready', 'not_found'].includes(e.type));
 
     return {
       message,
@@ -482,7 +486,7 @@
       groups.get(e.type).push({ item: e.item, message: e.message });
     }
     return [...groups].map(([type, list]) => {
-      const words = type.replace(/_/g, ' ');
+      const words = errorHeading(type);
       // Resume's own notes exist only in the panel (not in any errors.md): list all
       const cap = PANEL_ONLY_ERROR_TYPES.includes(type) ? Infinity : perGroup;
       return {
@@ -680,12 +684,20 @@
   }
 
   // A Full Takeout's errors.md holds every category's errors: each keeps its
-  // type and gets its category in front ("Notes: <item>: <message>").
+  // type and gets its category in front ("Notes: <item>: <message>"). An error
+  // marked `prefixed` already names its own (a Studio item in a notes export).
   function prefixExportErrors(category, errors = []) {
     return (errors || []).map(raw => {
       const e = normalizeExportError(raw);
-      return { type: e.type, title: e.item ? `${category}: ${e.item}` : category, message: e.message, stack: e.detail };
+      const own = !!(raw && typeof raw === 'object' && raw.prefixed && e.item);
+      return { type: e.type, title: own ? e.item : (e.item ? `${category}: ${e.item}` : category), message: e.message, stack: e.detail };
     });
+  }
+
+  // Section headings that read better than the type's own words
+  const ERROR_HEADINGS = { skipped_ambiguous: 'Skipped: same title as another item' };
+  function errorHeading(type) {
+    return ERROR_HEADINGS[type] || type.replace(/_/g, ' ');
   }
 
   // One errors.md format for notes, sources, chat and Download All.
@@ -706,7 +718,7 @@
       groups.get(e.type).push(e);
     }
     for (const [type, list] of groups) {
-      lines.push(`## ${type.replace(/_/g, ' ').toUpperCase()} (${list.length})`, '');
+      lines.push(`## ${ERROR_HEADINGS[type] || type.replace(/_/g, ' ').toUpperCase()} (${list.length})`, '');
       for (const e of list) {
         lines.push(e.item ? `- ${e.item}: ${e.message}` : `- ${e.message}`);
         if (e.detail) lines.push(`  ${e.detail.split('\n')[0]}`);
@@ -2051,10 +2063,11 @@
     return `${verb} ${n.toLocaleString('en-US')} ${unit}${n === 1 ? '' : 's'}`;
   }
 
-  // Why a Generated row has nothing to download, '' when it can. The one rule for
-  // the row's Download button and generatedExportPlan. With no More button (moreIndex
-  // -1) the row must not be tried: a strict title match would download another
-  // item of the same title and report success.
+  // Why a Generated row has nothing to download, '' when it can. The rule for the
+  // row's Download button and generatedExportPlan, which (1.9.5) still tries a
+  // no-More item with its own title. With no More button (moreIndex -1) the row must
+  // not be tried: a strict title match would download another item of the same
+  // title and report success.
   function studioItemUnavailableReason(item) {
     if (!item || item.kind !== 'artifact') return '';
     if (!item.downloadable) return `${item.type} export not supported yet`;
@@ -2156,21 +2169,30 @@
 
   // The Generated list's selection as the two exports it becomes: artifacts in the
   // scanArtifactsData shape, notes in the exportSingleNote shape. skipped: what
-  // cannot be exported (studioItemUnavailableReason); those stay selectable for
-  // delete. item.jobKey (see stampGeneratedJobKeys) travels as the non-enumerable _listKey jobItemKeys reads, so a job record holds the keys a
+  // cannot be exported (studioItemUnavailableReason, narrowed for a no-More item to
+  // the same-title case; allItems: the whole list); those stay selectable for
+  // delete. ambiguous: the skipped no-More artifacts again, in the artifacts shape
+  // (errors.md and the job record take them). item.jobKey (see stampGeneratedJobKeys) travels as the non-enumerable _listKey jobItemKeys reads, so a job record holds the keys a
   // fresh scan of that category gives, whatever else is in the merged list.
-  function generatedExportPlan(items) {
-    const plan = { artifacts: [], notes: [], skipped: [] };
+  function generatedExportPlan(items, allItems = items) {
+    const plan = { artifacts: [], notes: [], skipped: [], ambiguous: [] };
     const keyed = (out, item) => {
       if (typeof item.jobKey === 'string') Object.defineProperty(out, '_listKey', { value: item.jobKey, configurable: true, writable: true });
       return out;
     };
+    const asArtifact = item => keyed({ index: item.moreIndex, label: item.label, type: item.type, details: item.details, disabled: false }, item);
+    const readyTitles = (allItems || []).filter(item => item && item.kind === 'artifact' && item.downloadable && item.moreIndex >= 0).map(item => item.label);
     for (const item of items || []) {
       if (!item) continue;
-      if (isStudioItemUnavailable(item)) {
+      // No More button: tried like any artifact, unless a ready item has its title
+      // (artifactExportPlan's rule). The row's own Download stays off either way.
+      if (item.kind === 'artifact' && item.downloadable && !(item.moreIndex >= 0) && !hitsReadyTitle(item.label, readyTitles)) {
+        plan.artifacts.push(asArtifact(item));
+      } else if (isStudioItemUnavailable(item)) {
         plan.skipped.push(item);
+        if (item.kind === 'artifact' && item.downloadable) plan.ambiguous.push(asArtifact(item));
       } else if (item.kind === 'artifact') {
-        plan.artifacts.push(keyed({ index: item.moreIndex, label: item.label, type: item.type, details: item.details, disabled: false }, item));
+        plan.artifacts.push(asArtifact(item));
       } else if (item.kind === 'note') {
         plan.notes.push(keyed({ index: item.kindIndex, title: item.label, type: item.type }, item));
       } else if (item.kind === 'source-note') {
@@ -2183,47 +2205,43 @@
   }
 
   // A Studio artifact with no More button is still being generated (or has no
-  // menu). Its download is found by title, so it would fetch a ready item of the
-  // same title and report success (or fail). Every export skips it: the Studio
-  // export since 1.9.1 (studioItemUnavailableReason), Export everything and Resume
-  // since 1.9.5. Each skip is a warning, so errors.md names the item that is
+  // menu). Every download path resolves it by title among the items that have
+  // one, so with a ready item of the same title it would fetch that item and
+  // report success. Only that case is skipped (1.9.5): a no-More item with its
+  // own title is tried, as before, and fails harmlessly ("Item changed") unless it
+  // finished meanwhile. Each skip is a warning, so errors.md names the item that is
   // missing from the archive and the checker warns; it is not an 'info' notice.
   const SKIPPED_NO_MENU_TYPE = 'skipped_ambiguous';
-  const SKIPPED_NO_MENU_REASON = 'still being generated or has no menu';
 
-  function skippedNoMenuWarning(title, sharesTitle = false) {
+  function skippedNoMenuWarning(title) {
     return {
       type: SKIPPED_NO_MENU_TYPE,
       title: String(title || ''),
-      message: sharesTitle ? `${SKIPPED_NO_MENU_REASON}; a ready item has the same title` : SKIPPED_NO_MENU_REASON
+      message: 'still being generated or has no menu; a ready item has the same title'
     };
   }
 
-  // One warning per skipped item; readyTitles: the titles a download could hit
-  function noMenuWarnings(skipped, readyTitles) {
-    return (skipped || []).map(item => skippedNoMenuWarning(item.label, readyTitles.some(t => titlesMatch(t, item.label))));
+  // The no-More item would hit a ready item: one of `readyTitles` matches its title
+  function hitsReadyTitle(title, readyTitles) {
+    return readyTitles.some(t => titlesMatch(t, title));
   }
 
   // scanArtifactsData's items as Export everything and Resume take them: runnable
-  // (enabled, with a More button: index is its moreIndex) and a warning for each
-  // enabled item without one. Disabled types (Flashcards, Quiz) are left out
-  // silently, as before. Two ready items of one title both stay runnable. all:
-  // the whole scan, when items is a part of it (Resume's matched keys), for the
-  // ready titles a skipped item shares.
+  // (everything enabled but the skipped), skipped (no More button, index -1, and a
+  // ready item of the same title) and one warning per skip. Disabled types
+  // (Flashcards, Quiz) are left out silently, as before. Two ready items of one
+  // title both stay runnable. all: the whole scan, when items is a part of it
+  // (Resume's matched keys), for the ready titles.
   function artifactExportPlan(items, { all = items } = {}) {
-    const ready = list => (list || []).filter(item => item && !item.disabled && item.index >= 0);
-    const runnable = ready(items);
-    const skipped = (items || []).filter(item => item && !item.disabled && !(item.index >= 0));
-    return { runnable, warnings: noMenuWarnings(skipped, ready(all).map(item => item.label)) };
-  }
-
-  // The Studio export's warnings for generatedExportPlan's skipped rows: only the
-  // artifacts skipped for a missing More button (a type that cannot be exported
-  // is the panel's line alone, as before). allItems: every Studio row.
-  function generatedSkipWarnings(skipped, allItems) {
-    const ready = (allItems || []).filter(item => item && item.kind === 'artifact' && item.moreIndex >= 0).map(item => item.label);
-    const noMenu = (skipped || []).filter(item => item && item.kind === 'artifact' && item.downloadable && !(item.moreIndex >= 0));
-    return noMenuWarnings(noMenu, ready);
+    const isReady = item => item && !item.disabled && item.index >= 0;
+    const readyTitles = (all || []).filter(isReady).map(item => item.label);
+    const runnable = [];
+    const skipped = [];
+    for (const item of items || []) {
+      if (!item || item.disabled) continue;
+      (!(item.index >= 0) && hitsReadyTitle(item.label, readyTitles) ? skipped : runnable).push(item);
+    }
+    return { runnable, skipped, warnings: skipped.map(item => skippedNoMenuWarning(item.label)) };
   }
 
   // Export everything and Resume read the notes list until it settles (1.9.5). The
@@ -2232,6 +2250,7 @@
   // between reads; emptyConfirmMs: how long a drawn but empty Studio list must stay
   // empty to be believed (Home re-reads a 0 for 4 s, the same guess).
   const NOTES_SETTLE = { boundMs: 8000, pollMs: 400, emptyConfirmMs: 4000 };
+  const NOTES_STUDIO_HIDDEN = "The Studio list wasn't visible, so notes saved only there may be missing. Close any open Studio item and export again.";
 
   // reads: one per SCAN_NOTES, oldest first, { at, notes, list }: at in ms since
   // the first read; notes the page's array, null when it gave no answer; list
@@ -2239,9 +2258,11 @@
   // library: the list's container is on the page, loading: it shows a spinner and
   // no rows }. A list with rows has drawn: its notes are believed once two reads
   // in a row agree. A drawn list with no rows is believed after emptyConfirmMs. No
-  // list, or a loading one, waits up to the bound and then fails, as does a page
-  // that never answers: neither may read as "none in notebook".
-  // -> { state: 'wait' | 'found' | 'empty' | 'failed', message? }
+  // list, or a loading one, waits up to the bound: then the notes found anyway
+  // (Sources-panel notes) are 'partial', exported with a warning that Studio notes
+  // may be missing; with none it fails, as does a page that never answers: neither
+  // may read as "none in notebook". An open Studio item hides the list.
+  // -> { state: 'wait' | 'found' | 'empty' | 'partial' | 'failed', message? }
   function notesSettleDecision(reads, { boundMs = NOTES_SETTLE.boundMs, emptyConfirmMs = NOTES_SETTLE.emptyConfirmMs } = {}) {
     const list = reads || [];
     const last = list[list.length - 1];
@@ -2273,9 +2294,10 @@
       }
       return last.at - start.at >= emptyConfirmMs || over ? done(last) : { state: 'wait' };
     }
-    return over
-      ? { state: 'failed', message: `The notes list did not finish loading within ${seconds} s; reload the notebook and export again` }
-      : { state: 'wait' };
+    if (!over) return { state: 'wait' };
+    return last.notes.length > 0
+      ? { state: 'partial', message: NOTES_STUDIO_HIDDEN }
+      : { state: 'failed', message: `The Studio list did not appear within ${seconds} s. Close any open Studio item (or reload the notebook) and export again` };
   }
 
   // Everything the Generated rows are drawn from and act on (and the page their
@@ -2541,11 +2563,13 @@
   // failed or errors were recorded, e.g. chat messages that could not be
   // read), 'empty' (nothing to export, no errors), else 'done'. 'skipped'
   // and scan failures are decided by runFullTakeout itself.
-  function takeoutCategoryStatus({ selected = 0, exported = 0, failed = 0, errorCount = 0, cancelled = false, stopped = false } = {}) {
+  // skipped: items left out on purpose (artifactExportPlan), in neither N nor M;
+  // their warnings are in errorCount. Only skips is 'done', not 'failed' or 'empty'.
+  function takeoutCategoryStatus({ selected = 0, exported = 0, failed = 0, errorCount = 0, cancelled = false, stopped = false, skipped = 0 } = {}) {
     if (cancelled) return 'partial';
     if (stopped) return 'stopped';
-    if (exported === 0 && (failed > 0 || errorCount > 0)) return 'failed';
-    if (selected === 0) return 'empty';
+    if (exported === 0 && (failed > 0 || errorCount - skipped > 0)) return 'failed';
+    if (selected === 0 && skipped === 0) return 'empty';
     return 'done';
   }
 
@@ -2765,7 +2789,8 @@ footer { margin-top: 3rem; }
   // error when items existed but none was exported and nobody cancelled;
   // info for a notebook with nothing to export.
   function summarizeTakeoutOutcome({ categories = [], auditOk = true } = {}) {
-    const part = c => {
+    const part = c => `${partText(c)}${c.skipped > 0 ? ` (${c.skipped} skipped)` : ''}`;
+    const partText = c => {
       const name = c.name.toLowerCase();
       const count = `${c.exported}/${c.selected}`;
       switch (c.status) {
@@ -3158,11 +3183,11 @@ footer { margin-top: 3rem; }
     jobRecordZip,
     planResume,
     NOTES_SETTLE,
+    NOTES_STUDIO_HIDDEN,
     notesSettleDecision,
     SKIPPED_NO_MENU_TYPE,
     skippedNoMenuWarning,
     artifactExportPlan,
-    generatedSkipWarnings,
     resumeBannerLabel,
     resumeBannerView,
     jobResumeKeys,

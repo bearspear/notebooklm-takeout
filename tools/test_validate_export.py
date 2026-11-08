@@ -128,7 +128,7 @@ class ValidateTests(Base):
     def test_skipped_studio_item_warns_with_its_title(self):
         # 1.9.5: an artifact skipped for a missing More button counts in errorCount
         # (it is missing from the archive), unlike an INFO notice
-        errors = ('# Artifacts Export Error Report\n\nErrors: 1\n\n## SKIPPED AMBIGUOUS (1)\n\n'
+        errors = ('# Artifacts Export Error Report\n\nErrors: 1\n\n## Skipped: same title as another item (1)\n\n'
                   '- Deck: still being generated or has no menu; a ready item has the same title\n')
         files = {'notes/A.md': '# A\n', 'combined-notes.md': '# All\n', 'errors.md': errors}
         [r] = self.check(make_export(os.path.join(self.tmp, 'e'), files=files, manifest={'errorCount': 1}))

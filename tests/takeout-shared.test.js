@@ -2333,9 +2333,10 @@ test('an artifact with no More button is not exported: its index would resolve b
   assert.deepEqual(plan.skipped.map(i => i.moreIndex), [-1]);
 });
 
-test('the row check and the export plan share one rule', () => {
+test('the export plan skips what the row check refuses, but tries a no-More item with its own title', () => {
   const rows = [
     { kind: 'artifact', moreIndex: 0, label: 'A', type: 'Slides', downloadable: true },
+    { kind: 'artifact', moreIndex: -1, label: 'A', type: 'Slides', downloadable: true },
     { kind: 'artifact', moreIndex: -1, label: 'B', type: 'Slides', downloadable: true },
     { kind: 'artifact', moreIndex: 2, label: 'C', type: 'Quiz', downloadable: false },
     { kind: 'artifact', moreIndex: -1, label: 'D', type: 'Quiz', downloadable: false },
@@ -2343,8 +2344,9 @@ test('the row check and the export plan share one rule', () => {
     { kind: 'source-note', sourceIndex: 1, label: 'F', type: 'Note (Sources panel)' }
   ];
   const skipped = NLME.generatedExportPlan(rows).skipped;
-  assert.deepEqual(rows.filter(NLME.isStudioItemUnavailable), skipped);
-  assert.deepEqual(skipped.map(i => i.label), ['B', 'C', 'D']);
+  // The row's own Download stays off for B: a single click is not an archive
+  assert.deepEqual(rows.filter(NLME.isStudioItemUnavailable).map(i => i.label), ['A', 'B', 'C', 'D']);
+  assert.deepEqual(skipped, [rows[1], rows[3], rows[4]]);
 });
 
 test('an unavailable row says why it cannot download', () => {
@@ -3479,68 +3481,93 @@ test('shownNotebookName hides the file-name fallback, header and results alike',
   assert.equal(NLME.headerName(nb, 'NotebookLM'), 'Notebook');
 });
 
-// ---- 1.9.5: no-More artifacts skipped everywhere, and named in errors.md ----
+// ---- 1.9.5: a no-More artifact that shares a ready item's title is skipped, and named in errors.md ----
 
-test('artifactExportPlan skips an item with no More button and names the ready item it shares a title with', () => {
+const SKIP_MESSAGE = 'still being generated or has no menu; a ready item has the same title';
+
+test('artifactExportPlan skips a no-More item only when a ready item has its title', () => {
   const plan = NLME.artifactExportPlan([
     { index: 0, label: 'Deck', type: 'Slides' },
     { index: -1, label: 'Deck', type: 'Slides' },
     { index: -1, label: 'Lonely', type: 'Audio Overview' },
     { index: 1, label: 'Cards', type: 'Flashcards', disabled: true }
   ]);
-  assert.deepEqual(plan.runnable.map(i => [i.index, i.label]), [[0, 'Deck']]);
-  assert.deepEqual(plan.warnings, [
-    { type: 'skipped_ambiguous', title: 'Deck', message: 'still being generated or has no menu; a ready item has the same title' },
-    { type: 'skipped_ambiguous', title: 'Lonely', message: 'still being generated or has no menu' }
-  ]);
+  // A unique-title no-More item is tried, as in 1.9.4 (it fails harmlessly or finished meanwhile)
+  assert.deepEqual(plan.runnable.map(i => [i.index, i.label]), [[0, 'Deck'], [-1, 'Lonely']]);
+  assert.deepEqual(plan.skipped.map(i => i.label), ['Deck']);
+  assert.deepEqual(plan.warnings, [{ type: 'skipped_ambiguous', title: 'Deck', message: SKIP_MESSAGE }]);
 });
 
-test('artifactExportPlan keeps two ready items of one title, and an all-ready scan has no warnings', () => {
-  const items = [{ index: 0, label: 'Deck', type: 'Slides' }, { index: 1, label: 'Deck', type: 'Slides' }];
-  const plan = NLME.artifactExportPlan(items);
-  assert.deepEqual(plan.runnable, items);
-  assert.deepEqual(plan.warnings, []);
+test('artifactExportPlan keeps two ready items of one title, and two no-More items of one title with no ready one', () => {
+  const ready = [{ index: 0, label: 'Deck', type: 'Slides' }, { index: 1, label: 'Deck', type: 'Slides' }];
+  assert.deepEqual(NLME.artifactExportPlan(ready).runnable, ready);
+  assert.deepEqual(NLME.artifactExportPlan(ready).warnings, []);
+  const drafts = [{ index: -1, label: 'Draft' }, { index: -1, label: 'Draft' }];
+  assert.deepEqual(NLME.artifactExportPlan(drafts).runnable, drafts);
 });
 
-test('artifactExportPlan takes the shared title from the whole scan when given a part of it', () => {
+test('artifactExportPlan takes the ready titles from the whole scan when given a part of it', () => {
   const all = [{ index: 0, label: 'Deck' }, { index: -1, label: 'Deck' }];
-  const plan = NLME.artifactExportPlan([all[1]], { all });
-  assert.deepEqual(plan.runnable, []);
-  assert.match(plan.warnings[0].message, /a ready item has the same title/);
-  assert.doesNotMatch(NLME.artifactExportPlan([all[1]]).warnings[0].message, /same title/);
+  assert.deepEqual(NLME.artifactExportPlan([all[1]], { all }).skipped, [all[1]]);
+  assert.deepEqual(NLME.artifactExportPlan([all[1]]).skipped, []);
 });
 
-test('generatedSkipWarnings covers only the artifacts skipped for a missing More button', () => {
+test('generatedExportPlan narrows the no-More rule to a shared title and lists those as ambiguous', () => {
   const rows = [
-    { kind: 'artifact', label: 'Deck', moreIndex: 0, downloadable: true },
-    { kind: 'artifact', label: 'Deck', moreIndex: -1, downloadable: true },
-    { kind: 'artifact', label: 'Quiz me', moreIndex: 1, downloadable: false },
-    { kind: 'something-new', label: 'X' }
+    { kind: 'artifact', label: 'Deck', moreIndex: 0, downloadable: true, type: 'Slides' },
+    { kind: 'artifact', label: 'Deck', moreIndex: -1, downloadable: true, type: 'Slides', jobKey: 'Slides\u0000Deck#2' },
+    { kind: 'artifact', label: 'Fresh', moreIndex: -1, downloadable: true, type: 'Report' },
+    { kind: 'artifact', label: 'Quiz me', moreIndex: 1, downloadable: false, type: 'Quiz' }
   ];
-  const plan = NLME.generatedExportPlan(rows);
-  assert.equal(plan.skipped.length, 3);
-  assert.deepEqual(NLME.generatedSkipWarnings(plan.skipped, rows), [
-    { type: 'skipped_ambiguous', title: 'Deck', message: 'still being generated or has no menu; a ready item has the same title' }
-  ]);
-  assert.deepEqual(NLME.generatedSkipWarnings([], rows), []);
+  const selected = rows.slice(1);
+  const plan = NLME.generatedExportPlan(selected, rows);
+  assert.deepEqual(plan.artifacts.map(a => [a.index, a.label]), [[-1, 'Fresh']]);
+  assert.deepEqual(plan.skipped.map(i => i.label), ['Deck', 'Quiz me']);
+  assert.deepEqual(plan.ambiguous.map(a => [a.index, a.label, a._listKey]), [[-1, 'Deck', 'Slides\u0000Deck#2']]);
+  // Without the whole list the ready Deck is not known: the no-More Deck is tried
+  assert.deepEqual(NLME.generatedExportPlan(selected).ambiguous, []);
 });
 
-test('a skipped item is an error in errors.md (the checker warns), not an info notice', () => {
-  const warning = NLME.skippedNoMenuWarning('Deck', true);
+test('a skipped item is an error in errors.md (the checker warns), under a plain heading', () => {
+  const warning = NLME.skippedNoMenuWarning('Deck');
   assert.equal(NLME.countExportErrors([warning]), 1);
   const report = NLME.buildErrorReport({ title: 'Artifacts Export', errors: [warning] });
   assert.match(report, /^Errors: 1$/m);
-  assert.match(report, /^## SKIPPED AMBIGUOUS \(1\)\n\n- Deck: still being generated or has no menu; a ready item has the same title$/m);
-  const takeout = NLME.buildErrorReport({ errors: NLME.prefixExportErrors('Artifacts', [warning]) });
-  assert.match(takeout, /^- Artifacts: Deck: still being generated/m);
+  assert.match(report, new RegExp(`^## Skipped: same title as another item \\(1\\)\\n\\n- Deck: ${SKIP_MESSAGE.replace(/;/g, ';')}$`, 'm'));
+  assert.doesNotMatch(report, /SKIPPED AMBIGUOUS/);
+  assert.match(NLME.buildErrorReport({ errors: NLME.prefixExportErrors('Artifacts', [warning]) }), /^- Artifacts: Deck: still being generated/m);
+  assert.equal(NLME.groupErrorsForPanel([warning])[0].heading, 'Skipped: same title as another item');
+  // Other headings keep their words
+  assert.match(NLME.buildErrorReport({ errors: [{ type: 'scan_failed', message: 'x' }] }), /^## SCAN FAILED \(1\)$/m);
 });
 
-test('a Resume that could only skip an artifact has no N of M', () => {
-  const ok = { name: 'Notes', message: 'm', level: 'success', saved: [], errors: [], failedItems: [], exported: 1, selected: 1 };
-  const extra = [{ ...NLME.skippedNoMenuWarning('Deck'), title: 'Artifacts: Deck' }];
-  const combined = NLME.combineRetryOutcomes({ steps: [ok], verb: 'Resume', extraErrors: extra });
-  assert.equal(combined.count, null);
-  assert.equal(combined.level, 'warning');
+test('an error that names its own category keeps it when prefixed', () => {
+  const studio = { ...NLME.skippedNoMenuWarning('Studio: Deck'), prefixed: true };
+  assert.deepEqual(NLME.prefixExportErrors('Notes', [studio, '[Note A] broke']).map(e => e.title), ['Studio: Deck', 'Notes: Note A']);
+});
+
+test('Resume says how many it skipped and keeps N of M without them, seeded or panel-only', () => {
+  const step = { name: 'Artifacts', message: 'm', level: 'warning', saved: [], errors: [NLME.skippedNoMenuWarning('Deck')], failedItems: [], exported: 2, selected: 2 };
+  const seeded = NLME.combineRetryOutcomes({ steps: [step], verb: 'Resume' });
+  assert.deepEqual(seeded.count, { done: 2, total: 2 });
+  assert.match(seeded.message, /^Resume finished — 1 skipped$/);
+  const notes = { name: 'Notes', message: 'm', level: 'success', saved: [], errors: [], failedItems: [], exported: 1, selected: 1 };
+  const panelOnly = NLME.combineRetryOutcomes({ steps: [notes], verb: 'Resume', extraErrors: [{ ...NLME.skippedNoMenuWarning('Deck'), title: 'Artifacts: Deck' }] });
+  assert.deepEqual(panelOnly.count, { done: 1, total: 1 });
+  assert.match(panelOnly.message, /— 1 skipped$/);
+  assert.equal(panelOnly.level, 'warning');
+});
+
+test('a takeout category of skips only is done, says so, and is not "none"', () => {
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 0, exported: 0, errorCount: 1, skipped: 1 }), 'done');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 0, exported: 0, errorCount: 2, skipped: 1 }), 'failed');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 2, exported: 2, errorCount: 1, skipped: 1 }), 'done');
+  const { message, level } = NLME.summarizeTakeoutOutcome({ categories: [
+    { name: 'Notes', status: 'done', selected: 1, exported: 1, failed: 0, errorCount: 0 },
+    { name: 'Artifacts', status: 'done', selected: 2, exported: 2, failed: 0, errorCount: 1, skipped: 1 }
+  ] });
+  assert.equal(message, 'Takeout: notes 1/1, artifacts 2/2 (1 skipped) (see errors.md)');
+  assert.equal(level, 'warning');
 });
 
 // ---- 1.9.5: the notes list settles before a takeout believes it ----
@@ -3578,7 +3605,7 @@ test('notesSettleDecision: an undrawn list is never "none in notebook", and the 
   assert.equal(late.state, 'found');
   const never = NLME.notesSettleDecision([read(0, [], none), read(8000, [], none)]);
   assert.equal(never.state, 'failed');
-  assert.match(never.message, /did not finish loading within 8 s/);
+  assert.match(never.message, /^The Studio list did not appear within 8 s\. Close any open Studio item/);
   const spinning = NLME.notesSettleDecision([read(8000, [], { items: 0, library: true, loading: true })]);
   assert.equal(spinning.state, 'failed');
 });
@@ -3609,4 +3636,13 @@ test('notesSettleDecision: polled every pollMs, a truly empty notebook ends well
   } while (decision.state === 'wait');
   assert.equal(decision.state, 'empty');
   assert.ok(reads[reads.length - 1].at >= emptyConfirmMs && reads[reads.length - 1].at < boundMs);
+});
+
+test('notesSettleDecision: Sources-panel notes found while the Studio list never draws are exported, with a warning', () => {
+  const sourceNotes = [{ index: -1, sourceIndex: 2, title: 'S', elementType: 'source-note' }];
+  const none = { items: 0, library: false, loading: false };
+  assert.equal(NLME.notesSettleDecision([read(0, sourceNotes, none), read(4000, sourceNotes, none)]).state, 'wait');
+  assert.deepEqual(NLME.notesSettleDecision([read(0, sourceNotes, none), read(8000, sourceNotes, none)]),
+    { state: 'partial', message: "The Studio list wasn't visible, so notes saved only there may be missing. Close any open Studio item and export again." });
+  assert.equal(NLME.NOTES_STUDIO_HIDDEN, "The Studio list wasn't visible, so notes saved only there may be missing. Close any open Studio item and export again.");
 });

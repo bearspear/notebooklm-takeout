@@ -213,10 +213,17 @@ test('an export of notes closes an open note before the health check and the sca
   // warn, and a takeout scan would find no notes and no artifacts
   const src = fs.readFileSync(path.join(ROOT, 'sidebar-takeout.js'), 'utf8');
   const shell = src.slice(src.indexOf('async function withExportShell('));
-  const close = shell.indexOf('NLME.MSG.NAVIGATE_BACK');
+  const close = shell.indexOf('await closeOpenStudioItem(tab.id)');
   assert.ok(close > 0, 'withExportShell must close the viewer');
   assert.ok(close < shell.indexOf('NLME.MSG.CHECK_DOM_HEALTH'));
   assert.match(shell.slice(0, close), /healthType === 'notes'/);
+  assert.match(fnSource('sidebar-takeout.js', 'closeOpenStudioItem'), /type: NLME\.MSG\.NAVIGATE_BACK/);
+});
+
+test('Resume closes an open Studio item before it scans notes or artifacts', () => {
+  const resume = fnSource('sidebar-takeout.js', 'resumeJob');
+  const close = resume.indexOf('await closeOpenStudioItem(tabId)');
+  assert.ok(close > 0 && close < resume.indexOf('for (const { category, name, scan, regionOfType } of RESUME_CATEGORIES)'));
 });
 
 test('countPageContent leaves price ranges drawn as math out of the formula count', () => {
@@ -388,24 +395,32 @@ function generatedChain() {
 test('a Generated export runs artifacts, then notes, as fresh exports on the scanned tab', async () => {
   const { ctx, calls } = generatedChain();
   const { steps, notRun } = await ctx.run({ Artifacts: ['a1'], Notes: ['n1'] });
-  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['artifacts', 7, ['a1'], { seedErrors: [] }], ['notes', ['n1'], { tabId: 7, seedErrors: [] }]]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['artifacts', 7, ['a1'], {}], ['notes', ['n1'], { tabId: 7 }]]);
   assert.deepEqual([steps.length, notRun.length], [2, 0]);
 });
 
 test('a Generated export hands the skipped items\' warnings to the side named for them', async () => {
   const warning = { type: 'skipped_ambiguous', title: 'Deck', message: 'still being generated or has no menu' };
   const { ctx, calls } = generatedChain();
-  await ctx.run({ Artifacts: ['a1'], Notes: ['n1'] }, { Artifacts: [warning] });
-  assert.deepEqual(JSON.parse(JSON.stringify(calls.map(c => c[c.length - 1].seedErrors))), [[warning], []]);
+  await ctx.run({ Artifacts: ['a1'], Notes: ['n1'] }, { Artifacts: { seedErrors: [warning], recordFailed: ['a2'] } });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['artifacts', 7, ['a1'], { seedErrors: [warning], recordFailed: ['a2'] }], ['notes', ['n1'], { tabId: 7 }]]);
   const notesOnly = generatedChain();
-  await notesOnly.ctx.run({ Artifacts: [], Notes: ['n1'] }, { Notes: [warning] });
+  await notesOnly.ctx.run({ Artifacts: [], Notes: ['n1'] }, { Notes: { seedErrors: [warning] } });
   assert.deepEqual(JSON.parse(JSON.stringify(notesOnly.calls)), [['notes', ['n1'], { tabId: 7, seedErrors: [warning] }]]);
 });
 
-test('the Studio export seeds its no-More warnings: artifacts side first, else notes', () => {
+test('the Studio export seeds its same-title skips: artifacts side (and its record) first, else notes as Studio items', () => {
   const run = fnSource('sidebar-generated.js', 'runGeneratedExport');
-  assert.match(run, /const skipWarnings = NLME\.generatedSkipWarnings\(plan\.skipped, _studioItems\);/);
-  assert.match(run, /\[plan\.artifacts\.length \? 'Artifacts' : 'Notes'\]: skipWarnings/);
+  assert.match(run, /NLME\.generatedExportPlan\(_studioListController \? _studioListController\.selectedItems\(\) : \[\], _studioItems\)/);
+  // Every plan in the Studio tab sees the whole list, for the shared titles
+  const generated = fs.readFileSync(path.join(ROOT, 'sidebar-generated.js'), 'utf8');
+  assert.equal([...generated.matchAll(/NLME\.generatedExportPlan\(/g)].length, [...generated.matchAll(/NLME\.generatedExportPlan\([^\n]*, _studioItems\)/g)].length);
+  assert.match(run, /const skipWarnings = plan\.ambiguous\.map\(item => NLME\.skippedNoMenuWarning\(item\.label\)\);/);
+  assert.match(run, /plan\.artifacts\.length \? \{ Artifacts: \{ seedErrors: skipWarnings, recordFailed: plan\.ambiguous \} \}/);
+  assert.match(run, /\{ Notes: \{ seedErrors: skipWarnings\.map\(w => \(\{ \.\.\.w, title: `Studio: \$\{w\.title\}`, prefixed: true \}\)\) \} \}/);
+  const artifacts = fnSource('sidebar-artifacts.js', 'downloadAllArtifacts');
+  assert.match(artifacts, /withJobRecord\(shell, 'artifacts', 'Artifacts', 'artifacts', \[\.\.\.items, \.\.\.recordFailed\]/);
+  assert.match(artifacts, /recordFailed\.forEach\(item => tracker\.fail\('artifacts', item\)\)/);
   assert.match(run, /runRetryChain\(\{ Artifacts: plan\.artifacts, Notes: plan\.notes \}, tabId, 'Export', GENERATED_EXPORT_STEPS, zip, seeds\)/);
 });
 
@@ -520,7 +535,7 @@ test('Default preset and Default save reach settings through saveSettings only',
 });
 
 test('Artifacts with no sheet choice take the default save', () => {
-  assert.match(fs.readFileSync(path.join(ROOT, 'sidebar-artifacts.js'), 'utf8'), /async function downloadAllArtifacts\(tabId, items, \{ updateRecord = false, zip = NLME\.takeoutZipChoice\(settings\), seedErrors = \[\] \} = \{\}\)/);
+  assert.match(fs.readFileSync(path.join(ROOT, 'sidebar-artifacts.js'), 'utf8'), /async function downloadAllArtifacts\(tabId, items, \{ updateRecord = false, zip = NLME\.takeoutZipChoice\(settings\), seedErrors = \[\], recordFailed = \[\] \} = \{\}\)/);
 });
 
 test('the progress view keeps its ids, and only its text is a live region', () => {
@@ -551,8 +566,8 @@ test('every Retry goes through the one check of the run\'s notebook', () => {
 
 test('Full Takeout and Resume wait for the notes list; Home and Generated ask for the strict scan', () => {
   const takeout = fs.readFileSync(path.join(ROOT, 'sidebar-takeout.js'), 'utf8');
-  assert.match(takeout, /await scanNotesSettled\(tabId, \{ isCancelled: shell\.isCancelled \}\)/);
-  assert.match(takeout, /scan: tabId => scanNotesSettled\(tabId, \{ isCancelled: \(\) => chainCancelRequested \}\)/);
+  assert.match(takeout, /await scanNotesSettled\(tabId, \{\s+isCancelled: shell\.isCancelled,\s+onPartial:/);
+  assert.match(takeout, /scan: \(tabId, \{ onPartial \} = \{\}\) => scanNotesSettled\(tabId, \{ isCancelled: \(\) => chainCancelRequested, onPartial \}\)/);
   assert.doesNotMatch(takeout, /scanNotesData\(/);
   assert.match(fnSource('sidebar-generated.js', 'scanGeneratedItems'), /scanNotesData\(tabId, \{ strict: true \}\)/);
   assert.match(fs.readFileSync(path.join(ROOT, 'sidebar-core.js'), 'utf8'), /scanNotesData\(tabId, \{ strict: true \}\)/);
@@ -1050,7 +1065,7 @@ test('scanNotesSettled: a truly empty notebook is empty within the bound; one th
   assert.deepEqual(JSON.parse(JSON.stringify(await empty.run())), []);
   assert.ok(empty.asked[empty.asked.length - 1] <= 4400);
   const never = settledScan(() => ({ notes: [], list: { items: 0, library: false, loading: false } }));
-  await assert.rejects(never.run(), /did not finish loading within 8 s/);
+  await assert.rejects(never.run(), /The Studio list did not appear within 8 s\. Close any open Studio item/);
   assert.ok(never.asked[never.asked.length - 1] >= 8000 && never.asked[never.asked.length - 1] < 8400);
   const silent = settledScan(() => new Error('Could not establish connection'));
   await assert.rejects(silent.run(), /No answer from the page/);
@@ -1065,9 +1080,11 @@ test('scanNotesSettled stops on a Cancel', async () => {
 test('Resume skips no-More artifacts like Export everything and seeds the warnings into the artifacts step', () => {
   const resume = fnSource('sidebar-takeout.js', 'resumeJob');
   assert.match(resume, /const plan = NLME\.artifactExportPlan\(matched, \{ all: items \}\);/);
-  assert.match(resume, /if \(runnable\.length\) seeds\[name\] = warnings;\s+else extraErrors\.push\(/);
+  assert.match(resume, /if \(scanWarnings\[name\]\) seeds\[name\] = \{ seedErrors: scanWarnings\[name\] \};/);
   assert.match(resume, /runRetryChain\(itemsByName, tabId, 'Resume', TAKEOUT_RETRY_STEPS, zip, seeds\)/);
-  assert.match(fnSource('sidebar-takeout.js', 'runRetryChain'), /step\.run\(items, tabId, zip, seeds\[step\.name\] \|\| \[\]\)/);
+  // A step that did not run puts its warnings in the panel
+  assert.match(resume, /if \(!steps\.some\(step => step\.name === name\)\) extraErrors\.push\(/);
+  assert.match(fnSource('sidebar-takeout.js', 'runRetryChain'), /step\.run\(items, tabId, zip, seeds\[step\.name\] \|\| \{\}\)/);
 });
 
 test('the page says with its notes whether the Studio list has drawn', () => {

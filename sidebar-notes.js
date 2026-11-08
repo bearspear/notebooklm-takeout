@@ -20,8 +20,10 @@ async function scanNotesData(tabId, { strict = false } = {}) {
 // list settles (NLME.notesSettleDecision), at most about 8 s. Notes found or a
 // drawn empty list return the array; a list that never drew, or a page that never
 // answered, throws, so the caller reports a failed scan, not "none in notebook".
+// Notes found while the Studio list never drew (Sources-panel notes) are returned
+// too, and onPartial(message) says Studio notes may be missing.
 // isCancelled: ends the wait early by throwing.
-async function scanNotesSettled(tabId, { isCancelled = () => false, timing = NLME.NOTES_SETTLE, now = () => Date.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+async function scanNotesSettled(tabId, { isCancelled = () => false, onPartial = () => {}, timing = NLME.NOTES_SETTLE, now = () => Date.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   const reads = [];
   const started = now();
   for (;;) {
@@ -34,7 +36,8 @@ async function scanNotesSettled(tabId, { isCancelled = () => false, timing = NLM
     }
     reads.push({ at: now() - started, notes: Array.isArray(response?.notes) ? response.notes : null, list: response?.list });
     const decision = NLME.notesSettleDecision(reads, timing);
-    if (decision.state === 'found' || decision.state === 'empty') return reads[reads.length - 1].notes;
+    if (decision.state === 'partial') onPartial(decision.message);
+    if (['found', 'empty', 'partial'].includes(decision.state)) return reads[reads.length - 1].notes;
     if (decision.state === 'failed') throw new Error(decision.message);
     if (isCancelled()) throw new Error('Cancelled while reading the notes list');
     await sleep(timing.pollMs);

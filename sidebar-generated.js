@@ -232,7 +232,7 @@ function updateStudioBulkButtonsState(controller = _studioListController) {
   const selected = controller ? controller.selectedItems() : [];
   const deletableN = selected.filter(isStudioItemDeletable).length;
   const deleteCount = NLME.bulkDeletePlan(selected.filter(isStudioItemDeletable), _studioItems).deletable.length;
-  const plan = NLME.generatedExportPlan(selected);
+  const plan = NLME.generatedExportPlan(selected, _studioItems);
   const n = plan.artifacts.length + plan.notes.length;
   setTabAction('studio', { label: NLME.generatedActionLabel(plan), disabled: n === 0, onClick: exportSelectedGenerated });
   const deleteBulkBtn = document.getElementById('studio-delete-selected-btn');
@@ -245,16 +245,17 @@ function updateStudioBulkButtonsState(controller = _studioListController) {
 
 // The two sides of a Generated export, in this order. Each is the ordinary export
 // with its own job record, on the tab the list was scanned on.
-// seedErrors: the skipped artifacts' warnings, for the side that writes them.
+// seedErrors: the skipped artifacts' warnings, for the side that writes them;
+// recordFailed: those artifacts, kept in the artifacts record as failed.
 const GENERATED_EXPORT_STEPS = [
-  { name: 'Artifacts', run: (items, tabId, zip, seedErrors) => downloadAllArtifacts(tabId, items, { zip, seedErrors }) },
-  { name: 'Notes', run: (items, tabId, zip, seedErrors) => exportNotesAsMarkdown(items, { tabId, seedErrors }) }
+  { name: 'Artifacts', run: (items, tabId, zip, { seedErrors, recordFailed } = {}) => downloadAllArtifacts(tabId, items, { zip, seedErrors, recordFailed }) },
+  { name: 'Notes', run: (items, tabId, zip, { seedErrors } = {}) => exportNotesAsMarkdown(items, { tabId, seedErrors }) }
 ];
 
 // The Generated action: opens the sheet, whose title says what goes and what cannot.
 // Save as is for the artifacts: a selection of notes has nothing to choose.
 function exportSelectedGenerated() {
-  const plan = NLME.generatedExportPlan(_studioListController ? _studioListController.selectedItems() : []);
+  const plan = NLME.generatedExportPlan(_studioListController ? _studioListController.selectedItems() : [], _studioItems);
   const n = plan.artifacts.length + plan.notes.length;
   if (n === 0) return;
   openExportSheet({
@@ -275,16 +276,19 @@ function exportSelectedGenerated() {
 // take always reach that panel, as a warning, even with one side:
 // NLME.generatedExportOutcome.
 function runGeneratedExport(zip) {
-  const plan = NLME.generatedExportPlan(_studioListController ? _studioListController.selectedItems() : []);
+  const plan = NLME.generatedExportPlan(_studioListController ? _studioListController.selectedItems() : [], _studioItems);
   if (plan.artifacts.length + plan.notes.length === 0) {
     showToast('Nothing is selected now, so nothing was exported', 'warning');
     return;
   }
   const tabId = _studioTabId;
-  // Artifacts skipped for a missing More button go to errors.md too: the
-  // artifacts side's, or with none the notes side's (NLME.generatedSkipWarnings)
-  const skipWarnings = NLME.generatedSkipWarnings(plan.skipped, _studioItems);
-  const seeds = skipWarnings.length ? { [plan.artifacts.length ? 'Artifacts' : 'Notes']: skipWarnings } : {};
+  // Artifacts skipped for a shared title go to errors.md too: the artifacts side's
+  // (and its record, as failed, for a later Resume), or with none the notes
+  // side's, named as Studio items there
+  const skipWarnings = plan.ambiguous.map(item => NLME.skippedNoMenuWarning(item.label));
+  const seeds = !skipWarnings.length ? {}
+    : plan.artifacts.length ? { Artifacts: { seedErrors: skipWarnings, recordFailed: plan.ambiguous } }
+      : { Notes: { seedErrors: skipWarnings.map(w => ({ ...w, title: `Studio: ${w.title}`, prefixed: true })) } };
   return runChain(async () => {
     const { steps, notRun } = await runRetryChain({ Artifacts: plan.artifacts, Notes: plan.notes }, tabId, 'Export', GENERATED_EXPORT_STEPS, zip, seeds);
     // Nothing ran (declined, tab closed: already said), or one side ran alone with
