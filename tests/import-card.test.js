@@ -227,3 +227,21 @@ test('the notes converter has no import card rule', () => {
   const sandbox = loadConverter();
   assert.equal(sandbox.NLMEMarkdown.createConverter({ variant: 'note' }).turndownService.rules.importCard, undefined);
 });
+
+// ---------- re-review follow-ups ----------
+
+test('finishRemoteImages: a bare target may hold one level of balanced parentheses', () => {
+  assert.equal(NLME.finishRemoteImages('![a](https://x.org/i_(1).png)'), '[a](https://x.org/i_(1).png)');
+  assert.equal(NLME.finishRemoteImages('![a](https://en.wikipedia.org/wiki/File:X_(y).png "t")'), '[a](https://en.wikipedia.org/wiki/File:X_(y).png "t")');
+  assert.equal(NLME.finishRemoteImages('[![a](https://x.org/i_(1).png)](https://x.org/home)'), '[a](https://x.org/home)');
+});
+
+test('finishRemoteImages: escaped backticks are not code spans, and a span stops at a blank line', () => {
+  // Turndown writes a literal backtick as \`
+  assert.equal(NLME.finishRemoteImages('it\\`s ![a](https://x.org/i.png) and \\`b'), 'it\\`s [a](https://x.org/i.png) and \\`b');
+  // one stray backtick in each of two paragraphs
+  assert.equal(NLME.finishRemoteImages('a ` stray\n\n![a](https://x.org/i.png)\n\nanother ` stray'), 'a ` stray\n\n[a](https://x.org/i.png)\n\nanother ` stray');
+  // a real span across one line break still protects its content
+  const span = 'x `![a](https://x.org/i.png)\nmore` y';
+  assert.equal(NLME.finishRemoteImages(span), span);
+});

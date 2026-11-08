@@ -1537,7 +1537,7 @@
   // link the alt as its text. data: and relative images stay, and nothing
   // inside a code span or fence is touched. Titles and <targets> are read.
   // Without a remote image the text comes back unchanged.
-  const MD_IMAGE = String.raw`!\[((?:\\.|[^\]\\])*)\]\(\s*(?:<([^>\n]*)>|([^\s()<>]+))(\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\)))?\s*\)`;
+  const MD_IMAGE = String.raw`!\[((?:\\.|[^\]\\])*)\]\(\s*(?:<([^>\n]*)>|((?:[^\s()<>]|\([^\s()<>]*\))+))(\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\)))?\s*\)`;
   const LINKED_IMAGE_RE = new RegExp(String.raw`\[\s*${MD_IMAGE}\s*\]\(`, 'g');
   const IMAGE_RE = new RegExp(MD_IMAGE, 'g');
   const isRemoteImageUrl = url => /^https?:\/\//i.test(String(url || '').trim());
@@ -1569,9 +1569,11 @@
     let prose = [];
     const flushProse = () => {
       if (prose.length === 0) return;
-      // Inline code spans stay too: only the text between them is rewritten
+      // Inline code spans stay too: only the text between them is rewritten.
+      // An escaped backtick (Turndown writes a literal one as \`) opens no
+      // span, and a span never runs past a blank line.
       const chunk = prose.join('\n');
-      const parts = chunk.split(/((`+)(?!`)[\s\S]*?(?<!`)\2(?!`))/);
+      const parts = chunk.split(/((?<![\\`])(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\2(?!`))/);
       const rebuilt = [];
       for (let i = 0; i < parts.length; i++) {
         if (i % 3 === 0) rebuilt.push(finishRemoteImagesInText(parts[i]));
