@@ -1498,3 +1498,29 @@ test('build_viewer warns when a framed mind map of an older export fetches a web
   const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
   assert.match(readme, /build_viewer\.js[^\n]*web font|web font[^\n]*build_viewer\.js/);
 });
+
+// ---------- collapsed Thoughts (1.9.7) ----------
+
+const THOUGHTS_ANSWER = '<details>\n<summary>Thoughts</summary>\n\n**Defining Sizing Concepts**\n\nI am now exploring sizing.\n\n**Searched your sources**\n\n</details>\n\nSizing is the cardinality of a model.';
+
+test('sanitizeHtml keeps <details>/<summary> and strips every attribute, so the section is closed on load', () => {
+  assert.equal(clean('<details><summary>Thoughts</summary><p>x</p></details>'), '<details><summary>Thoughts</summary><p>x</p></details>');
+  const out = clean('<details open ontoggle="alert(1)" class="c" id="d"><summary onclick="x()" style="color:red" title="t">Thoughts</summary><p title="k">x</p></details>');
+  assert.equal(out, '<details><summary>Thoughts</summary><p title="k">x</p></details>');
+  assert.doesNotMatch(out, /open|ontoggle|onclick|style/);
+});
+
+test('viewer data: an answer with Thoughts keeps the section as written, so Copy gives it as Markdown', () => {
+  const chat = ['# Chat', '', '## Q: What does sizing mean?', '', '**A:**', '', THOUGHTS_ANSWER, '', '---', ''].join('\n');
+  const d = V.buildViewerData({ 'chat/chat.md': chat }, manifestOpts);
+  assert.equal(d.pairs[0].a, THOUGHTS_ANSWER);
+  assert.equal(app.copyMarkdown(d.pairs[0].a), THOUGHTS_ANSWER);
+});
+
+test('viewer page styles the Thoughts section (muted summary, chevron that turns when open)', () => {
+  const tpl = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-template.html'), 'utf8');
+  assert.match(tpl, /\.md summary \{[^}]*color: var\(--muted\)/);
+  assert.match(tpl, /\.md summary::before \{[^}]*border-right/);
+  assert.match(tpl, /\.md details\[open\] > summary::before \{ transform: rotate\(45deg\)/);
+  assert.match(tpl, /\.md summary::-webkit-details-marker \{ display: none; \}/);
+});

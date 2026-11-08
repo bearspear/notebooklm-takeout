@@ -545,8 +545,13 @@ side panel.
      `stats.thoughtsUnread` ("Message N: Thoughts could not be read"), which
      `NLME.chatScanErrors` puts in errors.md. After a Cancel the rest are counted in
      `stats.thoughtsCancelled` only (a scan-summary note, no errors.md entry). The chat
-     converter's `chatThoughts` rule writes `NLME.thoughtsMarkdown` (a `> **Thoughts**`
-     blockquote) at the placeholder, or nothing when they were not read. Thoughts are not in
+     converter's `chatThoughts` rule writes `NLME.thoughtsMarkdown` at the placeholder, or
+     nothing when they were not read. From 1.9.7 the section is collapsed: `<details>` (never
+     `open`), `<summary>Thoughts</summary>`, then each step's `**title**` and body as plain
+     Markdown, blank lines between; `convertChatToMarkdown` puts a blank line after `**A:**`
+     when an answer opens with it. The viewer's `sanitizeHtml` strips every attribute of
+     `details`/`summary`, so they are closed on load; `markQuote` opens one that holds a
+     search hit. (1.9.6 wrote a `> **Thoughts**` blockquote.) Thoughts are not in
      the answer HTML, so the audit (`countPageContent`) and the citation reading never
      count them. A thought body whose blocks miss part of its text (`NLME.blocksCoverText`)
      is converted whole: their texts joined must equal the body's text, whitespace aside.

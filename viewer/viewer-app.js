@@ -58,6 +58,11 @@ function sanitizeHtml(html, parser) {
   doc.querySelectorAll('*').forEach(function (n) {
     var tag = String(n.tagName).toLowerCase();
     if (SMIL_TAGS.test(tag)) { n.remove(); return; }
+    // A collapsed section (chat Thoughts) keeps no attribute, so it is closed on load
+    if (tag === 'details' || tag === 'summary') {
+      Array.prototype.slice.call(n.attributes).forEach(function (a) { n.removeAttribute(a.name); });
+      return;
+    }
     var loads = LOADING_TAGS.test(tag);
     Array.prototype.slice.call(n.attributes).forEach(function (a) {
       var name = a.name;
@@ -382,6 +387,8 @@ if (typeof document !== 'undefined') (function () {
       var m = document.createElement('mark'); r.surroundContents(m); first = m;
     }
     if (first) {
+      // A quote inside a closed section (Thoughts): open it so the mark shows
+      for (var d = first.closest('details'); d && box.contains(d); d = d.parentElement && d.parentElement.closest('details')) d.open = true;
       var sc = box.closest('.scroll'), mr = first.getBoundingClientRect(), sr = sc.getBoundingClientRect();
       sc.scrollTop += mr.top - sr.top - sc.clientHeight * 0.25;
     }

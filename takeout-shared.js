@@ -1698,11 +1698,11 @@
   // what 1.9.5 wrote.
   const THOUGHTS_PLACEHOLDER_HTML = '<div data-nlme-thoughts="">Thoughts</div>';
 
-  // A chat answer's Thoughts as one blockquote section: "> **Thoughts**",
-  // then per thought its bold title and its body, every line quoted and the
-  // parts separated by ">" lines. thoughts: [{ title, body }]; a step line
-  // ("Searched your sources") is a title with an empty body. Icon names are
-  // left out. No thoughts: ''.
+  // A chat answer's Thoughts as one collapsed section (1.9.7): a <details>
+  // block without "open" whose summary is "Thoughts", then per thought its
+  // bold title and its body as Markdown, parts separated by blank lines.
+  // thoughts: [{ title, body }]; a step line ("Searched your sources") is a
+  // title with an empty body. Icon names are left out. No thoughts: ''.
   function thoughtsMarkdown(thoughts) {
     const blocks = [];
     for (const thought of Array.isArray(thoughts) ? thoughts : []) {
@@ -1715,7 +1715,7 @@
       if (body.trim()) blocks.push(body);
     }
     if (blocks.length === 0) return '';
-    return toBlockquote(['**Thoughts**', ...blocks].join('\n\n'));
+    return ['<details>\n<summary>Thoughts</summary>', ...blocks, '</details>'].join('\n\n');
   }
 
   // Scan problems that lead a chat export's errors.md: messages that could
