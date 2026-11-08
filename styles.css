@@ -35,11 +35,16 @@
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-  font-size: 14px;
+  font-size: 13px;
   color: var(--ink);
   background: var(--bg);
   min-width: 320px;
   max-width: 400px;
+}
+
+/* Controls take the panel's type, not the browser's own 13.33px */
+button, input, select, textarea {
+  font: inherit;
 }
 
 .container {
@@ -157,7 +162,7 @@ body {
 
 .btn-small {
   padding: 6px 12px;
-  font-size: 12px;
+  font-size: 11.5px;
 }
 
 /* Focus: one ring on every control, shown when the keyboard moves it.
@@ -223,7 +228,7 @@ body {
   background: none;
   border: none;
   color: var(--accent);
-  font-size: 12px;
+  font-size: 11.5px;
   cursor: pointer;
   padding: 4px;
 }
@@ -326,7 +331,7 @@ body {
 
 .scan-results p {
   margin: 8px 0;
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--muted);
 }
 
@@ -371,7 +376,7 @@ body {
 
 .scan-item-info small {
   display: block;
-  font-size: 10px;
+  font-size: 11.5px;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -379,7 +384,7 @@ body {
 }
 
 .scan-results .hint {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--muted);
   font-style: italic;
 }
@@ -856,7 +861,7 @@ body.docked #action-bar {
 }
 
 .settings-header h2 {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--ink);
   margin: 0;
@@ -937,7 +942,7 @@ body.docked #action-bar {
   padding: 4px 0;
   cursor: pointer;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11.5px;
 }
 
 .version-child input[type="checkbox"]:checked + span {
@@ -949,7 +954,7 @@ body.docked #action-bar {
 }
 
 .setting-help {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--muted);
   margin-top: 6px;
   line-height: 1.4;
@@ -1000,7 +1005,7 @@ body.docked #action-bar {
 .empty-message .hint {
   display: block;
   margin-top: 8px;
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--muted);
   font-style: italic;
 }
@@ -1111,7 +1116,7 @@ body.docked #action-bar {
   border-radius: 14px;
   background: var(--bg);
   color: var(--ink);
-  font-size: 12px;
+  font-size: 11.5px;
   cursor: pointer;
 }
 
@@ -1131,7 +1136,7 @@ body.docked #action-bar {
   justify-content: space-between;
   gap: 8px;
   margin-top: 8px;
-  font-size: 12px;
+  font-size: 11.5px;
 }
 
 .list-select-visible-label {
@@ -1146,13 +1151,13 @@ body.docked #action-bar {
   padding: 3px 6px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 11.5px;
   background: var(--bg);
 }
 
 .list-summary {
   margin-top: 6px;
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--muted);
 }
 
@@ -1180,7 +1185,7 @@ body.docked #action-bar {
   min-width: 16px;
   height: 16px;
   border-radius: 50%;
-  font-size: 10px;
+  font-size: 11.5px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1292,7 +1297,7 @@ body.docked #action-bar {
   border-radius: 6px;
   margin-bottom: 12px;
   border-left: 3px solid var(--warn);
-  font-size: 12px;
+  font-size: 11.5px;
 }
 
 .warning-banner .warning-icon {
@@ -1376,7 +1381,7 @@ body.docked #action-bar {
   overflow-y: auto;
   margin: 4px 0 0;
   padding-left: 18px;
-  font-size: 12px;
+  font-size: 11.5px;
   line-height: 1.45;
   color: var(--muted);
 }
@@ -1400,6 +1405,17 @@ body.docked #action-bar {
 
 .btn-destructive:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 85%, var(--ink));
+}
+
+/* The tinted form, for Delete Selected under a list: danger text on a light danger
+   ground (a dark one in dark mode, from the same tokens). A dialog's confirm stays solid. */
+.btn-destructive.btn-destructive-soft {
+  background: color-mix(in srgb, var(--danger) 16%, var(--bg));
+  color: var(--danger);
+}
+
+.btn-destructive.btn-destructive-soft:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 24%, var(--bg));
 }
 
 /* ============================================
@@ -1429,7 +1445,7 @@ body.docked #action-bar {
 }
 
 .health-check-header h2 {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--ink);
   margin: 0;
@@ -1462,7 +1478,7 @@ body.docked #action-bar {
 
 .health-check-loading p {
   color: var(--muted);
-  font-size: 14px;
+  font-size: 13px;
   margin: 0;
 }
 
@@ -1493,7 +1509,7 @@ body.docked #action-bar {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
+  font-size: 26px;
   flex-shrink: 0;
 }
 
@@ -1527,7 +1543,7 @@ body.docked #action-bar {
 }
 
 .health-overall-text span {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--muted);
 }
 
@@ -1557,7 +1573,7 @@ body.docked #action-bar {
 .health-recommendations ul {
   margin: 0;
   padding-left: 18px;
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--warn);
 }
 
@@ -1619,7 +1635,7 @@ body.docked #action-bar {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: bold;
   flex-shrink: 0;
 }
@@ -1667,7 +1683,7 @@ body.docked #action-bar {
   gap: 10px;
   padding: 8px 0;
   border-bottom: 1px solid var(--line);
-  font-size: 12px;
+  font-size: 11.5px;
 }
 
 .health-check-item:last-child {
@@ -1681,7 +1697,7 @@ body.docked #action-bar {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 11.5px;
   flex-shrink: 0;
   margin-top: 1px;
 }
@@ -1721,7 +1737,7 @@ body.docked #action-bar {
 .health-check-icon.info::after {
   content: 'i';
   font-style: italic;
-  font-size: 10px;
+  font-size: 11.5px;
   font-weight: bold;
 }
 
@@ -1737,13 +1753,13 @@ body.docked #action-bar {
 
 .health-check-note {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 11.5px;
   margin-top: 2px;
 }
 
 .health-check-selector {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11.5px;
   font-family: monospace;
   margin-top: 2px;
   word-break: break-all;
@@ -1765,7 +1781,7 @@ body.docked #action-bar {
 }
 
 .health-check-duration {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--muted);
   margin-left: auto;
 }

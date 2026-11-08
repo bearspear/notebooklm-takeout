@@ -3463,6 +3463,36 @@ test('sameDeleteTarget needs the same tab and the same notebook', () => {
   assert.equal(NLME.sameDeleteTarget(asked, { tabId: 8, notebookId: 'aaaa' }), false);
   assert.equal(NLME.sameDeleteTarget({ tabId: null, notebookId: '' }, { tabId: null, notebookId: '' }), false);
   assert.equal(NLME.sameDeleteTarget(null, asked), false);
+  assert.equal(NLME.sameDeleteTarget({ tabId: 7, notebookId: '' }, { tabId: 7, notebookId: '' }), false, 'no notebook, no delete');
+});
+
+// 1.9.5: a delete asked before the panel knows its notebook
+test('deleteTarget names the notebook the tab shows, and none when the panel shows another', () => {
+  const url = 'https://notebook.google.com/notebook/aaaa?authuser=0';
+  assert.deepEqual(NLME.deleteTarget({ tabId: 7, url, panelNotebookId: '' }), { tabId: 7, notebookId: 'aaaa' });
+  assert.deepEqual(NLME.deleteTarget({ tabId: 7, url, panelNotebookId: 'aaaa' }), { tabId: 7, notebookId: 'aaaa' });
+  assert.deepEqual(NLME.deleteTarget({ tabId: 7, url, panelNotebookId: 'bbbb' }), { tabId: 7, notebookId: '' });
+  assert.deepEqual(NLME.deleteTarget({ tabId: 7, url: 'https://example.com/', panelNotebookId: 'aaaa' }), { tabId: 7, notebookId: '' });
+  assert.deepEqual(NLME.deleteTarget({ tabId: undefined, url: '', panelNotebookId: '' }), { tabId: null, notebookId: '' });
+  // Asked at panel start (id ''), checked once the id has arrived for the same notebook
+  const asked = NLME.deleteTarget({ tabId: 7, url, panelNotebookId: '' });
+  assert.equal(NLME.sameDeleteTarget(asked, NLME.deleteTarget({ tabId: 7, url, panelNotebookId: 'aaaa' })), true);
+  // After a Refresh that forgot the id, on the same notebook
+  assert.equal(NLME.sameDeleteTarget(NLME.deleteTarget({ tabId: 7, url, panelNotebookId: 'aaaa' }), NLME.deleteTarget({ tabId: 7, url, panelNotebookId: '' })), true);
+  // The tab moved on to another notebook, or off the site
+  assert.equal(NLME.sameDeleteTarget(asked, NLME.deleteTarget({ tabId: 7, url: 'https://notebook.google.com/notebook/bbbb', panelNotebookId: 'aaaa' })), false);
+  assert.equal(NLME.sameDeleteTarget(asked, NLME.deleteTarget({ tabId: 7, url: 'https://notebook.google.com/', panelNotebookId: 'aaaa' })), false);
+});
+
+// 1.9.5: the time left counts down between counts
+test('tickedTimeLeft counts down, but not below about a minute by ticking', () => {
+  assert.equal(NLME.tickedTimeLeft(null, 5), null);
+  assert.equal(NLME.tickedTimeLeft(300, 0), 300);
+  assert.equal(NLME.tickedTimeLeft(300, 60), 240);
+  assert.equal(NLME.tickedTimeLeft(300, 1000), 30);
+  assert.equal(NLME.progressLeftLine(1, 10, NLME.tickedTimeLeft(300, 1000)), 'about 1 min left');
+  assert.equal(NLME.tickedTimeLeft(20, 15), 20, 'an estimate under the floor stays');
+  assert.equal(NLME.tickedTimeLeft(100, -5), 100);
 });
 
 test('overlayView names only the categories exports write, not prototype keys', () => {

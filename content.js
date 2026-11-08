@@ -112,7 +112,7 @@
       box-shadow: 0 8px 32px var(--shadow);
       text-align: left; line-height: 1.4;
     }
-    .label { margin: 0 0 12px; font-size: 12px; font-weight: 500; color: var(--muted); letter-spacing: 0.01em; }
+    .label { margin: 0 0 12px; font-size: 11.5px; font-weight: 500; color: var(--muted); letter-spacing: 0.01em; }
     .heading { margin: 0; font-size: 15px; font-weight: 600; color: var(--ink); }
     .line { margin: 2px 0 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
     .line:empty { display: none; }
@@ -134,7 +134,7 @@
       animation: slide 1.4s ease-in-out infinite;
     }
     @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
-    .note { margin: 16px 0 0; font-size: 12px; color: var(--muted); }
+    .note { margin: 16px 0 0; font-size: 11.5px; color: var(--muted); }
     .footer { display: flex; justify-content: flex-end; align-items: center; min-height: 36px; margin-top: 16px; }
     .cancel {
       font: inherit; font-size: 13px; font-weight: 500;
@@ -172,6 +172,8 @@
   // The text goes in after the empty status region is in the page, so it is announced.
   // It does not take focus (focus would hold it open): the Cancel that had it is gone,
   // so focus is on the page, as before; Dismiss is one Tab away at the end of the page.
+  // If it has the focus when it goes (Dismiss, or the timer while the window was in the
+  // background), the focus goes back to where it came from, or to the page.
   const RELOADED_NOTE_MS = 6000;
   const RELOADED_TEXT = 'This export stopped when the extension was reloaded. Refresh the page to use Takeout again.';
   function showReloadedNote() {
@@ -215,13 +217,25 @@
     let startedAt = 0;
     let hovered = false;
     let focused = false;
-    const remove = () => { clearTimeout(timer); host.remove(); };
+    let cameFrom = null; // the element outside the note that had the focus before it
+    const remove = () => {
+      clearTimeout(timer);
+      const hadFocus = document.activeElement === host;
+      host.remove();
+      if (!hadFocus) return;
+      // Else it is on the page, where the note found it
+      if (cameFrom?.isConnected && cameFrom !== document.body) cameFrom.focus({ preventScroll: true });
+    };
     const run = () => { startedAt = Date.now(); clearTimeout(timer); timer = setTimeout(remove, left); };
     const pause = () => { clearTimeout(timer); left = Math.max(800, left - (Date.now() - startedAt)); };
     const resume = () => { if (!hovered && !focused && host.isConnected) run(); };
     card.addEventListener('mouseenter', () => { hovered = true; pause(); });
     card.addEventListener('mouseleave', () => { hovered = false; resume(); });
-    card.addEventListener('focusin', () => { focused = true; pause(); });
+    card.addEventListener('focusin', (e) => {
+      if (!focused && e.relatedTarget && !host.contains(e.relatedTarget) && e.relatedTarget !== host) cameFrom = e.relatedTarget;
+      focused = true;
+      pause();
+    });
     card.addEventListener('focusout', () => { focused = false; resume(); });
     dismiss.addEventListener('click', remove);
 

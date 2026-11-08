@@ -446,9 +446,9 @@ test('Generated keeps the delete guards', () => {
   assert.match(fnSource('sidebar-generated.js', 'handleStudioBulkDelete'), /NLME\.bulkDeletePlan\(/);
   // Both deletes ask first, in the panel's own danger dialog
   const row = fnSource('sidebar-generated.js', 'handleStudioDeleteRow');
-  assert.match(row, /await showDialog\(\{\s*title: `Delete "\$\{item\.label\}"\?`[\s\S]*danger: true[\s\S]*if \(!sure \|\| !studioDeleteStillValid\(target\)\) return;/);
+  assert.match(row, /await showDialog\(\{\s*title: `Delete "\$\{item\.label\}"\?`[\s\S]*danger: true[\s\S]*if \(!sure \|\| !await studioDeleteStillValid\(target\)\) return;/);
   const bulkDelete = fnSource('sidebar-generated.js', 'handleStudioBulkDelete');
-  assert.match(bulkDelete, /await showDialog\(\{[\s\S]*\$\{skippedNote\}[\s\S]*confirmLabel: `Delete \$\{n\}`[\s\S]*danger: true[\s\S]*if \(!sure \|\| !studioDeleteStillValid\(target\)\) return;/);
+  assert.match(bulkDelete, /await showDialog\(\{[\s\S]*\$\{skippedNote\}[\s\S]*confirmLabel: `Delete \$\{n\}`[\s\S]*danger: true[\s\S]*if \(!sure \|\| !await studioDeleteStillValid\(target\)\) return;/);
   // Hidden with its tab; off during a job
   const bulk = fnSource('sidebar-generated.js', 'updateStudioBulkButtonsState');
   assert.match(bulk, /deleteBulkBtn\.hidden = !controller \|\| openPanelTab\(\) !== 'studio'/);
@@ -740,16 +740,53 @@ test('the page overlay is modal to assistive tech and focuses Cancel without scr
 test('a delete reaches only the tab and notebook it was asked about', () => {
   for (const name of ['handleStudioDeleteRow', 'handleStudioBulkDelete']) {
     const src = fnSource('sidebar-generated.js', name);
-    const asked = src.indexOf('const target = studioDeleteTarget()');
+    const asked = src.indexOf('const target = await studioDeleteTarget()');
     const dialog = src.indexOf('await showDialog(');
     assert.ok(asked >= 0 && asked < dialog, `${name} captures its target before the dialog`);
-    assert.match(src, /if \(!sure \|\| !studioDeleteStillValid\(target\)\) return;/);
+    assert.match(src, /if \(!sure \|\| !await studioDeleteStillValid\(target\)\) return;/);
     assert.match(src, /sendStudioDelete\(item, \{[^}]*tabId: target\.tabId \}\)/);
   }
-  assert.match(fnSource('sidebar-generated.js', 'handleStudioBulkDelete'), /if \(!NLME\.sameDeleteTarget\(target, studioDeleteTarget\(\)\)\)/);
+  assert.match(fnSource('sidebar-generated.js', 'handleStudioBulkDelete'), /if \(!NLME\.sameDeleteTarget\(target, await studioDeleteTarget\(\)\)\)/);
+  // The notebook comes from the tab's URL, not only the panel's id (still '' at panel start)
+  assert.match(fnSource('sidebar-generated.js', 'studioDeleteTarget'), /chrome\.tabs\.get\(tabId\)[\s\S]*NLME\.deleteTarget\(\{ tabId, url, panelNotebookId: lastPanelNotebookId \}\)/);
   // A notebook switch closes every open dialog, answering false
   assert.match(fnSource('sidebar-core.js', 'resetChatPanel'), /closePanelDialogs\(\);/);
   assert.match(fnSource('sidebar-core.js', 'notePageMove'), /closePanelDialogs\(\);/);
+});
+
+// 1.9.5: the tab leaving the notebook closes the dialogs, as a switch does
+test('the tab leaving the notebook closes the panel dialogs', () => {
+  const vm = require('node:vm');
+  const closed = [];
+  let released = 0;
+  const context = {
+    NLME: require(path.join(ROOT, 'takeout-shared.js')),
+    lastPanelNotebookId: 'aaaa',
+    isNotebookUrl: url => /^https:\/\/notebook\.google\.com\//.test(url),
+    releasePageLoad: () => { released++; },
+    closePanelDialogs: kind => closed.push(kind ?? 'all'),
+    closeExportSheet: () => closed.push('sheet'),
+    holdForPageLoad: () => {}
+  };
+  vm.createContext(context);
+  vm.runInContext(fnSource('sidebar-core.js', 'notePageMove'), context);
+  context.notePageMove({ url: 'https://notebook.google.com/notebook/aaaa?x=1' });
+  assert.deepEqual(closed, [], 'the same notebook keeps them');
+  context.notePageMove({ url: 'https://example.com/' });
+  assert.deepEqual(closed, ['all'], 'another site closes them');
+  context.notePageMove({ url: 'https://notebook.google.com/' });
+  assert.deepEqual(closed, ['all', 'all'], 'the notebook list closes them');
+  context.notePageMove({ url: 'https://notebook.google.com/notebook/bbbb' });
+  assert.deepEqual(closed, ['all', 'all', 'sheet', 'all'], 'another notebook closes the sheet and them');
+  assert.equal(released, 3);
+});
+
+// 1.9.5: a bulk delete that stops because the target changed still rescans
+test('a stopped bulk delete rescans the list', () => {
+  const bulk = fnSource('sidebar-generated.js', 'handleStudioBulkDelete');
+  assert.match(bulk, /stopped there`, 'warning'\);\s*stopped = true;[^\n]*\n\s*break;/);
+  assert.doesNotMatch(bulk.slice(bulk.indexOf('let stopped')), /\breturn;/);
+  assert.match(bulk, /_studioSignature = null;[^\n]*\n\s*await scanStudioPage\(\);\s*\}\s*$/);
 });
 
 test('an export that is cancelled or over closes its mid-export dialog', () => {
@@ -871,12 +908,62 @@ test('one focus ring for every control, drawn from the theme', () => {
   }
 });
 
-test('one destructive button class', () => {
+test('one destructive button family: solid, and tinted for Delete Selected', () => {
   const readers = ['styles.css', 'sidebar.html', ...fs.readdirSync(ROOT).filter(f => /^sidebar-.*\.js$/.test(f))];
   for (const file of readers) {
     assert.doesNotMatch(fs.readFileSync(path.join(ROOT, file), 'utf8'), /btn-danger/, `${file} still names btn-danger`);
   }
-  assert.match(PANEL_CSS(), /\.btn-destructive\s*\{/);
+  const css = PANEL_CSS();
+  assert.match(css, /\.btn-destructive\s*\{\s*background: var\(--danger\);/);
+  // The tinted form is a modifier of the same class, from the tokens, so dark mode follows
+  const soft = css.match(/\.btn-destructive\.btn-destructive-soft\s*\{([^}]*)\}/);
+  assert.ok(soft, 'the tinted form');
+  assert.match(soft[1], /background: color-mix\(in srgb, var\(--danger\) \d+%, var\(--bg\)\);/);
+  assert.match(soft[1], /color: var\(--danger\);/);
+  assert.match(css, /\.btn-destructive\.btn-destructive-soft:hover:not\(:disabled\)\s*\{/);
+  assert.match(fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8'), /id="studio-delete-selected-btn" class="btn btn-destructive btn-destructive-soft"/);
+  // A dialog's confirm stays solid
+  assert.match(fnSource('sidebar-core.js', 'showDialog'), /confirmBtn\.className = danger \? 'btn btn-destructive' : 'btn btn-primary';/);
+});
+
+// 1.9.5: one type scale for the panel and the page overlay
+test('every font size is on the type scale (11.5, 13, 15, 26px)', () => {
+  const SCALE = new Set(['11.5', '13', '15', '26']);
+  const sources = {
+    'styles.css': fs.readFileSync(path.join(ROOT, 'styles.css'), 'utf8'),
+    'sidebar.html': fs.readFileSync(path.join(ROOT, 'sidebar.html'), 'utf8'),
+    'content.js': fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8')
+  };
+  for (const f of fs.readdirSync(ROOT).filter(f => /^sidebar-.*\.js$/.test(f))) sources[f] = fs.readFileSync(path.join(ROOT, f), 'utf8');
+  let seen = 0;
+  for (const [file, text] of Object.entries(sources)) {
+    // CSS declarations and inline styles: font-size: N, and the font shorthand with a size
+    for (const m of text.matchAll(/font-size:\s*([^;"'`}\n]+)/g)) {
+      seen++;
+      const value = m[1].trim();
+      if (value === 'inherit') continue;
+      const px = value.match(/^([\d.]+)px$/);
+      assert.ok(px && SCALE.has(px[1]), `${file}: font-size ${value} is off the scale`);
+    }
+    for (const m of text.matchAll(/\bfont:\s*([^;"'`}\n]+)/g)) {
+      assert.match(m[1].trim(), /^inherit$/, `${file}: font shorthand ${m[1]}`);
+    }
+    assert.doesNotMatch(text, /\.style\.fontSize\s*=/, `${file} sets a size from script`);
+  }
+  assert.ok(seen > 50);
+  // Headings stay larger than body text
+  const css = PANEL_CSS();
+  const size = selector => {
+    const rule = css.match(new RegExp(`(?:^|\\})\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`));
+    assert.ok(rule, selector);
+    return parseFloat(rule[1].match(/font-size:\s*([\d.]+)px/)[1]);
+  };
+  const body = size('body');
+  // Controls inherit it, not the browser's own 13.33px
+  assert.match(css, /button, input, select, textarea \{\s*font: inherit;\s*\}/);
+  for (const heading of ['.settings-header h2', '.health-check-header h2']) assert.ok(size(heading) > body, `${heading} is larger than body`);
+  const overlay = overlayCss();
+  assert.ok(parseFloat(overlay.match(/\.heading \{[^}]*font-size: ([\d.]+)px/)[1]) > parseFloat(overlay.match(/\.line \{[^}]*font-size: ([\d.]+)px/)[1]));
 });
 
 test('every class and id the panel stylesheet names has a reader', () => {
@@ -1152,4 +1239,40 @@ test('artifact, note and source picks all go through the strict resolver, and th
 
 test('a pick refused for a shared title is not retried', () => {
   assert.match(fnSource('sidebar-core.js', 'retryDownload'), /if \(error && \(error\.formatNotOffered \|\| NLME\.isSameTitleRefusal\(error\)\)\) throw error;/);
+});
+
+// 1.9.5: Start puts the focus straight on the progress view's Cancel
+test('Start in the export sheet hands the focus to the progress view', () => {
+  const start = fnSource('sidebar-sheet.js', 'startExportSheet');
+  assert.match(start, /closeExportSheet\(\{ starting: true \}\);\s*showProgressView\(\{ title \}\);/);
+  assert.ok(start.indexOf('showProgressView(') < start.indexOf('tabStillOnPanelNotebook'), 'the view is up before the first wait');
+  assert.match(start, /if \(!jobLock\.current\(\)\) hideProgressView\(\);\s*\/\/[^\n]*\n\s*if \(!_sheet && document\.activeElement === document\.body\) returnSheetFocus\(opener\);/);
+  assert.match(fnSource('sidebar-sheet.js', 'closeExportSheet'), /if \(!starting\) returnSheetFocus\(switched \? null : opener\);/);
+  // A Cancel before the shell listens is kept, and the shell reads it before it begins
+  assert.match(fnSource('sidebar-core.js', 'requestCancel'), /if \(sheetStarting && activeShellTabId === null\) startCancelRequested = true;\s*if \(!jobLock\.current\(\)\) return;/);
+  const shell = fnSource('sidebar-takeout.js', 'withExportShell');
+  assert.equal((shell.match(/if \(startCancelled\(\)\) return \{ declined: true \};/g) || []).length, 2);
+  assert.ok(shell.indexOf('startCancelled()') < shell.indexOf('preflightWarn('));
+  assert.ok(shell.lastIndexOf('startCancelled()') < shell.indexOf('SHOW_EXPORT_OVERLAY'));
+  assert.match(shell, /addListener\(cancelListener\);\s*if \(startCancelRequested\) cancelled = true;/);
+});
+
+// 1.9.5: the time left ticks between counts and stops with the run
+test('the time left ticks each second and stops on finish, cancel and hide', () => {
+  assert.match(fnSource('sidebar-results.js', 'progressLeftText'), /NLME\.tickedTimeLeft\(run\.left, \(Date\.now\(\) - run\.leftAt\) \/ 1000\)/);
+  const tick = fnSource('sidebar-results.js', 'startProgressTick');
+  assert.match(tick, /setInterval\(/);
+  assert.match(tick, /progressRun !== run \|\| dockMode !== 'progress' \|\| run\.finishing/);
+  assert.match(fnSource('sidebar-results.js', 'showProgressView'), /progressRun = newProgressRun\(\);\s*startProgressTick\(progressRun\);/);
+  for (const [file, name] of [['sidebar-results.js', 'setProgressFinishing'], ['sidebar-results.js', 'hideProgressView'], ['sidebar-core.js', 'requestCancel']]) {
+    assert.match(fnSource(file, name), /stopProgressTick\(\)/, name);
+  }
+});
+
+// 1.9.5: the reload note gives the focus back when it goes with it
+test('the reload note returns the focus it held', () => {
+  const note = contentFn('showReloadedNote');
+  assert.match(note, /const hadFocus = document\.activeElement === host;\s*host\.remove\(\);/);
+  assert.match(note, /cameFrom\?\.isConnected[^\n]*cameFrom\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(note, /e\.relatedTarget && !host\.contains\(e\.relatedTarget\)/);
 });

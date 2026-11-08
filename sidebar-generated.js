@@ -201,14 +201,21 @@ function isStudioItemDeletable(item) {
   return !!item;
 }
 
-// The notebook and tab a delete is asked about, to check again after the dialog
-function studioDeleteTarget() {
-  return { tabId: _studioTabId, notebookId: lastPanelNotebookId };
+// The notebook and tab a delete is asked about, to check again after the dialog: the
+// notebook the tab's URL names (NLME.deleteTarget), so a delete asked before the panel
+// has its notebook id is not refused once the id arrives for the same notebook
+async function studioDeleteTarget() {
+  const tabId = _studioTabId;
+  let url = '';
+  try {
+    url = (await chrome.tabs.get(tabId))?.url || '';
+  } catch (_) { /* no tab: no notebook, so the check refuses */ }
+  return NLME.deleteTarget({ tabId, url, panelNotebookId: lastPanelNotebookId });
 }
 
 // False, with a warning, when the panel moved to another notebook or tab
-function studioDeleteStillValid(asked) {
-  if (NLME.sameDeleteTarget(asked, studioDeleteTarget())) return true;
+async function studioDeleteStillValid(asked) {
+  if (NLME.sameDeleteTarget(asked, await studioDeleteTarget())) return true;
   showToast('The notebook changed, so nothing was deleted', 'warning');
   return false;
 }
@@ -357,14 +364,14 @@ async function handleStudioDownloadRow(item, btn) {
 async function handleStudioDeleteRow(item, btn) {
   if (!item || !isStudioItemDeletable(item)) return;
 
-  const target = studioDeleteTarget();
+  const target = await studioDeleteTarget();
   const sure = await showDialog({
     title: `Delete "${item.label}"?`,
     body: 'It is removed from the notebook. This cannot be undone.',
     confirmLabel: 'Delete',
     danger: true
   });
-  if (!sure || !studioDeleteStillValid(target)) return;
+  if (!sure || !await studioDeleteStillValid(target)) return;
 
   if (btn) btn.disabled = true;
   try {
@@ -394,14 +401,14 @@ async function handleStudioBulkDelete() {
 
   const n = deletable.length;
   const skippedNote = skipText ? `\n\n${skipText} will be skipped; delete those one by one.` : '';
-  const target = studioDeleteTarget();
+  const target = await studioDeleteTarget();
   const sure = await showDialog({
     title: n === 1 ? 'Delete 1 item?' : `Delete ${n} items?`,
     body: `${n === 1 ? 'It is' : 'They are'} removed from the notebook. This cannot be undone.${skippedNote}`,
     confirmLabel: `Delete ${n}`,
     danger: true
   });
-  if (!sure || !studioDeleteStillValid(target)) return;
+  if (!sure || !await studioDeleteStillValid(target)) return;
 
   const bulkBtn = document.getElementById('studio-delete-selected-btn');
   if (bulkBtn) bulkBtn.disabled = true;
@@ -415,11 +422,13 @@ async function handleStudioBulkDelete() {
   const queue = [...studioItems, ...sourceNotes];
 
   let okCount = 0;
+  let stopped = false;
   for (let i = 0; i < queue.length; i++) {
     const item = queue[i];
-    if (!NLME.sameDeleteTarget(target, studioDeleteTarget())) {
+    if (!NLME.sameDeleteTarget(target, await studioDeleteTarget())) {
       showToast(`The notebook changed: deleted ${okCount}/${queue.length}, stopped there`, 'warning');
-      return;
+      stopped = true; // still rescanned below: the list and Delete Selected show what is left
+      break;
     }
     try {
       await sendStudioDelete(item, { useIndex: false, tabId: target.tabId });
@@ -434,8 +443,10 @@ async function handleStudioBulkDelete() {
     }
   }
 
-  const skippedText = skipText ? `, skipped ${skipText}` : '';
-  showToast(`Deleted ${okCount}/${queue.length} Studio item(s)${skippedText}`, okCount === queue.length && !skipText ? 'success' : 'warning');
+  if (!stopped) {
+    const skippedText = skipText ? `, skipped ${skipText}` : '';
+    showToast(`Deleted ${okCount}/${queue.length} Studio item(s)${skippedText}`, okCount === queue.length && !skipText ? 'success' : 'warning');
+  }
   if (queue.some(item => item.kind !== 'artifact')) setTabCount('notes', null); // recounted when Notes rescans
   _studioSignature = null; // always a redraw
   await scanStudioPage();

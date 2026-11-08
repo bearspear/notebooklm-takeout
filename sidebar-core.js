@@ -1441,10 +1441,13 @@ async function endStalledPageLoad(hold) {
   }
 }
 
-// The active tab reported a new URL. Synchronous: the sheet must not outlive this event
+// The active tab reported a new URL. Synchronous: the sheet must not outlive this event.
+// Off the notebook (another site, the notebook list) the dialogs close too, as on a
+// switch: a Delete asked about this notebook must not reach the page it comes back to.
 function notePageMove({ url, status }) {
   if (!isNotebookUrl(url) || !NLME.tabLeftPanelNotebook(url, lastPanelNotebookId)) {
     releasePageLoad();
+    if (!NLME.notebookIdFromUrl(url)) closePanelDialogs();
     return;
   }
   closeExportSheet({ switched: true });
@@ -2059,12 +2062,19 @@ function refreshListButtons() {
 // lock. requestCancel sets chainCancelRequested; the chain checks it before each step.
 let chainActive = false;
 let chainCancelRequested = false;
+// From Start in the export sheet (sheetStarting) the progress view and its Cancel are
+// up before the export's shell listens: a Cancel then is noted here, and the shell
+// reads it before it begins (startCancelled). startExportSheet sets and clears both.
+let sheetStarting = false;
+let startCancelRequested = false;
 
 // Same path as the page overlay's Cancel button: the content script flags the
 // export as cancelled and broadcasts CANCEL_EXPORT to every running exporter.
 // Target tab: activeShellTabId (sidebar-takeout.js, the running shell's tab),
 // else jobTabId (the active tab when the job started), else the current tab.
 async function requestCancel() {
+  stopProgressTick(); // the time left means nothing once cancelled
+  if (sheetStarting && activeShellTabId === null) startCancelRequested = true;
   if (!jobLock.current()) return;
   // A Retry / Resume chain has moments with no shell (between two steps): note the
   // cancel on the chain so it does not start the next step

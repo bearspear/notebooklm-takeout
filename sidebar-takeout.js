@@ -324,6 +324,9 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
       return { aborted: true };
     }
 
+    // A Cancel pressed since Start in the export sheet, before this shell listened
+    if (startCancelled()) return { declined: true };
+
     // Pre-flight warning (the DOM-health type, e.g. 'chat'): after the tab lookup, inside
     // the shell, so its cleanup covers it
     if (preflight) await preflightWarn(tab.id, preflight);
@@ -358,6 +361,8 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
       }
     }
 
+    if (startCancelled()) return { declined: true };
+
     // Overlay on the page
     await chrome.tabs.sendMessage(tab.id, {
       type: NLME.MSG.SHOW_EXPORT_OVERLAY,
@@ -379,6 +384,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
       }
     };
     chrome.runtime.onMessage.addListener(cancelListener);
+    if (startCancelRequested) cancelled = true; // pressed while the overlay was being put up
 
     activeShellTabId = tab.id;
     const tabId = tab.id;

@@ -1335,7 +1335,25 @@
   // A delete asked about one notebook's tab may only reach that tab: true when
   // the panel still shows the same notebook in the same tab as when it asked.
   function sameDeleteTarget(asked, now) {
-    return !!asked && !!now && asked.tabId != null && asked.tabId === now.tabId && asked.notebookId === now.notebookId;
+    return !!asked && !!now && asked.tabId != null && !!asked.notebookId && asked.tabId === now.tabId && asked.notebookId === now.notebookId;
+  }
+
+  // What a delete is about: the tab and the notebook its URL names. The panel's own id
+  // is still '' at panel start, or after a Refresh that found nothing; the URL is not.
+  // A panel id that names another notebook than the tab means the tab is ahead of the
+  // panel, so the list is not the tab's: no notebook, which sameDeleteTarget refuses.
+  function deleteTarget({ tabId, url, panelNotebookId }) {
+    const id = notebookIdFromUrl(url);
+    return { tabId: tabId ?? null, notebookId: id && (!panelNotebookId || panelNotebookId === id) ? id : '' };
+  }
+
+  // The time left to show between progress events: the last estimate counted down by
+  // the seconds since, but never below 30 s (the last "about 1 min") by ticking alone,
+  // since one long item can run past the estimate. An estimate already under it stays.
+  const TICK_FLOOR_SECONDS = 30;
+  function tickedTimeLeft(left, waited) {
+    if (left === null || !Number.isFinite(left)) return null;
+    return Math.max(Math.min(left, TICK_FLOOR_SECONDS), left - Math.max(0, waited || 0));
   }
 
   // Seconds left, at least what the work left is expected to take. A run's pace so far
@@ -3377,6 +3395,8 @@ footer { margin-top: 3rem; }
     overlayView,
     overlayCount,
     sameDeleteTarget,
+    deleteTarget,
+    tickedTimeLeft,
     honestTimeLeft,
     calmTimeLeft,
     progressLeftLine,
