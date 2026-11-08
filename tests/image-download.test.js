@@ -477,6 +477,10 @@ function notesPanel({ fetchImpl = byUrl, noteData, notesSettings = { exportNoteW
   vm.runInContext(topLevelFn('sidebar-notes.js', 'extractNoteItem'), sandbox);
   vm.runInContext(topLevelFn('sidebar-notes.js', 'getEnabledNoteVersions'), sandbox);
   vm.runInContext(topLevelFn('sidebar-notes.js', 'exportSingleNote'), sandbox);
+  // exportSingleNote starts its own session with the real sleep; the 403
+  // backoffs it would wait out (5 s, 15 s per image) are not what these tests check
+  const begin = sandbox.beginImageSession;
+  sandbox.beginImageSession = (tabId, isCancelled, sleep = null) => begin(tabId, isCancelled, sleep || (async () => {}));
   vm.runInContext(topLevelFn('sidebar-notes.js', 'buildNotesFiles'), sandbox);
   return { ...panel, downloads, toasts };
 }
