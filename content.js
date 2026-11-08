@@ -479,9 +479,10 @@
     [NLME.MSG.SCAN_NOTES]: {
       async: false,
       run(message, sender, sendResponse) {
-        // Scan for notes
+        // Scan for notes; list says whether the Studio list has drawn
+        // (NLME.notesSettleDecision reads it)
         const notes = scanForNotes();
-        sendResponse({ notes });
+        sendResponse({ notes, list: notesListState() });
       }
     },
     [NLME.MSG.SCAN_SOURCES]: {
@@ -806,6 +807,16 @@
   // ==================== NOTE EXTRACTION ====================
 
   // Scan for notes in the page
+  // Has the Studio list drawn? items: its rows (notes and other items); library:
+  // its container is on the page; loading: a spinner where the rows go. An empty
+  // notebook shows the container with no rows and no spinner.
+  function notesListState() {
+    const container = document.querySelector('.artifact-library-container') || document.querySelector('artifact-library');
+    const items = document.querySelectorAll('artifact-library-item, artifact-library-note').length;
+    const spinner = 'mat-spinner, mat-progress-spinner, mat-progress-bar, [role="progressbar"]';
+    return { items, library: !!container, loading: !!container && items === 0 && !!container.querySelector(spinner) };
+  }
+
   function scanForNotes() {
     console.log('[NotebookLM Takeout] Scanning for notes...');
 

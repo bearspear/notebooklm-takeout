@@ -360,7 +360,7 @@ Views (1.9.2): `showView(view, { save, focus })` in sidebar-core.js is the one s
 
 Home's counts: `refreshHome({ force })` runs `HOME_SCANS` in order (`scanSourcesData`, `scanNotesData`, `scanGeneratedItems`), plain DOM reads, painting through `setTabCount`, which paints the tab label and the Home row, so the two cannot differ and a delete in Generated reaches Home. Generated's count is `scanGeneratedItems`, the list's own data, not `scanArtifactsData` (artifacts only). A `null` count shows as "—" (`NLME.homeCountText`). Chat is never scanned from Home: its row shows Load and only opens the tab. Without `force`, `refreshHome` does nothing while all three counts are known. It skips on a list and during a job (`afterJobChecks` calls it); during a settle wait (`settleWaits`) it only remembers a force (`homeForceOwed`) for the wait's owner to run. `readHomeCounts` is one pass; each await rechecks `homeGate` (`NLME.createLatestGate`, bumped by `resetChatPanel`), the job lock, the view, the settle and `lastPanelNotebookId`, and asks the tab's URL too, since the panel hears of a navigation late. `syncHomeControls` (from `checkStatus`, a scan, a job or settle's start and end) repaints the rows, disables them and Export everything without a notebook id, disables Export everything during a settle, and shows one line by `NLME.homeNotice`. Off a notebook rows show "—" (`aria-label` "not available") and the counts stay in `_tabCounts`.
 
-A page draws its lists after it reports complete, and an undrawn list reads as 0. So a 0 is not known (`homeCountsKnown`): `NLME.homeCountRead` shows it as "—" and re-reads on a timer (`HOME_REREAD_WAITS`: reads at 0, 1.5 s and 4 s, all three lists each pass). A job, a view change or a newer read ends the re-reads. When the attempts run out a 0 is believed and goes in `_homeZeroConfirmed`, so an empty notebook settles and stays settled until `complete` or a switch clears the set, or items are found. A failed read is `null`, never 0; after the attempts Home shows the read-failed line with the Refresh hint. `scanNotesData(tabId, { strict: true })` (Home, Studio) and `scanGeneratedItems` throw on an error or a missing response; Export everything keeps the default, where a missing response reads as no notes ("none in notebook") and only a rejected message is a failed scan. A switch reported by `complete` gets the settle too (`PAGE_SETTLE_MS`), like in-app navigation.
+A page draws its lists after it reports complete, and an undrawn list reads as 0. So a 0 is not known (`homeCountsKnown`): `NLME.homeCountRead` shows it as "—" and re-reads on a timer (`HOME_REREAD_WAITS`: reads at 0, 1.5 s and 4 s, all three lists each pass). A job, a view change or a newer read ends the re-reads. When the attempts run out a 0 is believed and goes in `_homeZeroConfirmed`, so an empty notebook settles and stays settled until `complete` or a switch clears the set, or items are found. A failed read is `null`, never 0; after the attempts Home shows the read-failed line with the Refresh hint. `scanNotesData(tabId, { strict: true })` (Home, Studio) and `scanGeneratedItems` throw on an error or a missing response; Export everything and Resume wait for the list instead (`scanNotesSettled`, see Export everything). A switch reported by `complete` gets the settle too (`PAGE_SETTLE_MS`), like in-app navigation.
 
 A same-notebook tab event, and `focus` on the panel window (`handlePanelFocus`), read Home again though the counts are known (`refreshHomeFresh`, throttled by `HOME_READ_THROTTLE_MS`). Neither runs during a job, while hidden (focus) or on a list. Refresh on Home goes through `reconcileHome` -> `refreshForTab(activeTab, { homeForce })`, so a notebook the panel missed is picked up. `handleTabChange` ignores `onActivated` from other windows: the tab must be the panel window's active tab.
 
@@ -973,7 +973,9 @@ Already covered in [Export pipelines](#export-pipelines-deep), but the wiring:
 - Export: `NLME.generatedExportPlan(selected) -> { artifacts, notes, skipped }`. The action counts artifacts + notes;
   `NLME.studioItemUnavailableReason(item)` is the one rule for `skipped` and the row's disabled Download and title:
   `downloadable` false, or `moreIndex < 0` (no More button: `pickByIndexThenTitleStrict(titles, -1, title)` would hit a
-  same-titled ready item and report success). `scanArtifactsData`, so Export everything, does not apply it. Skipped items
+  same-titled ready item and report success). Since 1.9.5 Export everything and Resume apply the same rule to `scanArtifactsData`'s items
+  (`NLME.artifactExportPlan`). Every such skip is a `skipped_ambiguous` warning in errors.md (`NLME.generatedSkipWarnings` here: the
+  artifacts side's errors.md, or the notes side's when no artifact is exported; Flashcards and Quiz stay a panel line). Skipped items
   stay selectable for delete (default selection is `none` for that
   reason). `exportSelectedGenerated` runs `runRetryChain` with `GENERATED_EXPORT_STEPS` (artifacts, then notes, as
   fresh exports, on `_studioTabId`) under `runExclusive('Studio export')` + `runChain`: a Cancel or a declined
@@ -1298,6 +1300,24 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined out
   (before this, the PPTX click hit PDF again and Chrome saved `Name (1).pdf`, identical bytes). A single
   `settings.slidesFormat = pptx` request keeps the old fallback, so such a deck still gets its PDF. Tab
   downloads keep the single `settings.slidesFormat`.
+- **No-More artifacts (1.9.5).** The artifacts scan goes through `NLME.artifactExportPlan(items, { all })`: an enabled
+  item with no More button (`index` -1, still being generated) is skipped, as in the Studio export, since its download
+  resolves by title and would fetch a ready item of the same title. Two ready items of one title both export. Each skip
+  is `{ type: 'skipped_ambiguous', title, message: 'still being generated or has no menu[; a ready item has the same title]' }`,
+  handed to `runArtifactsJob` as `seedErrors` (runExportJob's), so it leads the artifacts errors.md and, prefixed, the
+  root errors.md, and counts in the category's M ("artifacts 3/4"). Skipped items are not recorded (as in the Studio
+  export). With only skipped items the runner still runs on none, writing an errors-only package; the category is
+  `failed`. It is an error, not an INFO notice: `countExportErrors` counts it, so `manifest.json`'s `errorCount` makes
+  the checker WARN. Resume applies the same plan to its matched keys (the key stays in the record) and seeds the
+  warnings into its Artifacts step (`runRetryChain(…, seeds)`; with no artifact to export, the panel alone). Retry
+  re-runs failed items only, which had a More button, so it skips nothing.
+- **Notes settle (1.9.5).** The notes scan of Export everything and Resume is `scanNotesSettled` (sidebar-notes.js):
+  SCAN_NOTES every 400 ms; content.js answers `list: notesListState()` (`items`: Studio rows, `library`: the list
+  container is there, `loading`: a spinner and no rows). `NLME.notesSettleDecision` (`NLME.NOTES_SETTLE`): rows drawn
+  → believed when two reads agree (notes found, or none when only other items are there); a drawn list with no rows →
+  "none in notebook" after 4 s of that; no list, a spinner, or no answer → wait up to 8 s, then a failed scan
+  ("Notes: Scan failed: The notes list did not finish loading within 8 s; …" or "No answer from the page …"). A Cancel
+  during the wait cancels the takeout (no "Scan failed").
 - **Formula audit (1.9.5).** "Written" is what the converter wrote, not a re-read of the Markdown. The KaTeX
   rule marks each formula it writes (`NLME.markWrittenFormula`, a private-use `\uE002` before its `$`); `convert()` takes the
   marks out of its final text and counts them (`NLME.takeFormulaMarks`, `NLMEMarkdown.formulasWritten()`), and

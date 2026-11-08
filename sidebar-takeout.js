@@ -659,6 +659,7 @@ async function runFullTakeout({ zip = NLME.takeoutZipChoice(settings) } = {}) {
     const folder = zipMode ? null : NLME.takeoutFolderName(folderName, shell.timestamp);
     console.log(`[NotebookLM Takeout] Full Takeout (${zipMode ? 'ZIP' : `folder "${folder}"`})`);
 
+    let artifactSkips = []; // NLME.artifactExportPlan's warnings, from the artifacts scan
     const categories = [
       {
         name: 'Sources', folder: 'sources',
@@ -672,8 +673,9 @@ async function runFullTakeout({ zip = NLME.takeoutZipChoice(settings) } = {}) {
       },
       {
         name: 'Notes', folder: 'notes',
+        // Read until the list settles: an undrawn list is not "none in notebook"
         scan: async () => {
-          const notes = await scanNotesData(tabId, { strict: true });
+          const notes = await scanNotesSettled(tabId, { isCancelled: shell.isCancelled });
           stampJobKeys('notes', notes);
           return notes;
         },
@@ -696,13 +698,19 @@ async function runFullTakeout({ zip = NLME.takeoutZipChoice(settings) } = {}) {
       {
         name: 'Artifacts', folder: 'artifacts',
         // Keys over the whole list, disabled items included (the Generated tab's
-        // list), then only the enabled items are exported and recorded
+        // list), then only the enabled items with a More button are exported and
+        // recorded. One without (still being generated) is skipped, as in the
+        // Studio export: its download goes by title and would fetch a ready item of
+        // the same title. Each skip leads the artifacts errors.md and counts in M.
         scan: async () => {
           const all = await scanArtifactsData(tabId);
           stampJobKeys('artifacts', all);
-          return all.filter(item => !item.disabled);
+          const plan = NLME.artifactExportPlan(all);
+          artifactSkips = plan.warnings;
+          return plan.runnable;
         },
-        run: (catShell, items, target) => runArtifactsJob(catShell, items, { ...target, bothSlideFormats: true })
+        count: items => items.length + artifactSkips.length,
+        run: (catShell, items, target) => runArtifactsJob(catShell, items, { ...target, bothSlideFormats: true, seedErrors: artifactSkips })
       }
     ].map(c => ({ ...c, status: null, selected: 0, exported: 0, failed: 0, zips: [], parts: 0, packages: 0, errors: [], auditOk: true, items: null, failedItems: [] }));
     const takeoutErrors = []; // not tied to one category
@@ -735,6 +743,12 @@ async function runFullTakeout({ zip = NLME.takeoutZipChoice(settings) } = {}) {
         c.selected = c.count ? c.count(c.items) : c.items.length;
         if (c.isEmpty ? c.isEmpty(c.items) : c.selected === 0) c.status = 'empty';
       } catch (error) {
+        if (shell.isCancelled()) {
+          // A Cancel during the notes wait: the scan stopped, it did not fail
+          takeoutErrors.push({ type: 'cancelled', message: 'Cancelled by user during the scan; the remaining categories were skipped' });
+          stopRest = true;
+          break;
+        }
         console.error(`[NotebookLM Takeout] Full Takeout: ${c.name} scan failed:`, error);
         c.status = 'failed';
         c.errors.push(`Scan failed: ${error.message || error}`);
@@ -936,8 +950,8 @@ async function runFullTakeout({ zip = NLME.takeoutZipChoice(settings) } = {}) {
 // its outcome (see withExportShell) so the chain can combine them.
 const TAKEOUT_RETRY_STEPS = [
   { name: 'Sources', run: (items, tabId) => exportSources(items, { tabId, updateRecord: true }) },
-  { name: 'Notes', run: (items, tabId) => exportNotesAsMarkdown(items, { tabId, updateRecord: true }) },
-  { name: 'Artifacts', run: (items, tabId, zip) => downloadAllArtifacts(tabId, items, { updateRecord: true, zip }) }
+  { name: 'Notes', run: (items, tabId, zip, seedErrors) => exportNotesAsMarkdown(items, { tabId, updateRecord: true, seedErrors }) },
+  { name: 'Artifacts', run: (items, tabId, zip, seedErrors) => downloadAllArtifacts(tabId, items, { updateRecord: true, zip, seedErrors }) }
 ];
 
 // Show a takeout-level outcome with "Retry N failed" for `failed`
@@ -994,7 +1008,7 @@ async function chainTabOnRunNotebook(tabId) {
  * @returns {{ steps: object[], notRun: object[] }} the inputs of
  *   NLME.combineRetryOutcomes
  */
-async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TAKEOUT_RETRY_STEPS, zip) {
+async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TAKEOUT_RETRY_STEPS, zip, seeds = {}) {
   const steps = [];
   const notRun = [];
   let stopped = false;
@@ -1013,7 +1027,7 @@ async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TA
       chainProgress.later = chainSteps.slice(chainSteps.indexOf(step) + 1).map(s => [s.name, (itemsByName[s.name] || []).length]);
       let out;
       try {
-        out = await step.run(items, tabId, zip);
+        out = await step.run(items, tabId, zip, seeds[step.name] || []);
       } catch (error) {
         console.error(`[NotebookLM Takeout] ${verb} ${step.name} failed:`, error);
         showToast('Export failed. Please try again.', 'error');
@@ -1089,7 +1103,7 @@ const RESUME_CATEGORIES = [
   { category: 'sources', name: 'Sources', scan: async tabId => (await scanSourcesData(tabId)).sources },
   // Studio notes and the Sources panel's notes are drawn separately: a key is gone
   // only if the scan shows its own region (see NLME.planResume)
-  { category: 'notes', name: 'Notes', scan: tabId => scanNotesData(tabId, { strict: true }), regionOfType: type => (type === 'Note (Sources panel)' ? 'sources-panel' : 'studio') },
+  { category: 'notes', name: 'Notes', scan: tabId => scanNotesSettled(tabId, { isCancelled: () => chainCancelRequested }), regionOfType: type => (type === 'Note (Sources panel)' ? 'sources-panel' : 'studio') },
   { category: 'artifacts', name: 'Artifacts', scan: tabId => scanArtifactsData(tabId) }
 ];
 
@@ -1160,6 +1174,7 @@ function resumeJob(record) {
       } catch (_) { return false; }
     };
     const itemsByName = {};
+    const seeds = {}; // warnings that lead a step's errors.md (artifacts skipped for no More button)
     const missingByCategory = {};
     const extraErrors = [];
     // No export shell is active while the categories are scanned, so open the
@@ -1196,9 +1211,18 @@ function resumeJob(record) {
       const { matched, missing, unknown } = NLME.planResume(keys, items, { ...JOB_KEY_ACCESSORS[category], regionOfType });
       let runnable = matched;
       if (category === 'artifacts') {
-        runnable = matched.filter(item => !item.disabled);
         for (const item of matched.filter(item => item.disabled)) {
           extraErrors.push({ type: 'not_ready', title: name, message: `${item.label} is not ready to download; it stays in the list to resume` });
+        }
+        // No More button: skipped as in Export everything (NLME.artifactExportPlan).
+        // The key stays in the record; the warning leads the artifacts errors.md,
+        // or, with no artifact to export, the panel alone
+        const plan = NLME.artifactExportPlan(matched, { all: items });
+        const warnings = plan.warnings;
+        runnable = plan.runnable;
+        if (warnings.length) {
+          if (runnable.length) seeds[name] = warnings;
+          else extraErrors.push(...warnings.map(w => ({ ...w, title: `${name}: ${w.title}` })));
         }
       }
       if (runnable.length) itemsByName[name] = runnable;
@@ -1214,7 +1238,11 @@ function resumeJob(record) {
     await clearMissingFromRecord(live, missingByCategory);
 
     const zip = NLME.jobRecordZip(live);
-    const { steps, notRun } = await runRetryChain(itemsByName, tabId, 'Resume', TAKEOUT_RETRY_STEPS, zip);
+    const { steps, notRun } = await runRetryChain(itemsByName, tabId, 'Resume', TAKEOUT_RETRY_STEPS, zip, seeds);
+    // A step that never ran wrote no errors.md: its skips go to the panel
+    for (const [name, warnings] of Object.entries(seeds)) {
+      if (!steps.some(step => step.name === name)) extraErrors.push(...warnings.map(w => ({ ...w, title: `${name}: ${w.title}` })));
+    }
     if (steps.length === 0 && notRun.length === 0 && extraErrors.length === 0) {
       showToast('Nothing left to resume', 'info');
       return;

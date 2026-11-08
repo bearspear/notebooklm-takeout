@@ -245,9 +245,10 @@ function updateStudioBulkButtonsState(controller = _studioListController) {
 
 // The two sides of a Generated export, in this order. Each is the ordinary export
 // with its own job record, on the tab the list was scanned on.
+// seedErrors: the skipped artifacts' warnings, for the side that writes them.
 const GENERATED_EXPORT_STEPS = [
-  { name: 'Artifacts', run: (items, tabId, zip) => downloadAllArtifacts(tabId, items, { zip }) },
-  { name: 'Notes', run: (items, tabId) => exportNotesAsMarkdown(items, { tabId }) }
+  { name: 'Artifacts', run: (items, tabId, zip, seedErrors) => downloadAllArtifacts(tabId, items, { zip, seedErrors }) },
+  { name: 'Notes', run: (items, tabId, zip, seedErrors) => exportNotesAsMarkdown(items, { tabId, seedErrors }) }
 ];
 
 // The Generated action: opens the sheet, whose title says what goes and what cannot.
@@ -280,8 +281,12 @@ function runGeneratedExport(zip) {
     return;
   }
   const tabId = _studioTabId;
+  // Artifacts skipped for a missing More button go to errors.md too: the
+  // artifacts side's, or with none the notes side's (NLME.generatedSkipWarnings)
+  const skipWarnings = NLME.generatedSkipWarnings(plan.skipped, _studioItems);
+  const seeds = skipWarnings.length ? { [plan.artifacts.length ? 'Artifacts' : 'Notes']: skipWarnings } : {};
   return runChain(async () => {
-    const { steps, notRun } = await runRetryChain({ Artifacts: plan.artifacts, Notes: plan.notes }, tabId, 'Export', GENERATED_EXPORT_STEPS, zip);
+    const { steps, notRun } = await runRetryChain({ Artifacts: plan.artifacts, Notes: plan.notes }, tabId, 'Export', GENERATED_EXPORT_STEPS, zip, seeds);
     // Nothing ran (declined, tab closed: already said), or one side ran alone with
     // nothing left out: its own panel stands
     const leftOut = plan.skipped.length > 0;

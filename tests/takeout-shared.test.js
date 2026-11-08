@@ -3478,3 +3478,135 @@ test('shownNotebookName hides the file-name fallback, header and results alike',
   assert.equal(NLME.shownNotebookName(undefined), '');
   assert.equal(NLME.headerName(nb, 'NotebookLM'), 'Notebook');
 });
+
+// ---- 1.9.5: no-More artifacts skipped everywhere, and named in errors.md ----
+
+test('artifactExportPlan skips an item with no More button and names the ready item it shares a title with', () => {
+  const plan = NLME.artifactExportPlan([
+    { index: 0, label: 'Deck', type: 'Slides' },
+    { index: -1, label: 'Deck', type: 'Slides' },
+    { index: -1, label: 'Lonely', type: 'Audio Overview' },
+    { index: 1, label: 'Cards', type: 'Flashcards', disabled: true }
+  ]);
+  assert.deepEqual(plan.runnable.map(i => [i.index, i.label]), [[0, 'Deck']]);
+  assert.deepEqual(plan.warnings, [
+    { type: 'skipped_ambiguous', title: 'Deck', message: 'still being generated or has no menu; a ready item has the same title' },
+    { type: 'skipped_ambiguous', title: 'Lonely', message: 'still being generated or has no menu' }
+  ]);
+});
+
+test('artifactExportPlan keeps two ready items of one title, and an all-ready scan has no warnings', () => {
+  const items = [{ index: 0, label: 'Deck', type: 'Slides' }, { index: 1, label: 'Deck', type: 'Slides' }];
+  const plan = NLME.artifactExportPlan(items);
+  assert.deepEqual(plan.runnable, items);
+  assert.deepEqual(plan.warnings, []);
+});
+
+test('artifactExportPlan takes the shared title from the whole scan when given a part of it', () => {
+  const all = [{ index: 0, label: 'Deck' }, { index: -1, label: 'Deck' }];
+  const plan = NLME.artifactExportPlan([all[1]], { all });
+  assert.deepEqual(plan.runnable, []);
+  assert.match(plan.warnings[0].message, /a ready item has the same title/);
+  assert.doesNotMatch(NLME.artifactExportPlan([all[1]]).warnings[0].message, /same title/);
+});
+
+test('generatedSkipWarnings covers only the artifacts skipped for a missing More button', () => {
+  const rows = [
+    { kind: 'artifact', label: 'Deck', moreIndex: 0, downloadable: true },
+    { kind: 'artifact', label: 'Deck', moreIndex: -1, downloadable: true },
+    { kind: 'artifact', label: 'Quiz me', moreIndex: 1, downloadable: false },
+    { kind: 'something-new', label: 'X' }
+  ];
+  const plan = NLME.generatedExportPlan(rows);
+  assert.equal(plan.skipped.length, 3);
+  assert.deepEqual(NLME.generatedSkipWarnings(plan.skipped, rows), [
+    { type: 'skipped_ambiguous', title: 'Deck', message: 'still being generated or has no menu; a ready item has the same title' }
+  ]);
+  assert.deepEqual(NLME.generatedSkipWarnings([], rows), []);
+});
+
+test('a skipped item is an error in errors.md (the checker warns), not an info notice', () => {
+  const warning = NLME.skippedNoMenuWarning('Deck', true);
+  assert.equal(NLME.countExportErrors([warning]), 1);
+  const report = NLME.buildErrorReport({ title: 'Artifacts Export', errors: [warning] });
+  assert.match(report, /^Errors: 1$/m);
+  assert.match(report, /^## SKIPPED AMBIGUOUS \(1\)\n\n- Deck: still being generated or has no menu; a ready item has the same title$/m);
+  const takeout = NLME.buildErrorReport({ errors: NLME.prefixExportErrors('Artifacts', [warning]) });
+  assert.match(takeout, /^- Artifacts: Deck: still being generated/m);
+});
+
+test('a Resume that could only skip an artifact has no N of M', () => {
+  const ok = { name: 'Notes', message: 'm', level: 'success', saved: [], errors: [], failedItems: [], exported: 1, selected: 1 };
+  const extra = [{ ...NLME.skippedNoMenuWarning('Deck'), title: 'Artifacts: Deck' }];
+  const combined = NLME.combineRetryOutcomes({ steps: [ok], verb: 'Resume', extraErrors: extra });
+  assert.equal(combined.count, null);
+  assert.equal(combined.level, 'warning');
+});
+
+// ---- 1.9.5: the notes list settles before a takeout believes it ----
+
+const listed = (n, extra = {}) => Array.from({ length: n }, (_, i) => ({ index: i, title: `N${i}`, elementType: 'note', ...extra }));
+const read = (at, notes, list = { items: Array.isArray(notes) ? notes.length : 0, library: true, loading: false }) => ({ at, notes, list });
+
+test('notesSettleDecision believes notes once two reads agree', () => {
+  assert.deepEqual(NLME.notesSettleDecision([read(0, listed(3))]), { state: 'wait' });
+  assert.deepEqual(NLME.notesSettleDecision([read(0, listed(3)), read(400, listed(3))]), { state: 'found' });
+  // Still drawing: 3, then 5
+  assert.deepEqual(NLME.notesSettleDecision([read(0, listed(3)), read(400, listed(5))]), { state: 'wait' });
+});
+
+test('notesSettleDecision: a drawn list with other rows and no notes is empty at once', () => {
+  const rows = { items: 4, library: true, loading: false };
+  assert.deepEqual(NLME.notesSettleDecision([read(0, [], rows)]), { state: 'wait' });
+  assert.deepEqual(NLME.notesSettleDecision([read(0, [], rows), read(400, [], rows)]), { state: 'empty' });
+});
+
+test('notesSettleDecision: a drawn list with no rows is believed empty only after it stays so', () => {
+  const empty = { items: 0, library: true, loading: false };
+  const reads = [0, 400, 800, 3600].map(at => read(at, [], empty));
+  assert.equal(NLME.notesSettleDecision(reads).state, 'wait');
+  assert.equal(NLME.notesSettleDecision([...reads, read(4000, [], empty)]).state, 'empty');
+  // A spinner restarts nothing but keeps it waiting
+  const loading = { items: 0, library: true, loading: true };
+  assert.equal(NLME.notesSettleDecision([read(0, [], loading), read(4400, [], loading)]).state, 'wait');
+});
+
+test('notesSettleDecision: an undrawn list is never "none in notebook", and the notes win when they come', () => {
+  const none = { items: 0, library: false, loading: false };
+  assert.equal(NLME.notesSettleDecision([read(0, [], none), read(4400, [], none)]).state, 'wait');
+  const late = NLME.notesSettleDecision([read(0, [], none), read(4400, listed(2)), read(4800, listed(2))]);
+  assert.equal(late.state, 'found');
+  const never = NLME.notesSettleDecision([read(0, [], none), read(8000, [], none)]);
+  assert.equal(never.state, 'failed');
+  assert.match(never.message, /did not finish loading within 8 s/);
+  const spinning = NLME.notesSettleDecision([read(8000, [], { items: 0, library: true, loading: true })]);
+  assert.equal(spinning.state, 'failed');
+});
+
+test('notesSettleDecision: no answer waits, then fails at the bound', () => {
+  assert.equal(NLME.notesSettleDecision([read(0, null)]).state, 'wait');
+  const failed = NLME.notesSettleDecision([read(0, null), read(8100, null)]);
+  assert.equal(failed.state, 'failed');
+  assert.match(failed.message, /No answer from the page/);
+});
+
+test('notesSettleDecision: Sources-panel notes under a drawn empty Studio list are found after the wait', () => {
+  const sourceNotes = [{ index: -1, sourceIndex: 2, title: 'S', elementType: 'source-note' }];
+  const empty = { items: 0, library: true, loading: false };
+  assert.equal(NLME.notesSettleDecision([read(0, sourceNotes, empty), read(400, sourceNotes, empty)]).state, 'wait');
+  assert.equal(NLME.notesSettleDecision([read(0, sourceNotes, empty), read(4000, sourceNotes, empty)]).state, 'found');
+});
+
+test('notesSettleDecision: polled every pollMs, a truly empty notebook ends well inside the bound', () => {
+  const { pollMs, boundMs, emptyConfirmMs } = NLME.NOTES_SETTLE;
+  const reads = [];
+  let at = 0;
+  let decision;
+  do {
+    reads.push(read(at, [], { items: 0, library: true, loading: false }));
+    decision = NLME.notesSettleDecision(reads);
+    at += pollMs;
+  } while (decision.state === 'wait');
+  assert.equal(decision.state, 'empty');
+  assert.ok(reads[reads.length - 1].at >= emptyConfirmMs && reads[reads.length - 1].at < boundMs);
+});

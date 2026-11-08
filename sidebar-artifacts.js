@@ -778,14 +778,16 @@ const ARTIFACT_ZIP_MAX_BYTES = 500 * 1024 * 1024;
 // manifest.json. Returns withExportShell's outcome, like exportNotesAsMarkdown.
 // zip: the export sheet's Save as (default NLME.takeoutZipChoice, for a Resume of a record
 // without one); its job record and its Retry keep this run's choice.
-async function downloadAllArtifacts(tabId, items, { updateRecord = false, zip = NLME.takeoutZipChoice(settings) } = {}) {
+// seedErrors: warnings that lead errors.md (items the caller skipped, see
+// NLME.artifactExportPlan); none for an export that skipped nothing.
+async function downloadAllArtifacts(tabId, items, { updateRecord = false, zip = NLME.takeoutZipChoice(settings), seedErrors = [] } = {}) {
   await preflightWarn(tabId, 'artifacts');
   startExportTiming();
 
   return withExportShell({ label: 'artifacts', overlayMessage: 'Preparing to download artifacts...', tabId }, async shell => {
     const folder = zip ? null : (shell.projectName || 'NotebookLM');
     const { result, zips, savedOutside } = await withJobRecord(shell, 'artifacts', 'Artifacts', 'artifacts', items,
-      tracker => runArtifactsJob(shell, items, { folder, tracker }), { update: updateRecord, zip });
+      tracker => runArtifactsJob(shell, items, { folder, tracker, seedErrors }), { update: updateRecord, zip });
 
     return shell.finish({
       kind: 'artifacts',
@@ -809,13 +811,15 @@ async function downloadAllArtifacts(tabId, items, { updateRecord = false, zip = 
  *
  * @param {object} shell withExportShell's shell
  * @param {Array<{ index, label, type }>} items downloadable artifacts (scanArtifactsData)
- * @param {CategoryTarget & { bothSlideFormats?: boolean }} [target]
+ * @param {CategoryTarget & { bothSlideFormats?: boolean, seedErrors?: Array }} [target]
  *   bothSlideFormats: save every Slides artifact as PDF and PowerPoint
- *   (Full Takeout); otherwise the Settings slides format alone
+ *   (Full Takeout); otherwise the Settings slides format alone. seedErrors:
+ *   warnings known before the first item (skipped items); they lead errors.md,
+ *   and with no items an errors-only package is still written
  * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, savedOutside: number, parts: number, packages: number }>}
  *   savedOutside: items Chrome saved itself (no capturable URL)
  */
-async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artifacts', folder = null, bothSlideFormats = false, written = newWritten(), tracker = null, capture = null } = {}) {
+async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artifacts', folder = null, bothSlideFormats = false, written = newWritten(), tracker = null, capture = null, seedErrors = [] } = {}) {
   const zipMode = !folder;
   const place = files => (pathPrefix ? files.map(f => ({ ...f, path: pathPrefix + f.path })) : files);
   const stems = NLME.artifactStems(items, { obsidian: !!settings.obsidianNames });
@@ -831,6 +835,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
   const result = await NLME.runExportJob({
     kind: 'artifacts',
     items,
+    seedErrors,
     perZip: zipMode ? Infinity : 1,
     // ZIP mode only: split by size (folder mode streams to disk)
     ...(zipMode ? { maxBatchBytes: ARTIFACT_ZIP_MAX_BYTES, sizeOf: r => NLME.filesByteSize(r.files) } : {}),

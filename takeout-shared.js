@@ -454,7 +454,7 @@
     const ranTotal = steps.reduce((sum, s) => sum + (s.selected ?? (s.exported || 0) + (s.failedItems || []).length), 0);
     const notRunTotal = notRun.reduce((sum, n) => sum + (n.failedItems || []).length, 0);
     // Items that could not be checked or taken are in neither side of the sum
-    const uncounted = extraErrors.some(e => ['scan_failed', 'not_ready', 'not_found'].includes(e.type));
+    const uncounted = extraErrors.some(e => ['scan_failed', 'not_ready', 'not_found', SKIPPED_NO_MENU_TYPE].includes(e.type));
 
     return {
       message,
@@ -2182,6 +2182,102 @@
     return plan;
   }
 
+  // A Studio artifact with no More button is still being generated (or has no
+  // menu). Its download is found by title, so it would fetch a ready item of the
+  // same title and report success (or fail). Every export skips it: the Studio
+  // export since 1.9.1 (studioItemUnavailableReason), Export everything and Resume
+  // since 1.9.5. Each skip is a warning, so errors.md names the item that is
+  // missing from the archive and the checker warns; it is not an 'info' notice.
+  const SKIPPED_NO_MENU_TYPE = 'skipped_ambiguous';
+  const SKIPPED_NO_MENU_REASON = 'still being generated or has no menu';
+
+  function skippedNoMenuWarning(title, sharesTitle = false) {
+    return {
+      type: SKIPPED_NO_MENU_TYPE,
+      title: String(title || ''),
+      message: sharesTitle ? `${SKIPPED_NO_MENU_REASON}; a ready item has the same title` : SKIPPED_NO_MENU_REASON
+    };
+  }
+
+  // One warning per skipped item; readyTitles: the titles a download could hit
+  function noMenuWarnings(skipped, readyTitles) {
+    return (skipped || []).map(item => skippedNoMenuWarning(item.label, readyTitles.some(t => titlesMatch(t, item.label))));
+  }
+
+  // scanArtifactsData's items as Export everything and Resume take them: runnable
+  // (enabled, with a More button: index is its moreIndex) and a warning for each
+  // enabled item without one. Disabled types (Flashcards, Quiz) are left out
+  // silently, as before. Two ready items of one title both stay runnable. all:
+  // the whole scan, when items is a part of it (Resume's matched keys), for the
+  // ready titles a skipped item shares.
+  function artifactExportPlan(items, { all = items } = {}) {
+    const ready = list => (list || []).filter(item => item && !item.disabled && item.index >= 0);
+    const runnable = ready(items);
+    const skipped = (items || []).filter(item => item && !item.disabled && !(item.index >= 0));
+    return { runnable, warnings: noMenuWarnings(skipped, ready(all).map(item => item.label)) };
+  }
+
+  // The Studio export's warnings for generatedExportPlan's skipped rows: only the
+  // artifacts skipped for a missing More button (a type that cannot be exported
+  // is the panel's line alone, as before). allItems: every Studio row.
+  function generatedSkipWarnings(skipped, allItems) {
+    const ready = (allItems || []).filter(item => item && item.kind === 'artifact' && item.moreIndex >= 0).map(item => item.label);
+    const noMenu = (skipped || []).filter(item => item && item.kind === 'artifact' && item.downloadable && !(item.moreIndex >= 0));
+    return noMenuWarnings(noMenu, ready);
+  }
+
+  // Export everything and Resume read the notes list until it settles (1.9.5). The
+  // page draws its Studio list late, and an undrawn list reads as no notes, which
+  // a takeout wrote as "none in notebook". boundMs: the longest wait; pollMs: time
+  // between reads; emptyConfirmMs: how long a drawn but empty Studio list must stay
+  // empty to be believed (Home re-reads a 0 for 4 s, the same guess).
+  const NOTES_SETTLE = { boundMs: 8000, pollMs: 400, emptyConfirmMs: 4000 };
+
+  // reads: one per SCAN_NOTES, oldest first, { at, notes, list }: at in ms since
+  // the first read; notes the page's array, null when it gave no answer; list
+  // (content.js notesListState) { items: rows in the Studio list, notes or not,
+  // library: the list's container is on the page, loading: it shows a spinner and
+  // no rows }. A list with rows has drawn: its notes are believed once two reads
+  // in a row agree. A drawn list with no rows is believed after emptyConfirmMs. No
+  // list, or a loading one, waits up to the bound and then fails, as does a page
+  // that never answers: neither may read as "none in notebook".
+  // -> { state: 'wait' | 'found' | 'empty' | 'failed', message? }
+  function notesSettleDecision(reads, { boundMs = NOTES_SETTLE.boundMs, emptyConfirmMs = NOTES_SETTLE.emptyConfirmMs } = {}) {
+    const list = reads || [];
+    const last = list[list.length - 1];
+    if (!last) return { state: 'wait' };
+    const over = last.at >= boundMs;
+    const seconds = Math.round(boundMs / 1000);
+    if (!Array.isArray(last.notes)) {
+      return over ? { state: 'failed', message: `No answer from the page while reading the notes list (waited ${seconds} s)` } : { state: 'wait' };
+    }
+    const done = read => ({ state: read.notes.length > 0 ? 'found' : 'empty' });
+    const rowsOf = read => {
+      const studio = read.notes.filter(note => note && note.elementType !== 'source-note').length;
+      return Math.max(studio, Number(read.list && read.list.items) || 0);
+    };
+    // No list info: an older page answer; read it as a drawn list
+    const drawnEmpty = read => !read.list || (!!read.list.library && !read.list.loading);
+    const prev = list[list.length - 2];
+    if (rowsOf(last) > 0) {
+      const steady = prev && Array.isArray(prev.notes) && prev.notes.length === last.notes.length && rowsOf(prev) === rowsOf(last);
+      return steady || over ? done(last) : { state: 'wait' };
+    }
+    if (drawnEmpty(last)) {
+      // The run of drawn-and-empty reads this one ends
+      let start = last;
+      for (let i = list.length - 2; i >= 0; i--) {
+        const read = list[i];
+        if (!Array.isArray(read.notes) || rowsOf(read) > 0 || !drawnEmpty(read)) break;
+        start = read;
+      }
+      return last.at - start.at >= emptyConfirmMs || over ? done(last) : { state: 'wait' };
+    }
+    return over
+      ? { state: 'failed', message: `The notes list did not finish loading within ${seconds} s; reload the notebook and export again` }
+      : { state: 'wait' };
+  }
+
   // Everything the Generated rows are drawn from and act on (and the page their
   // buttons talk to); equal signatures need no redraw
   function generatedSignature(tab, items) {
@@ -3061,6 +3157,12 @@ footer { margin-top: 3rem; }
     jobRecordOverrides,
     jobRecordZip,
     planResume,
+    NOTES_SETTLE,
+    notesSettleDecision,
+    SKIPPED_NO_MENU_TYPE,
+    skippedNoMenuWarning,
+    artifactExportPlan,
+    generatedSkipWarnings,
     resumeBannerLabel,
     resumeBannerView,
     jobResumeKeys,

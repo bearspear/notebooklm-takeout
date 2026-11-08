@@ -125,6 +125,17 @@ class ValidateTests(Base):
         self.assertEqual(len(p), 1)
         self.assertIn('Cancelled by user after 2 of 148 notes', p[0].detail)
 
+    def test_skipped_studio_item_warns_with_its_title(self):
+        # 1.9.5: an artifact skipped for a missing More button counts in errorCount
+        # (it is missing from the archive), unlike an INFO notice
+        errors = ('# Artifacts Export Error Report\n\nErrors: 1\n\n## SKIPPED AMBIGUOUS (1)\n\n'
+                  '- Deck: still being generated or has no menu; a ready item has the same title\n')
+        files = {'notes/A.md': '# A\n', 'combined-notes.md': '# All\n', 'errors.md': errors}
+        [r] = self.check(make_export(os.path.join(self.tmp, 'e'), files=files, manifest={'errorCount': 1}))
+        self.assertEqual(r.status, 'WARN')
+        [w] = [f for f in r.findings if f.code == 'export-errors']
+        self.assertIn('Deck: still being generated or has no menu', w.detail)
+
     def test_partial_without_errors_md_fails(self):
         [r] = self.check(make_export(os.path.join(self.tmp, 'e'), manifest={'partial': True, 'errorCount': 1}))
         self.assertIn('errors-missing', codes(r))
