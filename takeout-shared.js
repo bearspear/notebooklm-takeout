@@ -662,6 +662,46 @@
     };
   }
 
+  // A source guide is written in steps for a brand-new source. A summary
+  // with text at the first check is a finished guide (an existing guide
+  // arrives in one response): proceed at once. A summary that appears later
+  // is being generated: wait until it and the key-topics count have both
+  // held still for settleMs. read() returns { summary, keyTopics } (summary
+  // text, count of key topics); keyTopics may stay 0 (some sources have none).
+  // Resolves { status, waitedMs }: 'settled'; 'empty' when no summary text
+  // came within timeout; 'unsettled' when it was still changing at timeout.
+  const GUIDE_SETTLE_MS = 500;
+  async function waitForGuideSettled(read, {
+    settleMs = GUIDE_SETTLE_MS, timeout = 10000, interval = 50,
+    now = () => Date.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+  } = {}) {
+    const start = now();
+    let last = null;
+    let since = 0;
+    let first = true;
+    for (;;) {
+      const snap = read() || {};
+      const summary = String(snap.summary || '').trim();
+      const t = now();
+      // Text at the very first read: a finished guide, saved at once
+      if (summary && first) return { status: 'settled', waitedMs: 0 };
+      first = false;
+      if (summary) {
+        const key = `${snap.keyTopics || 0}\u0000${summary}`;
+        if (key !== last) {
+          last = key;
+          since = t;
+        } else if (t - since >= settleMs) {
+          return { status: 'settled', waitedMs: t - start };
+        }
+      }
+      if (t - start >= timeout) {
+        return { status: last === null ? 'empty' : 'unsettled', waitedMs: t - start };
+      }
+      await sleep(interval);
+    }
+  }
+
   // errors.md line for a cancelled run; it also forces the ZIP (and so the
   // -PARTIAL name) for exports that otherwise write a single file.
   function cancellationNote({ kind, done = 0, total = 0 } = {}) {
@@ -3754,6 +3794,8 @@ footer { margin-top: 3rem; }
     cancellationNote,
     distinctVariants,
     createStabilityTracker,
+    waitForGuideSettled,
+    GUIDE_SETTLE_MS,
     downloadFolderPath,
     takeoutFolderName,
     extensionFromDownloadUrl,

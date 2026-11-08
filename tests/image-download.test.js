@@ -272,6 +272,21 @@ test('a source reports a failure from the plus-meta pass too, once per image', a
   assert.match(images[0].url, /\/meta$/);
 });
 
+test('a source guide still being written at the cap gets the summary warning', async () => {
+  const { sandbox } = sourcesPanel(async () => imageResponse());
+  const build = async extra => {
+    const warned = [];
+    const data = { html: 'x', guideMarkdown: 'Half a sum', keyTopics: [], sourceTitle: 'Venus', ...extra };
+    await sandbox.buildSourceData({ title: 'Venus', index: 0 }, data, { warn: e => warned.push(e) }, {}, true,
+      { exportSourcePlusMeta: true });
+    return warned.filter(e => e.type === 'missing_summary');
+  };
+  const unsettled = await build({ guideStillChanging: true });
+  assert.equal(unsettled.length, 1);
+  assert.match(unsettled[0].message, /still being written/);
+  assert.equal((await build({})).length, 0);
+});
+
 test('a note hands its image failures to the job as one summary', async () => {
   const { sandbox } = sidePanel({
     fetchImpl: async () => imageResponse(),
@@ -477,6 +492,10 @@ function notesPanel({ fetchImpl = byUrl, noteData, notesSettings = { exportNoteW
   vm.runInContext(topLevelFn('sidebar-notes.js', 'extractNoteItem'), sandbox);
   vm.runInContext(topLevelFn('sidebar-notes.js', 'getEnabledNoteVersions'), sandbox);
   vm.runInContext(topLevelFn('sidebar-notes.js', 'exportSingleNote'), sandbox);
+  // exportSingleNote starts its own session with the real sleep; the 403
+  // backoffs it would wait out (5 s, 15 s per image) are not what these tests check
+  const begin = sandbox.beginImageSession;
+  sandbox.beginImageSession = (tabId, isCancelled, sleep = null) => begin(tabId, isCancelled, sleep || (async () => {}));
   vm.runInContext(topLevelFn('sidebar-notes.js', 'buildNotesFiles'), sandbox);
   return { ...panel, downloads, toasts };
 }
