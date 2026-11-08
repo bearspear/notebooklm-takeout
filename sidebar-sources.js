@@ -462,6 +462,10 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
   if (needsMeta && !hasSummary) {
     ctx.warn({ source: source.title, type: 'missing_summary', message: 'Source guide/summary not found or empty' });
     console.warn(`[NotebookLM Takeout] "${source.title}": Summary/guide is missing`);
+  } else if (needsMeta && sourceData.guideStillChanging) {
+    // Still being written when the wait ran out: saved as far as it got
+    ctx.warn({ source: source.title, type: 'missing_summary', message: 'Source guide was still being written; summary and key topics may be incomplete' });
+    console.warn(`[NotebookLM Takeout] "${source.title}": Summary/guide may be incomplete`);
   }
   if (needsMeta && !hasKeyTopics) {
     ctx.warn({ source: source.title, type: 'missing_key_topics', message: 'Key topics not found or empty' });

@@ -440,6 +440,65 @@ test('stability tracker never stable below minLength', () => {
   assert.equal(t.push(10), false);
 });
 
+// Fake clock for waitForGuideSettled: sleep advances time, read sees it
+function guideClock(script) {
+  let t = 0;
+  const reads = [];
+  return {
+    reads,
+    opts: { now: () => t, sleep: async ms => { t += ms; } },
+    read: () => { const snap = script(t); reads.push(snap); return snap; }
+  };
+}
+
+test('waitForGuideSettled waits for a guide written in steps to reach its final text', async () => {
+  // Summary grows every 300 ms until 800 ms; key topics arrive at 1100 ms
+  const c = guideClock(t => ({
+    summary: t < 200 ? '' : 'Part one.' + (t >= 500 ? ' Part two.' : '') + (t >= 800 ? ' Part three.' : ''),
+    keyTopics: t >= 1100 ? 3 : 0
+  }));
+  const r = await NLME.waitForGuideSettled(c.read, c.opts);
+  assert.equal(r.status, 'settled');
+  assert.equal(r.waitedMs, 1600);
+  const last = c.reads[c.reads.length - 1];
+  assert.equal(last.summary, 'Part one. Part two. Part three.');
+  assert.equal(last.keyTopics, 3);
+});
+
+test('waitForGuideSettled adds only the settle window to a finished guide', async () => {
+  const c = guideClock(() => ({ summary: 'Done.', keyTopics: 4 }));
+  const r = await NLME.waitForGuideSettled(c.read, c.opts);
+  assert.equal(r.status, 'settled');
+  assert.equal(r.waitedMs, NLME.GUIDE_SETTLE_MS);
+  assert.equal(NLME.GUIDE_SETTLE_MS, 500);
+});
+
+test('waitForGuideSettled proceeds without key topics once the summary holds still', async () => {
+  const c = guideClock(t => ({ summary: t < 100 ? '' : 'Only a summary.', keyTopics: 0 }));
+  const r = await NLME.waitForGuideSettled(c.read, c.opts);
+  assert.equal(r.status, 'settled');
+  assert.equal(r.waitedMs, 600);
+});
+
+test('waitForGuideSettled ignores surrounding whitespace changes', async () => {
+  const c = guideClock(t => ({ summary: t < 100 ? 'Text' : ' Text \n', keyTopics: 1 }));
+  const r = await NLME.waitForGuideSettled(c.read, c.opts);
+  assert.equal(r.waitedMs, 500);
+});
+
+test('waitForGuideSettled stops at the cap while the guide still changes', async () => {
+  const c = guideClock(t => ({ summary: 'x'.repeat(1 + Math.floor(t / 200)), keyTopics: 0 }));
+  const r = await NLME.waitForGuideSettled(c.read, { ...c.opts, timeout: 10000 });
+  assert.equal(r.status, 'unsettled');
+  assert.equal(r.waitedMs, 10000);
+});
+
+test('waitForGuideSettled reports an empty guide at the cap', async () => {
+  const c = guideClock(() => ({ summary: '   ', keyTopics: 0 }));
+  const r = await NLME.waitForGuideSettled(c.read, { ...c.opts, timeout: 3000 });
+  assert.deepEqual(r, { status: 'empty', waitedMs: 3000 });
+});
+
 test('cancellationNote says how far the export got and what is missing', () => {
   const note = NLME.cancellationNote({ kind: 'messages', done: 4, total: 17 });
   assert.match(note, /Cancelled by user after 4 of 17 messages/);

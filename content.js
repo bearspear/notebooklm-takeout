@@ -2319,36 +2319,29 @@
       requestTimer.start('source.guide');
       // Try to wait for source-guide-container to load (optional, timeout after 3 seconds)
       // Only when a metadata version is exported (needsGuide), scoped to this viewer
+      let guideStillChanging = false;
       if (needsGuide) try {
         await waitForElement('.source-guide-container', 3000, sourceViewer);
         console.log(`[NotebookLM Takeout] source-guide-container found`);
 
-        // NEW: Wait for summary content to be generated (10 second timeout)
-        console.log(`[NotebookLM Takeout] Waiting for summary content to generate...`);
-
-        const summaryTimeout = 10000; // 10 seconds
-        const pollInterval = 50; // Check every 50ms
-        const maxAttempts = summaryTimeout / pollInterval; // 50 attempts
-
-        let summaryAppeared = false;
-        for (let attempt = 0; attempt < maxAttempts; attempt++) {
-          const sourceGuideContainer = sourceViewer.querySelector('.source-guide-container');
-          if (sourceGuideContainer) {
-            const summaryElement = sourceGuideContainer.querySelector('.summary');
-
-            // Check if summary exists AND has actual content (not empty/whitespace)
-            if (summaryElement && summaryElement.textContent.trim().length > 0) {
-              console.log(`[NotebookLM Takeout] Summary content appeared after ${attempt * pollInterval}ms`);
-              summaryAppeared = true;
-              break;
-            }
-          }
-
-          await new Promise(resolve => setTimeout(resolve, pollInterval));
-        }
-
-        if (!summaryAppeared) {
-          console.warn(`[NotebookLM Takeout] Summary content did not appear after ${summaryTimeout}ms - proceeding anyway`);
+        // Wait until the summary has text and the summary and key topics have
+        // held still (a brand-new source's guide is written in steps); one
+        // 10 second cap, as before. A finished guide costs one settle window.
+        console.log(`[NotebookLM Takeout] Waiting for the source guide to settle...`);
+        const guideWait = await NLME.waitForGuideSettled(() => {
+          const guide = sourceViewer.querySelector('.source-guide-container');
+          return {
+            summary: guide?.querySelector('.summary')?.textContent || '',
+            keyTopics: guide ? guide.querySelectorAll('.key-topics-text').length : 0
+          };
+        }, { timeout: 10000, interval: 50 });
+        if (guideWait.status === 'settled') {
+          console.log(`[NotebookLM Takeout] Source guide settled after ${guideWait.waitedMs}ms`);
+        } else if (guideWait.status === 'unsettled') {
+          guideStillChanging = true;
+          console.warn(`[NotebookLM Takeout] Source guide still changing after ${guideWait.waitedMs}ms - proceeding anyway`);
+        } else {
+          console.warn(`[NotebookLM Takeout] Summary content did not appear after ${guideWait.waitedMs}ms - proceeding anyway`);
         }
 
       } catch (e) {
@@ -2476,6 +2469,7 @@
         title: sourceTitle,
         guideMarkdown: sourceGuideMarkdown,
         keyTopics: keyTopics,
+        guideStillChanging,
         youtubeUrl: youtubeUrl,
         imageUrls
       };
