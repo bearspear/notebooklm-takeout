@@ -650,7 +650,7 @@ test('every export reaches its job through the sheet or the run settings, under 
 
 test('an export rechecks the tab at Start and at the Export everything click', () => {
   const read = file => fs.readFileSync(path.join(ROOT, file), 'utf8');
-  assert.match(read('sidebar-sheet.js'), /if \(await tabStillOnPanelNotebook\(\)\) await start\(run\);/);
+  assert.match(read('sidebar-sheet.js'), /if \(await tabStillOnPanelNotebook\(\)\) outcome = await start\(run\);/);
   const takeout = read('sidebar-takeout.js');
   const at = takeout.indexOf('async function openExportEverythingSheet(');
   assert.ok(at >= 0);
@@ -949,6 +949,12 @@ test('every font size is on the type scale (11.5, 13, 15, 26px)', () => {
       assert.match(m[1].trim(), /^inherit$/, `${file}: font shorthand ${m[1]}`);
     }
     assert.doesNotMatch(text, /\.style\.fontSize\s*=/, `${file} sets a size from script`);
+    // setProperty('font-size', …) too (cssText strings are covered by the font-size: scan)
+    for (const m of text.matchAll(/setProperty\(\s*['"`]font-size['"`]\s*,\s*['"`]([^'"`]+)['"`]/g)) {
+      const px = m[1].trim().match(/^([\d.]+)px$/);
+      assert.ok(px && SCALE.has(px[1]), `${file}: setProperty font-size ${m[1]} is off the scale`);
+    }
+    assert.doesNotMatch(text, /setProperty\(\s*['"`]font-size['"`]\s*,\s*[^'"`\s]/, `${file} sets a computed font size`);
   }
   assert.ok(seen > 50);
   // Headings stay larger than body text
@@ -1246,10 +1252,13 @@ test('Start in the export sheet hands the focus to the progress view', () => {
   const start = fnSource('sidebar-sheet.js', 'startExportSheet');
   assert.match(start, /closeExportSheet\(\{ starting: true \}\);\s*showProgressView\(\{ title \}\);/);
   assert.ok(start.indexOf('showProgressView(') < start.indexOf('tabStillOnPanelNotebook'), 'the view is up before the first wait');
-  assert.match(start, /if \(!jobLock\.current\(\)\) hideProgressView\(\);\s*\/\/[^\n]*\n\s*if \(!_sheet && document\.activeElement === document\.body\) returnSheetFocus\(opener\);/);
+  assert.match(start, /hideProgressView\(\);\s*\/\/[^\n]*\n\s*if \(!_sheet && document\.activeElement === document\.body\) returnSheetFocus\(opener\);/);
   assert.match(fnSource('sidebar-sheet.js', 'closeExportSheet'), /if \(!starting\) returnSheetFocus\(switched \? null : opener\);/);
   // A Cancel before the shell listens is kept, and the shell reads it before it begins
   assert.match(fnSource('sidebar-core.js', 'requestCancel'), /if \(sheetStarting && activeShellTabId === null\) startCancelRequested = true;\s*if \(!jobLock\.current\(\)\) return;/);
+  // Another job took the lock during the tab check (JOB_BUSY): this start's view goes too
+  assert.match(start, /if \(await tabStillOnPanelNotebook\(\)\) outcome = await start\(run\);/);
+  assert.match(start, /if \(!jobLock\.current\(\) \|\| \(outcome === JOB_BUSY && activeShellTabId === null\)\) hideProgressView\(\);/);
   const shell = fnSource('sidebar-takeout.js', 'withExportShell');
   assert.equal((shell.match(/if \(startCancelled\(\)\) return \{ declined: true \};/g) || []).length, 2);
   assert.ok(shell.indexOf('startCancelled()') < shell.indexOf('preflightWarn('));
@@ -1267,6 +1276,10 @@ test('the time left ticks each second and stops on finish, cancel and hide', () 
   for (const [file, name] of [['sidebar-results.js', 'setProgressFinishing'], ['sidebar-results.js', 'hideProgressView'], ['sidebar-core.js', 'requestCancel']]) {
     assert.match(fnSource(file, name), /stopProgressTick\(\)/, name);
   }
+  // A Cancel stops the countdown only once it reached the page
+  const cancel = fnSource('sidebar-core.js', 'requestCancel');
+  assert.match(cancel, /await chrome\.tabs\.sendMessage\(target, \{ type: NLME\.MSG\.REQUEST_EXPORT_CANCEL \}\);\s*stopProgressTick\(\);/);
+  assert.equal((cancel.match(/stopProgressTick\(\)/g) || []).length, 1);
 });
 
 // 1.9.5: the reload note gives the focus back when it goes with it

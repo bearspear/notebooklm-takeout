@@ -2073,7 +2073,6 @@ let startCancelRequested = false;
 // Target tab: activeShellTabId (sidebar-takeout.js, the running shell's tab),
 // else jobTabId (the active tab when the job started), else the current tab.
 async function requestCancel() {
-  stopProgressTick(); // the time left means nothing once cancelled
   if (sheetStarting && activeShellTabId === null) startCancelRequested = true;
   if (!jobLock.current()) return;
   // A Retry / Resume chain has moments with no shell (between two steps): note the
@@ -2086,6 +2085,7 @@ async function requestCancel() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const target = activeShellTabId ?? jobTabId ?? currentTabId ?? tab?.id;
     await chrome.tabs.sendMessage(target, { type: NLME.MSG.REQUEST_EXPORT_CANCEL });
+    stopProgressTick(); // the page has the cancel: the time left means nothing now
   } catch (error) {
     console.warn('[NotebookLM Takeout] Cancel request failed:', error.message);
   }

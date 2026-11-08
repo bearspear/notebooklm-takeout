@@ -127,8 +127,9 @@ async function startExportSheet() {
   startCancelRequested = false;
   closeExportSheet({ starting: true });
   showProgressView({ title });
+  let outcome;
   try {
-    if (await tabStillOnPanelNotebook()) await start(run);
+    if (await tabStillOnPanelNotebook()) outcome = await start(run);
   } catch (error) {
     console.error('[NotebookLM Takeout] Export failed:', error);
     showToast('Export failed. Please try again.', 'error');
@@ -137,8 +138,10 @@ async function startExportSheet() {
     startCancelRequested = false;
   }
   // Refused, declined or nothing to export: no export took the view over (and another
-  // job that started meanwhile keeps its own)
-  if (!jobLock.current()) hideProgressView();
+  // job that started meanwhile keeps its own). JOB_BUSY: another job took the lock
+  // during the tab check, so this one never ran; the view is still this start's
+  // unless that job's export shell has it.
+  if (!jobLock.current() || (outcome === JOB_BUSY && activeShellTabId === null)) hideProgressView();
   // That, or the job disabling the opener, dropped the focus
   if (!_sheet && document.activeElement === document.body) returnSheetFocus(opener);
 }
