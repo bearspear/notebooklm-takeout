@@ -504,10 +504,10 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
       imageFailures.push(...embedded.failures);
 
       if (imagesFound > 0) {
-        withImages = embedded.markdown;
+        withImages = NLME.finishRemoteImages(embedded.markdown);
         if (plusMetaMarkdown) {
           const embeddedMeta = await embedImagesInMarkdown(plusMetaMarkdown, source.title);
-          plusMetaWithImages = embeddedMeta.markdown;
+          plusMetaWithImages = NLME.finishRemoteImages(embeddedMeta.markdown);
           imageFailures.push(...embeddedMeta.failures);
         }
         console.log(`[NotebookLM Takeout] "${source.title}": ${imagesFound} images found, creating image versions`);

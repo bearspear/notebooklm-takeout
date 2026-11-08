@@ -1484,13 +1484,12 @@
     return THOUGHT_ICON_NAMES.has(String(text || '').trim());
   }
 
-  // Do these blocks hold (nearly) all of the element's text? Counts
-  // non-space characters; a few may be missing (stray separators), not more.
+  // Do these blocks (outermost, in page order) hold all of the element's
+  // text? Whitespace aside, their texts joined must be the element's text:
+  // any heading, line or separator outside them means no.
   function blocksCoverText(blockTexts, wholeText) {
-    const size = text => String(text || '').replace(/\s+/g, '').length;
-    const whole = size(wholeText);
-    const covered = (blockTexts || []).reduce((n, text) => n + size(text), 0);
-    return whole - covered <= Math.max(3, Math.floor(whole * 0.05));
+    const squeeze = text => String(text || '').replace(/\s+/g, '');
+    return (blockTexts || []).map(squeeze).join('') === squeeze(wholeText);
   }
 
   // ---------- Source import cards (1.9.6) ----------
@@ -1513,7 +1512,7 @@
   }
 
   function importCardMarkdown({ heading = '', names = '', status = '' } = {}) {
-    const tidy = text => String(text || '').replace(/\s+/g, ' ').trim().replace(/([\\`*_[\]])/g, '\\$1');
+    const tidy = text => String(text || '').replace(/\s+/g, ' ').trim().replace(/([\\`*_[\]<>])/g, '\\$1');
     const stop = text => (/[.!?…]$/.test(text) ? text : `${text}.`);
     const [h, n, s] = [heading, names, status].map(tidy);
     const lead = h && n ? `${h}: ${n}` : (h || n);
@@ -1533,11 +1532,69 @@
   }
 
   // A -with-images version keeps no remote image: one still remote after
-  // embedding becomes a plain link "[image](url)", a favicon is dropped.
-  // data: and relative images stay.
+  // embedding becomes a plain link with its alt text ("[image]" without
+  // one), a favicon is dropped; an image that is a link's text gives that
+  // link the alt as its text. data: and relative images stay, and nothing
+  // inside a code span or fence is touched. Titles and <targets> are read.
+  // Without a remote image the text comes back unchanged.
+  const MD_IMAGE = String.raw`!\[((?:\\.|[^\]\\])*)\]\(\s*(?:<([^>\n]*)>|([^\s()<>]+))(\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\)))?\s*\)`;
+  const LINKED_IMAGE_RE = new RegExp(String.raw`\[\s*${MD_IMAGE}\s*\]\(`, 'g');
+  const IMAGE_RE = new RegExp(MD_IMAGE, 'g');
+  const isRemoteImageUrl = url => /^https?:\/\//i.test(String(url || '').trim());
+
+  function finishRemoteImagesInText(text) {
+    if (!/!\[/.test(text)) return text;
+    return text
+      .replace(LINKED_IMAGE_RE, (match, alt, angled, bare) => {
+        const url = angled ?? bare;
+        if (!isRemoteImageUrl(url)) return match;
+        const label = alt.trim() || (isFaviconServiceUrl(url.trim()) ? 'link' : 'image');
+        return `[${label}](`;
+      })
+      .replace(IMAGE_RE, (match, alt, angled, bare, title) => {
+        const url = angled ?? bare;
+        if (!isRemoteImageUrl(url)) return match;
+        if (isFaviconServiceUrl(url.trim())) return '';
+        const target = angled !== undefined ? `<${angled}>` : bare;
+        return `[${alt.trim() || 'image'}](${target}${title || ''})`;
+      });
+  }
+
   function finishRemoteImages(markdown) {
-    return String(markdown).replace(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g,
-      (match, url) => (isFaviconServiceUrl(url) ? '' : `[image](${url})`));
+    const text = String(markdown);
+    if (!/!\[/.test(text)) return text;
+    // Fenced code blocks (``` or ~~~, up to three spaces in) stay as they are
+    const out = [];
+    let fence = null;
+    let prose = [];
+    const flushProse = () => {
+      if (prose.length === 0) return;
+      // Inline code spans stay too: only the text between them is rewritten
+      const chunk = prose.join('\n');
+      const parts = chunk.split(/((`+)(?!`)[\s\S]*?(?<!`)\2(?!`))/);
+      const rebuilt = [];
+      for (let i = 0; i < parts.length; i++) {
+        if (i % 3 === 0) rebuilt.push(finishRemoteImagesInText(parts[i]));
+        else if (i % 3 === 1) rebuilt.push(parts[i]);
+      }
+      out.push(rebuilt.join(''));
+      prose = [];
+    };
+    for (const line of text.split('\n')) {
+      const marker = line.match(/^ {0,3}(`{3,}|~{3,})/);
+      if (fence) {
+        out.push(line);
+        if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && line.trim() === marker[1]) fence = null;
+      } else if (marker) {
+        flushProse();
+        out.push(line);
+        fence = marker[1];
+      } else {
+        prose.push(line);
+      }
+    }
+    flushProse();
+    return out.join('\n');
   }
 
   // The -with-images pass: embed what was downloaded, then finishRemoteImages

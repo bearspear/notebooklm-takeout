@@ -37,6 +37,7 @@ test('importCardMarkdown: missing parts are left out; nothing gives ""', () => {
 test('importCardMarkdown: no doubled stop, whitespace collapsed, Markdown characters escaped', () => {
   assert.equal(NLME.importCardMarkdown({ heading: ' Sources\n(2) ', names: 'A, and B.', status: 'Done!' }), '*Sources (2): A, and B. Done!*');
   assert.equal(NLME.importCardMarkdown({ heading: 'x_y *z* [1]' }), '*x\\_y \\*z\\* \\[1\\].*');
+  assert.equal(NLME.importCardMarkdown({ heading: 'Sources (1)', names: '<b>Bold</b> & co' }), '*Sources (1): \\<b\\>Bold\\</b\\> & co.*');
 });
 
 test('importCardFromLines: first line heading, a status-like last line the status, the rest names', () => {
@@ -61,7 +62,7 @@ test('isFaviconServiceUrl: Google favicon services only', () => {
   assert.equal(NLME.isFaviconServiceUrl('not a url'), false);
 });
 
-test('finishRemoteImages: a remote image left after embedding becomes a link; a favicon goes; data and relative images stay', () => {
+test('finishRemoteImages: a remote image left after embedding becomes a link (alt kept); a favicon goes; data and relative images stay', () => {
   const md = [
     'A ![](data:image/png;base64,AAAA) b',
     `![](${FAVICON})![](${FAVICON})`,
@@ -72,7 +73,7 @@ test('finishRemoteImages: a remote image left after embedding becomes a link; a 
   assert.equal(NLME.finishRemoteImages(md), [
     'A ![](data:image/png;base64,AAAA) b',
     '',
-    '[image](https://lh3.googleusercontent.com/abc=w800)',
+    '[chart](https://lh3.googleusercontent.com/abc=w800)',
     '![x](images/local.png)',
     'text [link](https://example.com) end'
   ].join('\n'));
@@ -90,12 +91,62 @@ test('embedImagesForVersion: embeds first, then no remote image stays', () => {
   assert.equal(NLME.embedImagesForVersion(local, new Map()), NLME.applyImageEmbeds(local, new Map()));
 });
 
-test('every -with-images pass goes through embedImagesForVersion', () => {
+test('every -with-images pass leaves no remote image (chat, notes, sources)', () => {
   for (const file of ['sidebar-chat.js', 'sidebar-notes.js']) {
     const src = read(file);
     assert.doesNotMatch(src, /NLME\.applyImageEmbeds\(/, file);
     assert.match(src, /NLME\.embedImagesForVersion\(/, file);
   }
+  // Sources embed with embedImagesInMarkdown; both image versions are finished
+  const sources = read('sidebar-sources.js');
+  assert.match(sources, /withImages = NLME\.finishRemoteImages\(embedded\.markdown\)/);
+  assert.match(sources, /plusMetaWithImages = NLME\.finishRemoteImages\(embeddedMeta\.markdown\)/);
+});
+
+test('finishRemoteImages keeps the alt text as the link text', () => {
+  assert.equal(NLME.finishRemoteImages('![fig 2](https://x.org/a.png)'), '[fig 2](https://x.org/a.png)');
+  assert.equal(NLME.finishRemoteImages('![](https://x.org/a.png)'), '[image](https://x.org/a.png)');
+  assert.equal(NLME.finishRemoteImages('![  ](https://x.org/a.png)'), '[image](https://x.org/a.png)');
+});
+
+test('finishRemoteImages: titles, <targets>, escaped ] in alt', () => {
+  assert.equal(NLME.finishRemoteImages('![a](https://x.org/i.png "t")'), '[a](https://x.org/i.png "t")');
+  assert.equal(NLME.finishRemoteImages("![a](https://x.org/i.png 't')"), "[a](https://x.org/i.png 't')");
+  assert.equal(NLME.finishRemoteImages('![](<https://x.org/a b.png>)'), '[image](<https://x.org/a b.png>)');
+  assert.equal(NLME.finishRemoteImages('![a \\] b](https://x.org/i.png)'), '[a \\] b](https://x.org/i.png)');
+  assert.equal(NLME.finishRemoteImages(`![x](${FAVICON} "favicon")`), '');
+  assert.equal(NLME.finishRemoteImages(`![x](<${FAVICON}>)`), '');
+});
+
+test('finishRemoteImages never rewrites inside code spans or fences', () => {
+  const md = [
+    'Inline `![a](https://x.org/i.png)` and ``![b](https://x.org/j.png)`` stay;',
+    '![c](https://x.org/k.png) goes.',
+    '```markdown',
+    '![d](https://x.org/l.png)',
+    '```',
+    '~~~',
+    '![e](https://x.org/m.png)',
+    '~~~',
+    '![f](https://x.org/n.png)'
+  ].join('\n');
+  assert.equal(NLME.finishRemoteImages(md), md
+    .replace('![c](https://x.org/k.png)', '[c](https://x.org/k.png)')
+    .replace('![f](https://x.org/n.png)', '[f](https://x.org/n.png)'));
+});
+
+test('finishRemoteImages: an image inside a link keeps the outer link, with the alt as its text', () => {
+  assert.equal(NLME.finishRemoteImages('[![logo](https://x.org/i.png)](https://x.org/home)'), '[logo](https://x.org/home)');
+  assert.equal(NLME.finishRemoteImages('[![](https://x.org/i.png)](https://x.org/home)'), '[image](https://x.org/home)');
+  assert.equal(NLME.finishRemoteImages(`[![](${FAVICON})](https://x.org/home)`), '[link](https://x.org/home)');
+  // a local image inside a link is untouched
+  const local = '[![a](data:image/png;base64,QQ)](https://x.org/home)';
+  assert.equal(NLME.finishRemoteImages(local), local);
+});
+
+test('finishRemoteImages: nothing remote, nothing changes', () => {
+  const md = 'Text with [a link](https://x.org) and `code` and ![local](images/a.png) and ![d](data:image/png;base64,QQ)\n\n```\nfence\n```';
+  assert.equal(NLME.finishRemoteImages(md), md);
 });
 
 // ---------- the chat converter ----------

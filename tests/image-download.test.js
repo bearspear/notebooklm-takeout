@@ -493,7 +493,7 @@ test('a note body image reaches the with-images files, and base files stay byte-
   const data = name => files.find(f => f.path === name).data;
   for (const name of ['notes/Note-with-images.md', 'combined-notes-with-images.md']) {
     assert.match(data(name), /!\[fig\]\(data:image\/png;base64,/, name);
-    assert.ok(data(name).includes(`[image](${BAD_URL})`), `${name} keeps the failed image as a plain link (1.9.6)`);
+    assert.ok(data(name).includes(`[fig2](${BAD_URL})`), `${name} keeps the failed image as a plain link (1.9.6)`);
   }
   const without = sandbox.buildNotesFiles([{ ...note, sources: quote, imageEmbeds: null }], { meta: META, variantSettings: settingsOn });
   const unstamped = text => text.replace(/^Exported: .*$/m, '');
@@ -548,7 +548,7 @@ test('a single note download embeds body images and shows its failures', async (
   const withImages = downloads.find(([name]) => /with-images/.test(name))[1];
   const base = downloads.find(([name]) => !/with-images/.test(name))[1];
   assert.match(withImages, /!\[fig\]\(data:image\/png/);
-  assert.ok(withImages.includes(`[image](${BAD_URL})`));
+  assert.ok(withImages.includes(`[fig2](${BAD_URL})`));
   imagesGone(base);
   assert.equal(toasts.length, 1);
   assert.match(toasts[0][0], /Note: Failed to download 2 images/);
@@ -599,7 +599,7 @@ for (const citationMode of ['quotes', 'titles', 'none']) {
     const files = chatFilesFor(sandbox, [message], true);
     const data = name => files.find(f => f.path === name).data;
     assert.match(data('chat-with-images.md'), /!\[fig\]\(data:image\/png/);
-    assert.ok(data('chat-with-images.md').includes(`[image](${BAD_URL})`));
+    assert.ok(data('chat-with-images.md').includes(`[fig2](${BAD_URL})`));
     const without = chatFilesFor(sandbox, [{ ...message, imageEmbeds: null }], true);
     assert.equal(data('chat.md'), without.find(f => f.path === 'chat.md').data);
     assert.doesNotMatch(data('chat.md'), /!\[|data:image/);

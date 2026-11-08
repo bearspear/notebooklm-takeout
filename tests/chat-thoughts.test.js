@@ -233,6 +233,11 @@ test('blocksCoverText: blocks that miss part of the body text do not cover it', 
   assert.equal(NLME.blocksCoverText(['One.'], 'A heading outside the blocks One.'), false);
   assert.equal(NLME.blocksCoverText([], ''), true);
   assert.equal(NLME.blocksCoverText([], 'Text'), false);
-  // a few stray characters between blocks are fine
-  assert.equal(NLME.blocksCoverText(['One', 'Two'], 'One · Two'), true);
+  // Anything outside the blocks counts, even a separator
+  assert.equal(NLME.blocksCoverText(['One', 'Two'], 'One · Two'), false);
+  // a 40-character heading in a 1,000-character body is caught
+  const paragraph = 'x'.repeat(960);
+  const heading = 'H'.repeat(40);
+  assert.equal(NLME.blocksCoverText([paragraph], `${heading}\n${paragraph}`), false);
+  assert.equal(NLME.blocksCoverText([heading, paragraph], `${heading}\n${paragraph}`), true);
 });
