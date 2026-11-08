@@ -465,11 +465,18 @@ test('waitForGuideSettled waits for a guide written in steps to reach its final 
   assert.equal(last.keyTopics, 3);
 });
 
-test('waitForGuideSettled adds only the settle window to a finished guide', async () => {
+test('waitForGuideSettled proceeds at once for a guide finished at the first check', async () => {
   const c = guideClock(() => ({ summary: 'Done.', keyTopics: 4 }));
   const r = await NLME.waitForGuideSettled(c.read, c.opts);
+  assert.deepEqual(r, { status: 'settled', waitedMs: 0 });
+  assert.equal(c.reads.length, 1);
+});
+
+test('waitForGuideSettled settles a guide that appears later only after the settle window', async () => {
+  const c = guideClock(t => ({ summary: t < 100 ? '' : 'Done.', keyTopics: t < 100 ? 0 : 4 }));
+  const r = await NLME.waitForGuideSettled(c.read, c.opts);
   assert.equal(r.status, 'settled');
-  assert.equal(r.waitedMs, NLME.GUIDE_SETTLE_MS);
+  assert.equal(r.waitedMs, 100 + NLME.GUIDE_SETTLE_MS);
   assert.equal(NLME.GUIDE_SETTLE_MS, 500);
 });
 
@@ -481,13 +488,13 @@ test('waitForGuideSettled proceeds without key topics once the summary holds sti
 });
 
 test('waitForGuideSettled ignores surrounding whitespace changes', async () => {
-  const c = guideClock(t => ({ summary: t < 100 ? 'Text' : ' Text \n', keyTopics: 1 }));
+  const c = guideClock(t => ({ summary: t < 50 ? '' : t < 100 ? 'Text' : ' Text \n', keyTopics: 1 }));
   const r = await NLME.waitForGuideSettled(c.read, c.opts);
-  assert.equal(r.waitedMs, 500);
+  assert.equal(r.waitedMs, 550);
 });
 
 test('waitForGuideSettled stops at the cap while the guide still changes', async () => {
-  const c = guideClock(t => ({ summary: 'x'.repeat(1 + Math.floor(t / 200)), keyTopics: 0 }));
+  const c = guideClock(t => ({ summary: t < 50 ? '' : 'x'.repeat(Math.floor(t / 200) + 1), keyTopics: 0 }));
   const r = await NLME.waitForGuideSettled(c.read, { ...c.opts, timeout: 10000 });
   assert.equal(r.status, 'unsettled');
   assert.equal(r.waitedMs, 10000);

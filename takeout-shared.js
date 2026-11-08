@@ -662,8 +662,10 @@
     };
   }
 
-  // A source guide is written in steps for a brand-new source: wait until
-  // the summary has text and the summary and the key-topics count have both
+  // A source guide is written in steps for a brand-new source. A summary
+  // with text at the first check is a finished guide (an existing guide
+  // arrives in one response): proceed at once. A summary that appears later
+  // is being generated: wait until it and the key-topics count have both
   // held still for settleMs. read() returns { summary, keyTopics } (summary
   // text, count of key topics); keyTopics may stay 0 (some sources have none).
   // Resolves { status, waitedMs }: 'settled'; 'empty' when no summary text
@@ -680,6 +682,7 @@
       const snap = read() || {};
       const summary = String(snap.summary || '').trim();
       const t = now();
+      if (summary && t === start) return { status: 'settled', waitedMs: 0 };
       if (summary) {
         const key = `${snap.keyTopics || 0}\u0000${summary}`;
         if (key !== last) {

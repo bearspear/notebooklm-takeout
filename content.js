@@ -2324,9 +2324,9 @@
         await waitForElement('.source-guide-container', 3000, sourceViewer);
         console.log(`[NotebookLM Takeout] source-guide-container found`);
 
-        // Wait until the summary has text and the summary and key topics have
-        // held still (a brand-new source's guide is written in steps); one
-        // 10 second cap, as before. A finished guide costs one settle window.
+        // A summary with text at the first check is a finished guide: go on at
+        // once. One that appears later is being written: wait until it and the
+        // key topics have held still. One 10 second cap, as before.
         console.log(`[NotebookLM Takeout] Waiting for the source guide to settle...`);
         const guideWait = await NLME.waitForGuideSettled(() => {
           const guide = sourceViewer.querySelector('.source-guide-container');
