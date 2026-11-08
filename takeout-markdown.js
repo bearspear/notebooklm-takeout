@@ -350,6 +350,30 @@
   // The audit reads it before and after a conversion (convertCounted).
   let formulasWrittenTotal = 0;
 
+  // A source import card's text, one line per block (DIV, P, H1-H6, LI);
+  // icons and images (the remote favicons) left out
+  const IMPORT_CARD_BLOCKS = new Set(['DIV', 'P', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'SECTION']);
+  function importCardLines(card) {
+    const clone = card.cloneNode(true);
+    clone.querySelectorAll('mat-icon, img').forEach(node => node.remove());
+    const lines = [];
+    let line = '';
+    const flush = () => { if (line.trim()) lines.push(line.replace(/\s+/g, ' ').trim()); line = ''; };
+    const walk = node => {
+      for (const child of Array.from(node.childNodes || [])) {
+        if (child.nodeType === 3) { line += child.textContent; continue; }
+        if (child.nodeType !== 1) continue;
+        const block = IMPORT_CARD_BLOCKS.has(child.nodeName.toUpperCase());
+        if (block) flush();
+        walk(child);
+        if (block) flush();
+      }
+    };
+    walk(clone);
+    flush();
+    return lines;
+  }
+
   // ==================== ONE TURNDOWN RULE SET ====================
   // The notes/sources/reports rule set and the chat rule set were two copies
   // (Milestone 3d merges them). Options:
@@ -372,6 +396,8 @@
   //     NLME.footnoteLabel(noteIndex, n, { combined: true }); chat does the same
   //     with the current message index, so every label is unique in chat.md.
   //   anchorPrefix (note), getMessageIndex (chat), log(context, message)
+  //   getThoughts (chat): the current answer's thoughts, [{ title, body }],
+  //     written where its Thoughts placeholder is (NLME.thoughtsMarkdown)
   // Returns { turndownService, convert(html), citedNumbers(messageIndex?) } —
   // callers use convert() (turndownService.turndown() leaves formula marks in);
   // citedNumbers: the distinct marker numbers converted so far (note variant),
@@ -380,7 +406,7 @@
   // order. Only rules with overlapping filters depend on it (reportHeadings vs
   // blockquotes, sourceLink vs citationButtons), and both sets ordered those
   // the same way.
-  function createConverter({ variant = 'note', citations = 'links', anchorPrefix = '', getMessageIndex = () => 0, footnoteLabel = null, log = null } = {}) {
+  function createConverter({ variant = 'note', citations = 'links', anchorPrefix = '', getMessageIndex = () => 0, getThoughts = () => [], footnoteLabel = null, log = null } = {}) {
     const isChat = variant === 'chat';
     const dropCitations = citations === 'none';
     const footnotes = citations === 'footnotes';
@@ -458,6 +484,32 @@
         return content; // Return inner content, strip wrapper
       }
     });
+
+    // A source import card in a chat answer (1.9.6): one line of text in its
+    // place (NLME.importCardMarkdown), never its remote favicons
+    if (isChat) {
+      turndownService.addRule('importCard', {
+        filter: (node) => node.nodeName === 'A2UI-SOURCE-IMPORT-CARD',
+        replacement: (_content, node) => {
+          const line = NLME.importCardMarkdown(NLME.importCardFromLines(importCardLines(node)));
+          return line ? `\n\n${line}\n\n` : '';
+        }
+      });
+    }
+
+    // A chat answer's Thoughts (1.9.6): content.js leaves
+    // NLME.THOUGHTS_PLACEHOLDER_HTML where the page's thinking-chain-view
+    // was; the section goes there. Thoughts that could not be read write
+    // nothing, not the stray word.
+    if (isChat) {
+      turndownService.addRule('chatThoughts', {
+        filter: (node) => node.nodeName === 'DIV' && node.hasAttribute('data-nlme-thoughts'),
+        replacement: () => {
+          const section = NLME.thoughtsMarkdown(getThoughts());
+          return section ? `\n\n${section}\n\n` : '';
+        }
+      });
+    }
 
     // Lists whose <li> elements sit inside Angular wrapper components
     turndownService.addRule('listsWithWrappers', {
@@ -1040,6 +1092,7 @@
     convertKatexNodeToLatex,
     createConverter,
     formulasWritten: () => formulasWrittenTotal,
+    importCardLines,
     htmlToMarkdownPlain
   });
 })(globalThis);

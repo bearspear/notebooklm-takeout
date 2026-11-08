@@ -504,10 +504,10 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
       imageFailures.push(...embedded.failures);
 
       if (imagesFound > 0) {
-        withImages = embedded.markdown;
+        withImages = NLME.finishRemoteImages(embedded.markdown);
         if (plusMetaMarkdown) {
           const embeddedMeta = await embedImagesInMarkdown(plusMetaMarkdown, source.title);
-          plusMetaWithImages = embeddedMeta.markdown;
+          plusMetaWithImages = NLME.finishRemoteImages(embeddedMeta.markdown);
           imageFailures.push(...embeddedMeta.failures);
         }
         console.log(`[NotebookLM Takeout] "${source.title}": ${imagesFound} images found, creating image versions`);
@@ -530,8 +530,9 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
   return {
     title: source.title,
     youtubeUrl: sourceData.youtubeUrl || null,
-    // The page's type icon; 'document' is only the scan's default
-    sourceType: source.type === 'document' ? null : source.type || null,
+    // The page's type icon ('document' is only the scan's default), or
+    // web / web_pdf and the original URL for a web source
+    ...NLME.sourceTypeFields(source),
     // Metadata for _index.md
     summary: sourceData.guideMarkdown || null,
     keyTopics: sourceData.keyTopics || [],
@@ -548,8 +549,8 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
 }
 
 // Front matter for a source file (field order fixed by the Milestone 3a
-// layout; youtube_url and source_type are dropped when null)
-function sourceFrontMatter(meta, { title, variant, youtubeUrl = null, sourceType = null }) {
+// layout; youtube_url, source_type and source_url are dropped when null)
+function sourceFrontMatter(meta, { title, variant, youtubeUrl = null, sourceType = null, sourceUrl = null }) {
   return NLME.frontMatter({
     title,
     notebook: meta.notebook,
@@ -560,7 +561,8 @@ function sourceFrontMatter(meta, { title, variant, youtubeUrl = null, sourceType
     kind: 'source',
     variant,
     youtube_url: youtubeUrl,
-    source_type: sourceType
+    source_type: sourceType,
+    source_url: sourceUrl
   });
 }
 
@@ -659,7 +661,7 @@ function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batch
       const filename = `${stems[idx]}${suffix}.md`;
       files.push({
         path: `${itemDir}${filename}`,
-        data: sourceFrontMatter(meta, { title: source.title, variant, youtubeUrl: source.youtubeUrl, sourceType: source.sourceType }) + markdown,
+        data: sourceFrontMatter(meta, { title: source.title, variant, youtubeUrl: source.youtubeUrl, sourceType: source.sourceType, sourceUrl: source.sourceUrl }) + markdown,
         title: source.title,
         variant,
         itemKind: 'source'
@@ -669,6 +671,7 @@ function buildSourcesFiles(sources, { meta, errors = [], auditText = null, batch
 
     let details = '';
     if (source.youtubeUrl) details += `**YouTube Video:** ${source.youtubeUrl}\n\n`;
+    details += NLME.sourceOriginalLine(source.sourceUrl);
     if (source.summary && source.summary.trim().length > 0) details += `**Summary:**\n\n${source.summary}\n\n`;
     if (source.keyTopics && source.keyTopics.length > 0) {
       details += `**Key Topics:**\n\n${source.keyTopics.map(topic => `- ${topic}`).join('\n')}\n`;

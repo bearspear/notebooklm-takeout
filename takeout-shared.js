@@ -1475,6 +1475,262 @@
     return String(text || '').split('\n').map(line => (line.trim() ? `> ${line}` : '>')).join('\n');
   }
 
+  // The icon names a Thoughts section shows (mat-icon text, seen live:
+  // neurology, document_search; and the header's chevrons). Only these are
+  // dropped, never another one-word title.
+  const THOUGHT_ICON_NAMES = new Set(['neurology', 'document_search', 'expand_more', 'expand_less',
+    'keyboard_arrow_down', 'keyboard_arrow_up', 'chevron_right', 'arrow_drop_down']);
+  function isThoughtIconName(text) {
+    return THOUGHT_ICON_NAMES.has(String(text || '').trim());
+  }
+
+  // Do these blocks (outermost, in page order) hold all of the element's
+  // text? Whitespace aside, their texts joined must be the element's text:
+  // any heading, line or separator outside them means no.
+  function blocksCoverText(blockTexts, wholeText) {
+    const squeeze = text => String(text || '').replace(/\s+/g, '');
+    return (blockTexts || []).map(squeeze).join('') === squeeze(wholeText);
+  }
+
+  // ---------- Web sources (1.9.6) ----------
+  // A web or web-PDF source shows no type icon in the source list, only a
+  // favicon: https://www.google.com/s2/favicons?domain=<original URL>. The
+  // original URL (never the favicon URL) goes into the export.
+  // Live, the source list's favicon carries the URL raw (its own ? & + left
+  // as they are), the chat's percent-encoded: the text after domain= up to
+  // &sz= (or the end) is read as written, and decoded once only when it is
+  // encoded (no "://" but %XX). URLSearchParams is not used: it reads + as a
+  // space. null for anything that is not http(s), has no domain, or is a
+  // Google-hosted download or redirect link (never a source's public page);
+  // a bare host gives its root, https://<host>/.
+  function sourceUrlFromFavicon(src) {
+    const text = String(src || '');
+    let favicon;
+    try { favicon = new URL(text); } catch (error) { return null; }
+    if (!/^https?:$/.test(favicon.protocol)) return null;
+    const at = text.search(/[?&]domain=/);
+    if (at < 0) return null;
+    const rest = text.slice(at + '?domain='.length);
+    const stop = rest.indexOf('&sz=');
+    let value = (stop >= 0 ? rest.slice(0, stop) : rest).replace(/#.*$/, '').trim();
+    if (!value.includes('://') && /%[0-9a-f]{2}/i.test(value)) {
+      try { value = decodeURIComponent(value); } catch (error) { return null; }
+    }
+    value = value.trim();
+    if (!value) return null;
+    let candidate;
+    if (/^[a-z][\w+.-]*:/i.test(value)) {
+      if (!/^https?:\/\//i.test(value)) return null;
+      candidate = value;
+    } else if (/^[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/\S*)?$/i.test(value)) {
+      candidate = `https://${value}`;
+    } else {
+      return null;
+    }
+    let url;
+    try { url = new URL(candidate); } catch (error) { return null; }
+    if (!/^https?:$/.test(url.protocol) || !url.hostname) return null;
+    return isGoogleDownloadUrl(url) ? null : url.href;
+  }
+
+  // Google-hosted downloads and redirects: *.usercontent.google.com,
+  // *.googleusercontent.com, google.com/url, and *.google.com links that
+  // download (private, short-lived; never a source's original page)
+  function isGoogleDownloadUrl(url) {
+    const host = url.hostname.toLowerCase();
+    if (/(^|\.)usercontent\.google\.com$/.test(host) || /(^|\.)googleusercontent\.com$/.test(host)) return true;
+    if ((host === 'google.com' || host === 'www.google.com') && /^\/url\b/.test(url.pathname)) return true;
+    return /(^|\.)google\.com$/.test(host) && /download/i.test(url.pathname + url.search);
+  }
+
+  // 'web_pdf' when the URL's path ends in .pdf, else 'web'
+  function webSourceType(url) {
+    try { return /\.pdf$/i.test(new URL(url).pathname) ? 'web_pdf' : 'web'; } catch (error) { return 'web'; }
+  }
+
+  // A scanned source's front matter type and URL. A web source (webUrl from
+  // its favicon): web / web_pdf and the URL. Others: the page's type icon,
+  // with the scan's default 'document' left out, and no URL (as before 1.9.6).
+  function sourceTypeFields(source) {
+    const s = source || {};
+    if (s.webUrl) return { sourceType: webSourceType(s.webUrl), sourceUrl: s.webUrl };
+    return { sourceType: s.type === 'document' ? null : s.type || null, sourceUrl: null };
+  }
+
+  // A web source's line in the Sources _index.md: its URL as a link (the
+  // target's parentheses encoded so the link stays whole)
+  function sourceOriginalLine(url) {
+    if (!url) return '';
+    const text = String(url).replace(/([\\`*_[\]<>])/g, '\\$1');
+    const target = String(url).replace(/\(/g, '%28').replace(/\)/g, '%29').replace(/\s/g, '%20');
+    return `**Original:** [${text}](${target})\n\n`;
+  }
+
+  // ---------- Source import cards (1.9.6) ----------
+  // A chat answer's a2ui-source-import-card: "Report & Outside sources (5)",
+  // the names ("Research Report, Open Logic Project, and nLab, +2"), a status
+  // ("All sources imported") and a row of remote favicons. Written as one
+  // italic line, never as images.
+  const IMPORT_CARD_ICONS = new Set(['check_circle', 'error', 'progress_activity', 'add', 'check', 'warning']);
+  const IMPORT_CARD_STATUS = /\b(import|imported|importing|added|adding|failed|selected|in progress)\b/i;
+
+  // The card's text lines (one per block, icons out): the first is the
+  // heading; a status-like last line (beyond the heading) is the status; the
+  // rest are the names
+  function importCardFromLines(lines) {
+    const clean = (lines || []).map(line => String(line || '').replace(/\s+/g, ' ').trim())
+      .filter(line => line && !IMPORT_CARD_ICONS.has(line));
+    const heading = clean.shift() || '';
+    const status = clean.length > 0 && IMPORT_CARD_STATUS.test(clean[clean.length - 1]) ? clean.pop() : '';
+    return { heading, names: clean.join(' '), status };
+  }
+
+  function importCardMarkdown({ heading = '', names = '', status = '' } = {}) {
+    const tidy = text => String(text || '').replace(/\s+/g, ' ').trim().replace(/([\\`*_[\]<>])/g, '\\$1');
+    const stop = text => (/[.!?…]$/.test(text) ? text : `${text}.`);
+    const [h, n, s] = [heading, names, status].map(tidy);
+    const lead = h && n ? `${h}: ${n}` : (h || n);
+    const parts = [lead, s].filter(Boolean).map(stop);
+    return parts.length > 0 ? `*${parts.join(' ')}*` : '';
+  }
+
+  // A favicon service URL (Google's s2/favicons, gstatic faviconV2): never
+  // worth keeping, not even as a link
+  function isFaviconServiceUrl(url) {
+    let parsed;
+    try { parsed = new URL(String(url || '')); } catch (error) { return false; }
+    if (!/^https?:$/.test(parsed.protocol)) return false;
+    const host = parsed.hostname.toLowerCase();
+    if ((host === 'google.com' || host === 'www.google.com') && parsed.pathname.startsWith('/s2/favicons')) return true;
+    return /(^|\.)gstatic\.com$/.test(host) && parsed.pathname.startsWith('/faviconV2');
+  }
+
+  // A -with-images version keeps no remote image: one still remote after
+  // embedding becomes a plain link with its alt text ("[image]" without
+  // one), a favicon is dropped; an image that is a link's text gives that
+  // link the alt as its text. data: and relative images stay, and nothing
+  // inside a code span or fence is touched. Titles and <targets> are read.
+  // Without a remote image the text comes back unchanged.
+  // Linear on text full of unclosed marks: an alt stops at any unescaped
+  // bracket and a target at a space or bracket, so neither needs a length
+  // bound (a failed download's long URL as alt still matches); only quoted
+  // titles, which could run to the end, are bounded (2000 characters)
+  const MD_IMAGE = String.raw`!\[((?:\\.|[^\[\]\\])*)\]\(\s*(?:<([^>\n]*)>|((?:[^\s()<>]|\([^\s()<>]*\))+))(\s+(?:"(?:\\.|[^"\\]){0,2000}"|'(?:\\.|[^'\\]){0,2000}'|\((?:\\.|[^()\\]){0,2000}\)))?\s*\)`;
+  const LINKED_IMAGE_RE = new RegExp(String.raw`\[\s*${MD_IMAGE}\s*\]\(`, 'g');
+  const IMAGE_RE = new RegExp(MD_IMAGE, 'g');
+  const isRemoteImageUrl = url => /^https?:\/\//i.test(String(url || '').trim());
+
+  // A raw <img> whose src is remote (viewer data only, imgTags)
+  const REMOTE_IMG_SRC_RE = /(<img\b[^>]{0,2000}?\bsrc\s*=\s*)(["']?)\s*https?:[^"'\s>]*\2/gi;
+  const HAS_IMAGE_RE = /!\[|<img\b/i;
+
+  // emptyImage: the viewer's form, a remote image becomes ![alt]() (its
+  // "not available offline" placeholder) instead of a link. imgTags: a raw
+  // <img> with a remote src keeps its alt and gets src="" (viewer data).
+  function finishRemoteImagesInText(text, emptyImage = false, imgTags = false) {
+    if (imgTags && /<img\b/i.test(text)) text = text.replace(REMOTE_IMG_SRC_RE, (m, head) => `${head}""`);
+    if (!/!\[/.test(text)) return text;
+    return text
+      .replace(LINKED_IMAGE_RE, (match, alt, angled, bare) => {
+        const url = angled ?? bare;
+        if (!isRemoteImageUrl(url)) return match;
+        if (emptyImage) return isFaviconServiceUrl(url.trim()) ? `[${alt.trim() || 'link'}](` : `[![${alt}]()](`;
+        const label = alt.trim() || (isFaviconServiceUrl(url.trim()) ? 'link' : 'image');
+        return `[${label}](`;
+      })
+      .replace(IMAGE_RE, (match, alt, angled, bare, title) => {
+        const url = angled ?? bare;
+        if (!isRemoteImageUrl(url)) return match;
+        if (isFaviconServiceUrl(url.trim())) return '';
+        if (emptyImage) return `![${alt}]()`;
+        const target = angled !== undefined ? `<${angled}>` : bare;
+        return `[${alt.trim() || 'image'}](${target}${title || ''})`;
+      });
+  }
+
+  function finishRemoteImages(markdown, { emptyImage = false, imgTags = false } = {}) {
+    const text = String(markdown);
+    if (!(imgTags ? HAS_IMAGE_RE : /!\[/).test(text)) return text;
+    // Fenced code blocks (``` or ~~~, up to three spaces in) stay as they are
+    const out = [];
+    let fence = null;
+    let prose = [];
+    const flushProse = () => {
+      if (prose.length === 0) return;
+      // Inline code spans stay too: only the text between them is rewritten.
+      // An escaped backtick (Turndown writes a literal one as \`) opens no
+      // span, and a span never runs past a blank line.
+      const chunk = prose.join('\n');
+      const parts = chunk.split(/((?<![\\`])(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\2(?!`))/);
+      const rebuilt = [];
+      for (let i = 0; i < parts.length; i++) {
+        if (i % 3 === 0) rebuilt.push(finishRemoteImagesInText(parts[i], emptyImage, imgTags));
+        else if (i % 3 === 1) rebuilt.push(parts[i]);
+      }
+      out.push(rebuilt.join(''));
+      prose = [];
+    };
+    for (const line of text.split('\n')) {
+      const marker = line.match(/^ {0,3}(`{3,}|~{3,})/);
+      if (fence) {
+        out.push(line);
+        if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && line.trim() === marker[1]) fence = null;
+      } else if (marker) {
+        flushProse();
+        out.push(line);
+        fence = marker[1];
+      } else {
+        prose.push(line);
+      }
+    }
+    flushProse();
+    return out.join('\n');
+  }
+
+  // The -with-images pass: embed what was downloaded, then finishRemoteImages
+  function embedImagesForVersion(markdown, embeds) {
+    return finishRemoteImages(applyImageEmbeds(markdown, embeds));
+  }
+
+  // Where a chat answer's "Thoughts" section was: content.js puts this in
+  // place of the page's thinking-chain-view, and the chat converter writes
+  // thoughtsMarkdown there. It keeps the word, so any other converter writes
+  // what 1.9.5 wrote.
+  const THOUGHTS_PLACEHOLDER_HTML = '<div data-nlme-thoughts="">Thoughts</div>';
+
+  // A chat answer's Thoughts as one blockquote section: "> **Thoughts**",
+  // then per thought its bold title and its body, every line quoted and the
+  // parts separated by ">" lines. thoughts: [{ title, body }]; a step line
+  // ("Searched your sources") is a title with an empty body. Icon names are
+  // left out. No thoughts: ''.
+  function thoughtsMarkdown(thoughts) {
+    const blocks = [];
+    for (const thought of Array.isArray(thoughts) ? thoughts : []) {
+      let title = String(thought?.title || '').replace(/\s+/g, ' ').trim();
+      if (isThoughtIconName(title)) title = '';
+      const body = String(thought?.body || '').replace(/\r\n?/g, '\n')
+        .split('\n').map(line => line.replace(/\s+$/, '')).join('\n')
+        .trim().replace(/\n{3,}/g, '\n\n');
+      if (title) blocks.push(`**${title}**`);
+      if (body.trim()) blocks.push(body);
+    }
+    if (blocks.length === 0) return '';
+    return toBlockquote(['**Thoughts**', ...blocks].join('\n\n'));
+  }
+
+  // Scan problems that lead a chat export's errors.md: messages that could
+  // not be read, citation groups still collapsed (not with citations 'none',
+  // which drops them on purpose) and answers whose Thoughts could not be read
+  function chatScanErrors(stats, citationMode) {
+    const s = stats || {};
+    const errors = (s.skipped || []).map(message => ({ type: 'message_skipped', message }));
+    if (citationMode !== 'none' && s.collapsedRemaining > 0) {
+      errors.push({ type: 'collapsed_citations', message: `${s.collapsedRemaining} citation group(s) were still collapsed after the scan; their citations are missing` });
+    }
+    for (const message of s.thoughtsUnread || []) errors.push({ type: 'thoughts_unread', message });
+    return errors;
+  }
+
   // Source title from a citation marker's aria-label ("3: Title"); markers
   // without one become "Source N" (titles-only mode, report Sources)
   function citationTitleFromAriaLabel(label, number) {
@@ -3377,6 +3633,20 @@ footer { margin-top: 3rem; }
     citationTitleFromAriaLabel,
     fenceFor,
     toBlockquote,
+    isThoughtIconName,
+    sourceUrlFromFavicon,
+    webSourceType,
+    sourceTypeFields,
+    sourceOriginalLine,
+    importCardFromLines,
+    importCardMarkdown,
+    isFaviconServiceUrl,
+    finishRemoteImages,
+    embedImagesForVersion,
+    blocksCoverText,
+    THOUGHTS_PLACEHOLDER_HTML,
+    thoughtsMarkdown,
+    chatScanErrors,
     noteVariants,
     sourceVariants,
     presetOverrides,

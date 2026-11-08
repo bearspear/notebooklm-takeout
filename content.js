@@ -960,6 +960,10 @@
       // Get source icon to determine type
       const iconEl = container.querySelector('.source-item-source-icon');
       const iconType = iconEl?.textContent?.trim() || 'document';
+      // A web source has no type icon, only a favicon whose src holds the
+      // original URL; only the decoded URL is kept (1.9.6)
+      let webUrl = null;
+      if (!iconEl) webUrl = NLME.sourceUrlFromFavicon(container.querySelector('img.favicon-icon')?.getAttribute('src'));
 
       // Only process if visible
       const rect = container.getBoundingClientRect();
@@ -971,7 +975,8 @@
         sources.push({
           title: title,
           index: index,
-          type: iconType
+          type: iconType,
+          ...(webUrl ? { webUrl } : {})
         });
 
         console.log(`[NotebookLM Takeout] Found source: "${title}" (${iconType})`);
@@ -4181,6 +4186,139 @@
     console.log('[NotebookLM Takeout] All collapsed citations expanded');
   }
 
+  // ---------- Thoughts (1.9.6) ----------
+  // An answer's thinking-chain-view: its header button.thinking-chain__header
+  // "Thoughts" (aria-expanded) and, only while open, .thinking-chain__content
+  // with .thinking-chain__item > .thought-block rows: .thought-block__title
+  // and .thought-block__body (a step line such as "Searched your sources" is
+  // a title with an empty body). Live, all rows render at once (~110 ms).
+  const THOUGHTS_WAIT_MS = 3000;
+  const ICON_SELECTOR = 'mat-icon, .mat-icon, .material-symbols-outlined, .material-symbols-rounded, .material-icons, .google-symbols';
+  // Blocks of a thought body; live bodies are paragraph-element-views
+  const THOUGHT_BLOCK_SELECTOR = 'paragraph-element-view, p, ul, ol, pre, table';
+
+  // The answer's own Thoughts sections: outermost views only
+  const ownThoughtViews = root => Array.from(root.querySelectorAll('thinking-chain-view'))
+    .filter(view => !view.parentElement?.closest('thinking-chain-view'));
+  // The view's own header, never a button inside its content
+  const thoughtsHeader = view => Array.from(view.querySelectorAll('button.thinking-chain__header'))
+    .find(button => button.closest('thinking-chain-view') === view && !button.closest('.thinking-chain__content')) || null;
+  const isThoughtsOpen = view => thoughtsHeader(view)?.getAttribute('aria-expanded') === 'true';
+  // The view's own rows, in order
+  const thoughtRows = view => Array.from(view.querySelectorAll('.thinking-chain__item'))
+    .filter(row => row.closest('thinking-chain-view') === view);
+
+  // Icons out; a citation marker out with the whitespace before it (a
+  // citation in a thought must not count as one of the answer's), so
+  // "forcing [7] here" reads "forcing here" and "forcing [7]." "forcing."
+  function stripThoughtExtras(clone) {
+    clone.querySelectorAll(ICON_SELECTOR).forEach(node => node.remove());
+    clone.querySelectorAll('button.citation-marker').forEach(button => {
+      const before = button.previousSibling;
+      if (before && before.nodeType === Node.TEXT_NODE) before.textContent = before.textContent.replace(/\s+$/, '');
+      button.remove();
+    });
+    return clone;
+  }
+
+  function thoughtTitle(element) {
+    if (!element) return '';
+    return (stripThoughtExtras(element.cloneNode(true)).textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  // Each outermost block (paragraph-element-view, p, list, pre, table) as
+  // Markdown, separated by a blank line; no blocks: the whole body
+  function thoughtBody(element) {
+    if (!element) return '';
+    const clone = stripThoughtExtras(element.cloneNode(true));
+    let blocks = Array.from(clone.querySelectorAll(THOUGHT_BLOCK_SELECTOR))
+      .filter(block => !block.parentElement?.closest(THOUGHT_BLOCK_SELECTOR));
+    // Text outside the blocks (a heading, an unknown view): the whole body,
+    // so nothing is dropped
+    if (!NLME.blocksCoverText(blocks.map(block => block.textContent), clone.textContent)) blocks = [];
+    const parts = (blocks.length > 0 ? blocks : [clone]).map(block => NLMEMarkdown.htmlToMarkdownPlain(block).trim());
+    return parts.filter(Boolean).join('\n\n');
+  }
+
+  // The rows of an open view: [{ title, body }]
+  function readThoughtRows(view) {
+    return thoughtRows(view).map(row => {
+      const block = row.querySelector('.thought-block');
+      if (block && (block.querySelector('.thought-block__title') || block.querySelector('.thought-block__body'))) {
+        return { title: thoughtTitle(block.querySelector('.thought-block__title')), body: thoughtBody(block.querySelector('.thought-block__body')) };
+      }
+      return { title: thoughtTitle(row), body: '' };
+    }).filter(row => row.title || row.body);
+  }
+
+  /**
+   * Read every answer's Thoughts: open a closed section, wait until its rows
+   * have rendered and stopped changing (at most THOUGHTS_WAIT_MS), read them
+   * and close it again in a finally, so the page is left as found also on an
+   * error or Cancel. A section that was open already stays open. The chat's
+   * scroll position is restored afterwards. Two sections in one answer give
+   * one list, in page order.
+   * @returns {Promise<{ byPair: Map<Element, Array<{title, body}>>, unread: Set<Element>, cancelled: Set<Element> }>}
+   *   unread: pairs whose Thoughts did not render in time or failed;
+   *   cancelled: pairs not read because the scan was cancelled
+   */
+  async function readChatThoughts(chatPanel, { waitMs = THOUGHTS_WAIT_MS } = {}) {
+    const byPair = new Map();
+    const unread = new Set();
+    const cancelled = new Set();
+    const opened = new Set();
+    const scrollTop = chatPanel.scrollTop;
+    const pairs = Array.from(chatPanel.querySelectorAll('.chat-message-pair'))
+      .filter(pair => pair.querySelector('.to-user-container thinking-chain-view'));
+    try {
+      for (const pair of pairs) {
+        if (isExportCancelled()) { cancelled.add(pair); continue; }
+        const answer = pair.querySelector('.to-user-container');
+        const thoughts = [];
+        let failed = false;
+        for (const view of ownThoughtViews(answer)) {
+          const header = thoughtsHeader(view);
+          try {
+            if (header && !isThoughtsOpen(view)) {
+              header.scrollIntoView({ behavior: 'instant', block: 'center' });
+              opened.add(view);
+              header.click();
+            }
+            // Settled once rows have text and it stopped changing; after a
+            // Cancel the measure stands still, so the wait ends at once
+            await waitForStable(
+              () => (isExportCancelled() ? 1 : thoughtRows(view).reduce((n, row) => n + (row.textContent || '').length, 0)),
+              { interval: 50, checks: 3, timeout: waitMs });
+            if (isExportCancelled()) break;
+            const rows = readThoughtRows(view);
+            if (rows.length === 0) failed = true;
+            thoughts.push(...rows);
+          } catch (error) {
+            console.warn('[NotebookLM Takeout] Could not read Thoughts:', error);
+            failed = true;
+          } finally {
+            if (opened.has(view) && isThoughtsOpen(view)) {
+              try { thoughtsHeader(view).click(); } catch (error) { /* closed again below */ }
+            }
+          }
+        }
+        if (isExportCancelled()) cancelled.add(pair);
+        else if (failed || thoughts.length === 0) unread.add(pair);
+        else byPair.set(pair, thoughts);
+      }
+    } finally {
+      // Anything still open that this scan opened (a click that did not take,
+      // an error between open and close)
+      for (const view of opened) {
+        if (view.isConnected && isThoughtsOpen(view)) {
+          try { thoughtsHeader(view).click(); } catch (error) { /* nothing more to do */ }
+        }
+      }
+      chatPanel.scrollTo({ top: scrollTop, behavior: 'instant' });
+    }
+    return { byPair, unread, cancelled };
+  }
+
   /**
    * Scan chat panel for all messages
    * Message handler: responds to 'SCAN_CHAT'
@@ -4199,9 +4337,13 @@
       await expandCollapsedCitations();
       console.log('[NotebookLM Takeout] ✓ Collapsed citations expanded');
 
+      // Step 2b: Read each answer's Thoughts (opened and closed again)
+      const thoughtsPanel = document.querySelector('chat-panel .chat-panel-content');
+      const thoughts = thoughtsPanel ? await readChatThoughts(thoughtsPanel) : null;
+
       // Step 3: Extract all messages
       console.log('[NotebookLM Takeout] Step 3: Extracting messages...');
-      const chatData = extractChatMessages();
+      const chatData = extractChatMessages(thoughts);
       const panel = document.querySelector('chat-panel .chat-panel-content');
       chatData.stats.reachedTop = !!scrollResult?.success;
       chatData.stats.collapsedRemaining = panel
@@ -4227,7 +4369,7 @@
   /**
    * Extract all chat messages from the DOM
    */
-  function extractChatMessages() {
+  function extractChatMessages(thoughts = null) {
     const chatPanel = document.querySelector('chat-panel .chat-panel-content');
     if (!chatPanel) {
       throw new Error('Chat panel not found');
@@ -4258,6 +4400,8 @@
     // Notebook wraps them; Milestone 2, Resilience #2)
     const messagePairs = [];
     const skipped = [];
+    const thoughtsUnread = [];
+    let thoughtsCancelled = 0;
     const elements = Array.from(chatPanel.querySelectorAll('.chat-message-pair, .date-separator'));
     // Live DOM position of each pair, used later to find its citation buttons.
     // Pairs that fail extraction are skipped, so the array index can't be used.
@@ -4277,10 +4421,14 @@
 
       // Check for message pair
       if (el.classList.contains('chat-message-pair')) {
-        const pair = extractMessagePair(el, currentDate);
+        const pair = extractMessagePair(el, currentDate, thoughts?.byPair.get(el) || []);
         if (pair) {
           pair.domIndex = livePairs.indexOf(el);
           messagePairs.push(pair);
+          if (thoughts?.unread.has(el)) {
+            thoughtsUnread.push(`Message ${pair.domIndex + 1}: Thoughts could not be read`);
+          }
+          if (thoughts?.cancelled.has(el)) thoughtsCancelled++;
         } else {
           skipped.push(`Message ${livePairs.indexOf(el) + 1} could not be read and was skipped`);
         }
@@ -4306,7 +4454,10 @@
       stats: {
         pairsInDom: livePairs.length,
         pairsExtracted: messagePairs.length,
-        skipped
+        skipped,
+        thoughtsUnread,
+        // Not read because the scan was cancelled: no failure, no errors.md
+        thoughtsCancelled
       }
     };
   }
@@ -4375,7 +4526,7 @@
   /**
    * Extract a single message pair (user question + AI response)
    */
-  function extractMessagePair(pairElement, currentDate) {
+  function extractMessagePair(pairElement, currentDate, thoughts = []) {
     console.log('[NotebookLM Takeout] Extracting message pair...');
 
     try {
@@ -4396,17 +4547,31 @@
       // Extract user message text (simple text extraction)
       const userMessage = userMessageEl.textContent.trim();
 
-      // Extract AI response HTML (includes structural elements and citations)
-      const aiResponseHTML = aiMessageEl.innerHTML;
+      // Extract AI response HTML (includes structural elements and citations).
+      // A Thoughts section becomes the placeholder the chat converter writes
+      // the thoughts at (an answer without one is read exactly as before)
+      let answerEl = aiMessageEl;
+      if (aiMessageEl.querySelector('thinking-chain-view')) {
+        // One placeholder (one section) per answer, where the first view was
+        answerEl = aiMessageEl.cloneNode(true);
+        ownThoughtViews(answerEl).forEach((view, i) => {
+          if (i > 0) { view.remove(); return; }
+          const holder = document.createElement('template');
+          holder.innerHTML = NLME.THOUGHTS_PLACEHOLDER_HTML;
+          view.replaceWith(holder.content);
+        });
+      }
+      const aiResponseHTML = answerEl.innerHTML;
 
       // Count citations
-      const citationButtons = aiMessageEl.querySelectorAll('button.citation-marker');
+      const citationButtons = answerEl.querySelectorAll('button.citation-marker');
       console.log(`[NotebookLM Takeout] Found ${citationButtons.length} citations in AI response`);
 
       return {
         date: currentDate,
         userMessage: userMessage,
         aiResponseHTML: aiResponseHTML,
+        thoughts,
         citationCount: citationButtons.length
       };
 
@@ -4480,7 +4645,9 @@
       }
 
       // Only search for citation buttons WITHIN this specific message pair
-      const messageLiveButtons = targetMessagePair.querySelectorAll('.to-user-container button.citation-marker');
+      // Never a marker inside the answer's Thoughts (not part of the answer)
+      const messageLiveButtons = Array.from(targetMessagePair.querySelectorAll('.to-user-container button.citation-marker'))
+        .filter(btn => !btn.closest('thinking-chain-view'));
       console.log(`[NotebookLM Takeout] Found ${messageLiveButtons.length} citation buttons in message ${messageIndex}`);
 
       // Match buttons by aria-label (only within this message)

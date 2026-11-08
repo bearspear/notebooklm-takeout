@@ -226,6 +226,19 @@ Built by `NLMEViewer.buildViewerData` + `assembleViewer` (takeout-viewer.js) in 
 (sidebar-takeout.js), which reads `viewer/*` from the extension package. The data is JSON in
 `<script id="data" type="application/json">`, written by `escapeJson` (`</` , `<!--`, U+2028 and
 U+2029 escaped); `tools/validate_export.py` parses it back with a plain JSON parser.
+Since 1.9.6 the template's first `<head>` element is a Content-Security-Policy:
+`default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data: file: blob:;
+media-src 'self' file: blob:; font-src data:; frame-src 'self' file:; object-src 'self' file:` ('self' so an
+export served over http, e.g. a local server or NAS, still loads its own files). Checked headless from file://
+and http://127.0.0.1
+(Chromium and Google Chrome): slides PDF and mind map frames, audio (m4a, wav), video (mp4, webm), PNG/SVG,
+images/ files, KaTeX's data: fonts, Copy and search all work with no violation. A framed file
+(mind map HTML, PDF) is its own document, outside this policy, so such files must not reference the web
+themselves (mindmap-extract.js has no web font since 1.9.6). `buildViewerData` also takes remote images
+out of the data (`remoteImagesOut`: a Markdown image becomes `![alt]()`, the "not available offline"
+placeholder, via `NLME.finishRemoteImages(text, { emptyImage: true, imgTags: true })`; a raw `<img>` loses
+its src; code spans and fences are left alone);
+tools/build_viewer.js loads takeout-shared.js for it.
 
 - **Capture rule.** The viewer is built from what the runners saved, not from a re-read. `saveFiles`
   reports every written file to a `capture(path, data)` callback; `NLMEViewer.captureEntry` stores
@@ -514,6 +527,40 @@ side panel.
      where `NLME.isCollapsedCitationGroup` is true: an open group's button reads "Hide
      additional citations" (`unfold_less`), and clicking it would close the group again
      (this lost ~250 citations on a second scan before Nov 2026). Up to 3 passes, re-scanned.
+   - Then `readChatThoughts` (1.9.6) reads each answer's Thoughts. A `thinking-chain-view`
+     has its own header `button.thinking-chain__header` (`aria-expanded`) and, only while
+     open, `.thinking-chain__content` with `.thinking-chain__item > .thought-block` rows
+     (`.thought-block__title`, `.thought-block__body`; the step line "Searched your sources"
+     is a title with an empty body; bodies are `paragraph-element-view`s; icons are
+     `mat-icon` `neurology` / `document_search`). Live, all rows render at once (~110 ms).
+     It clicks a closed header, waits with `waitForStable` (at most 3 s) for the rows to
+     settle, reads them (each `paragraph-element-view`, `p`, list, `pre`, table a block;
+     icons removed; a citation marker removed with the space before it) and clicks it closed
+     again in a `finally`; a last `finally` closes anything it opened that is still open and
+     restores the chat's scroll position. A section that was open before the scan stays open.
+     Two views in one answer give one list in page order and one placeholder.
+     `extractMessagePair` replaces the view in a clone of the answer with
+     `NLME.THOUGHTS_PLACEHOLDER_HTML` and returns `thoughts: [{ title, body }]`; an answer
+     without one is read exactly as before. Thoughts that did not render go to
+     `stats.thoughtsUnread` ("Message N: Thoughts could not be read"), which
+     `NLME.chatScanErrors` puts in errors.md. After a Cancel the rest are counted in
+     `stats.thoughtsCancelled` only (a scan-summary note, no errors.md entry). The chat
+     converter's `chatThoughts` rule writes `NLME.thoughtsMarkdown` (a `> **Thoughts**`
+     blockquote) at the placeholder, or nothing when they were not read. Thoughts are not in
+     the answer HTML, so the audit (`countPageContent`) and the citation reading never
+     count them. A thought body whose blocks miss part of its text (`NLME.blocksCoverText`)
+     is converted whole: their texts joined must equal the body's text, whitespace aside.
+   - A source import card (`a2ui-source-import-card`: heading "Report & Outside sources (5)",
+     names, status "All sources imported", a row of `img.a2ui-favicon-overlap` from
+     `google.com/s2/favicons`) is written by the chat converter's `importCard` rule as one
+     line, `NLMEMarkdown.importCardLines` → `NLME.importCardFromLines` →
+     `NLME.importCardMarkdown`: `*Heading: names. Status.*`. Its favicons are never written.
+   - Every `-with-images` version (chat, notes: `NLME.embedImagesForVersion`; sources'
+     `-with-images` and `-plus-meta-with-images`: `NLME.finishRemoteImages` after
+     `embedImagesInMarkdown`) keeps no remote image: one still remote becomes a link with its
+     alt text (`[image](url)` without one), a favicon service image is dropped, an image that
+     is a link's text gives the link its alt. Titles and `<targets>` are read; code spans and
+     fences are never touched; with nothing remote the text is unchanged (1.9.6).
 2. `exportChat(chatData)` reads `NLME.chatCitationMode(settings)` (the run's citations:
    `'quotes'` default | `'titles'` | `'none'`) and passes it to
    `runChatJob(shell, chatData, { citationMode, forceZip, pathPrefix, zipKind, folder })`;
@@ -1134,6 +1181,15 @@ Found while checking real exports after #8; the export bugs below predate it.
   extension. Seen Nov 2026 across 8 notebooks: `drive_pdf`, `image`, `video_youtube`, `video_audio_call`
   (uploaded audio), `markdown`, `description`, `article`. Written as `source_type`; `sourceKind` in
   `viewer/viewer-app.js` maps it for the viewer, then falls back to the extension and the url.
+- **Web sources (1.9.6):** a web or web-PDF source has no type icon, only `img.favicon-icon` whose src is
+  `google.com/s2/favicons?domain=<original URL>`, the URL raw (chat favicons: percent-encoded); read up to
+  `&sz=`, decoded once only when encoded, never through URLSearchParams (`+` stays `+`). Google-hosted
+  download and redirect links (`*.usercontent.google.com`, `*.googleusercontent.com`, `google.com/url`,
+  `*.google.com` downloads) give no URL. The scan keeps only `NLME.sourceUrlFromFavicon(src)` as `webUrl`
+  (never the favicon URL); `NLME.sourceTypeFields` gives
+  `source_type: "web"` (`"web_pdf"` when the path ends in `.pdf`) and `source_url`. `_index.md` shows it with
+  `NLME.sourceOriginalLine`; the viewer reads `source_url` as the source's url ("Open original page"; YouTube
+  keeps "Open original video"). The open source viewer itself shows no original link.
 - **Viewer links open in a new tab.** The sanitizer does it for Markdown links; every `<a>` the viewer writes
   itself needs `target="_blank"` too. `download` is unreliable on a page opened from disk, so it cannot be
   relied on to keep the viewer open.
