@@ -131,11 +131,24 @@
 
   // The text the viewer may use: no image data, and with savedImages (the page shows the
   // placeholder there) no link to an image that was not saved
+  // The viewer data holds no remote image (1.9.6, with the page's
+  // Content-Security-Policy): a remote Markdown image becomes ![alt](), the
+  // viewer's "not available offline" placeholder, a favicon goes
+  // (NLME.finishRemoteImages, which leaves code alone); a raw <img> with a
+  // remote src keeps its alt and loses the src. Text without a remote image
+  // comes back unchanged.
+  const REMOTE_IMG_SRC_RE = /(<img\b[^>]{0,2000}?\bsrc\s*=\s*)(["']?)\s*https?:[^"'\s>]*\2/gi;
+  function remoteImagesOut(text) {
+    const finish = root.NLME && root.NLME.finishRemoteImages;
+    const marked = finish ? finish(text, { emptyImage: true }) : text;
+    return marked.replace(REMOTE_IMG_SRC_RE, (m, head) => `${head}""`);
+  }
+
   function viewerText(files, savedImages) {
     const out = {};
     for (const [path, text] of Object.entries(files)) {
       if (typeof text !== 'string') { out[path] = text; continue; }
-      const clean = emptyDataImages(text);
+      const clean = emptyDataImages(/\.md$/i.test(path) ? remoteImagesOut(text) : text);
       out[path] = !savedImages ? clean : clean.replace(ANY_IMAGE_RE, (match, image, url) =>
         (IMAGE_PATH_RE.test(url) && !savedImages.has(url) ? `${image}()` : match));
     }

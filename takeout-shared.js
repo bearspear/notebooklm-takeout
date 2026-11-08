@@ -1611,17 +1611,22 @@
   // link the alt as its text. data: and relative images stay, and nothing
   // inside a code span or fence is touched. Titles and <targets> are read.
   // Without a remote image the text comes back unchanged.
-  const MD_IMAGE = String.raw`!\[((?:\\.|[^\]\\])*)\]\(\s*(?:<([^>\n]*)>|((?:[^\s()<>]|\([^\s()<>]*\))+))(\s+(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^()\\])*\)))?\s*\)`;
+  // Bounded (alt 300, target 8192, title 300 characters) so text full of
+  // unclosed marks stays linear
+  const MD_IMAGE = String.raw`!\[((?:\\.|[^\]\\]){0,300})\]\(\s*(?:<([^>\n]{0,8192})>|((?:[^\s()<>]|\([^\s()<>]{0,8192}\)){1,8192}))(\s+(?:"(?:\\.|[^"\\]){0,300}"|'(?:\\.|[^'\\]){0,300}'|\((?:\\.|[^()\\]){0,300}\)))?\s*\)`;
   const LINKED_IMAGE_RE = new RegExp(String.raw`\[\s*${MD_IMAGE}\s*\]\(`, 'g');
   const IMAGE_RE = new RegExp(MD_IMAGE, 'g');
   const isRemoteImageUrl = url => /^https?:\/\//i.test(String(url || '').trim());
 
-  function finishRemoteImagesInText(text) {
+  // emptyImage: the viewer's form, a remote image becomes ![alt]() (its
+  // "not available offline" placeholder) instead of a link
+  function finishRemoteImagesInText(text, emptyImage = false) {
     if (!/!\[/.test(text)) return text;
     return text
       .replace(LINKED_IMAGE_RE, (match, alt, angled, bare) => {
         const url = angled ?? bare;
         if (!isRemoteImageUrl(url)) return match;
+        if (emptyImage) return isFaviconServiceUrl(url.trim()) ? `[${alt.trim() || 'link'}](` : `[![${alt}]()](`;
         const label = alt.trim() || (isFaviconServiceUrl(url.trim()) ? 'link' : 'image');
         return `[${label}](`;
       })
@@ -1629,12 +1634,13 @@
         const url = angled ?? bare;
         if (!isRemoteImageUrl(url)) return match;
         if (isFaviconServiceUrl(url.trim())) return '';
+        if (emptyImage) return `![${alt}]()`;
         const target = angled !== undefined ? `<${angled}>` : bare;
         return `[${alt.trim() || 'image'}](${target}${title || ''})`;
       });
   }
 
-  function finishRemoteImages(markdown) {
+  function finishRemoteImages(markdown, { emptyImage = false } = {}) {
     const text = String(markdown);
     if (!/!\[/.test(text)) return text;
     // Fenced code blocks (``` or ~~~, up to three spaces in) stay as they are
@@ -1650,7 +1656,7 @@
       const parts = chunk.split(/((?<![\\`])(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\2(?!`))/);
       const rebuilt = [];
       for (let i = 0; i < parts.length; i++) {
-        if (i % 3 === 0) rebuilt.push(finishRemoteImagesInText(parts[i]));
+        if (i % 3 === 0) rebuilt.push(finishRemoteImagesInText(parts[i], emptyImage));
         else if (i % 3 === 1) rebuilt.push(parts[i]);
       }
       out.push(rebuilt.join(''));

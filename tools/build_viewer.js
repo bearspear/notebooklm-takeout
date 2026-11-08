@@ -6,6 +6,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+require('../takeout-shared.js'); // NLME.finishRemoteImages for the viewer's offline pass
 require('../takeout-viewer.js');
 const V = globalThis.NLMEViewer;
 

@@ -194,9 +194,9 @@ async function extractMindmapSVG(mindmapViewer) {
 
   // Add embedded styles for text rendering
   const styleElement = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+  // No web font: the file is opened offline (and in the viewer's frame), so
+  // it never loads anything; Google Sans is used where it is installed
   styleElement.textContent = `
-    @import url('https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500&display=swap');
-
     text {
       font-family: 'Google Sans', 'Roboto', Arial, sans-serif;
       dominant-baseline: middle;

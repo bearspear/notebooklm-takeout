@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Takeout for Gemini Notebook",
-  "version": "1.9.5",
+  "version": "1.9.6",
   "description": "Export and archive Gemini Notebook (formerly NotebookLM) sources, notes, chat and Studio items",
   "permissions": [
     "storage",

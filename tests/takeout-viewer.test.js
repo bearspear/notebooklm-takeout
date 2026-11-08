@@ -1438,3 +1438,46 @@ test('Full Takeout skips two no-More twins, keeps them failed in the record, and
   assert.match(log.zipped['Book/errors.md'], /^## Skipped: same title as another item \(2\)\n\n- Artifacts: Twin: still being generated or has no menu; another item being generated has the same title$/m);
   assert.match(log.panels[0].message, /artifacts 1\/1 \(2 skipped\)/);
 });
+
+// ---------- offline policy (1.9.6) ----------
+
+const VIEWER_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: file: blob:; media-src file: blob:; font-src data:; frame-src file:; object-src file:";
+
+test('the assembled viewer starts its <head> with the offline Content-Security-Policy', () => {
+  const dir = path.join(__dirname, '..', 'viewer');
+  const read = f => fs.readFileSync(path.join(dir, f), 'utf8');
+  const page = V.assembleViewer({ template: read('viewer-template.html'), data: {}, app: read('viewer-app.js'), css: read('katex-inline.css'), katex: read('katex.min.js'), marked: read('marked.min.js') });
+  const head = /<head>\s*([\s\S]*?)<\/head>/.exec(page)[1];
+  assert.equal(head.split('\n')[0], `<meta http-equiv="Content-Security-Policy" content="${VIEWER_CSP}">`);
+  assert.equal((page.match(/Content-Security-Policy/g) || []).length, 1);
+  // within the first 1024 bytes the charset is still declared
+  assert.ok(page.indexOf('<meta charset="utf-8">') < 1024);
+});
+
+test('viewer data holds no remote image: Markdown images become the offline placeholder, <img> loses its src, favicons go', () => {
+  const d = V.buildViewerData({
+    'sources/s.md': '# S\n\nA ![fig](https://lh3.googleusercontent.com/x) b ![](https://x.org/i_(1).png "t")\n\n<img alt="x" src="https://x.org/y.png"> ![](https://www.google.com/s2/favicons?domain=x.org)\n\nkeep ![local](images/0123456789abcdef.png) and [a link](https://x.org)',
+    'chat/chat.md': '## Q: Hi\n\n**A:** see ![](http://x.org/a.png)\n'
+  }, manifestOpts);
+  const all = JSON.stringify(d);
+  assert.doesNotMatch(all, /!\[[^\]]*\]\(\s*<?https?:/);
+  assert.doesNotMatch(all, /<img[^>]*src=\\?["']?https?:/i);
+  assert.doesNotMatch(all, /s2\/favicons/);
+  assert.match(d.sources[0].md, /A !\[fig\]\(\) b !\[\]\(\)/);
+  assert.match(d.sources[0].md, /<img alt="x" src="">/);
+  assert.match(d.sources[0].md, /keep !\[local\]\(images\/0123456789abcdef\.png\) and \[a link\]\(https:\/\/x\.org\)/);
+  assert.match(d.pairs[0].a, /see !\[\]\(\)/);
+});
+
+test('viewer data without remote images is unchanged by the offline pass', () => {
+  const files = { 'sources/s.md': '# S\n\nplain ![l](images/0123456789abcdef.png) [x](https://x.org) `![c](https://x.org/c.png)`' };
+  const d = V.buildViewerData(files, manifestOpts);
+  assert.equal(d.sources[0].md, 'plain ![l](images/0123456789abcdef.png) [x](https://x.org) `![c](https://x.org/c.png)`');
+});
+
+test('mind map files (shown in the viewer\'s frame) make no remote requests', () => {
+  for (const f of ['mindmap-extract.js', 'mindmap-template.html']) {
+    const src = fs.readFileSync(path.join(__dirname, '..', f), 'utf8').replace(/https?:\/\/www\.w3\.org\/[\w/.]+/g, '');
+    assert.doesNotMatch(src, /@import|url\(\s*["']?https?:|(src|href)\s*=\s*["']https?:|https?:\/\/fonts\./i, f);
+  }
+});
