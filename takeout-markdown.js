@@ -5,6 +5,7 @@
 //   createTurndownService(options)   the one Turndown configuration
 //   convertKatexNodeToLatex(node)    KaTeX DOM → $…$ / $$…$$
 //   createConverter(options)         notes / chat Turndown rule set (side panel)
+//   formulasWritten()                formulas createConverter's converters wrote
 //   htmlToMarkdownPlain(element)     the page script's converter (quotes,
 //                                    source guides, notebook summary)
 // Turndown itself (turndown.min.js) is only needed by createTurndownService /
@@ -345,6 +346,10 @@
     return text ? `${delim}${katexUnicodeToLatex(text)}${delim}` : '';
   }
 
+  // Formulas every converter has written so far (NLME.markWrittenFormula).
+  // The audit reads it before and after a conversion (convertCounted).
+  let formulasWrittenTotal = 0;
+
   // ==================== ONE TURNDOWN RULE SET ====================
   // The notes/sources/reports rule set and the chat rule set were two copies
   // (Milestone 3d merges them). Options:
@@ -368,6 +373,7 @@
   //     with the current message index, so every label is unique in chat.md.
   //   anchorPrefix (note), getMessageIndex (chat), log(context, message)
   // Returns { turndownService, convert(html), citedNumbers(messageIndex?) } —
+  // callers use convert() (turndownService.turndown() leaves formula marks in);
   // citedNumbers: the distinct marker numbers converted so far (note variant),
   // in order; for the chat variant, those cited in the given message.
   // Turndown gives later-added rules priority; the order below is the notes
@@ -577,7 +583,9 @@
     // KaTeX math notation (see convertKatexNodeToLatex)
     turndownService.addRule('katexMath', {
       filter: (node) => node.nodeName === 'SPAN' && node.classList.contains('katex'),
-      replacement: (_content, node) => convertKatexNodeToLatex(node)
+      // Marked for the audit's count; convert() takes the mark out again
+      replacement: (_content, node) => NLME.markWrittenFormula(
+        convertKatexNodeToLatex(node), node.closest('[data-math]')?.getAttribute('data-math'))
     });
 
     // Citation markers
@@ -725,7 +733,11 @@
 
     return {
       turndownService,
-      convert: (html) => finishFootnotes(turndownService.turndown(html)),
+      convert: (html) => {
+        const { text, formulas } = NLME.takeFormulaMarks(turndownService.turndown(html));
+        formulasWrittenTotal += formulas;
+        return finishFootnotes(text);
+      },
       citedNumbers: (messageIndex) => {
         if (isChat && messageIndex !== undefined) {
           const prefix = `${messageIndex}:`;
@@ -1027,6 +1039,7 @@
     createTurndownService,
     convertKatexNodeToLatex,
     createConverter,
+    formulasWritten: () => formulasWrittenTotal,
     htmlToMarkdownPlain
   });
 })(globalThis);

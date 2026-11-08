@@ -1535,14 +1535,37 @@
   }
 
   // The page reads "$3-$4 million" as math and draws "3-" as a formula. The
-  // export's text is still "$3-$4 million", which countMarkdownFormulas rightly
-  // takes for prices, so the audit leaves these out of the page's count.
+  // export's text is still "$3-$4 million", a price, so the audit leaves these
+  // out of both counts (countPageContent, markWrittenFormula).
   function isPriceRangeFragment(tex) {
     return /^\d[\d.,]*(?:\s*(?:thousand|million|billion|k|m|b))?\s*(?:[-–—]|to|or|and)$/i.test(String(tex ?? '').trim());
   }
 
+  // The audit's "written" formulas are the ones the converter wrote, not a
+  // re-read of the Markdown: a formula touching a number ($1 micron (μm):
+  // 10-6 m$1 nanometre) looks like a price to any regex. The KaTeX rule marks
+  // each formula it writes with a private-use sentinel; convert() takes the
+  // marks out of its final text and counts them. Output a nested list or
+  // table rule converted and then threw away never reaches that text, so
+  // every formula counts once. A price range the page drew as math is left
+  // unmarked, as countPageContent leaves it out of the page's count.
+  const FORMULA_MARK = '';
+
+  function markWrittenFormula(markdown, dataMath) {
+    if (!markdown || isPriceRangeFragment(dataMath)) return markdown;
+    return FORMULA_MARK + markdown;
+  }
+
+  // { text without marks, formulas: how many were marked }
+  function takeFormulaMarks(text) {
+    const parts = String(text ?? '').split(FORMULA_MARK);
+    return { text: parts.join(''), formulas: parts.length - 1 };
+  }
+
   // Formulas in final Markdown ($$...$$ and $...$), each counted once,
-  // however many times the converter ran on nested lists or tables.
+  // however many times the converter ran on nested lists or tables. The
+  // audit's counter until 1.9.5; the panel no longer calls it, since it misses
+  // a formula that opens on a digit and ends before one (markWrittenFormula).
   // A formula may touch words ($x$rad, a$b$). A price is a $ and a digit, so
   // a span that opens on a digit must not close before a digit ($400 ... $500);
   // other spans may ($T$2).
@@ -3078,6 +3101,8 @@ footer { margin-top: 3rem; }
     markWindowedQuote,
     noteHasImages,
     countMarkdownFormulas,
+    markWrittenFormula,
+    takeFormulaMarks,
     listItemMarkdown,
     countExportErrors,
     isPriceRangeFragment,

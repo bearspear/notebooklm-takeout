@@ -1298,10 +1298,14 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined out
   (before this, the PPTX click hit PDF again and Chrome saved `Name (1).pdf`, identical bytes). A single
   `settings.slidesFormat = pptx` request keeps the old fallback, so such a deck still gets its PDF. Tab
   downloads keep the single `settings.slidesFormat`.
-- **Formula audit.** `NLME.countMarkdownFormulas` counts `$$..$$` and `$..$` in the final Markdown. A formula
-  may touch words (`$x$rad`). A span that opens on a digit must not close before a digit, so `$400 ... $500`
-  is not a formula; other spans may (`$T$2`). Known gap: `$1 micron: 10-6 m$1 nanometre` reads as a price. On
-  the Venus sources (base files) it gives 149 against 150 on the page (it was 85).
+- **Formula audit (1.9.5).** "Written" is what the converter wrote, not a re-read of the Markdown. The KaTeX
+  rule marks each formula it writes (`NLME.markWrittenFormula`, a private-use `\uE002`); `convert()` takes the
+  marks out of its final text and counts them (`NLME.takeFormulaMarks`, `NLMEMarkdown.formulasWritten()`), and
+  `convertCounted` reads that total before and after. Output a nested list or table rule converted and threw
+  away never reaches the final text, so each formula counts once. A price range drawn as math
+  (`isPriceRangeFragment`) is unmarked, as the page count leaves it out. The old regex counter
+  (`NLME.countMarkdownFormulas`, kept with its tests but no longer called by the panel) read
+  `$1 micron (μm): 10-6 m$1 nanometre` as a price (Venus sources 149 of 150: the Sheehan source's 4th formula).
 - **Checker links.** `check_links` reads a link target with balanced parentheses
   (`[a](x-(S1)-y.md)`) and accepts the target as written or percent-decoded (a file name may hold `%2C`).
 - **ZIP on** (`runFullTakeout({ zip })`, the export sheet's Save as): one ZIP per category, `<Notebook>-takeout-<category>-<ts>[-PARTIAL]
@@ -1629,7 +1633,8 @@ same list `ensureContentScriptLoaded` re-injects, checked by `tests/structure.te
 |---|---|
 | `createTurndownService(options)` | the one Turndown configuration (atx headings, `*` bullets, `_` emphasis, fenced code) |
 | `convertKatexNodeToLatex(node)` | KaTeX DOM → `$…$` / `$$…$$` (`data-math` / annotation first, then the layout walker) |
-| `createConverter({ variant, citations, anchorPrefix, getMessageIndex, footnoteLabel, log })` | `convertToMarkdown` (notes, sources, reports; `variant: 'note'`) and `convertChatToMarkdown` (`variant: 'chat'`). Returns `{ turndownService, convert(html), citedNumbers(messageIndex?) }` |
+| `createConverter({ variant, citations, anchorPrefix, getMessageIndex, footnoteLabel, log })` | `convertToMarkdown` (notes, sources, reports; `variant: 'note'`) and `convertChatToMarkdown` (`variant: 'chat'`). Returns `{ turndownService, convert(html), citedNumbers(messageIndex?) }`; use `convert()`, since `turndownService.turndown()` leaves formula marks in |
+| `formulasWritten()` | `convertCounted`: formulas every converter has written so far (the audit's "written") |
 | `htmlToMarkdownPlain(element)` | `content.js`: citation quotes, source guides, the notebook summary |
 
 - **One rule set.** reportHeadings, blockquotes, stripAngularComponents, listsWithWrappers, tables,

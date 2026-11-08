@@ -1911,14 +1911,17 @@ function newAudit() {
   return { expected: { items: 0, citations: 0, formulas: 0 }, written: { items: 0, citations: 0, formulas: 0 }, cacheHits: 0, cachedItems: 0 };
 }
 
-// Converts and counts formulas: .katex on the page vs formulas in the final
-// Markdown (counted in the output, so nested list/table conversions that run
-// the KaTeX converter twice can't inflate it)
+// Converts and counts formulas: .katex on the page vs the formulas the
+// converter wrote into its final text (NLMEMarkdown.formulasWritten; each
+// once, however often a nested list or table converts its content). Not a
+// regex over the Markdown, which takes "$1 micron (μm): 10-6 m$1" for a
+// price. convert must be synchronous.
 function convertCounted(audit, html, convert, page = null) {
   const counts = page || countPageContent(html);
+  const before = NLMEMarkdown.formulasWritten();
   const markdown = convert();
   audit.expected.formulas += counts.formulas;
-  audit.written.formulas += NLME.countMarkdownFormulas(markdown);
+  audit.written.formulas += NLMEMarkdown.formulasWritten() - before;
   return markdown;
 }
 
