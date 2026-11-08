@@ -227,14 +227,17 @@ Built by `NLMEViewer.buildViewerData` + `assembleViewer` (takeout-viewer.js) in 
 `<script id="data" type="application/json">`, written by `escapeJson` (`</` , `<!--`, U+2028 and
 U+2029 escaped); `tools/validate_export.py` parses it back with a plain JSON parser.
 Since 1.9.6 the template's first `<head>` element is a Content-Security-Policy:
-`default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: file: blob:;
-media-src file: blob:; font-src data:; frame-src file:; object-src file:`. Checked headless from file://
+`default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data: file: blob:;
+media-src 'self' file: blob:; font-src data:; frame-src 'self' file:; object-src 'self' file:` ('self' so an
+export served over http, e.g. a local server or NAS, still loads its own files). Checked headless from file://
+and http://127.0.0.1
 (Chromium and Google Chrome): slides PDF and mind map frames, audio (m4a, wav), video (mp4, webm), PNG/SVG,
 images/ files, KaTeX's data: fonts, Copy and search all work with no violation. A framed file
 (mind map HTML, PDF) is its own document, outside this policy, so such files must not reference the web
 themselves (mindmap-extract.js has no web font since 1.9.6). `buildViewerData` also takes remote images
 out of the data (`remoteImagesOut`: a Markdown image becomes `![alt]()`, the "not available offline"
-placeholder, via `NLME.finishRemoteImages(text, { emptyImage: true })`; a raw `<img>` loses its src);
+placeholder, via `NLME.finishRemoteImages(text, { emptyImage: true, imgTags: true })`; a raw `<img>` loses
+its src; code spans and fences are left alone);
 tools/build_viewer.js loads takeout-shared.js for it.
 
 - **Capture rule.** The viewer is built from what the runners saved, not from a re-read. `saveFiles`

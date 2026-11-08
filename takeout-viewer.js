@@ -137,11 +137,9 @@
   // (NLME.finishRemoteImages, which leaves code alone); a raw <img> with a
   // remote src keeps its alt and loses the src. Text without a remote image
   // comes back unchanged.
-  const REMOTE_IMG_SRC_RE = /(<img\b[^>]{0,2000}?\bsrc\s*=\s*)(["']?)\s*https?:[^"'\s>]*\2/gi;
   function remoteImagesOut(text) {
     const finish = root.NLME && root.NLME.finishRemoteImages;
-    const marked = finish ? finish(text, { emptyImage: true }) : text;
-    return marked.replace(REMOTE_IMG_SRC_RE, (m, head) => `${head}""`);
+    return finish ? finish(text, { emptyImage: true, imgTags: true }) : text;
   }
 
   function viewerText(files, savedImages) {

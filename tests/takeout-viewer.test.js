@@ -1441,7 +1441,8 @@ test('Full Takeout skips two no-More twins, keeps them failed in the record, and
 
 // ---------- offline policy (1.9.6) ----------
 
-const VIEWER_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: file: blob:; media-src file: blob:; font-src data:; frame-src file:; object-src file:";
+// 'self': an export served over http (a local server, a NAS) loads its own files too
+const VIEWER_CSP = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data: file: blob:; media-src 'self' file: blob:; font-src data:; frame-src 'self' file:; object-src 'self' file:";
 
 test('the assembled viewer starts its <head> with the offline Content-Security-Policy', () => {
   const dir = path.join(__dirname, '..', 'viewer');
@@ -1480,4 +1481,20 @@ test('mind map files (shown in the viewer\'s frame) make no remote requests', ()
     const src = fs.readFileSync(path.join(__dirname, '..', f), 'utf8').replace(/https?:\/\/www\.w3\.org\/[\w/.]+/g, '');
     assert.doesNotMatch(src, /@import|url\(\s*["']?https?:|(src|href)\s*=\s*["']https?:|https?:\/\/fonts\./i, f);
   }
+});
+
+test('viewer data: a remote <img> inside code stays as written', () => {
+  const md = 'Use `<img src="https://x.org/a.png">` like this:\n\n```html\n<img alt="b" src="https://x.org/b.png">\n```\n\n<img alt="c" src="https://x.org/c.png">';
+  const out = V.buildViewerData({ 'sources/s.md': `# S\n\n${md}` }, manifestOpts).sources[0].md;
+  assert.ok(out.includes('`<img src="https://x.org/a.png">`'), out);
+  assert.ok(out.includes('<img alt="b" src="https://x.org/b.png">\n```'), out);
+  assert.ok(out.includes('<img alt="c" src="">'), out);
+});
+
+test('build_viewer warns when a framed mind map of an older export fetches a web font', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'tools', 'build_viewer.js'), 'utf8');
+  assert.match(src, /fonts\\\.googleapis/);
+  assert.match(src, /console\.warn\(/);
+  const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
+  assert.match(readme, /build_viewer\.js[^\n]*web font|web font[^\n]*build_viewer\.js/);
 });

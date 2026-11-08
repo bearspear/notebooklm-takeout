@@ -62,4 +62,19 @@ const html = V.assembleViewer({ template, css, marked, katex, app, data });
 
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.writeFileSync(out, html);
+
+// Mind maps from exports before 1.9.6 import a web font; the viewer frames
+// them as their own documents, outside its offline policy
+const fontFetchers = [];
+(function scan(dir, rel) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const r = rel ? rel + '/' + e.name : e.name;
+    if (e.isDirectory()) scan(path.join(dir, e.name), r);
+    else if (/^artifacts\//.test(r) && /\.(html|svg)$/i.test(e.name) &&
+      /fonts\.googleapis|@import\s+url\(\s*['"]?https?:/i.test(fs.readFileSync(path.join(dir, e.name), 'utf8'))) fontFetchers.push(r);
+  }
+})(root, '');
+if (fontFetchers.length > 0) {
+  console.warn(`Note: ${fontFetchers.length} mind map file(s) from an older export load a web font when the viewer shows them (${fontFetchers.slice(0, 3).join(', ')}${fontFetchers.length > 3 ? ', …' : ''}). Export the notebook again with 1.9.6 or later for files that load nothing from the web.`);
+}
 console.log(`${out}: ${data.sources.length} sources, ${data.studio.length} studio items, ${data.pairs.length} Q&A, ${data.pairs.reduce((n, p) => n + p.n, 0)} chat citations, ${data.cites.length} unique citation records, ${imageCount} image files`);

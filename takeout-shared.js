@@ -1611,16 +1611,24 @@
   // link the alt as its text. data: and relative images stay, and nothing
   // inside a code span or fence is touched. Titles and <targets> are read.
   // Without a remote image the text comes back unchanged.
-  // Bounded (alt 300, target 8192, title 300 characters) so text full of
-  // unclosed marks stays linear
-  const MD_IMAGE = String.raw`!\[((?:\\.|[^\]\\]){0,300})\]\(\s*(?:<([^>\n]{0,8192})>|((?:[^\s()<>]|\([^\s()<>]{0,8192}\)){1,8192}))(\s+(?:"(?:\\.|[^"\\]){0,300}"|'(?:\\.|[^'\\]){0,300}'|\((?:\\.|[^()\\]){0,300}\)))?\s*\)`;
+  // Linear on text full of unclosed marks: an alt stops at any unescaped
+  // bracket and a target at a space or bracket, so neither needs a length
+  // bound (a failed download's long URL as alt still matches); only quoted
+  // titles, which could run to the end, are bounded (2000 characters)
+  const MD_IMAGE = String.raw`!\[((?:\\.|[^\[\]\\])*)\]\(\s*(?:<([^>\n]*)>|((?:[^\s()<>]|\([^\s()<>]*\))+))(\s+(?:"(?:\\.|[^"\\]){0,2000}"|'(?:\\.|[^'\\]){0,2000}'|\((?:\\.|[^()\\]){0,2000}\)))?\s*\)`;
   const LINKED_IMAGE_RE = new RegExp(String.raw`\[\s*${MD_IMAGE}\s*\]\(`, 'g');
   const IMAGE_RE = new RegExp(MD_IMAGE, 'g');
   const isRemoteImageUrl = url => /^https?:\/\//i.test(String(url || '').trim());
 
+  // A raw <img> whose src is remote (viewer data only, imgTags)
+  const REMOTE_IMG_SRC_RE = /(<img\b[^>]{0,2000}?\bsrc\s*=\s*)(["']?)\s*https?:[^"'\s>]*\2/gi;
+  const HAS_IMAGE_RE = /!\[|<img\b/i;
+
   // emptyImage: the viewer's form, a remote image becomes ![alt]() (its
-  // "not available offline" placeholder) instead of a link
-  function finishRemoteImagesInText(text, emptyImage = false) {
+  // "not available offline" placeholder) instead of a link. imgTags: a raw
+  // <img> with a remote src keeps its alt and gets src="" (viewer data).
+  function finishRemoteImagesInText(text, emptyImage = false, imgTags = false) {
+    if (imgTags && /<img\b/i.test(text)) text = text.replace(REMOTE_IMG_SRC_RE, (m, head) => `${head}""`);
     if (!/!\[/.test(text)) return text;
     return text
       .replace(LINKED_IMAGE_RE, (match, alt, angled, bare) => {
@@ -1640,9 +1648,9 @@
       });
   }
 
-  function finishRemoteImages(markdown, { emptyImage = false } = {}) {
+  function finishRemoteImages(markdown, { emptyImage = false, imgTags = false } = {}) {
     const text = String(markdown);
-    if (!/!\[/.test(text)) return text;
+    if (!(imgTags ? HAS_IMAGE_RE : /!\[/).test(text)) return text;
     // Fenced code blocks (``` or ~~~, up to three spaces in) stay as they are
     const out = [];
     let fence = null;
@@ -1656,7 +1664,7 @@
       const parts = chunk.split(/((?<![\\`])(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\2(?!`))/);
       const rebuilt = [];
       for (let i = 0; i < parts.length; i++) {
-        if (i % 3 === 0) rebuilt.push(finishRemoteImagesInText(parts[i], emptyImage));
+        if (i % 3 === 0) rebuilt.push(finishRemoteImagesInText(parts[i], emptyImage, imgTags));
         else if (i % 3 === 1) rebuilt.push(parts[i]);
       }
       out.push(rebuilt.join(''));

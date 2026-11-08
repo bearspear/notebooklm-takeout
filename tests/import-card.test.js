@@ -245,3 +245,13 @@ test('finishRemoteImages: escaped backticks are not code spans, and a span stops
   const span = 'x `![a](https://x.org/i.png)\nmore` y';
   assert.equal(NLME.finishRemoteImages(span), span);
 });
+
+test("finishRemoteImages: a long alt (a failed download's URL) or a long URL still becomes a link, and stays fast", () => {
+  const longAlt = 'https://lh3.googleusercontent.com/' + 'a'.repeat(1500);
+  assert.equal(NLME.finishRemoteImages(`![${longAlt}](${longAlt})`), `[${longAlt}](${longAlt})`);
+  const longUrl = 'https://lh3.googleusercontent.com/' + 'b'.repeat(12000);
+  assert.equal(NLME.finishRemoteImages(`![x](${longUrl})`), `[x](${longUrl})`);
+  const started = Date.now();
+  for (const mark of ['![a ', '![a](x', '![a](x "t', '[![a ']) NLME.finishRemoteImages(mark.repeat(100000));
+  assert.ok(Date.now() - started < 2000, `${Date.now() - started} ms`);
+});
