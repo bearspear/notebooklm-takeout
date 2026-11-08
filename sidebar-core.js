@@ -1305,7 +1305,7 @@ async function paintNotebookName(tab, retry = true) {
     if (seq !== notebookNameSeq || id !== lastPanelNotebookId) return;
     const real = name !== NAME_FALLBACK;
     if (real || paintedName.id !== id || !paintedName.real) {
-      setNotebookName(NLME.headerName(tab.url, real ? name : '')); // the fallback name is for files only
+      setNotebookName(NLME.headerName(tab.url, name)); // the file-name fallback shows as "Notebook"
       paintedName = { id, real };
     }
     if (!real && retry) setTimeout(() => repaintActiveName(false), 1500);

@@ -3464,9 +3464,17 @@ test('sameDeleteTarget needs the same tab and the same notebook', () => {
   assert.equal(NLME.sameDeleteTarget(null, asked), false);
 });
 
-test('overlayView calls the Studio list "Studio items", also under its 1.9.1 to 1.9.3 name', () => {
-  assert.equal(NLME.overlayView('Studio: Processing 1/3: Deck', null).heading, 'Exporting Studio items');
-  assert.equal(NLME.overlayView('Generated: Processing 1/3: Deck', null).heading, 'Exporting Studio items');
+test('overlayView names only the categories exports write, not prototype keys', () => {
   assert.equal(NLME.overlayView('Artifacts: Processing 1/3: Deck', null).heading, 'Exporting artifacts');
+  assert.equal(NLME.overlayView('Chat: Processing 1/3', null).heading, 'Exporting chat');
   assert.equal(NLME.overlayView('constructor: x', null).heading, 'Exporting');
+  assert.equal(NLME.overlayView('Studio: x', null).heading, 'Exporting');
+});
+
+test('shownNotebookName hides the file-name fallback, header and results alike', () => {
+  const nb = 'https://notebook.google.com/notebook/62d6e344-2fa7-42ed-b3ef-236f3007fdc3';
+  assert.equal(NLME.shownNotebookName('NotebookLM'), '');
+  assert.equal(NLME.shownNotebookName('  New Physics '), 'New Physics');
+  assert.equal(NLME.shownNotebookName(undefined), '');
+  assert.equal(NLME.headerName(nb, 'NotebookLM'), 'Notebook');
 });

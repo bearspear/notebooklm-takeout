@@ -454,7 +454,7 @@ function downloadBlob(blob, filename) {
 async function exportSingleNote(note) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!isNotebookUrl(tab?.url)) {
-    throw new Error('NotebookLM tab not active'); // kept: an error text can reach errors.md
+    throw new Error('The notebook tab is not active');
   }
 
   await ensureContentScriptLoaded(tab.id);

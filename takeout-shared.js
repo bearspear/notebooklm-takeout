@@ -1253,9 +1253,9 @@
   // The page overlay's fields from a progress text and count (Task 10).
   // text: 'Notes: Batch 1/2: Processing 1/25: Title' and the like; count:
   // { done, total, item } or null. Pure, so the content script only renders.
-  // Progress category -> what the heading calls it. 'Generated' is the list's name
-  // before 1.9.4 (now Studio).
-  const OVERLAY_CATEGORIES = { Sources: 'sources', Notes: 'notes', Chat: 'chat', Studio: 'Studio items', Generated: 'Studio items', Artifacts: 'artifacts' };
+  // Progress category -> what the heading calls it: the prefixes Export everything
+  // and the tab exports write (a Studio export runs as artifacts, then notes)
+  const OVERLAY_CATEGORIES = { Sources: 'sources', Notes: 'notes', Chat: 'chat', Artifacts: 'artifacts' };
   function overlayView(text, count, { finishing = false } = {}) {
     let rest = String(text || '');
     let heading = 'Exporting';
@@ -1768,7 +1768,16 @@
   // which has a notebook host but no notebook id).
   function headerName(url, projectName) {
     if (!isNotebookUrl(url) || !notebookIdFromUrl(url)) return 'Open a notebook';
-    return String(projectName || '').trim() || 'Notebook';
+    return shownNotebookName(projectName) || 'Notebook';
+  }
+
+  // The notebook's name as the panel shows it, '' when unknown. 'NotebookLM' is
+  // getProjectName's fallback for export file names (kept for byte-identical
+  // exports), never a name to show.
+  const FILE_NAME_FALLBACK = 'NotebookLM';
+  function shownNotebookName(projectName) {
+    const name = String(projectName || '').trim();
+    return name === FILE_NAME_FALLBACK ? '' : name;
   }
 
   // ---- List view helpers (filter / sort / select toolbar) ----
@@ -3012,6 +3021,7 @@ footer { margin-top: 3rem; }
     homeNotice,
     loadWithRetry,
     headerName,
+    shownNotebookName,
     listItemKeys,
     jobRecordKey,
     newJobRecord,

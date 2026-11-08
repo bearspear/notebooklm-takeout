@@ -166,9 +166,14 @@
   }
 
   // In the overlay's place when its export died with a reload: a small note at the
-  // foot of the page, not blocking it, gone after RELOADED_NOTE_MS or on Dismiss.
-  // The overlay's own styles and tokens, in its own shadow root.
+  // foot of the page, not blocking it. It goes on Dismiss, or after RELOADED_NOTE_MS
+  // with the pointer and focus elsewhere (it waits while either is on it, like the
+  // panel's notices). The overlay's own styles and tokens, in its own shadow root.
+  // The text goes in after the empty status region is in the page, so it is announced.
+  // It does not take focus (focus would hold it open): the Cancel that had it is gone,
+  // so focus is on the page, as before; Dismiss is one Tab away at the end of the page.
   const RELOADED_NOTE_MS = 6000;
+  const RELOADED_TEXT = 'This export stopped when the extension was reloaded. Refresh the page to use Takeout again.';
   function showReloadedNote() {
     document.getElementById('notebooklm-export-reloaded')?.remove();
     const host = document.createElement('div');
@@ -185,28 +190,43 @@
     scrim.className = 'scrim reloaded';
     const card = document.createElement('div');
     card.className = 'card';
-    card.setAttribute('role', 'status');
     const label = document.createElement('p');
     label.className = 'label';
     label.textContent = 'Takeout for Gemini Notebook';
     const text = document.createElement('p');
     text.className = 'heading';
-    text.textContent = 'This export stopped when the extension was reloaded. Refresh the page to use Takeout again.';
+    text.id = 'reloaded-text';
+    text.setAttribute('role', 'status');
     const footer = document.createElement('div');
     footer.className = 'footer';
     const dismiss = document.createElement('button');
     dismiss.type = 'button';
     dismiss.className = 'cancel';
     dismiss.textContent = 'Dismiss';
-    const remove = () => host.remove();
-    dismiss.addEventListener('click', remove);
+    dismiss.setAttribute('aria-describedby', 'reloaded-text');
     footer.appendChild(dismiss);
     card.append(label, text, footer);
     scrim.appendChild(card);
     shadow.append(style, scrim);
     document.body.appendChild(host);
-    dismiss.focus({ preventScroll: true });
-    setTimeout(remove, RELOADED_NOTE_MS);
+
+    let timer = null;
+    let left = RELOADED_NOTE_MS;
+    let startedAt = 0;
+    let hovered = false;
+    let focused = false;
+    const remove = () => { clearTimeout(timer); host.remove(); };
+    const run = () => { startedAt = Date.now(); clearTimeout(timer); timer = setTimeout(remove, left); };
+    const pause = () => { clearTimeout(timer); left = Math.max(800, left - (Date.now() - startedAt)); };
+    const resume = () => { if (!hovered && !focused && host.isConnected) run(); };
+    card.addEventListener('mouseenter', () => { hovered = true; pause(); });
+    card.addEventListener('mouseleave', () => { hovered = false; resume(); });
+    card.addEventListener('focusin', () => { focused = true; pause(); });
+    card.addEventListener('focusout', () => { focused = false; resume(); });
+    dismiss.addEventListener('click', remove);
+
+    run();
+    setTimeout(() => { text.textContent = RELOADED_TEXT; }, 100);
   }
 
   function createExportOverlay() {

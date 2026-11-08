@@ -950,10 +950,9 @@ test('the panel says Gemini Notebook, not NotebookLM (1.9.4)', () => {
   assert.equal(manifest.name, 'Takeout for Gemini Notebook');
   assert.match(manifest.description, /Gemini Notebook \(formerly NotebookLM\)/);
   assert.ok(manifest.description.length <= 132);
-  // Every string in the panel scripts. Kept: the console prefix, the bare
-  // 'NotebookLM' fallback name, which goes into export file and folder names, and
-  // an error text that can reach errors.md.
-  const kept = new Set(['NotebookLM', 'NotebookLM tab not active']);
+  // Every string in the panel scripts. Kept: the console prefix, and the bare
+  // 'NotebookLM' fallback name, which goes into export file and folder names.
+  const kept = new Set(['NotebookLM']);
   for (const file of fs.readdirSync(ROOT).filter(f => /^sidebar-.*\.js$/.test(f))) {
     const src = fs.readFileSync(path.join(ROOT, file), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/ .*$/gm, '');
@@ -986,9 +985,15 @@ test('an overlay Cancel never leaves a dead card when the extension was reloaded
   assert.match(overlay, /exportCancelled = true;\s*removeExportOverlay\(\);\s*if \(!sendCancelExport\(\)\) showReloadedNote\(\);/);
   assert.doesNotMatch(overlay, /chrome\.runtime\.sendMessage/);
   const note = contentFn('showReloadedNote');
-  assert.match(note, /This export stopped when the extension was reloaded\. Refresh the page to use Takeout again\./);
+  assert.match(fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8'), /const RELOADED_TEXT = 'This export stopped when the extension was reloaded\. Refresh the page to use Takeout again\.';/);
+  // Announced: the status region is in the page empty, then filled; Dismiss is described by it
+  assert.match(note, /document\.body\.appendChild\(host\);[\s\S]*setTimeout\(\(\) => \{ text\.textContent = RELOADED_TEXT; \}, 100\);/);
+  assert.match(note, /dismiss\.setAttribute\('aria-describedby', 'reloaded-text'\)/);
+  // It waits while the pointer or focus is on it
+  for (const event of ['mouseenter', 'mouseleave', 'focusin', 'focusout']) assert.ok(note.includes(`'${event}'`), event);
+  assert.doesNotMatch(note, /dismiss\.focus\(/); // focus on it would hold it open
   assert.match(note, /attachShadow/);
-  assert.match(note, /setTimeout\(remove, RELOADED_NOTE_MS\)/);
+  assert.match(note, /timer = setTimeout\(remove, left\)/);
   assert.match(note, /'Dismiss'/);
   assert.match(fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8'), /const RELOADED_NOTE_MS = 6000;/);
   // The side panel's Cancel goes through the same guard
