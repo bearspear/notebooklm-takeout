@@ -84,6 +84,8 @@ function reportFile(stem, response, title, meta) {
 async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', slidesFormat = settings.slidesFormat, onlyIfOffered = false }) {
   const { index, type, label } = item;
   const format = slidesFormat === 'pptx' ? 'pptx' : 'pdf';
+  // the scan's place among items of this title (NLME.stampTitleOrdinals)
+  const ordinal = NLME.titlePlace(item);
   logger.info('Download', `Downloading artifact ${index} (${type})`, label);
   await ensureContentScriptLoaded(tabId);
 
@@ -100,8 +102,8 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
     const response = await chrome.tabs.sendMessage(tabId, {
       type: NLME.MSG.DOWNLOAD_ARTIFACT,
       data: extractable
-        ? { artifactIndex: index, artifactType: type, artifactName: label, skipMoreButton: true }
-        : { artifactIndex: index, artifactType: type, artifactName: label, downloadPreference: format, ...(onlyIfOffered ? { requireFormat: true } : {}) }
+        ? { artifactIndex: index, artifactType: type, artifactName: label, skipMoreButton: true, ...ordinal }
+        : { artifactIndex: index, artifactType: type, artifactName: label, downloadPreference: format, ...(onlyIfOffered ? { requireFormat: true } : {}), ...ordinal }
     });
     if (!response || !response.success) {
       throw new Error(response?.error || 'Download failed');
@@ -213,12 +215,13 @@ async function fetchSlideFormats(item, formats, fetchOne, ctx) {
  * names ([report]_Title.md, [audio-overview]_Title.m4a, ...); a Data Table
  * or mind map is one ZIP ([data-table]_Title.zip, [mind-map]_Title.zip).
  */
-async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName) {
+// place: { titleOrdinal, titleCount } from the list the row came from (NLME.titlePlace)
+async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName, place = {}) {
   const obsidian = !!settings.obsidianNames;
   const stem = NLME.prefixedStem(getArtifactTypePrefix(artifactType), artifactName, { obsidian });
-  const { files } = await fetchArtifactFiles(tabId,
-    { index: artifactIndex, type: artifactType, label: artifactName },
-    { stem, mode: 'single' });
+  const item = { index: artifactIndex, type: artifactType, label: artifactName };
+  if (Number.isInteger(place.titleOrdinal) && Number.isInteger(place.titleCount)) NLME.setTitlePlace(item, place.titleOrdinal, place.titleCount);
+  const { files } = await fetchArtifactFiles(tabId, item, { stem, mode: 'single' });
   // Data Tables and mind maps are several files: one ZIP, as before 3a
   const pkg = NLME.singleArtifactPackage({ type: artifactType, title: artifactName, files, obsidian });
   if (pkg) await saveFiles(pkg.entries, { zipName: pkg.zipName });
@@ -232,7 +235,7 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
 async function scanArtifactsData(tabId) {
   await ensureContentScriptLoaded(tabId);
   const scan = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.SCAN_STUDIO_ITEMS });
-  return (scan?.items || [])
+  const items = (scan?.items || [])
     .filter(item => item.kind === 'artifact')
     .map(item => ({
       index: item.moreIndex,
@@ -241,6 +244,8 @@ async function scanArtifactsData(tabId) {
       details: item.details,
       disabled: !item.downloadable
     }));
+  // Over every row with a More button, disabled ones included: the page's list
+  return NLME.stampTitleOrdinals(items, { titleOf: item => item.label, indexOf: item => item.index });
 }
 
 function convertTableToCSV(htmlContent) {
@@ -745,13 +750,13 @@ function citationTitlesFromHtml(html) {
   return [...byNumber.values()];
 }
 
-async function triggerItemDownload(tabId, itemIndex, artifactName, artifactType) {
+async function triggerItemDownload(tabId, itemIndex, artifactName, artifactType, place = {}) {
   try {
     logger.info('Download', `Triggering download for ${artifactName}`, { itemIndex, artifactType });
 
     // Use new message-based download with retry logic (2 retries for individual downloads)
     await retryDownload(
-      () => downloadArtifact(tabId, itemIndex, artifactType, artifactName),
+      () => downloadArtifact(tabId, itemIndex, artifactType, artifactName, place),
       2,
       artifactName
     );
@@ -767,6 +772,23 @@ async function triggerItemDownload(tabId, itemIndex, artifactName, artifactType)
 }
 
 
+// An item with no More button (index -1, still being generated) is found by
+// title only; when that fails, say why instead of the title pick's "Item
+// changed: expected …", which stays as the error's detail (errors.md's second
+// line). A refused same-title pick keeps its own message. Its key stays failed
+// in the job record for Resume.
+async function fetchNoMenuSafe(item, run) {
+  try {
+    return await run();
+  } catch (error) {
+    if (item.index >= 0 || NLME.isSameTitleRefusal(error)) throw error;
+    console.warn('[NotebookLM Takeout] An item with no More button failed:', item.label, error);
+    const friendly = new Error(NLME.NO_MENU_FAILED);
+    friendly.detail = (error && error.message) || String(error);
+    throw friendly;
+  }
+}
+
 // Size cap of one artifacts ZIP (ZIP mode): JSZip builds a ZIP in the side
 // panel's memory, so a big notebook is split into parts. The size is checked
 // after each item; a part may pass the cap by one item.
@@ -778,14 +800,20 @@ const ARTIFACT_ZIP_MAX_BYTES = 500 * 1024 * 1024;
 // manifest.json. Returns withExportShell's outcome, like exportNotesAsMarkdown.
 // zip: the export sheet's Save as (default NLME.takeoutZipChoice, for a Resume of a record
 // without one); its job record and its Retry keep this run's choice.
-async function downloadAllArtifacts(tabId, items, { updateRecord = false, zip = NLME.takeoutZipChoice(settings) } = {}) {
+// seedErrors: warnings that lead errors.md (items the caller skipped, see
+// NLME.artifactExportPlan); none for an export that skipped nothing.
+// recordFailed: those skipped items, kept in the job record as failed (Resume).
+async function downloadAllArtifacts(tabId, items, { updateRecord = false, zip = NLME.takeoutZipChoice(settings), seedErrors = [], recordFailed = [] } = {}) {
   await preflightWarn(tabId, 'artifacts');
   startExportTiming();
 
   return withExportShell({ label: 'artifacts', overlayMessage: 'Preparing to download artifacts...', tabId }, async shell => {
     const folder = zip ? null : (shell.projectName || 'NotebookLM');
-    const { result, zips, savedOutside } = await withJobRecord(shell, 'artifacts', 'Artifacts', 'artifacts', items,
-      tracker => runArtifactsJob(shell, items, { folder, tracker }), { update: updateRecord, zip });
+    const { result, zips, savedOutside } = await withJobRecord(shell, 'artifacts', 'Artifacts', 'artifacts', [...items, ...recordFailed],
+      tracker => {
+        if (tracker) recordFailed.forEach(item => tracker.fail('artifacts', item));
+        return runArtifactsJob(shell, items, { folder, tracker, seedErrors });
+      }, { update: updateRecord, zip });
 
     return shell.finish({
       kind: 'artifacts',
@@ -809,13 +837,15 @@ async function downloadAllArtifacts(tabId, items, { updateRecord = false, zip = 
  *
  * @param {object} shell withExportShell's shell
  * @param {Array<{ index, label, type }>} items downloadable artifacts (scanArtifactsData)
- * @param {CategoryTarget & { bothSlideFormats?: boolean }} [target]
+ * @param {CategoryTarget & { bothSlideFormats?: boolean, seedErrors?: Array }} [target]
  *   bothSlideFormats: save every Slides artifact as PDF and PowerPoint
- *   (Full Takeout); otherwise the Settings slides format alone
+ *   (Full Takeout); otherwise the Settings slides format alone. seedErrors:
+ *   warnings known before the first item (skipped items); they lead errors.md,
+ *   and with no items an errors-only package is still written
  * @returns {Promise<{ result: object, zips: string[], errors: Array, auditOk: boolean, savedOutside: number, parts: number, packages: number }>}
  *   savedOutside: items Chrome saved itself (no capturable URL)
  */
-async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artifacts', folder = null, bothSlideFormats = false, written = newWritten(), tracker = null, capture = null } = {}) {
+async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artifacts', folder = null, bothSlideFormats = false, written = newWritten(), tracker = null, capture = null, seedErrors = [] } = {}) {
   const zipMode = !folder;
   const place = files => (pathPrefix ? files.map(f => ({ ...f, path: pathPrefix + f.path })) : files);
   const stems = NLME.artifactStems(items, { obsidian: !!settings.obsidianNames });
@@ -831,6 +861,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
   const result = await NLME.runExportJob({
     kind: 'artifacts',
     items,
+    seedErrors,
     perZip: zipMode ? Infinity : 1,
     // ZIP mode only: split by size (folder mode streams to disk)
     ...(zipMode ? { maxBatchBytes: ARTIFACT_ZIP_MAX_BYTES, sizeOf: r => NLME.filesByteSize(r.files) } : {}),
@@ -841,7 +872,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
       // extension (the guessed one follows the format; the background's
       // real-extension rename keeps them apart)
       const formats = NLME.slideFormatsFor(item.type, { both: bothSlideFormats, preferred: settings.slidesFormat });
-      const fetched = await fetchSlideFormats(item, formats, async format => {
+      const fetched = await fetchNoMenuSafe(item, () => fetchSlideFormats(item, formats, async format => {
         const one = await retryDownload(() => fetchArtifactFiles(shell.tab.id, item, {
           stem: stemOf.get(item),
           mode: zipMode ? 'zip' : 'folder',
@@ -856,7 +887,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
         // path from the takeout to it, so the viewer cannot link it (errors.md does)
         if (capture && one.savedName && !zipMode) reportSaved(capture, pathPrefix + NLMEViewer.outsidePath(typeFolder, one.savedName), null);
         return one;
-      }, ctx);
+      }, ctx));
       if (fetched.savedOutside) {
         savedOutside++;
         // Folder mode: the background captured it into the folder's top level

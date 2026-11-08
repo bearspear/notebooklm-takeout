@@ -71,12 +71,41 @@ function resultsLeftNotebook() {
 
 const PROGRESS_ANNOUNCE_MS = 4000;
 // One run, across the exports of a chain. startedAt: the first count, so a takeout's
-// scan does not slow the pace. left, leftAt: the time last shown and when.
+// scan does not slow the pace. left, leftAt: the last estimate and when. tickTimer:
+// counts the time left down each second between counts (one item can take minutes).
 // spokenAt, textTimer: #progress-text's throttle.
 let progressRun = null;
+const PROGRESS_TICK_MS = 1000;
 
 function newProgressRun() {
-  return { done: 0, total: 0, percent: 0, startedAt: null, left: null, leftAt: null, finishing: false, spokenAt: null, textTimer: null };
+  return { done: 0, total: 0, percent: 0, startedAt: null, left: null, leftAt: null, tickTimer: null, finishing: false, spokenAt: null, textTimer: null };
+}
+
+// The line under the bar now: the last estimate counted down (NLME.tickedTimeLeft)
+function progressLeftText(run) {
+  const left = run.leftAt === null ? run.left : NLME.tickedTimeLeft(run.left, (Date.now() - run.leftAt) / 1000);
+  return NLME.progressLeftLine(run.done, run.total, left, { finishing: run.finishing });
+}
+
+// Ticks while its run is the one in the progress view and not finishing; stops on
+// the save (setProgressFinishing), a Cancel (requestCancel) and the view going
+function startProgressTick(run) {
+  stopProgressTick(run);
+  run.tickTimer = setInterval(() => {
+    if (progressRun !== run || dockMode !== 'progress' || run.finishing) {
+      stopProgressTick(run);
+      return;
+    }
+    const el = document.getElementById('progress-left');
+    const text = progressLeftText(run);
+    if (el.textContent !== text) el.textContent = text;
+  }, PROGRESS_TICK_MS);
+}
+
+function stopProgressTick(run = progressRun) {
+  if (!run) return;
+  clearInterval(run.tickTimer);
+  run.tickTimer = null;
 }
 
 // #progress-text is the live region, so it changes once in PROGRESS_ANNOUNCE_MS at most
@@ -101,7 +130,7 @@ function paintProgressCount() {
   run.percent = percent;
   document.getElementById('progress-count').textContent = count;
   document.getElementById('progress-fill').style.width = `${percent}%`;
-  document.getElementById('progress-left').textContent = NLME.progressLeftLine(run.done, run.total, run.left, { finishing: run.finishing });
+  document.getElementById('progress-left').textContent = progressLeftText(run);
 }
 
 /**
@@ -116,7 +145,9 @@ function showProgressView({ title = jobLock.current() || 'Export', text = 'Prepa
   const fresh = dockMode !== 'progress';
   if (fresh) {
     clearTimeout(progressRun?.textTimer);
+    stopProgressTick();
     progressRun = newProgressRun();
+    startProgressTick(progressRun);
     document.getElementById('progress-title').textContent = title;
     document.getElementById('progress-text').textContent = '';
     paintProgressCount();
@@ -158,6 +189,7 @@ function setProgressCount(done, total, rest) {
 function setProgressFinishing() {
   if (!progressRun) return;
   progressRun.finishing = true;
+  stopProgressTick();
   paintProgressCount();
   keepDockFocus();
 }
@@ -166,6 +198,7 @@ function setProgressFinishing() {
 function hideProgressView() {
   if (chainHolds === 0 && dockMode === 'progress') {
     clearTimeout(progressRun?.textTimer);
+    stopProgressTick();
     setDock(null);
   }
 }

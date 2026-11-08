@@ -1441,10 +1441,13 @@ async function endStalledPageLoad(hold) {
   }
 }
 
-// The active tab reported a new URL. Synchronous: the sheet must not outlive this event
+// The active tab reported a new URL. Synchronous: the sheet must not outlive this event.
+// Off the notebook (another site, the notebook list) the dialogs close too, as on a
+// switch: a Delete asked about this notebook must not reach the page it comes back to.
 function notePageMove({ url, status }) {
   if (!isNotebookUrl(url) || !NLME.tabLeftPanelNotebook(url, lastPanelNotebookId)) {
     releasePageLoad();
+    if (!NLME.notebookIdFromUrl(url)) closePanelDialogs();
     return;
   }
   closeExportSheet({ switched: true });
@@ -1527,8 +1530,9 @@ async function retryDownload(downloadFn, maxRetries = 3, itemName = 'item') {
 
     } catch (error) {
       lastError = error;
-      // The menu will not change by waiting: no retries for a missing format
-      if (error && error.formatNotOffered) throw error;
+      // The menu will not change by waiting: no retries for a missing format,
+      // nor for a pick refused for a shared title (only a rescan finds it)
+      if (error && (error.formatNotOffered || NLME.isSameTitleRefusal(error))) throw error;
       logger.warn('Download', `Attempt ${attempt} failed for ${itemName}`, error.message);
     }
 
@@ -1911,14 +1915,20 @@ function newAudit() {
   return { expected: { items: 0, citations: 0, formulas: 0 }, written: { items: 0, citations: 0, formulas: 0 }, cacheHits: 0, cachedItems: 0 };
 }
 
-// Converts and counts formulas: .katex on the page vs formulas in the final
-// Markdown (counted in the output, so nested list/table conversions that run
-// the KaTeX converter twice can't inflate it)
+// Converts and counts formulas: .katex on the page vs the formulas the
+// converter wrote into its final text (NLMEMarkdown.formulasWritten; each
+// once, however often a nested list or table converts its content). Not a
+// regex over the Markdown, which takes "$1 micron (μm): 10-6 m$1" for a
+// price. convert must be synchronous.
 function convertCounted(audit, html, convert, page = null) {
   const counts = page || countPageContent(html);
+  const before = NLMEMarkdown.formulasWritten();
   const markdown = convert();
+  if (markdown && typeof markdown.then === 'function') {
+    throw new Error('convertCounted: convert must be synchronous (the formula count reads a running total)');
+  }
   audit.expected.formulas += counts.formulas;
-  audit.written.formulas += NLME.countMarkdownFormulas(markdown);
+  audit.written.formulas += NLMEMarkdown.formulasWritten() - before;
   return markdown;
 }
 
@@ -2052,12 +2062,18 @@ function refreshListButtons() {
 // lock. requestCancel sets chainCancelRequested; the chain checks it before each step.
 let chainActive = false;
 let chainCancelRequested = false;
+// From Start in the export sheet (sheetStarting) the progress view and its Cancel are
+// up before the export's shell listens: a Cancel then is noted here, and the shell
+// reads it before it begins (startCancelled). startExportSheet sets and clears both.
+let sheetStarting = false;
+let startCancelRequested = false;
 
 // Same path as the page overlay's Cancel button: the content script flags the
 // export as cancelled and broadcasts CANCEL_EXPORT to every running exporter.
 // Target tab: activeShellTabId (sidebar-takeout.js, the running shell's tab),
 // else jobTabId (the active tab when the job started), else the current tab.
 async function requestCancel() {
+  if (sheetStarting && activeShellTabId === null) startCancelRequested = true;
   if (!jobLock.current()) return;
   // A Retry / Resume chain has moments with no shell (between two steps): note the
   // cancel on the chain so it does not start the next step
@@ -2069,6 +2085,7 @@ async function requestCancel() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const target = activeShellTabId ?? jobTabId ?? currentTabId ?? tab?.id;
     await chrome.tabs.sendMessage(target, { type: NLME.MSG.REQUEST_EXPORT_CANCEL });
+    stopProgressTick(); // the page has the cancel: the time left means nothing now
   } catch (error) {
     console.warn('[NotebookLM Takeout] Cancel request failed:', error.message);
   }

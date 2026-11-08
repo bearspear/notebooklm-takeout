@@ -4,16 +4,50 @@
 // ==================== NOTE SCANNING ====================
 
 
-// Notes from SCAN_NOTES, no UI (Notes tab, Full Takeout, Home, Generated)
+// Notes from SCAN_NOTES, no UI (Notes tab, Home, Generated; Export everything and
+// Resume wait for the list with scanNotesSettled)
 // strict: throw when the page gave no list, instead of reading that as no notes
-// (everything but the Notes tab, whose own message says so). A takeout then reports
-// a failed scan, not "none in notebook".
+// (everything but the Notes tab, whose own message says so).
 // @returns {Promise<Array<{ index, title, ... }>>} as the content script sends them
 async function scanNotesData(tabId, { strict = false } = {}) {
   await ensureContentScriptLoaded(tabId);
   const response = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.SCAN_NOTES });
   if (strict && !Array.isArray(response?.notes)) throw new Error(response?.error || 'No response from the page');
-  return response?.notes || [];
+  return stampNoteOrdinals(response?.notes || []);
+}
+
+// Studio notes get their place among notes of their title, which the page checks
+// before it trusts a scanned index (NLME.pickByIndexThenTitleStrict)
+function stampNoteOrdinals(notes) {
+  return NLME.stampTitleOrdinals(notes, { titleOf: n => n.title, indexOf: n => (n.elementType === 'source-note' ? -1 : n.index) });
+}
+
+// Notes for Export everything and Resume: SCAN_NOTES again every pollMs until the
+// list settles (NLME.notesSettleDecision), at most about 8 s. Notes found or a
+// drawn empty list return the array; a list that never drew, or a page that never
+// answered, throws, so the caller reports a failed scan, not "none in notebook".
+// Notes found while the Studio list never drew (Sources-panel notes) are returned
+// too, and onPartial(message) says Studio notes may be missing.
+// isCancelled: ends the wait early by throwing.
+async function scanNotesSettled(tabId, { isCancelled = () => false, onPartial = () => {}, timing = NLME.NOTES_SETTLE, now = () => Date.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+  const reads = [];
+  const started = now();
+  for (;;) {
+    let response = null;
+    try {
+      await ensureContentScriptLoaded(tabId);
+      response = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.SCAN_NOTES });
+    } catch (error) {
+      console.warn('[NotebookLM Takeout] Notes scan: no answer yet:', error);
+    }
+    reads.push({ at: now() - started, notes: Array.isArray(response?.notes) ? response.notes : null, list: response?.list });
+    const decision = NLME.notesSettleDecision(reads, timing);
+    if (decision.state === 'partial') onPartial(decision.message);
+    if (['found', 'empty', 'partial'].includes(decision.state)) return stampNoteOrdinals(reads[reads.length - 1].notes);
+    if (decision.state === 'failed') throw new Error(decision.message);
+    if (isCancelled()) throw new Error('Cancelled while reading the notes list');
+    await sleep(timing.pollMs);
+  }
 }
 
 // Sidebar function to trigger note scan
@@ -169,13 +203,15 @@ function exportSelectedNotes() {
 // options.tabId: the tab the notes were scanned on (a retry); default the active tab.
 // Returns withExportShell's outcome ({ result, message, level, saved, errors } or
 // { declined } / { aborted }); the Full Takeout retry chain reads it.
-async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = false } = {}) {
+// seedErrors: warnings that lead errors.md (a Studio export's skipped artifacts
+// when it has no artifact side to carry them).
+async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = false, seedErrors = [] } = {}) {
   startExportTiming();
   console.log('[NotebookLM Takeout] Starting export for notes:', selectedNotes.length);
 
   return withExportShell({ label: 'notes', healthType: 'notes', overlayMessage: 'Preparing to export notes...', tabId }, async shell => {
     const { result, zips, auditOk } = await withJobRecord(shell, 'notes', 'Notes', 'notes', selectedNotes,
-      tracker => runNotesJob(shell, selectedNotes, { tracker }), { update: updateRecord });
+      tracker => runNotesJob(shell, selectedNotes, { tracker, seedErrors }), { update: updateRecord });
 
     return shell.finish({
       kind: 'notes',
@@ -201,7 +237,7 @@ async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = fals
  *   zips/parts/packages: what target.written holds (see newWritten)
  *   result: runExportJob's result
  */
-async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'notes', folder = null, variantSettings = settings, itemDir = 'notes/', written = newWritten(), tracker = null, capture = null } = {}) {
+async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'notes', folder = null, variantSettings = settings, itemDir = 'notes/', written = newWritten(), tracker = null, capture = null, seedErrors = [] } = {}) {
   // File names already used by an earlier part of this job: every part of one
   // export unzips into one folder, so a repeat is numbered, not overwritten.
   // Mind maps have their own folder, so their own set.
@@ -236,6 +272,7 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
   const result = await NLME.runExportJob({
     kind: 'notes',
     items: selectedNotes,
+    seedErrors,
     perZip,
     extractOne: (note, ctx) => extractNoteItem(shell, note, ctx, state, variantSettings),
     // Always close the note viewer, even if extraction failed
@@ -333,6 +370,8 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
         noteIndex: note.index,
         noteTitle: note.title,
         sourceIndex: note.sourceIndex,
+        // the scan's place among notes of this title (NLME.stampTitleOrdinals)
+        ...NLME.titlePlace(note),
         // Only download images if user has enabled an image version
         includeCitationImages: !!variantSettings.exportNoteWithImages,
         citationDetail: settings.citationDetail,
@@ -480,6 +519,7 @@ async function exportSingleNote(note) {
           noteIndex: note.index,
           noteTitle: note.title,
           sourceIndex: note.sourceIndex,
+          ...NLME.titlePlace(note),
           includeCitationImages: needsImages,
           citationDetail: settings.citationDetail,
           reuseCitations: settings.reuseCitations !== false

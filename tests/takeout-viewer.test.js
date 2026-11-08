@@ -628,13 +628,15 @@ test('buildViewerHtml throws when a packaged file cannot be read', async () => {
 
 // runFullTakeout itself, with the page, the shell and the runners stubbed. Each runner
 // saves through the real saveCategoryBatch, under the target it was handed.
-function takeoutPanel({ zip = true, fetchFile, cancelAfter = null, notesThrow = false, noteImages = '# N\n\nnote body IMAGE-TEXT', chatImages = null, zipMaxBytes = 500 * 1024 * 1024 } = {}) {
+function takeoutPanel({ zip = true, fetchFile, cancelAfter = null, notesThrow = false, noteImages = '# N\n\nnote body IMAGE-TEXT', chatImages = null, zipMaxBytes = 500 * 1024 * 1024, artifacts = [{ index: 0, label: 'A' }], notesScan = null, record = null } = {}) {
   const readAsset = url => ({ ok: true, text: async () => fs.readFileSync(path.join(ROOT, url.replace('chrome-extension://id/', '')), 'utf8') });
   const { sandbox, log } = sidePanel({ fetchFile: fetchFile || readAsset, downloadItem: () => [{ filename: '/d/x.m4a', state: 'complete' }] });
   let cancelled = false;
   const stepsRun = [];
+  const runnerArgs = {};
   const batch = name => async (shell, items, target) => {
     stepsRun.push(name);
+    runnerArgs[name] = { items, seedErrors: target.seedErrors };
     if (name === 'notes' && notesThrow) throw new Error('notes broke');
     const info = { multi: name === 'notes', batchIndex: 2, totalBatches: 2, partial: false };
     const prefix = name === 'notes' ? `${target.pathPrefix}part-2/` : target.pathPrefix;
@@ -646,14 +648,15 @@ function takeoutPanel({ zip = true, fetchFile, cancelAfter = null, notesThrow = 
     }[name];
     await sandbox.saveCategoryBatch(shell, files, info, { prefix, zipKind: target.zipKind, folder: target.folder, written: target.written, capture: target.capture });
     if (cancelAfter === name) cancelled = true;
-    return { result: { exported: 1, failed: 0, cancelled: cancelAfter === name }, errors: [], auditOk: true };
+    // Like runExportJob: seed errors lead the runner's errors
+    return { result: { exported: items.length ? 1 : 0, failed: 0, cancelled: cancelAfter === name }, errors: [...(target.seedErrors || [])], auditOk: true };
   };
   Object.assign(sandbox, {
     settings: { ...NLME.DEFAULT_SETTINGS, takeoutZip: zip }, exportTimer: { merge() {} }, lastChatScanTiming: null, ARTIFACT_ZIP_MAX_BYTES: zipMaxBytes,
     isNotebookUrl: () => true, ensureContentScriptLoaded: async () => {}, startExportTiming() {}, stampJobKeys() {},
     showToast() {}, timingSummary: () => '', showResults: panel => log.panels.push(panel),
-    startJobRecord: async () => null, newWritten: () => ({ zips: [], count: 0, multi: false, parts: 0 }),
-    scanSourcesData: async () => ({ sources: [{}] }), scanNotesData: async () => [{}], scanArtifactsData: async () => [{}],
+    startJobRecord: async (shell, kind, label, items) => (record ? record(items) : null), newWritten: () => ({ zips: [], count: 0, multi: false, parts: 0 }),
+    scanSourcesData: async () => ({ sources: [{}] }), scanNotesData: async () => [{}], scanNotesSettled: notesScan || (async () => [{}]), scanArtifactsData: async () => artifacts,
     scanChatData: async () => ({ messagePairs: [{}], stats: {} }),
     runSourcesJob: batch('sources'), runNotesJob: batch('notes'), runChatJob: batch('chat'), runArtifactsJob: batch('artifacts'),
     withExportShell: (opts, run) => run({
@@ -662,7 +665,7 @@ function takeoutPanel({ zip = true, fetchFile, cancelAfter = null, notesThrow = 
     })
   });
   sandbox.chrome.tabs = { query: async () => [{ id: 1, url: 'https://notebooklm.google.com/notebook/x' }] };
-  return { sandbox, log, stepsRun };
+  return { sandbox, log, stepsRun, runnerArgs, cancel: () => { cancelled = true; } };
 }
 
 test('Full Takeout writes viewer.html with what was saved, lists it and links it', async () => {
@@ -1329,4 +1332,109 @@ test('folder mode saves each image on its own, so one failed download costs only
   assert.deepEqual(calls, [['R/images/a.png'], ['R/images/b.png'], ['R/images/c.png']]);
   assert.deepEqual([...out.paths].sort(), ['images/a.png', 'images/c.png']);
   assert.equal(out.failed, true);
+});
+
+
+// ---- 1.9.5: Export everything skips no-More artifacts and waits for the notes list ----
+
+test('Full Takeout skips a no-More artifact that shares a ready title, exports both ready items, and names the skip in errors.md', async () => {
+  const recorded = { failed: [] };
+  const record = items => { recorded.items = items; return { fail: (cat, item) => recorded.failed.push([cat, item.index, item.label]), done() {}, commit() {}, discard() {}, finish: async () => {} }; };
+  const { sandbox, log, runnerArgs } = takeoutPanel({ record, artifacts: [
+    { index: 0, label: 'Deck', type: 'Slides' },
+    { index: 1, label: 'Deck', type: 'Slides' },
+    { index: -1, label: 'Deck', type: 'Slides' },
+    { index: -1, label: 'Fresh', type: 'Report' }
+  ] });
+  await sandbox.runFullTakeout();
+  // The unique-title no-More item is tried, as in 1.9.4
+  assert.deepEqual(runnerArgs.artifacts.items.map(i => [i.index, i.label]), [[0, 'Deck'], [1, 'Deck'], [-1, 'Fresh']]);
+  const warning = { type: 'skipped_ambiguous', title: 'Deck', message: 'still being generated or has no menu; a ready item has the same title' };
+  assert.deepEqual(JSON.parse(JSON.stringify(runnerArgs.artifacts.seedErrors)), [warning]);
+  // Kept in the record, as failed, for a later Resume
+  assert.deepEqual(JSON.parse(JSON.stringify(recorded.items.artifacts.map(i => [i.index, i.label]))), [[0, 'Deck'], [1, 'Deck'], [-1, 'Fresh'], [-1, 'Deck']]);
+  assert.deepEqual(recorded.failed, [['artifacts', -1, 'Deck']]);
+  const errors = log.zipped['Book/errors.md'];
+  assert.match(errors, /^## Skipped: same title as another item \(1\)\n\n- Artifacts: Deck: still being generated or has no menu; a ready item has the same title$/m);
+  assert.match(errors, /^- Artifacts: 1 of 3 \(done, 1 skipped\)$/m);
+  const panel = log.panels[0];
+  assert.equal(panel.level, 'warning');
+  assert.ok(panel.errors.some(e => e.type === 'skipped_ambiguous' && e.title === 'Artifacts: Deck'));
+  assert.equal(panel.count.total, 6, 'the skip is in neither N nor M'); // sources, notes, chat 1 each + 3 artifacts
+  assert.match(panel.message, /artifacts 1\/3 \(1 skipped\)/);
+  const manifest = JSON.parse(log.zipped['Book/manifest.json']);
+  assert.equal(manifest.categories.find(c => c.name === 'Artifacts').skipped, 1);
+});
+
+test('Full Takeout with nothing skipped hands the runner no warnings, writes no errors.md and no skipped field', async () => {
+  const { sandbox, log, runnerArgs } = takeoutPanel();
+  await sandbox.runFullTakeout();
+  assert.deepEqual(JSON.parse(JSON.stringify(runnerArgs.artifacts.seedErrors)), []);
+  assert.deepEqual(JSON.parse(JSON.stringify(runnerArgs.notes.seedErrors)), []);
+  assert.equal(log.zipped['Book/errors.md'], undefined);
+  assert.ok(JSON.parse(log.zipped['Book/manifest.json']).categories.every(c => !('skipped' in c)));
+});
+
+test('Full Takeout with one ready item and its no-More namesake writes the skip, and the category is not "none"', async () => {
+  const { sandbox, log, runnerArgs } = takeoutPanel({ artifacts: [{ index: -1, label: 'Deck', type: 'Report' }, { index: 0, label: 'Deck', type: 'Report' }] });
+  await sandbox.runFullTakeout();
+  assert.deepEqual(JSON.parse(JSON.stringify(runnerArgs.artifacts.items.map(i => i.index))), [0]);
+  assert.match(log.zipped['Book/errors.md'], /- Artifacts: Deck: still being generated/);
+  assert.doesNotMatch(log.panels[0].message, /artifacts none/);
+});
+
+test('Full Takeout tries a lone no-More artifact, as in 1.9.4', async () => {
+  const lone = takeoutPanel({ artifacts: [{ index: -1, label: 'Fresh', type: 'Report' }] });
+  await lone.sandbox.runFullTakeout();
+  assert.deepEqual(JSON.parse(JSON.stringify(lone.runnerArgs.artifacts.items.map(i => i.index))), [-1]);
+  assert.equal(lone.log.zipped['Book/errors.md'], undefined);
+});
+
+test('Full Takeout skips a no-More artifact whose namesake is a Flashcards or Quiz row with a menu: the title pick lands there', async () => {
+  for (const type of ['Flashcards', 'Quiz']) {
+    const { sandbox, log, runnerArgs } = takeoutPanel({ artifacts: [{ index: 0, label: 'Deck', type, disabled: true }, { index: -1, label: 'Deck', type: 'Report' }] });
+    await sandbox.runFullTakeout();
+    assert.deepEqual(JSON.parse(JSON.stringify(runnerArgs.artifacts.items)), [], type);
+    assert.match(log.zipped['Book/errors.md'], /^## Skipped: same title as another item \(1\)\n\n- Artifacts: Deck: still being generated/m, type);
+    assert.match(log.panels[0].message, /artifacts 0\/0 \(1 skipped\)/, type);
+  }
+});
+
+test('Full Takeout: notes read without the Studio list are exported with a warning in errors.md', async () => {
+  const message = "The Studio list wasn't visible, so notes saved only there may be missing. Close any open Studio item and export again.";
+  const { sandbox, log, runnerArgs } = takeoutPanel({ notesScan: async (tabId, { onPartial }) => { onPartial(message); return [{ index: -1, title: 'S', elementType: 'source-note' }]; } });
+  await sandbox.runFullTakeout();
+  assert.deepEqual(JSON.parse(JSON.stringify(runnerArgs.notes.seedErrors)), [{ type: 'scan_incomplete', message }]);
+  assert.match(log.zipped['Book/errors.md'], /^## SCAN INCOMPLETE \(1\)\n\n- Notes: The Studio list wasn't visible/m);
+  assert.match(log.panels[0].message, /notes 1\/1/);
+});
+
+test('Full Takeout: a notes list that never settles is a failed scan with its reason, not "none in notebook"', async () => {
+  const { sandbox, log, stepsRun } = takeoutPanel({ notesScan: async () => { throw new Error('The Studio list did not appear within 8 s. Close any open Studio item (or reload the notebook) and export again'); } });
+  await sandbox.runFullTakeout();
+  assert.ok(!stepsRun.includes('notes'));
+  assert.match(log.zipped['Book/errors.md'], /- Notes: Scan failed: The Studio list did not appear within 8 s\. Close any open Studio item/);
+  assert.match(log.panels[0].message, /notes failed/);
+  assert.doesNotMatch(log.panels[0].message, /notes none/);
+});
+
+test('Full Takeout: a Cancel during the notes wait cancels the takeout, it is not a failed scan', async () => {
+  const { sandbox, log, stepsRun, cancel } = takeoutPanel({ notesScan: async (tabId, { isCancelled }) => { cancel(); assert.equal(isCancelled(), true); throw new Error('Cancelled while reading the notes list'); } });
+  await sandbox.runFullTakeout();
+  assert.deepEqual(stepsRun, []);
+  assert.match(log.zipped['Book/errors.md'], /Cancelled by user during the scan/);
+  assert.doesNotMatch(log.zipped['Book/errors.md'], /Scan failed/);
+});
+
+test('Full Takeout skips two no-More twins, keeps them failed in the record, and tries a lone one', async () => {
+  const recorded = { failed: [] };
+  const record = items => { recorded.items = items; return { fail: (cat, item) => recorded.failed.push(item.label), done() {}, commit() {}, discard() {}, finish: async () => {} }; };
+  const { sandbox, log, runnerArgs } = takeoutPanel({ record, artifacts: [
+    { index: -1, label: 'Twin', type: 'Report' }, { index: -1, label: 'Twin', type: 'Report' }, { index: -1, label: 'Solo', type: 'Report' }
+  ] });
+  await sandbox.runFullTakeout();
+  assert.deepEqual(JSON.parse(JSON.stringify(runnerArgs.artifacts.items.map(i => i.label))), ['Solo']);
+  assert.deepEqual(recorded.failed, ['Twin', 'Twin']);
+  assert.match(log.zipped['Book/errors.md'], /^## Skipped: same title as another item \(2\)\n\n- Artifacts: Twin: still being generated or has no menu; another item being generated has the same title$/m);
+  assert.match(log.panels[0].message, /artifacts 1\/1 \(2 skipped\)/);
 });

@@ -4,7 +4,7 @@
 // the DOM, so what `start` gets cannot depend on the page after the sheet closes, and
 // a rescan or tab event under the sheet leaves the choices and the focus alone.
 
-let _sheet = null; // { opener, counts, start, choice, startLostFocus } while open
+let _sheet = null; // { opener, title, counts, start, choice, startLostFocus } while open
 
 // Why Start cannot run right now, for the line above it; '' when it can
 function sheetBlockedReason() {
@@ -74,7 +74,7 @@ function openExportSheet({ title, counts, offerSaveAs = false, start }) {
     showToast('Close this panel to export', 'warning');
     return false;
   }
-  _sheet = { opener: document.activeElement, counts, start, choice: NLME.sheetChoice(realSettings()), startLostFocus: false };
+  _sheet = { opener: document.activeElement, title, counts, start, choice: NLME.sheetChoice(realSettings()), startLostFocus: false };
   document.getElementById('export-sheet-title').textContent = title;
   document.getElementById('sheet-save').hidden = !offerSaveAs;
   paintSheetChoice();
@@ -96,30 +96,53 @@ function returnSheetFocus(opener) {
 
 // switched: a notebook switch. The opener belongs to the old notebook and Export
 // everything goes off for the settle, so the focus goes to the view.
-function closeExportSheet({ switched = false } = {}) {
+// starting: Start, whose progress view takes the focus next.
+function closeExportSheet({ switched = false, starting = false } = {}) {
   if (!_sheet) return;
   const { opener } = _sheet;
   _sheet = null;
   document.removeEventListener('keydown', handleSheetKey, true);
   document.getElementById('export-sheet').hidden = true;
   syncCoverInert();
-  returnSheetFocus(switched ? null : opener);
+  if (!starting) returnSheetFocus(switched ? null : opener);
+}
+
+// True, and says so, when the progress view's Cancel was pressed after Start and before
+// the export's shell listened: the shell then ends before it begins
+function startCancelled() {
+  if (!startCancelRequested) return false;
+  showToast('Export cancelled', 'info');
+  return true;
 }
 
 // Close first, then the job: a second click finds the sheet closed. The one wait before
-// `start` is the last look at the tab, which tab events can lag behind.
+// `start` is the last look at the tab, which tab events can lag behind. The progress
+// view comes up at once, so the focus goes from Start straight to its Cancel, not to
+// the opener (which the job disables) or the page; the export keeps the view.
 async function startExportSheet() {
   if (!_sheet || sheetBlockedReason()) return;
-  const { opener, choice, start } = _sheet;
+  const { opener, title, choice, start } = _sheet;
   const run = NLME.sheetOverrides(choice, realSettings());
-  closeExportSheet();
+  sheetStarting = true;
+  startCancelRequested = false;
+  closeExportSheet({ starting: true });
+  showProgressView({ title });
+  let outcome;
   try {
-    if (await tabStillOnPanelNotebook()) await start(run);
+    if (await tabStillOnPanelNotebook()) outcome = await start(run);
   } catch (error) {
     console.error('[NotebookLM Takeout] Export failed:', error);
     showToast('Export failed. Please try again.', 'error');
+  } finally {
+    sheetStarting = false;
+    startCancelRequested = false;
   }
-  // The job disabled the opener, which dropped the focus
+  // Refused, declined or nothing to export: no export took the view over (and another
+  // job that started meanwhile keeps its own). JOB_BUSY: another job took the lock
+  // during the tab check, so this one never ran; the view is still this start's
+  // unless that job's export shell has it.
+  if (!jobLock.current() || (outcome === JOB_BUSY && activeShellTabId === null)) hideProgressView();
+  // That, or the job disabling the opener, dropped the focus
   if (!_sheet && document.activeElement === document.body) returnSheetFocus(opener);
 }
 

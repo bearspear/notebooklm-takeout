@@ -201,14 +201,21 @@ function isStudioItemDeletable(item) {
   return !!item;
 }
 
-// The notebook and tab a delete is asked about, to check again after the dialog
-function studioDeleteTarget() {
-  return { tabId: _studioTabId, notebookId: lastPanelNotebookId };
+// The notebook and tab a delete is asked about, to check again after the dialog: the
+// notebook the tab's URL names (NLME.deleteTarget), so a delete asked before the panel
+// has its notebook id is not refused once the id arrives for the same notebook
+async function studioDeleteTarget() {
+  const tabId = _studioTabId;
+  let url = '';
+  try {
+    url = (await chrome.tabs.get(tabId))?.url || '';
+  } catch (_) { /* no tab: no notebook, so the check refuses */ }
+  return NLME.deleteTarget({ tabId, url, panelNotebookId: lastPanelNotebookId });
 }
 
 // False, with a warning, when the panel moved to another notebook or tab
-function studioDeleteStillValid(asked) {
-  if (NLME.sameDeleteTarget(asked, studioDeleteTarget())) return true;
+async function studioDeleteStillValid(asked) {
+  if (NLME.sameDeleteTarget(asked, await studioDeleteTarget())) return true;
   showToast('The notebook changed, so nothing was deleted', 'warning');
   return false;
 }
@@ -232,7 +239,7 @@ function updateStudioBulkButtonsState(controller = _studioListController) {
   const selected = controller ? controller.selectedItems() : [];
   const deletableN = selected.filter(isStudioItemDeletable).length;
   const deleteCount = NLME.bulkDeletePlan(selected.filter(isStudioItemDeletable), _studioItems).deletable.length;
-  const plan = NLME.generatedExportPlan(selected);
+  const plan = NLME.generatedExportPlan(selected, _studioItems);
   const n = plan.artifacts.length + plan.notes.length;
   setTabAction('studio', { label: NLME.generatedActionLabel(plan), disabled: n === 0, onClick: exportSelectedGenerated });
   const deleteBulkBtn = document.getElementById('studio-delete-selected-btn');
@@ -245,15 +252,17 @@ function updateStudioBulkButtonsState(controller = _studioListController) {
 
 // The two sides of a Generated export, in this order. Each is the ordinary export
 // with its own job record, on the tab the list was scanned on.
+// seedErrors: the skipped artifacts' warnings, for the side that writes them;
+// recordFailed: those artifacts, kept in the artifacts record as failed.
 const GENERATED_EXPORT_STEPS = [
-  { name: 'Artifacts', run: (items, tabId, zip) => downloadAllArtifacts(tabId, items, { zip }) },
-  { name: 'Notes', run: (items, tabId) => exportNotesAsMarkdown(items, { tabId }) }
+  { name: 'Artifacts', run: (items, tabId, zip, { seedErrors, recordFailed } = {}) => downloadAllArtifacts(tabId, items, { zip, seedErrors, recordFailed }) },
+  { name: 'Notes', run: (items, tabId, zip, { seedErrors } = {}) => exportNotesAsMarkdown(items, { tabId, seedErrors }) }
 ];
 
 // The Generated action: opens the sheet, whose title says what goes and what cannot.
 // Save as is for the artifacts: a selection of notes has nothing to choose.
 function exportSelectedGenerated() {
-  const plan = NLME.generatedExportPlan(_studioListController ? _studioListController.selectedItems() : []);
+  const plan = NLME.generatedExportPlan(_studioListController ? _studioListController.selectedItems() : [], _studioItems);
   const n = plan.artifacts.length + plan.notes.length;
   if (n === 0) return;
   openExportSheet({
@@ -274,14 +283,21 @@ function exportSelectedGenerated() {
 // take always reach that panel, as a warning, even with one side:
 // NLME.generatedExportOutcome.
 function runGeneratedExport(zip) {
-  const plan = NLME.generatedExportPlan(_studioListController ? _studioListController.selectedItems() : []);
+  const plan = NLME.generatedExportPlan(_studioListController ? _studioListController.selectedItems() : [], _studioItems);
   if (plan.artifacts.length + plan.notes.length === 0) {
     showToast('Nothing is selected now, so nothing was exported', 'warning');
     return;
   }
   const tabId = _studioTabId;
+  // Artifacts skipped for having no More button go to errors.md too: the artifacts
+  // side's (and its record, as failed, for a later Resume), or with none the notes
+  // side's, named as Studio items there
+  const skipWarnings = plan.noMenuWarnings;
+  const seeds = !skipWarnings.length ? {}
+    : plan.artifacts.length ? { Artifacts: { seedErrors: skipWarnings, recordFailed: plan.noMenu } }
+      : { Notes: { seedErrors: skipWarnings.map(w => ({ ...w, title: `Studio: ${w.title}`, prefixed: true })) } };
   return runChain(async () => {
-    const { steps, notRun } = await runRetryChain({ Artifacts: plan.artifacts, Notes: plan.notes }, tabId, 'Export', GENERATED_EXPORT_STEPS, zip);
+    const { steps, notRun } = await runRetryChain({ Artifacts: plan.artifacts, Notes: plan.notes }, tabId, 'Export', GENERATED_EXPORT_STEPS, zip, seeds);
     // Nothing ran (declined, tab closed: already said), or one side ran alone with
     // nothing left out: its own panel stands
     const leftOut = plan.skipped.length > 0;
@@ -324,15 +340,18 @@ async function handleStudioDownloadRow(item, btn) {
   if (!item || NLME.isStudioItemUnavailable(item)) return;
   setStudioRowStatus(btn, 'pending');
   try {
+    // The row's place among rows of its title in the whole list, so the page can
+    // tell a shifted list (NLME.generatedExportPlan stamps it)
+    const planned = NLME.generatedExportPlan([item], _studioItems);
     if (item.kind === 'artifact') {
       // moreIndex: same index space as DOWNLOAD_ARTIFACT. With retries; says its own failure
-      await triggerItemDownload(_studioTabId, item.moreIndex, item.label, item.type);
+      await triggerItemDownload(_studioTabId, item.moreIndex, item.label, item.type, NLME.titlePlace(planned.artifacts[0]));
     } else if (item.kind === 'source-note') {
       // A note from the Sources panel: EXTRACT_NOTE opens it by sourceIndex (as the Notes tab does)
       await exportSingleNote({ index: -1, sourceIndex: item.sourceIndex, title: item.label, type: item.type });
     } else {
       // kind === 'note' — regular note or mindmap
-      await exportSingleNote({ index: item.kindIndex, title: item.label, type: item.type });
+      await exportSingleNote(planned.notes[0] || { index: item.kindIndex, title: item.label, type: item.type });
     }
     setStudioRowStatus(btn, 'success');
   } catch (error) {
@@ -345,14 +364,14 @@ async function handleStudioDownloadRow(item, btn) {
 async function handleStudioDeleteRow(item, btn) {
   if (!item || !isStudioItemDeletable(item)) return;
 
-  const target = studioDeleteTarget();
+  const target = await studioDeleteTarget();
   const sure = await showDialog({
     title: `Delete "${item.label}"?`,
     body: 'It is removed from the notebook. This cannot be undone.',
     confirmLabel: 'Delete',
     danger: true
   });
-  if (!sure || !studioDeleteStillValid(target)) return;
+  if (!sure || !await studioDeleteStillValid(target)) return;
 
   if (btn) btn.disabled = true;
   try {
@@ -382,14 +401,14 @@ async function handleStudioBulkDelete() {
 
   const n = deletable.length;
   const skippedNote = skipText ? `\n\n${skipText} will be skipped; delete those one by one.` : '';
-  const target = studioDeleteTarget();
+  const target = await studioDeleteTarget();
   const sure = await showDialog({
     title: n === 1 ? 'Delete 1 item?' : `Delete ${n} items?`,
     body: `${n === 1 ? 'It is' : 'They are'} removed from the notebook. This cannot be undone.${skippedNote}`,
     confirmLabel: `Delete ${n}`,
     danger: true
   });
-  if (!sure || !studioDeleteStillValid(target)) return;
+  if (!sure || !await studioDeleteStillValid(target)) return;
 
   const bulkBtn = document.getElementById('studio-delete-selected-btn');
   if (bulkBtn) bulkBtn.disabled = true;
@@ -403,11 +422,13 @@ async function handleStudioBulkDelete() {
   const queue = [...studioItems, ...sourceNotes];
 
   let okCount = 0;
+  let stopped = false;
   for (let i = 0; i < queue.length; i++) {
     const item = queue[i];
-    if (!NLME.sameDeleteTarget(target, studioDeleteTarget())) {
+    if (!NLME.sameDeleteTarget(target, await studioDeleteTarget())) {
       showToast(`The notebook changed: deleted ${okCount}/${queue.length}, stopped there`, 'warning');
-      return;
+      stopped = true; // still rescanned below: the list and Delete Selected show what is left
+      break;
     }
     try {
       await sendStudioDelete(item, { useIndex: false, tabId: target.tabId });
@@ -422,8 +443,10 @@ async function handleStudioBulkDelete() {
     }
   }
 
-  const skippedText = skipText ? `, skipped ${skipText}` : '';
-  showToast(`Deleted ${okCount}/${queue.length} Studio item(s)${skippedText}`, okCount === queue.length && !skipText ? 'success' : 'warning');
+  if (!stopped) {
+    const skippedText = skipText ? `, skipped ${skipText}` : '';
+    showToast(`Deleted ${okCount}/${queue.length} Studio item(s)${skippedText}`, okCount === queue.length && !skipText ? 'success' : 'warning');
+  }
   if (queue.some(item => item.kind !== 'artifact')) setTabCount('notes', null); // recounted when Notes rescans
   _studioSignature = null; // always a redraw
   await scanStudioPage();

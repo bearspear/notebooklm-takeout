@@ -112,7 +112,7 @@
       box-shadow: 0 8px 32px var(--shadow);
       text-align: left; line-height: 1.4;
     }
-    .label { margin: 0 0 12px; font-size: 12px; font-weight: 500; color: var(--muted); letter-spacing: 0.01em; }
+    .label { margin: 0 0 12px; font-size: 11.5px; font-weight: 500; color: var(--muted); letter-spacing: 0.01em; }
     .heading { margin: 0; font-size: 15px; font-weight: 600; color: var(--ink); }
     .line { margin: 2px 0 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
     .line:empty { display: none; }
@@ -134,7 +134,7 @@
       animation: slide 1.4s ease-in-out infinite;
     }
     @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
-    .note { margin: 16px 0 0; font-size: 12px; color: var(--muted); }
+    .note { margin: 16px 0 0; font-size: 11.5px; color: var(--muted); }
     .footer { display: flex; justify-content: flex-end; align-items: center; min-height: 36px; margin-top: 16px; }
     .cancel {
       font: inherit; font-size: 13px; font-weight: 500;
@@ -172,6 +172,8 @@
   // The text goes in after the empty status region is in the page, so it is announced.
   // It does not take focus (focus would hold it open): the Cancel that had it is gone,
   // so focus is on the page, as before; Dismiss is one Tab away at the end of the page.
+  // If it has the focus when it goes (Dismiss, or the timer while the window was in the
+  // background), the focus goes back to where it came from, or to the page.
   const RELOADED_NOTE_MS = 6000;
   const RELOADED_TEXT = 'This export stopped when the extension was reloaded. Refresh the page to use Takeout again.';
   function showReloadedNote() {
@@ -215,13 +217,25 @@
     let startedAt = 0;
     let hovered = false;
     let focused = false;
-    const remove = () => { clearTimeout(timer); host.remove(); };
+    let cameFrom = null; // the element outside the note that had the focus before it
+    const remove = () => {
+      clearTimeout(timer);
+      const hadFocus = document.activeElement === host;
+      host.remove();
+      if (!hadFocus) return;
+      // Else it is on the page, where the note found it
+      if (cameFrom?.isConnected && cameFrom !== document.body) cameFrom.focus({ preventScroll: true });
+    };
     const run = () => { startedAt = Date.now(); clearTimeout(timer); timer = setTimeout(remove, left); };
     const pause = () => { clearTimeout(timer); left = Math.max(800, left - (Date.now() - startedAt)); };
     const resume = () => { if (!hovered && !focused && host.isConnected) run(); };
     card.addEventListener('mouseenter', () => { hovered = true; pause(); });
     card.addEventListener('mouseleave', () => { hovered = false; resume(); });
-    card.addEventListener('focusin', () => { focused = true; pause(); });
+    card.addEventListener('focusin', (e) => {
+      if (!focused && e.relatedTarget && !host.contains(e.relatedTarget) && e.relatedTarget !== host) cameFrom = e.relatedTarget;
+      focused = true;
+      pause();
+    });
     card.addEventListener('focusout', () => { focused = false; resume(); });
     dismiss.addEventListener('click', remove);
 
@@ -385,6 +399,16 @@
 
   // Condition waits instead of fixed sleeps (Milestone 1, Speed): resolve once
   // the measured size stops changing; on timeout continue with what is there.
+  // The current request's place among items of its title when the panel scanned
+  // (NLME.stampTitleOrdinals: titleOrdinal, titleCount). Set by each extract and
+  // download request, like citationDetailMode; null when the panel sent none.
+  let requestTitleOrdinal = null;
+  function titleOrdinalOf(data) {
+    return data && Number.isInteger(data.titleOrdinal)
+      ? { ordinal: data.titleOrdinal, count: Number.isInteger(data.titleCount) ? data.titleCount : null }
+      : null;
+  }
+
   async function waitForStable(measure, { interval = 50, checks = 2, minLength = 1, timeout = 5000 } = {}) {
     const tracker = NLME.createStabilityTracker({ checks, minLength });
     const deadline = Date.now() + timeout;
@@ -469,6 +493,7 @@
         // 'titles' and 'none' both skip hovering ('none' drops the markers later)
         citationDetailMode = ['titles', 'none'].includes(message.data.citationDetail) ? 'titles' : 'quotes';
         reuseCitations = message.data.reuseCitations === true;
+        requestTitleOrdinal = titleOrdinalOf(message.data);
         withRequestTiming(() => (typeof message.data.sourceIndex === 'number'
           ? extractSourcesPanelNote(message.data.sourceIndex, message.data.noteTitle, message.data.includeCitationImages)
           : extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages)))
@@ -479,9 +504,10 @@
     [NLME.MSG.SCAN_NOTES]: {
       async: false,
       run(message, sender, sendResponse) {
-        // Scan for notes
+        // Scan for notes; list says whether the Studio list has drawn
+        // (NLME.notesSettleDecision reads it)
         const notes = scanForNotes();
-        sendResponse({ notes });
+        sendResponse({ notes, list: notesListState() });
       }
     },
     [NLME.MSG.SCAN_SOURCES]: {
@@ -497,6 +523,7 @@
       async: true,
       run(message, sender, sendResponse) {
         // Extract source content
+        requestTitleOrdinal = titleOrdinalOf(message.data);
         withRequestTiming(() => extractSourceContent(message.data.sourceIndex, message.data.title || '', message.data.needsGuide !== false))
           .then(result => sendResponse(result))
           .catch(error => sendResponse({ error: error.message }));
@@ -539,6 +566,7 @@
       async: true,
       run(message, sender, sendResponse) {
         // Download artifact via message passing (new pattern)
+        requestTitleOrdinal = titleOrdinalOf(message.data);
         handleArtifactDownload(
           message.data.artifactIndex,
           message.data.artifactType,
@@ -806,6 +834,16 @@
   // ==================== NOTE EXTRACTION ====================
 
   // Scan for notes in the page
+  // Has the Studio list drawn? items: its rows (notes and other items); library:
+  // its container is on the page; loading: a spinner where the rows go. An empty
+  // notebook shows the container with no rows and no spinner.
+  function notesListState() {
+    const container = document.querySelector('.artifact-library-container') || document.querySelector('artifact-library');
+    const items = document.querySelectorAll('artifact-library-item, artifact-library-note').length;
+    const spinner = 'mat-spinner, mat-progress-spinner, mat-progress-bar, [role="progressbar"]';
+    return { items, library: !!container, loading: !!container && items === 0 && !!container.querySelector(spinner) };
+  }
+
   function scanForNotes() {
     console.log('[NotebookLM Takeout] Scanning for notes...');
 
@@ -941,7 +979,10 @@
     });
 
     console.log(`[NotebookLM Takeout] Total sources found: ${sources.length} (${skippedNotes} note(s) skipped)`);
-    return { sources: sources, skippedNotes };
+    // The list extractSourceContent resolves over, hidden rows included: the panel
+    // counts each source's place among its title there
+    const titles = Array.from(sourceContainers).map(c => (isNoteSourceContainer(c) ? '' : getSourceContainerTitle(c)));
+    return { sources: sources, skippedNotes, titles };
   }
 
   // Helper function to wait for an element
@@ -1912,8 +1953,10 @@
       // Strict: never fall back to an index whose title differs (Milestone 1)
       let pick = -1;
       try {
-        pick = NLME.pickByIndexThenTitleStrict(noteTitles, noteIndex, noteTitle);
+        pick = NLME.pickByIndexThenTitleStrict(noteTitles, noteIndex, noteTitle, requestTitleOrdinal);
       } catch (e) {
+        // Two notes of this title and the list moved: say so, not "not found"
+        if (NLME.isSameTitleRefusal(e)) throw e;
         pick = -1;
       }
       const noteEl = pick === -1 ? null : noteElements[pick];
@@ -2165,7 +2208,7 @@
       const containerTitles = Array.from(sourceContainers).map(c =>
         isNoteSourceContainer(c) ? '' : getSourceContainerTitle(c));
       const resolvedIndex = expectedTitle
-        ? NLME.pickByIndexThenTitleStrict(containerTitles, sourceIndex, expectedTitle)
+        ? NLME.pickByIndexThenTitleStrict(containerTitles, sourceIndex, expectedTitle, requestTitleOrdinal)
         : sourceIndex;
       if (resolvedIndex >= sourceContainers.length) {
         throw new Error(`Source index ${sourceIndex} out of range (total: ${sourceContainers.length})`);
@@ -2688,7 +2731,7 @@
     const titles = items.map(item => item.querySelector('.artifact-title')?.textContent?.trim() || '');
     // Strict (Milestone 1): throws "Item changed" instead of falling back to
     // an index whose title differs
-    const pick = title ? NLME.pickByIndexThenTitleStrict(titles, artifactIndex, title) : artifactIndex;
+    const pick = title ? NLME.pickByIndexThenTitleStrict(titles, artifactIndex, title, requestTitleOrdinal) : artifactIndex;
     return items[pick] || null;
   }
 
@@ -3172,7 +3215,7 @@
       const rows = getArtifactItemsWithMore();
       const rowTitles = rows.map(item => item.querySelector('.artifact-title')?.textContent?.trim() || '');
       const pick = artifactName
-        ? NLME.pickByIndexThenTitleStrict(rowTitles, artifactIndex, artifactName)
+        ? NLME.pickByIndexThenTitleStrict(rowTitles, artifactIndex, artifactName, requestTitleOrdinal)
         : artifactIndex;
       if (pick < 0 || pick >= rows.length) {
         throw new Error(`Artifact index ${artifactIndex} out of range (0-${rows.length - 1})`);

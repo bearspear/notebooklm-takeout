@@ -2333,9 +2333,10 @@ test('an artifact with no More button is not exported: its index would resolve b
   assert.deepEqual(plan.skipped.map(i => i.moreIndex), [-1]);
 });
 
-test('the row check and the export plan share one rule', () => {
+test('the Studio export plan skips exactly what the row check refuses (1.9.4), no-More rows included', () => {
   const rows = [
     { kind: 'artifact', moreIndex: 0, label: 'A', type: 'Slides', downloadable: true },
+    { kind: 'artifact', moreIndex: -1, label: 'A', type: 'Slides', downloadable: true },
     { kind: 'artifact', moreIndex: -1, label: 'B', type: 'Slides', downloadable: true },
     { kind: 'artifact', moreIndex: 2, label: 'C', type: 'Quiz', downloadable: false },
     { kind: 'artifact', moreIndex: -1, label: 'D', type: 'Quiz', downloadable: false },
@@ -2344,7 +2345,7 @@ test('the row check and the export plan share one rule', () => {
   ];
   const skipped = NLME.generatedExportPlan(rows).skipped;
   assert.deepEqual(rows.filter(NLME.isStudioItemUnavailable), skipped);
-  assert.deepEqual(skipped.map(i => i.label), ['B', 'C', 'D']);
+  assert.deepEqual(skipped.map(i => i.label), ['A', 'B', 'C', 'D']);
 });
 
 test('an unavailable row says why it cannot download', () => {
@@ -3462,6 +3463,36 @@ test('sameDeleteTarget needs the same tab and the same notebook', () => {
   assert.equal(NLME.sameDeleteTarget(asked, { tabId: 8, notebookId: 'aaaa' }), false);
   assert.equal(NLME.sameDeleteTarget({ tabId: null, notebookId: '' }, { tabId: null, notebookId: '' }), false);
   assert.equal(NLME.sameDeleteTarget(null, asked), false);
+  assert.equal(NLME.sameDeleteTarget({ tabId: 7, notebookId: '' }, { tabId: 7, notebookId: '' }), false, 'no notebook, no delete');
+});
+
+// 1.9.5: a delete asked before the panel knows its notebook
+test('deleteTarget names the notebook the tab shows, and none when the panel shows another', () => {
+  const url = 'https://notebook.google.com/notebook/aaaa?authuser=0';
+  assert.deepEqual(NLME.deleteTarget({ tabId: 7, url, panelNotebookId: '' }), { tabId: 7, notebookId: 'aaaa' });
+  assert.deepEqual(NLME.deleteTarget({ tabId: 7, url, panelNotebookId: 'aaaa' }), { tabId: 7, notebookId: 'aaaa' });
+  assert.deepEqual(NLME.deleteTarget({ tabId: 7, url, panelNotebookId: 'bbbb' }), { tabId: 7, notebookId: '' });
+  assert.deepEqual(NLME.deleteTarget({ tabId: 7, url: 'https://example.com/', panelNotebookId: 'aaaa' }), { tabId: 7, notebookId: '' });
+  assert.deepEqual(NLME.deleteTarget({ tabId: undefined, url: '', panelNotebookId: '' }), { tabId: null, notebookId: '' });
+  // Asked at panel start (id ''), checked once the id has arrived for the same notebook
+  const asked = NLME.deleteTarget({ tabId: 7, url, panelNotebookId: '' });
+  assert.equal(NLME.sameDeleteTarget(asked, NLME.deleteTarget({ tabId: 7, url, panelNotebookId: 'aaaa' })), true);
+  // After a Refresh that forgot the id, on the same notebook
+  assert.equal(NLME.sameDeleteTarget(NLME.deleteTarget({ tabId: 7, url, panelNotebookId: 'aaaa' }), NLME.deleteTarget({ tabId: 7, url, panelNotebookId: '' })), true);
+  // The tab moved on to another notebook, or off the site
+  assert.equal(NLME.sameDeleteTarget(asked, NLME.deleteTarget({ tabId: 7, url: 'https://notebook.google.com/notebook/bbbb', panelNotebookId: 'aaaa' })), false);
+  assert.equal(NLME.sameDeleteTarget(asked, NLME.deleteTarget({ tabId: 7, url: 'https://notebook.google.com/', panelNotebookId: 'aaaa' })), false);
+});
+
+// 1.9.5: the time left counts down between counts
+test('tickedTimeLeft counts down, but not below about a minute by ticking', () => {
+  assert.equal(NLME.tickedTimeLeft(null, 5), null);
+  assert.equal(NLME.tickedTimeLeft(300, 0), 300);
+  assert.equal(NLME.tickedTimeLeft(300, 60), 240);
+  assert.equal(NLME.tickedTimeLeft(300, 1000), 30);
+  assert.equal(NLME.progressLeftLine(1, 10, NLME.tickedTimeLeft(300, 1000)), 'about 1 min left');
+  assert.equal(NLME.tickedTimeLeft(20, 15), 20, 'an estimate under the floor stays');
+  assert.equal(NLME.tickedTimeLeft(100, -5), 100);
 });
 
 test('overlayView names only the categories exports write, not prototype keys', () => {
@@ -3477,4 +3508,339 @@ test('shownNotebookName hides the file-name fallback, header and results alike',
   assert.equal(NLME.shownNotebookName('  New Physics '), 'New Physics');
   assert.equal(NLME.shownNotebookName(undefined), '');
   assert.equal(NLME.headerName(nb, 'NotebookLM'), 'Notebook');
+});
+
+// ---- 1.9.5: a no-More artifact that shares a ready item's title is skipped, and named in errors.md ----
+
+const SKIP_MESSAGE = 'still being generated or has no menu; a ready item has the same title';
+
+test('artifactExportPlan skips a no-More item only when a ready item has its title', () => {
+  const plan = NLME.artifactExportPlan([
+    { index: 0, label: 'Deck', type: 'Slides' },
+    { index: -1, label: 'Deck', type: 'Slides' },
+    { index: -1, label: 'Lonely', type: 'Audio Overview' },
+    { index: 1, label: 'Cards', type: 'Flashcards', disabled: true }
+  ]);
+  // A unique-title no-More item is tried, as in 1.9.4 (it fails harmlessly or finished meanwhile)
+  assert.deepEqual(plan.runnable.map(i => [i.index, i.label]), [[0, 'Deck'], [-1, 'Lonely']]);
+  assert.deepEqual(plan.skipped.map(i => i.label), ['Deck']);
+  assert.deepEqual(plan.warnings, [{ type: 'skipped_ambiguous', title: 'Deck', message: SKIP_MESSAGE }]);
+});
+
+test('artifactExportPlan keeps two ready items of one title, and skips two no-More twins', () => {
+  const ready = [{ index: 0, label: 'Deck', type: 'Slides' }, { index: 1, label: 'Deck', type: 'Slides' }];
+  assert.deepEqual(NLME.artifactExportPlan(ready).runnable, ready);
+  assert.deepEqual(NLME.artifactExportPlan(ready).warnings, []);
+  // Once one twin is ready, the other's title pick would land on it
+  const drafts = [{ index: -1, label: 'Draft' }, { index: -1, label: 'Draft' }, { index: -1, label: 'Solo' }];
+  const plan = NLME.artifactExportPlan(drafts);
+  assert.deepEqual(plan.runnable, [drafts[2]], 'a lone no-More item is still tried');
+  assert.deepEqual(plan.skipped, drafts.slice(0, 2));
+  assert.deepEqual(plan.warnings.map(w => [w.type, w.message]), [
+    ['skipped_ambiguous', 'still being generated or has no menu; another item being generated has the same title'],
+    ['skipped_ambiguous', 'still being generated or has no menu; another item being generated has the same title']
+  ]);
+  // The item never counts as its own namesake, also when given a part of the scan
+  assert.deepEqual(NLME.artifactExportPlan([drafts[2]], { all: drafts }).runnable, [drafts[2]]);
+  assert.deepEqual(NLME.artifactExportPlan([drafts[0]], { all: drafts }).skipped, [drafts[0]]);
+});
+
+test('a title-only pick (index -1) refuses two candidates, and still resolves one', () => {
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(['Twin', 'Other', 'Twin'], -1, 'Twin'), err => err.message === NLME.SAME_TITLE_REFUSED);
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Twin', 'Other', 'Twin'], -1, 'Other'), 1);
+  // An index of its own still wins
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Twin', 'Other', 'Twin'], 2, 'Twin'), 2);
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(['Other'], -1, 'Twin'), /Item changed: expected "Twin"/);
+});
+
+test('Retry of two no-More twins after both are ready never saves the first one twice', () => {
+  // A Retry reuses the scanned items: both still say index -1
+  const rows = ['Twin', 'Twin'];
+  const picks = [];
+  for (const item of [{ index: -1, label: 'Twin' }, { index: -1, label: 'Twin' }]) {
+    try { picks.push(NLME.pickByIndexThenTitleStrict(rows, item.index, item.label)); } catch (e) { picks.push(e.message); }
+  }
+  assert.deepEqual(picks, [NLME.SAME_TITLE_REFUSED, NLME.SAME_TITLE_REFUSED]);
+});
+
+test('artifactExportPlan takes the ready titles from the whole scan when given a part of it', () => {
+  const all = [{ index: 0, label: 'Deck' }, { index: -1, label: 'Deck' }];
+  assert.deepEqual(NLME.artifactExportPlan([all[1]], { all }).skipped, [all[1]]);
+  assert.deepEqual(NLME.artifactExportPlan([all[1]]).skipped, []);
+});
+
+test('generatedExportPlan skips every no-More row, and words each skip by whether a row with a menu shares its title', () => {
+  const rows = [
+    { kind: 'artifact', label: 'Deck', moreIndex: 0, downloadable: true, type: 'Slides' },
+    { kind: 'artifact', label: 'Deck', moreIndex: -1, downloadable: true, type: 'Slides', jobKey: 'Slides\u0000Deck#2' },
+    { kind: 'artifact', label: 'Fresh', moreIndex: -1, downloadable: true, type: 'Report' },
+    { kind: 'artifact', label: 'Cards', moreIndex: 1, downloadable: false, type: 'Flashcards' },
+    { kind: 'artifact', label: 'Cards', moreIndex: -1, downloadable: true, type: 'Report' },
+    { kind: 'artifact', label: 'Quiz me', moreIndex: 2, downloadable: false, type: 'Quiz' }
+  ];
+  const plan = NLME.generatedExportPlan(rows.slice(1), rows);
+  assert.deepEqual(plan.artifacts, []);
+  assert.deepEqual(plan.skipped.map(i => [i.label, i.type]), [['Deck', 'Slides'], ['Fresh', 'Report'], ['Cards', 'Flashcards'], ['Cards', 'Report'], ['Quiz me', 'Quiz']]);
+  assert.deepEqual(plan.noMenu.map(a => [a.index, a.label]), [[-1, 'Deck'], [-1, 'Fresh'], [-1, 'Cards']]);
+  assert.equal(plan.noMenu[0]._listKey, 'Slides\u0000Deck#2');
+  // A Flashcards row with a menu is a title the pick can land on, too
+  assert.deepEqual(plan.noMenuWarnings.map(w => [w.type, w.title]), [['skipped_ambiguous', 'Deck'], ['skipped_not_ready', 'Fresh'], ['skipped_ambiguous', 'Cards']]);
+  assert.equal(plan.noMenuWarnings[1].message, 'still being generated or has no menu');
+});
+
+test('artifactExportPlan: a Flashcards or Quiz row with a menu makes its no-More namesake a skip', () => {
+  for (const type of ['Flashcards', 'Quiz']) {
+    const plan = NLME.artifactExportPlan([{ index: 0, label: 'Deck', type, disabled: true }, { index: -1, label: 'Deck', type: 'Report' }]);
+    assert.deepEqual(plan.runnable, [], type);
+    assert.deepEqual(plan.warnings.map(w => [w.type, w.title]), [['skipped_ambiguous', 'Deck']], type);
+  }
+});
+
+test('the still-generating skip has its own heading and counts as skipped', () => {
+  const warning = NLME.skippedNoMenuWarning('Fresh', false);
+  assert.equal(NLME.countExportErrors([warning]), 1);
+  assert.match(NLME.buildErrorReport({ errors: [warning] }), /^## Skipped: still being generated \(1\)\n\n- Fresh: still being generated or has no menu$/m);
+  const step = { name: 'Artifacts', message: 'm', level: 'warning', saved: [], errors: [warning], failedItems: [], exported: 1, selected: 1 };
+  assert.match(NLME.combineRetryOutcomes({ steps: [step] }).message, /— 1 skipped$/);
+  assert.equal(NLME.NO_MENU_FAILED, 'Still being generated. Try again when it is ready (Resume will retry it).');
+});
+
+test('a skipped item is an error in errors.md (the checker warns), under a plain heading', () => {
+  const warning = NLME.skippedNoMenuWarning('Deck');
+  assert.equal(NLME.countExportErrors([warning]), 1);
+  const report = NLME.buildErrorReport({ title: 'Artifacts Export', errors: [warning] });
+  assert.match(report, /^Errors: 1$/m);
+  assert.match(report, new RegExp(`^## Skipped: same title as another item \\(1\\)\\n\\n- Deck: ${SKIP_MESSAGE.replace(/;/g, ';')}$`, 'm'));
+  assert.doesNotMatch(report, /SKIPPED AMBIGUOUS/);
+  assert.match(NLME.buildErrorReport({ errors: NLME.prefixExportErrors('Artifacts', [warning]) }), /^- Artifacts: Deck: still being generated/m);
+  assert.equal(NLME.groupErrorsForPanel([warning])[0].heading, 'Skipped: same title as another item');
+  // Other headings keep their words
+  assert.match(NLME.buildErrorReport({ errors: [{ type: 'scan_failed', message: 'x' }] }), /^## SCAN FAILED \(1\)$/m);
+});
+
+test('an error that names its own category keeps it when prefixed', () => {
+  const studio = { ...NLME.skippedNoMenuWarning('Studio: Deck'), prefixed: true };
+  assert.deepEqual(NLME.prefixExportErrors('Notes', [studio, '[Note A] broke']).map(e => e.title), ['Studio: Deck', 'Notes: Note A']);
+});
+
+test('Resume says how many it skipped and keeps N of M without them, seeded or panel-only', () => {
+  const step = { name: 'Artifacts', message: 'm', level: 'warning', saved: [], errors: [NLME.skippedNoMenuWarning('Deck')], failedItems: [], exported: 2, selected: 2 };
+  const seeded = NLME.combineRetryOutcomes({ steps: [step], verb: 'Resume' });
+  assert.deepEqual(seeded.count, { done: 2, total: 2 });
+  assert.match(seeded.message, /^Resume finished — 1 skipped$/);
+  const notes = { name: 'Notes', message: 'm', level: 'success', saved: [], errors: [], failedItems: [], exported: 1, selected: 1 };
+  const panelOnly = NLME.combineRetryOutcomes({ steps: [notes], verb: 'Resume', extraErrors: [{ ...NLME.skippedNoMenuWarning('Deck'), title: 'Artifacts: Deck' }] });
+  assert.deepEqual(panelOnly.count, { done: 1, total: 1 });
+  assert.match(panelOnly.message, /— 1 skipped$/);
+  assert.equal(panelOnly.level, 'warning');
+});
+
+test('a takeout category of skips only is done, says so, and is not "none"', () => {
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 0, exported: 0, errorCount: 1, skipped: 1 }), 'done');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 0, exported: 0, errorCount: 2, skipped: 1 }), 'failed');
+  assert.equal(NLME.takeoutCategoryStatus({ selected: 2, exported: 2, errorCount: 1, skipped: 1 }), 'done');
+  const { message, level } = NLME.summarizeTakeoutOutcome({ categories: [
+    { name: 'Notes', status: 'done', selected: 1, exported: 1, failed: 0, errorCount: 0 },
+    { name: 'Artifacts', status: 'done', selected: 2, exported: 2, failed: 0, errorCount: 1, skipped: 1 }
+  ] });
+  assert.equal(message, 'Takeout: notes 1/1, artifacts 2/2 (1 skipped) (see errors.md)');
+  assert.equal(level, 'warning');
+});
+
+// ---- 1.9.5: the notes list settles before a takeout believes it ----
+
+const listed = (n, extra = {}) => Array.from({ length: n }, (_, i) => ({ index: i, title: `N${i}`, elementType: 'note', ...extra }));
+const read = (at, notes, list = { items: Array.isArray(notes) ? notes.length : 0, library: true, loading: false }) => ({ at, notes, list });
+
+test('notesSettleDecision believes notes once two reads agree', () => {
+  assert.deepEqual(NLME.notesSettleDecision([read(0, listed(3))]), { state: 'wait' });
+  assert.deepEqual(NLME.notesSettleDecision([read(0, listed(3)), read(400, listed(3))]), { state: 'found' });
+  // Still drawing: 3, then 5
+  assert.deepEqual(NLME.notesSettleDecision([read(0, listed(3)), read(400, listed(5))]), { state: 'wait' });
+});
+
+test('notesSettleDecision: a drawn list with other rows and no notes is empty at once', () => {
+  const rows = { items: 4, library: true, loading: false };
+  assert.deepEqual(NLME.notesSettleDecision([read(0, [], rows)]), { state: 'wait' });
+  assert.deepEqual(NLME.notesSettleDecision([read(0, [], rows), read(400, [], rows)]), { state: 'empty' });
+});
+
+test('notesSettleDecision: a drawn list with no rows is believed empty only after it stays so', () => {
+  const empty = { items: 0, library: true, loading: false };
+  const reads = [0, 400, 800, 3600].map(at => read(at, [], empty));
+  assert.equal(NLME.notesSettleDecision(reads).state, 'wait');
+  assert.equal(NLME.notesSettleDecision([...reads, read(4000, [], empty)]).state, 'empty');
+  // A spinner restarts nothing but keeps it waiting
+  const loading = { items: 0, library: true, loading: true };
+  assert.equal(NLME.notesSettleDecision([read(0, [], loading), read(4400, [], loading)]).state, 'wait');
+});
+
+test('notesSettleDecision: an undrawn list is never "none in notebook", and the notes win when they come', () => {
+  const none = { items: 0, library: false, loading: false };
+  assert.equal(NLME.notesSettleDecision([read(0, [], none), read(4400, [], none)]).state, 'wait');
+  const late = NLME.notesSettleDecision([read(0, [], none), read(4400, listed(2)), read(4800, listed(2))]);
+  assert.equal(late.state, 'found');
+  const never = NLME.notesSettleDecision([read(0, [], none), read(8000, [], none)]);
+  assert.equal(never.state, 'failed');
+  assert.match(never.message, /^The Studio list did not appear within 8 s\. Close any open Studio item/);
+  const spinning = NLME.notesSettleDecision([read(8000, [], { items: 0, library: true, loading: true })]);
+  assert.equal(spinning.state, 'failed');
+});
+
+test('notesSettleDecision: no answer waits, then fails at the bound', () => {
+  assert.equal(NLME.notesSettleDecision([read(0, null)]).state, 'wait');
+  const failed = NLME.notesSettleDecision([read(0, null), read(8100, null)]);
+  assert.equal(failed.state, 'failed');
+  assert.match(failed.message, /No answer from the page/);
+});
+
+test('notesSettleDecision: Sources-panel notes under a drawn empty Studio list are found after the wait', () => {
+  const sourceNotes = [{ index: -1, sourceIndex: 2, title: 'S', elementType: 'source-note' }];
+  const empty = { items: 0, library: true, loading: false };
+  assert.equal(NLME.notesSettleDecision([read(0, sourceNotes, empty), read(400, sourceNotes, empty)]).state, 'wait');
+  assert.equal(NLME.notesSettleDecision([read(0, sourceNotes, empty), read(4000, sourceNotes, empty)]).state, 'found');
+});
+
+test('notesSettleDecision: polled every pollMs, a truly empty notebook ends well inside the bound', () => {
+  const { pollMs, boundMs, emptyConfirmMs } = NLME.NOTES_SETTLE;
+  const reads = [];
+  let at = 0;
+  let decision;
+  do {
+    reads.push(read(at, [], { items: 0, library: true, loading: false }));
+    decision = NLME.notesSettleDecision(reads);
+    at += pollMs;
+  } while (decision.state === 'wait');
+  assert.equal(decision.state, 'empty');
+  assert.ok(reads[reads.length - 1].at >= emptyConfirmMs && reads[reads.length - 1].at < boundMs);
+});
+
+test('notesSettleDecision: Sources-panel notes found while the Studio list never draws are exported, with a warning', () => {
+  const sourceNotes = [{ index: -1, sourceIndex: 2, title: 'S', elementType: 'source-note' }];
+  const none = { items: 0, library: false, loading: false };
+  assert.equal(NLME.notesSettleDecision([read(0, sourceNotes, none), read(4000, sourceNotes, none)]).state, 'wait');
+  assert.deepEqual(NLME.notesSettleDecision([read(0, sourceNotes, none), read(8000, sourceNotes, none)]),
+    { state: 'partial', message: "The Studio list wasn't visible, so notes saved only there may be missing. Close any open Studio item and export again." });
+  assert.equal(NLME.NOTES_STUDIO_HIDDEN, "The Studio list wasn't visible, so notes saved only there may be missing. Close any open Studio item and export again.");
+});
+
+test('notesSettleDecision: a list still loading at the bound says so, not "wasn\'t visible"', () => {
+  const sourceNotes = [{ index: -1, sourceIndex: 2, title: 'S', elementType: 'source-note' }];
+  const loading = { items: 0, library: true, loading: true };
+  assert.deepEqual(NLME.notesSettleDecision([read(0, sourceNotes, loading), read(8000, sourceNotes, loading)]),
+    { state: 'partial', message: 'The Studio list was still loading, so notes saved only there may be missing. Wait for it to load and export again.' });
+  const failed = NLME.notesSettleDecision([read(0, [], loading), read(8000, [], loading)]);
+  assert.equal(failed.state, 'failed');
+  assert.match(failed.message, /^The Studio list was still loading after 8 s\. Wait for it to load/);
+});
+
+// ---- Task 2b: a stale index with a duplicate title is refused, on every path ----
+
+test('a stale index with two rows of its title is refused, on the artifact, note and source lists', () => {
+  // An item finished generating above two ready Decks: every row moved down one.
+  // The panel scanned [Deck, Deck, Other]: ordinals 0 and 1
+  const artifactRows = ['New report', 'Deck', 'Deck', 'Other'];
+  const refused = err => err.message === NLME.SAME_TITLE_SHIFTED;
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(artifactRows, 0, 'Deck', 0), refused, 'first twin: its row is gone');
+  // The second twin's old index now holds the FIRST twin: same title, wrong ordinal
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(artifactRows, 1, 'Deck', 1), refused, 'second twin: never the first one');
+  // Notes: a note added above two notes of one title
+  const notes = ['Added', 'Ideas', 'Ideas'];
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(notes, 0, 'Ideas', 0), refused);
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(notes, 1, 'Ideas', 1), refused);
+  // Sources: note containers read as '' and a source was added above two of one title
+  const sources = ['', 'Added.pdf', 'Paper.pdf', 'Paper.pdf'];
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(sources, 1, 'Paper.pdf', 0), refused);
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(sources, 2, 'Paper.pdf', 1), refused);
+  // A stale index past the end with two rows of the title is refused too
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(['Deck', 'Deck'], 5, 'Deck'), refused);
+  assert.ok(NLME.isSameTitleRefusal(new Error(NLME.SAME_TITLE_SHIFTED)) && NLME.isSameTitleRefusal(new Error(NLME.SAME_TITLE_REFUSED)));
+  assert.ok(!NLME.isSameTitleRefusal(new Error('Item changed: expected "Deck"')) && !NLME.isSameTitleRefusal(null));
+  assert.equal(NLME.SAME_TITLE_SHIFTED, 'The list changed and another item has the same title, so this one cannot be found safely. Resume finds it again.');
+});
+
+test('a stale index with a unique title follows it; a matching index (and ordinal) is kept even with twins', () => {
+  assert.equal(NLME.pickByIndexThenTitleStrict(['New report', 'Deck', 'Other'], 0, 'Deck', 0), 1);
+  assert.equal(NLME.pickByIndexThenTitleStrict(['', 'Added.pdf', 'Paper.pdf'], 1, 'Paper.pdf', 0), 2);
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Deck', 'Deck'], 0, 'Deck', 0), 0);
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Deck', 'Deck'], 1, 'Deck', 1), 1);
+  // No ordinal (a single row download): the title check alone, as before
+  assert.equal(NLME.pickByIndexThenTitleStrict(['New report', 'Deck', 'Deck'], 1, 'Deck'), 1);
+});
+
+test('stampTitleOrdinals counts earlier items of the same title by index, out of sight of JSON', () => {
+  const items = [{ index: 2, label: 'Deck' }, { index: 0, label: 'Deck' }, { index: -1, label: 'Deck' }, { index: 1, label: 'Other' }];
+  NLME.stampTitleOrdinals(items, { titleOf: i => i.label, indexOf: i => i.index });
+  assert.deepEqual(items.map(i => i._titleOrdinal), [1, 0, undefined, 0]);
+  assert.equal(JSON.stringify(items[0]), '{"index":2,"label":"Deck"}');
+  assert.equal(NLME.titleOrdinalAt(['Deck', 'X', 'Deck'], 2, 'Deck'), 1);
+});
+
+test('the Studio export plan sends each artifact and note its ordinal over the whole list', () => {
+  const rows = [
+    { kind: 'artifact', label: 'Deck', moreIndex: 0, downloadable: true, type: 'Slides' },
+    { kind: 'artifact', label: 'Deck', moreIndex: 1, downloadable: true, type: 'Slides' },
+    { kind: 'note', label: 'Ideas', kindIndex: 0, type: 'Note' },
+    { kind: 'note', label: 'Ideas', kindIndex: 1, type: 'Note' }
+  ];
+  const plan = NLME.generatedExportPlan([rows[1], rows[3]], rows);
+  assert.deepEqual([plan.artifacts[0]._titleOrdinal, plan.notes[0]._titleOrdinal], [1, 1]);
+});
+
+// ---- Task 2b fix round 1: the scan-time count of the title catches inserts and deletes ----
+
+const SHIFTED = err => err.message === NLME.SAME_TITLE_SHIFTED;
+const place = (ordinal, count) => ({ ordinal, count });
+
+test('a same-title row inserted directly above is caught by the count, for artifacts, notes and sources', () => {
+  // Artifacts: scanned More rows [Deck(ready)] (the no-More twin was skipped): index 0, 1 of 1.
+  // The twin finishes above it: [Deck(new), Deck(ready)]
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(['Deck', 'Deck'], 0, 'Deck', place(0, 1)), SHIFTED);
+  // Notes and sources: the same insert above
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(['Ideas', 'Ideas', 'Other'], 0, 'Ideas', place(0, 1)), SHIFTED);
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(['', 'Paper.pdf', 'Paper.pdf'], 1, 'Paper.pdf', place(0, 1)), SHIFTED);
+  // The ordinal alone missed it (the old check)
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Deck', 'Deck'], 0, 'Deck', 0), 0);
+});
+
+test('a same-title row deleted above is caught by the count, for artifacts, notes and sources', () => {
+  // [a, X, b] all "Deck": X is index 1, 1 of 3. Delete a: [X, b]; index 1 is now b
+  for (const rows of [['Deck', 'Deck'], ['Ideas', 'Ideas'], ['', 'Paper.pdf', 'Paper.pdf']]) {
+    const title = rows[rows.length - 1];
+    const index = rows.length - 1;
+    assert.throws(() => NLME.pickByIndexThenTitleStrict(rows, index, title, place(1, 3)), SHIFTED, title);
+  }
+});
+
+test('with the count, an unchanged list keeps every index, and a unique title still follows', () => {
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Deck', 'Deck', 'Other'], 1, 'Deck', place(1, 2)), 1);
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Deck', 'Deck', 'Other'], 2, 'Other', place(0, 1)), 2);
+  // A unique title that moved: followed, whatever the count said
+  assert.equal(NLME.pickByIndexThenTitleStrict(['New', 'Other'], 0, 'Other', place(0, 1)), 1);
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Deck'], 0, 'Deck', place(0, 2)), 0, 'its twin was deleted: one left, followed');
+});
+
+test('stampTitleOrdinals stamps the count, and counts over the page list when given one', () => {
+  const items = [{ index: 0, title: 'Deck' }, { index: 1, title: 'Deck' }, { index: 2, title: 'Other' }];
+  NLME.stampTitleOrdinals(items, { titleOf: i => i.title, indexOf: i => i.index });
+  assert.deepEqual(items.map(i => [i._titleOrdinal, i._titleCount]), [[0, 2], [1, 2], [0, 1]]);
+  assert.deepEqual(items.map(NLME.titlePlace), [{ titleOrdinal: 0, titleCount: 2 }, { titleOrdinal: 1, titleCount: 2 }, { titleOrdinal: 0, titleCount: 1 }]);
+  assert.deepEqual(NLME.titlePlace({ index: 0 }), {});
+  // Sources: a hidden "Paper.pdf" at 1 is not in the scan but is on the page's list
+  const sources = [{ index: 2, title: 'Paper.pdf' }];
+  NLME.stampTitleOrdinals(sources, { titleOf: s => s.title, indexOf: s => s.index, titles: ['', 'Paper.pdf', 'Paper.pdf'] });
+  assert.deepEqual([sources[0]._titleOrdinal, sources[0]._titleCount], [1, 2]);
+  assert.equal(NLME.pickByIndexThenTitleStrict(['', 'Paper.pdf', 'Paper.pdf'], 2, 'Paper.pdf', { ordinal: 1, count: 2 }), 2, 'no false refusal');
+  assert.equal(JSON.stringify(items[0]), '{"index":0,"title":"Deck"}');
+});
+
+test('the Studio export plan stamps the count over the whole list', () => {
+  const rows = [
+    { kind: 'artifact', label: 'Deck', moreIndex: 0, downloadable: true, type: 'Slides' },
+    { kind: 'artifact', label: 'Deck', moreIndex: 1, downloadable: true, type: 'Slides' },
+    { kind: 'note', label: 'Ideas', kindIndex: 0, type: 'Note' }
+  ];
+  const plan = NLME.generatedExportPlan([rows[1], rows[2]], rows);
+  assert.deepEqual(NLME.titlePlace(plan.artifacts[0]), { titleOrdinal: 1, titleCount: 2 });
+  assert.deepEqual(NLME.titlePlace(plan.notes[0]), { titleOrdinal: 0, titleCount: 1 });
 });

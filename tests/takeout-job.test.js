@@ -448,3 +448,20 @@ test('staged items are not committed by a later commit after discard', async () 
   await rec.finish({ clean: true });
   assert.deepEqual(storage.data['nlme.job.nb'].remaining, { sources: ['s2'], notes: [] });
 });
+
+test('a failure with a detail keeps it as the second line of errors.md', async () => {
+  const NLME = require('../takeout-shared.js');
+  require('../takeout-job.js');
+  const failure = new Error('Still being generated. Try again when it is ready (Resume will retry it).');
+  failure.detail = 'Item changed: expected "Fresh"';
+  const result = await NLME.runExportJob({
+    kind: 'artifacts', items: [{ label: 'Fresh' }, { label: 'Plain' }], titleOf: i => i.label,
+    extractOne: async item => { throw item.label === 'Fresh' ? failure : new Error('broke'); },
+    packageBatch: async () => {}, isCancelled: () => false
+  });
+  assert.deepEqual(result.errors, [
+    { type: 'error', title: 'Fresh', message: failure.message, stack: 'Item changed: expected "Fresh"' },
+    '[Plain] broke'
+  ]);
+  assert.match(NLME.buildErrorReport({ errors: result.errors }), /^- Fresh: Still being generated\. Try again when it is ready \(Resume will retry it\)\.\n  Item changed: expected "Fresh"$/m);
+});

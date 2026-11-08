@@ -449,6 +449,10 @@
       ? `${verb} stopped before ${notRun.map(n => n.name.toLowerCase()).join(' and ')}`
       : `${verb} finished`;
     if (remainingCount > 0) message += ` \u2014 ${remainingCount} still failed`;
+    // Skips are in no step's count (neither N nor M): they are said here
+    const skippedCount = [...steps.flatMap(s => s.errors || []), ...extraErrors]
+      .filter(e => SKIP_TYPES.includes(normalizeExportError(e).type)).length;
+    if (skippedCount > 0) message += ` \u2014 ${skippedCount} skipped`;
 
     const done = steps.reduce((sum, s) => sum + (s.exported || 0), 0);
     const ranTotal = steps.reduce((sum, s) => sum + (s.selected ?? (s.exported || 0) + (s.failedItems || []).length), 0);
@@ -482,7 +486,7 @@
       groups.get(e.type).push({ item: e.item, message: e.message });
     }
     return [...groups].map(([type, list]) => {
-      const words = type.replace(/_/g, ' ');
+      const words = errorHeading(type);
       // Resume's own notes exist only in the panel (not in any errors.md): list all
       const cap = PANEL_ONLY_ERROR_TYPES.includes(type) ? Infinity : perGroup;
       return {
@@ -551,16 +555,37 @@
   }
 
   // Like pickByIndexThenTitle, but never falls back to an index whose title
-  // differs: the item the user picked must still be the item we open.
-  function pickByIndexThenTitleStrict(titles, index, title) {
+  // differs: the item the user picked must still be the item we open. With no
+  // index of its own (-1: an item that had no More button when scanned) the title
+  // alone decides, so it must name one item only: two candidates of that title
+  // are refused (SAME_TITLE_REFUSED) instead of taking the first (1.9.5; a Retry
+  // reuses the scanned -1 without a rescan). The same goes for a scanned index
+  // whose row no longer has this title (the list shifted: an item finished or was
+  // added above it): with one row of that title it is followed, with two or more
+  // it is refused (SAME_TITLE_SHIFTED), since the first match is right only by
+  // luck. Every caller fails the item on a throw; Resume rescans.
+  // place (stampTitleOrdinals; a number is an ordinal alone): { ordinal, count },
+  // how many rows of this title came before the item when it was scanned, and how
+  // many there were in all. A shift can put the item's twin at its old index; the
+  // title still matches there, but the ordinal or (a same-title row added or
+  // removed above) the count does not, so that index is stale too. With no place
+  // the title check alone decides, as before.
+  function pickByIndexThenTitleStrict(titles, index, title, place = null) {
+    const { ordinal = null, count = null } = typeof place === 'number' ? { ordinal: place } : (place || {});
     const list = titles || [];
     const inRange = Number.isInteger(index) && index >= 0 && index < list.length;
     if (!normalizeTitle(title)) {
       if (inRange) return index;
       throw new Error(`Item changed: index ${index} is out of range`);
     }
-    if (inRange && titlesMatch(list[index], title)) return index;
+    const matches = list.filter(t => titlesMatch(t, title)).length;
+    if (inRange && titlesMatch(list[index], title) &&
+      (!Number.isInteger(ordinal) || titleOrdinalAt(list, index, title) === ordinal) &&
+      (!Number.isInteger(count) || matches === count)) return index;
     const byTitle = list.findIndex(t => titlesMatch(t, title));
+    if (byTitle !== -1 && matches > 1) {
+      throw new Error(Number.isInteger(index) && index >= 0 ? SAME_TITLE_SHIFTED : SAME_TITLE_REFUSED);
+    }
     if (byTitle !== -1) return byTitle;
     throw new Error(`Item changed: expected "${title}"`);
   }
@@ -680,12 +705,20 @@
   }
 
   // A Full Takeout's errors.md holds every category's errors: each keeps its
-  // type and gets its category in front ("Notes: <item>: <message>").
+  // type and gets its category in front ("Notes: <item>: <message>"). An error
+  // marked `prefixed` already names its own (a Studio item in a notes export).
   function prefixExportErrors(category, errors = []) {
     return (errors || []).map(raw => {
       const e = normalizeExportError(raw);
-      return { type: e.type, title: e.item ? `${category}: ${e.item}` : category, message: e.message, stack: e.detail };
+      const own = !!(raw && typeof raw === 'object' && raw.prefixed && e.item);
+      return { type: e.type, title: own ? e.item : (e.item ? `${category}: ${e.item}` : category), message: e.message, stack: e.detail };
     });
+  }
+
+  // Section headings that read better than the type's own words
+  const ERROR_HEADINGS = { skipped_ambiguous: 'Skipped: same title as another item', skipped_not_ready: 'Skipped: still being generated' };
+  function errorHeading(type) {
+    return ERROR_HEADINGS[type] || type.replace(/_/g, ' ');
   }
 
   // One errors.md format for notes, sources, chat and Download All.
@@ -706,7 +739,7 @@
       groups.get(e.type).push(e);
     }
     for (const [type, list] of groups) {
-      lines.push(`## ${type.replace(/_/g, ' ').toUpperCase()} (${list.length})`, '');
+      lines.push(`## ${ERROR_HEADINGS[type] || type.replace(/_/g, ' ').toUpperCase()} (${list.length})`, '');
       for (const e of list) {
         lines.push(e.item ? `- ${e.item}: ${e.message}` : `- ${e.message}`);
         if (e.detail) lines.push(`  ${e.detail.split('\n')[0]}`);
@@ -1302,7 +1335,25 @@
   // A delete asked about one notebook's tab may only reach that tab: true when
   // the panel still shows the same notebook in the same tab as when it asked.
   function sameDeleteTarget(asked, now) {
-    return !!asked && !!now && asked.tabId != null && asked.tabId === now.tabId && asked.notebookId === now.notebookId;
+    return !!asked && !!now && asked.tabId != null && !!asked.notebookId && asked.tabId === now.tabId && asked.notebookId === now.notebookId;
+  }
+
+  // What a delete is about: the tab and the notebook its URL names. The panel's own id
+  // is still '' at panel start, or after a Refresh that found nothing; the URL is not.
+  // A panel id that names another notebook than the tab means the tab is ahead of the
+  // panel, so the list is not the tab's: no notebook, which sameDeleteTarget refuses.
+  function deleteTarget({ tabId, url, panelNotebookId }) {
+    const id = notebookIdFromUrl(url);
+    return { tabId: tabId ?? null, notebookId: id && (!panelNotebookId || panelNotebookId === id) ? id : '' };
+  }
+
+  // The time left to show between progress events: the last estimate counted down by
+  // the seconds since, but never below 30 s (the last "about 1 min") by ticking alone,
+  // since one long item can run past the estimate. An estimate already under it stays.
+  const TICK_FLOOR_SECONDS = 30;
+  function tickedTimeLeft(left, waited) {
+    if (left === null || !Number.isFinite(left)) return null;
+    return Math.max(Math.min(left, TICK_FLOOR_SECONDS), left - Math.max(0, waited || 0));
   }
 
   // Seconds left, at least what the work left is expected to take. A run's pace so far
@@ -1535,14 +1586,41 @@
   }
 
   // The page reads "$3-$4 million" as math and draws "3-" as a formula. The
-  // export's text is still "$3-$4 million", which countMarkdownFormulas rightly
-  // takes for prices, so the audit leaves these out of the page's count.
+  // export's text is still "$3-$4 million", a price, so the audit leaves these
+  // out of both counts (countPageContent, markWrittenFormula).
   function isPriceRangeFragment(tex) {
     return /^\d[\d.,]*(?:\s*(?:thousand|million|billion|k|m|b))?\s*(?:[-–—]|to|or|and)$/i.test(String(tex ?? '').trim());
   }
 
+  // The audit's "written" formulas are the ones the converter wrote, not a
+  // re-read of the Markdown: a formula touching a number ($1 micron (μm):
+  // 10-6 m$1 nanometre) looks like a price to any regex. The KaTeX rule marks
+  // each formula it writes with a private-use sentinel; convert() takes the
+  // marks out of its final text and counts them. Output a nested list or
+  // table rule converted and then threw away never reaches that text, so
+  // every formula counts once. A price range the page drew as math is left
+  // unmarked, as countPageContent leaves it out of the page's count.
+  const FORMULA_MARK = '\uE002';
+  const FORMULA_MARK_BEFORE_DOLLAR = /\uE002(?=\$)/g;
+
+  function markWrittenFormula(markdown, dataMath) {
+    if (!markdown || isPriceRangeFragment(dataMath)) return markdown;
+    return FORMULA_MARK + markdown;
+  }
+
+  // { text without marks, formulas: how many were marked }. A mark always
+  // precedes the formula's opening $; a U+E002 anywhere else is the page's own
+  // text and stays.
+  function takeFormulaMarks(text) {
+    let formulas = 0;
+    const out = String(text ?? '').replace(FORMULA_MARK_BEFORE_DOLLAR, () => { formulas++; return ''; });
+    return { text: out, formulas };
+  }
+
   // Formulas in final Markdown ($$...$$ and $...$), each counted once,
-  // however many times the converter ran on nested lists or tables.
+  // however many times the converter ran on nested lists or tables. The
+  // audit's counter until 1.9.5; the panel no longer calls it, since it misses
+  // a formula that opens on a digit and ends before one (markWrittenFormula).
   // A formula may touch words ($x$rad, a$b$). A price is a $ and a digit, so
   // a span that opens on a digit must not close before a digit ($400 ... $500);
   // other spans may ($T$2).
@@ -2024,10 +2102,11 @@
     return `${verb} ${n.toLocaleString('en-US')} ${unit}${n === 1 ? '' : 's'}`;
   }
 
-  // Why a Generated row has nothing to download, '' when it can. The one rule for
-  // the row's Download button and generatedExportPlan. With no More button (moreIndex
-  // -1) the row must not be tried: a strict title match would download another
-  // item of the same title and report success.
+  // Why a Generated row has nothing to download, '' when it can. The rule for the
+  // row's Download button and generatedExportPlan, which (1.9.5) still tries a
+  // no-More item with its own title. With no More button (moreIndex -1) the row must
+  // not be tried: a strict title match would download another item of the same
+  // title and report success.
   function studioItemUnavailableReason(item) {
     if (!item || item.kind !== 'artifact') return '';
     if (!item.downloadable) return `${item.type} export not supported yet`;
@@ -2130,22 +2209,40 @@
   // The Generated list's selection as the two exports it becomes: artifacts in the
   // scanArtifactsData shape, notes in the exportSingleNote shape. skipped: what
   // cannot be exported (studioItemUnavailableReason); those stay selectable for
-  // delete. item.jobKey (see stampGeneratedJobKeys) travels as the non-enumerable _listKey jobItemKeys reads, so a job record holds the keys a
+  // delete. noMenu: the skipped no-More artifacts again, in the artifacts shape (the
+  // job record keeps them as failed), and noMenuWarnings their errors.md lines;
+  // allItems: the whole list, for the shared titles. item.jobKey (see stampGeneratedJobKeys) travels as the non-enumerable _listKey jobItemKeys reads, so a job record holds the keys a
   // fresh scan of that category gives, whatever else is in the merged list.
-  function generatedExportPlan(items) {
-    const plan = { artifacts: [], notes: [], skipped: [] };
+  function generatedExportPlan(items, allItems = items) {
+    const plan = { artifacts: [], notes: [], skipped: [], noMenu: [], noMenuWarnings: [] };
     const keyed = (out, item) => {
       if (typeof item.jobKey === 'string') Object.defineProperty(out, '_listKey', { value: item.jobKey, configurable: true, writable: true });
       return out;
     };
+    const asArtifact = item => keyed({ index: item.moreIndex, label: item.label, type: item.type, details: item.details, disabled: false }, item);
+    // Any other row of the same title makes the skip "same title": one with a More
+    // button (Flashcards and Quiz included) now, a no-More twin once it is ready
+    const artifactRows = (allItems || []).filter(item => item && item.kind === 'artifact');
+    const namesakesOf = item => artifactRows.filter(other => other !== item && titlesMatch(other.label, item.label));
+    // Ordinals over the whole list (stampTitleOrdinals), for the items it builds
+    const withMenu = (allItems || []).filter(item => item && item.kind === 'artifact' && item.moreIndex >= 0);
+    const notesAll = (allItems || []).filter(item => item && item.kind === 'note');
+    const ordinalIn = (list, item, indexOf) => list.filter(other => indexOf(other) < indexOf(item) && titlesMatch(other.label, item.label)).length;
+    const countIn = (list, item) => list.filter(other => titlesMatch(other.label, item.label)).length;
     for (const item of items || []) {
       if (!item) continue;
       if (isStudioItemUnavailable(item)) {
+        // As in 1.9.4, every no-More row is skipped here, like its row Download
         plan.skipped.push(item);
+        if (item.kind === 'artifact' && item.downloadable) {
+          plan.noMenu.push(asArtifact(item));
+          const namesakes = namesakesOf(item);
+          plan.noMenuWarnings.push(skippedNoMenuWarning(item.label, namesakes.length > 0, namesakes.some(other => other.moreIndex >= 0)));
+        }
       } else if (item.kind === 'artifact') {
-        plan.artifacts.push(keyed({ index: item.moreIndex, label: item.label, type: item.type, details: item.details, disabled: false }, item));
+        plan.artifacts.push(setTitlePlace(asArtifact(item), ordinalIn(withMenu, item, row => row.moreIndex), countIn(withMenu, item)));
       } else if (item.kind === 'note') {
-        plan.notes.push(keyed({ index: item.kindIndex, title: item.label, type: item.type }, item));
+        plan.notes.push(setTitlePlace(keyed({ index: item.kindIndex, title: item.label, type: item.type }, item), ordinalIn(notesAll, item, row => row.kindIndex), countIn(notesAll, item)));
       } else if (item.kind === 'source-note') {
         plan.notes.push(keyed({ index: -1, sourceIndex: item.sourceIndex, title: item.label, type: item.type }, item));
       } else {
@@ -2153,6 +2250,175 @@
       }
     }
     return plan;
+  }
+
+  // A Studio artifact with no More button is still being generated (or has no
+  // menu). Every download path resolves it by title among the items that have
+  // one (Flashcards and Quiz included), so with such an item of the same title it
+  // would fetch that item and report success. Export everything and Resume skip
+  // only that case (1.9.5); a no-More item with its own title is tried, as before,
+  // and a failure says it is still being generated (NO_MENU_FAILED). The Studio
+  // export skips every no-More row, as in 1.9.4. Each skip is a warning, so errors.md
+  // names the item that is missing from the archive and the checker warns; it is
+  // not an 'info' notice.
+  const SKIPPED_NO_MENU_TYPE = 'skipped_ambiguous'; // a same-titled item could be hit
+  const SKIPPED_NOT_READY_TYPE = 'skipped_not_ready'; // Studio export: no More button
+  const SKIP_TYPES = [SKIPPED_NO_MENU_TYPE, SKIPPED_NOT_READY_TYPE];
+  const NO_MENU_FAILED = 'Still being generated. Try again when it is ready (Resume will retry it).';
+  // pickByIndexThenTitleStrict's refusal: a title-only pick with two candidates
+  const SAME_TITLE_REFUSED = 'Another item has the same title, so this one cannot be found by its title alone. Resume finds it again by its place in the list.';
+  // ... and with a scanned index whose row has moved
+  const SAME_TITLE_SHIFTED = 'The list changed and another item has the same title, so this one cannot be found safely. Resume finds it again.';
+
+  // How many of `titles` before `index` match `title`
+  function titleOrdinalAt(titles, index, title) {
+    let n = 0;
+    for (let i = 0; i < index && i < titles.length; i++) if (titlesMatch(titles[i], title)) n++;
+    return n;
+  }
+
+  // An item's place among the rows of its title: _titleOrdinal (rows of that title
+  // before it) and _titleCount (rows of that title in all). Non-enumerable, like
+  // _listKey: never in a file.
+  function setTitlePlace(item, ordinal, count) {
+    Object.defineProperty(item, '_titleOrdinal', { value: ordinal, configurable: true, writable: true });
+    Object.defineProperty(item, '_titleCount', { value: count, configurable: true, writable: true });
+    return item;
+  }
+
+  // What a request sends of it: { titleOrdinal, titleCount }, or nothing unstamped
+  function titlePlace(item) {
+    return item && Number.isInteger(item._titleOrdinal) && Number.isInteger(item._titleCount)
+      ? { titleOrdinal: item._titleOrdinal, titleCount: item._titleCount } : {};
+  }
+
+  // Stamps each item with an index of its own (indexOf >= 0) with its place among
+  // the items of its title, by index: what pickByIndexThenTitleStrict checks. With
+  // `titles` (the page's own list, by index), counted there, so rows the scan left
+  // out still count, as on the page.
+  function stampTitleOrdinals(items, { titleOf, indexOf, titles = null }) {
+    const placed = (items || []).filter(item => item && Number.isInteger(indexOf(item)) && indexOf(item) >= 0)
+      .sort((a, b) => indexOf(a) - indexOf(b));
+    placed.forEach((item, i) => {
+      const title = titleOf(item);
+      if (Array.isArray(titles)) {
+        setTitlePlace(item, titleOrdinalAt(titles, indexOf(item), title), titles.filter(t => titlesMatch(t, title)).length);
+      } else {
+        setTitlePlace(item, placed.slice(0, i).filter(other => titlesMatch(titleOf(other), title)).length,
+          placed.filter(other => titlesMatch(titleOf(other), title)).length);
+      }
+    });
+    return items;
+  }
+
+  function isSameTitleRefusal(error) {
+    const message = error && error.message;
+    return message === SAME_TITLE_REFUSED || message === SAME_TITLE_SHIFTED;
+  }
+
+  // sharesTitle: another item has this title; ready: one of them has a More button
+  // (else a twin still being generated)
+  function skippedNoMenuWarning(title, sharesTitle = true, ready = true) {
+    const name = String(title || '');
+    if (!sharesTitle) return { type: SKIPPED_NOT_READY_TYPE, title: name, message: 'still being generated or has no menu' };
+    return {
+      type: SKIPPED_NO_MENU_TYPE,
+      title: name,
+      message: ready
+        ? 'still being generated or has no menu; a ready item has the same title'
+        : 'still being generated or has no menu; another item being generated has the same title'
+    };
+  }
+
+  // scanArtifactsData's items as Export everything and Resume take them: runnable
+  // (everything enabled but the skipped), skipped (no More button, index -1, and
+  // any OTHER scanned item of the same title: one with a More button, disabled
+  // ones included, is where a title pick lands now; a no-More twin is where it
+  // lands once that twin is ready) and one warning per skip. Twins are both
+  // skipped, kept failed in the record, and resumed later with their own indices.
+  // Disabled types (Flashcards, Quiz) are not exported, as before. Two ready items
+  // of one title both stay runnable. all: the whole scan, when items is a part of
+  // it (Resume's matched keys), for the titles.
+  function artifactExportPlan(items, { all = items } = {}) {
+    const scanned = (all || []).filter(Boolean);
+    const others = item => scanned.filter(other => other !== item && titlesMatch(other.label, item.label));
+    const runnable = [];
+    const skipped = [];
+    const warnings = [];
+    for (const item of items || []) {
+      if (!item || item.disabled) continue;
+      const namesakes = item.index >= 0 ? [] : others(item);
+      if (namesakes.length) {
+        skipped.push(item);
+        warnings.push(skippedNoMenuWarning(item.label, true, namesakes.some(other => other.index >= 0)));
+      } else {
+        runnable.push(item);
+      }
+    }
+    return { runnable, skipped, warnings };
+  }
+
+  // Export everything and Resume read the notes list until it settles (1.9.5). The
+  // page draws its Studio list late, and an undrawn list reads as no notes, which
+  // a takeout wrote as "none in notebook". boundMs: the longest wait; pollMs: time
+  // between reads; emptyConfirmMs: how long a drawn but empty Studio list must stay
+  // empty to be believed (Home re-reads a 0 for 4 s, the same guess).
+  const NOTES_SETTLE = { boundMs: 8000, pollMs: 400, emptyConfirmMs: 4000 };
+  const NOTES_STUDIO_HIDDEN = "The Studio list wasn't visible, so notes saved only there may be missing. Close any open Studio item and export again.";
+  const NOTES_STUDIO_LOADING = 'The Studio list was still loading, so notes saved only there may be missing. Wait for it to load and export again.';
+
+  // reads: one per SCAN_NOTES, oldest first, { at, notes, list }: at in ms since
+  // the first read; notes the page's array, null when it gave no answer; list
+  // (content.js notesListState) { items: rows in the Studio list, notes or not,
+  // library: the list's container is on the page, loading: it shows a spinner and
+  // no rows }. A list with rows has drawn: its notes are believed once two reads
+  // in a row agree. A drawn list with no rows is believed after emptyConfirmMs. No
+  // list, or a loading one, waits up to the bound: then the notes found anyway
+  // (Sources-panel notes) are 'partial', exported with a warning that Studio notes
+  // may be missing; with none it fails, as does a page that never answers: neither
+  // may read as "none in notebook". An open Studio item hides the list.
+  // -> { state: 'wait' | 'found' | 'empty' | 'partial' | 'failed', message? }
+  function notesSettleDecision(reads, { boundMs = NOTES_SETTLE.boundMs, emptyConfirmMs = NOTES_SETTLE.emptyConfirmMs } = {}) {
+    const list = reads || [];
+    const last = list[list.length - 1];
+    if (!last) return { state: 'wait' };
+    const over = last.at >= boundMs;
+    const seconds = Math.round(boundMs / 1000);
+    if (!Array.isArray(last.notes)) {
+      return over ? { state: 'failed', message: `No answer from the page while reading the notes list (waited ${seconds} s)` } : { state: 'wait' };
+    }
+    const done = read => ({ state: read.notes.length > 0 ? 'found' : 'empty' });
+    const rowsOf = read => {
+      const studio = read.notes.filter(note => note && note.elementType !== 'source-note').length;
+      return Math.max(studio, Number(read.list && read.list.items) || 0);
+    };
+    // No list info: an older page answer; read it as a drawn list
+    const drawnEmpty = read => !read.list || (!!read.list.library && !read.list.loading);
+    const prev = list[list.length - 2];
+    if (rowsOf(last) > 0) {
+      const steady = prev && Array.isArray(prev.notes) && prev.notes.length === last.notes.length && rowsOf(prev) === rowsOf(last);
+      return steady || over ? done(last) : { state: 'wait' };
+    }
+    if (drawnEmpty(last)) {
+      // The run of drawn-and-empty reads this one ends
+      let start = last;
+      for (let i = list.length - 2; i >= 0; i--) {
+        const read = list[i];
+        if (!Array.isArray(read.notes) || rowsOf(read) > 0 || !drawnEmpty(read)) break;
+        start = read;
+      }
+      return last.at - start.at >= emptyConfirmMs || over ? done(last) : { state: 'wait' };
+    }
+    if (!over) return { state: 'wait' };
+    // A spinner says the list is there but still loading: not an open item
+    const loading = !!(last.list && last.list.library && last.list.loading);
+    if (last.notes.length > 0) return { state: 'partial', message: loading ? NOTES_STUDIO_LOADING : NOTES_STUDIO_HIDDEN };
+    return {
+      state: 'failed',
+      message: loading
+        ? `The Studio list was still loading after ${seconds} s. Wait for it to load (or reload the notebook) and export again`
+        : `The Studio list did not appear within ${seconds} s. Close any open Studio item (or reload the notebook) and export again`
+    };
   }
 
   // Everything the Generated rows are drawn from and act on (and the page their
@@ -2418,11 +2684,13 @@
   // failed or errors were recorded, e.g. chat messages that could not be
   // read), 'empty' (nothing to export, no errors), else 'done'. 'skipped'
   // and scan failures are decided by runFullTakeout itself.
-  function takeoutCategoryStatus({ selected = 0, exported = 0, failed = 0, errorCount = 0, cancelled = false, stopped = false } = {}) {
+  // skipped: items left out on purpose (artifactExportPlan), in neither N nor M;
+  // their warnings are in errorCount. Only skips is 'done', not 'failed' or 'empty'.
+  function takeoutCategoryStatus({ selected = 0, exported = 0, failed = 0, errorCount = 0, cancelled = false, stopped = false, skipped = 0 } = {}) {
     if (cancelled) return 'partial';
     if (stopped) return 'stopped';
-    if (exported === 0 && (failed > 0 || errorCount > 0)) return 'failed';
-    if (selected === 0) return 'empty';
+    if (exported === 0 && (failed > 0 || errorCount - skipped > 0)) return 'failed';
+    if (selected === 0 && skipped === 0) return 'empty';
     return 'done';
   }
 
@@ -2642,7 +2910,8 @@ footer { margin-top: 3rem; }
   // error when items existed but none was exported and nobody cancelled;
   // info for a notebook with nothing to export.
   function summarizeTakeoutOutcome({ categories = [], auditOk = true } = {}) {
-    const part = c => {
+    const part = c => `${partText(c)}${c.skipped > 0 ? ` (${c.skipped} skipped)` : ''}`;
+    const partText = c => {
       const name = c.name.toLowerCase();
       const count = `${c.exported}/${c.selected}`;
       switch (c.status) {
@@ -3034,6 +3303,21 @@ footer { margin-top: 3rem; }
     jobRecordOverrides,
     jobRecordZip,
     planResume,
+    NOTES_SETTLE,
+    NOTES_STUDIO_HIDDEN,
+    NOTES_STUDIO_LOADING,
+    notesSettleDecision,
+    SKIPPED_NO_MENU_TYPE,
+    NO_MENU_FAILED,
+    SAME_TITLE_REFUSED,
+    SAME_TITLE_SHIFTED,
+    isSameTitleRefusal,
+    titleOrdinalAt,
+    titlePlace,
+    setTitlePlace,
+    stampTitleOrdinals,
+    skippedNoMenuWarning,
+    artifactExportPlan,
     resumeBannerLabel,
     resumeBannerView,
     jobResumeKeys,
@@ -3078,6 +3362,8 @@ footer { margin-top: 3rem; }
     markWindowedQuote,
     noteHasImages,
     countMarkdownFormulas,
+    markWrittenFormula,
+    takeFormulaMarks,
     listItemMarkdown,
     countExportErrors,
     isPriceRangeFragment,
@@ -3109,6 +3395,8 @@ footer { margin-top: 3rem; }
     overlayView,
     overlayCount,
     sameDeleteTarget,
+    deleteTarget,
+    tickedTimeLeft,
     honestTimeLeft,
     calmTimeLeft,
     progressLeftLine,
