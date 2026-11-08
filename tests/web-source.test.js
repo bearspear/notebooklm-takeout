@@ -233,11 +233,22 @@ test('sourceUrlFromFavicon: Google-hosted download and redirect links are never 
 // ---------- the original URL in the source Markdown (1.9.7) ----------
 
 test('sourceWebLine: "**Web Page:**" / "**Web PDF:**" like the YouTube line; other sources nothing', () => {
-  assert.equal(NLME.sourceWebLine({ sourceType: 'web', sourceUrl: NLAB }), `**Web Page:** ${NLAB}\n\n`);
-  assert.equal(NLME.sourceWebLine({ sourceType: 'web_pdf', sourceUrl: PDF }), `**Web PDF:** ${PDF}\n\n`);
+  assert.equal(NLME.sourceWebLine({ sourceType: 'web', sourceUrl: NLAB }), `**Web Page:** <${NLAB}>\n\n`);
+  assert.equal(NLME.sourceWebLine({ sourceType: 'web_pdf', sourceUrl: PDF }), `**Web PDF:** <${PDF}>\n\n`);
   assert.equal(NLME.sourceWebLine({ sourceType: 'video_youtube', sourceUrl: null }), '');
   assert.equal(NLME.sourceWebLine({ sourceType: null, sourceUrl: null }), '');
   assert.equal(NLME.sourceWebLine(undefined), '');
+  // trailing punctuation and parentheses stay inside the link
+  assert.equal(NLME.sourceWebLine({ sourceType: 'web', sourceUrl: 'https://en.wikipedia.org/wiki/Washington,_D.C.' }), '**Web Page:** <https://en.wikipedia.org/wiki/Washington,_D.C.>\n\n');
+  assert.equal(NLME.sourceWebLine({ sourceType: 'web', sourceUrl: 'https://x.org/wiki/Foo_(bar)' }), '**Web Page:** <https://x.org/wiki/Foo_(bar)>\n\n');
+});
+
+test('the Web Page line links the whole URL in the viewer\'s Markdown renderer', () => {
+  const { marked } = (() => { const sandbox = {}; vm.createContext(sandbox); vm.runInContext(read('viewer/marked.min.js'), sandbox); return sandbox; })();
+  for (const url of ['https://en.wikipedia.org/wiki/Washington,_D.C.', 'https://x.org/faq?', 'https://x.org/wiki/Foo)', NLAB, PDF]) {
+    const html = marked.parse(NLME.sourceWebLine({ sourceType: NLME.webSourceType(url), sourceUrl: url }), { gfm: true });
+    assert.ok(html.includes(`href="${url.replace(/&/g, '&amp;')}"`), html);
+  }
 });
 
 // sidebar-sources.js's buildSourceData, run as is with stand-ins for the
@@ -268,7 +279,7 @@ test('source Markdown: a web source gets "**Web Page:**" / "**Web PDF:**" under 
     assert.equal(data.sourceType, type);
     assert.equal(data.sourceUrl, url);
     for (const key of ['base', 'plusMeta', 'withImages', 'plusMetaWithImages']) {
-      assert.ok(data.versions[key].startsWith(`# W\n\n**${label}:** ${url}\n\n`), `${key}: ${data.versions[key]}`);
+      assert.ok(data.versions[key].startsWith(`# W\n\n**${label}:** <${url}>\n\n`), `${key}: ${data.versions[key]}`);
       assert.doesNotMatch(data.versions[key], /favicons/);
     }
   }

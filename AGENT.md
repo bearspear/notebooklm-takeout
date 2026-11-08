@@ -551,7 +551,10 @@ side panel.
      Markdown, blank lines between; `convertChatToMarkdown` puts a blank line after `**A:**`
      when an answer opens with it. The viewer's `sanitizeHtml` strips every attribute of
      `details`/`summary`, so they are closed on load; `markQuote` opens one that holds a
-     search hit. (1.9.6 wrote a `> **Thoughts**` blockquote.) Thoughts are not in
+     search hit. `<details`/`</details`/`<summary`/`</summary` written in a thought become `&lt;…` outside code
+     spans and fences (`escapeSectionTags`), so a thought cannot open or close the section. The viewer's
+     "Search this chat" filters on `searchText` (`filterPairs`), so tag names never match. (1.9.6 wrote a
+     `> **Thoughts**` blockquote.) Thoughts are not in
      the answer HTML, so the audit (`countPageContent`) and the citation reading never
      count them. A thought body whose blocks miss part of its text (`NLME.blocksCoverText`)
      is converted whole: their texts joined must equal the body's text, whitespace aside.
@@ -1190,7 +1193,8 @@ Found while checking real exports after #8; the export bugs below predate it.
   `<img class="source-item-source-icon favicon-icon">`: it carries the type-icon class, so 1.9.6's
   `querySelector('.source-item-source-icon')` took the `<img>` for the type icon and never read the URL.
   `NLME.sourceRowIcon(container)` (1.9.7) reads the type from a non-`<img>` type icon only and the URL from
-  `img.favicon-icon` when there is none. From 1.9.7 the source Markdown has `**Web Page:** <url>` (`**Web PDF:**`
+  `img.favicon-icon` when there is none. From 1.9.7 the source Markdown has `**Web Page:** <url>`, an angle-bracket
+  autolink so a trailing `.` or `)` stays in the link (`**Web PDF:**`
   for web_pdf) under the title, like `**YouTube Video:**` (`NLME.sourceWebLine`, all variants). The favicon src is
   `google.com/s2/favicons?domain=<original URL>`, the URL raw (chat favicons: percent-encoded); read up to
   `&sz=`, decoded once only when encoded, never through URLSearchParams (`+` stays `+`). Google-hosted

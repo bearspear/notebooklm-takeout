@@ -265,3 +265,28 @@ test('blocksCoverText: blocks that miss part of the body text do not cover it', 
   assert.equal(NLME.blocksCoverText([paragraph], `${heading}\n${paragraph}`), false);
   assert.equal(NLME.blocksCoverText([heading, paragraph], `${heading}\n${paragraph}`), true);
 });
+
+// ---------- review fix: a thought about the tags themselves ----------
+
+test('thoughtsMarkdown: <details>/<summary> written in a thought cannot open or close the section', () => {
+  const md = NLME.thoughtsMarkdown([
+    { title: 'Using <details>', body: 'Wrap it in <details> and end with </DETAILS>; the <summary class="x"> goes first, then </summary>.' },
+    { title: 'Next step', body: 'Still inside.' }
+  ]);
+  assert.equal(md, '<details>\n<summary>Thoughts</summary>\n\n**Using &lt;details>**\n\n' +
+    'Wrap it in &lt;details> and end with &lt;/DETAILS>; the &lt;summary class="x"> goes first, then &lt;/summary>.\n\n' +
+    '**Next step**\n\nStill inside.\n\n</details>');
+  // exactly one opening and one closing tag: the section's own
+  assert.equal(md.match(/<details>/gi).length, 1);
+  assert.equal(md.match(/<\/details>/gi).length, 1);
+  assert.equal(md.match(/<\/?summary>/gi).length, 2);
+});
+
+test('thoughtsMarkdown: tags inside code spans and fenced code stay as written; other tags are untouched', () => {
+  const body = 'Inline `<details>` and ``a ` </summary> b`` stay.\n\n```html\n<details>\n<summary>S</summary>\n</details>\n```\n\n~~~\n</details>\n~~~\n\nAfter the fence </details> is escaped; <detailsx>, <div> and <sum> are not.';
+  const md = NLME.thoughtsMarkdown([{ title: 'Code', body }]);
+  assert.ok(md.includes('Inline `<details>` and ``a ` </summary> b`` stay.'), md);
+  assert.ok(md.includes('```html\n<details>\n<summary>S</summary>\n</details>\n```'), md);
+  assert.ok(md.includes('~~~\n</details>\n~~~'), md);
+  assert.ok(md.includes('After the fence &lt;/details> is escaped; <detailsx>, <div> and <sum> are not.'), md);
+});

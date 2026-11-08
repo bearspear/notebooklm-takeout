@@ -1522,5 +1522,29 @@ test('viewer page styles the Thoughts section (muted summary, chevron that turns
   assert.match(tpl, /\.md summary \{[^}]*color: var\(--muted\)/);
   assert.match(tpl, /\.md summary::before \{[^}]*border-right/);
   assert.match(tpl, /\.md details\[open\] > summary::before \{ transform: rotate\(45deg\)/);
+  // the rule and indent sit on the open section, so lists and code inside keep their own padding
+  assert.match(tpl, /\.md details \{ margin: 0 0 12px; padding-left: 14px; border-left: 3px solid transparent; \}/);
+  assert.match(tpl, /\.md details\[open\] \{ border-left-color: var\(--line\); \}/);
+  assert.match(tpl, /\.md details > :not\(summary\) \{ color: var\(--muted\); \}/);
   assert.match(tpl, /\.md summary::-webkit-details-marker \{ display: none; \}/);
+});
+
+test('Search this chat matches the text, not the Thoughts markup', () => {
+  const pairs = [
+    { q: 'What does sizing mean?', a: THOUGHTS_ANSWER },
+    { q: 'Second?', a: 'A summary of the details.' },
+    { q: 'Third?', a: '**Bold** answer about *sizing*' }
+  ];
+  assert.deepEqual(app.filterPairs(pairs, 'summary'), [1]);
+  assert.deepEqual(app.filterPairs(pairs, 'details'), [1]);
+  assert.deepEqual(app.filterPairs(pairs, 'Sizing'), [0, 2]);
+  assert.deepEqual(app.filterPairs(pairs, 'searched your sources'), [0]);
+  assert.deepEqual(app.filterPairs(pairs, 'bold answer'), [2]);
+  assert.deepEqual(app.filterPairs(pairs, ''), [0, 1, 2]);
+  // the cache gives the same result
+  const flat = [];
+  assert.deepEqual(app.filterPairs(pairs, 'summary', flat), [1]);
+  assert.deepEqual(app.filterPairs(pairs, 'summary', flat), [1]);
+  const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8');
+  assert.match(src, /idx = filterPairs\(D\.pairs, q \|\| '', pairText\)/);
 });

@@ -1576,13 +1576,15 @@
 
   // A web source's line under the title of its Markdown, like a YouTube
   // source's "**YouTube Video:** <url>" (1.9.7): "**Web Page:** <url>" or,
-  // for web_pdf, "**Web PDF:** <url>". fields: NLME.sourceTypeFields'
+  // for web_pdf, "**Web PDF:** <url>", the URL in angle brackets (an
+  // autolink), so a trailing "." or ")" stays part of the link. url.href
+  // never holds a space, < or >. fields: NLME.sourceTypeFields'
   // { sourceType, sourceUrl }. Any other source: ''.
   function sourceWebLine(fields) {
     const { sourceType, sourceUrl } = fields || {};
     if (!sourceUrl) return '';
-    if (sourceType === 'web') return `**Web Page:** ${sourceUrl}\n\n`;
-    if (sourceType === 'web_pdf') return `**Web PDF:** ${sourceUrl}\n\n`;
+    if (sourceType === 'web') return `**Web Page:** <${sourceUrl}>\n\n`;
+    if (sourceType === 'web_pdf') return `**Web PDF:** <${sourceUrl}>\n\n`;
     return '';
   }
 
@@ -1727,6 +1729,25 @@
   // what 1.9.5 wrote.
   const THOUGHTS_PLACEHOLDER_HTML = '<div data-nlme-thoughts="">Thoughts</div>';
 
+  // A thought that writes about the tags themselves must not open or close
+  // the section: <details, </details, <summary and </summary (any case)
+  // become &lt;... outside code spans and fenced code, where they stay as
+  // written (code shows them literally anyway).
+  function escapeSectionTags(text) {
+    // a code span (a run of backticks up to the same run) is kept; a tag outside one is escaped
+    const spanOrTag = /(`+)[^`]*?(?:`(?!\1)[^`]*?)*?\1(?!`)|<(\/?)(details|summary)\b/gi;
+    let fence = null;
+    return String(text).split('\n').map(line => {
+      const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+      if (fence) {
+        if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !line.slice(marker[0].length).trim()) fence = null;
+        return line;
+      }
+      if (marker) { fence = marker[1]; return line; }
+      return line.replace(spanOrTag, (match, ticks, slash, name) => (ticks ? match : `&lt;${slash}${name}`));
+    }).join('\n');
+  }
+
   // A chat answer's Thoughts as one collapsed section (1.9.7): a <details>
   // block without "open" whose summary is "Thoughts", then per thought its
   // bold title and its body as Markdown, parts separated by blank lines.
@@ -1740,8 +1761,8 @@
       const body = String(thought?.body || '').replace(/\r\n?/g, '\n')
         .split('\n').map(line => line.replace(/\s+$/, '')).join('\n')
         .trim().replace(/\n{3,}/g, '\n\n');
-      if (title) blocks.push(`**${title}**`);
-      if (body.trim()) blocks.push(body);
+      if (title) blocks.push(`**${escapeSectionTags(title)}**`);
+      if (body.trim()) blocks.push(escapeSectionTags(body));
     }
     if (blocks.length === 0) return '';
     return ['<details>\n<summary>Thoughts</summary>', ...blocks, '</details>'].join('\n\n');
