@@ -282,12 +282,12 @@ function runGeneratedExport(zip) {
     return;
   }
   const tabId = _studioTabId;
-  // Artifacts skipped for a shared title go to errors.md too: the artifacts side's
-  // (and its record, as failed, for a later Resume), or with none the notes
+  // Artifacts skipped for having no More button go to errors.md too: the artifacts
+  // side's (and its record, as failed, for a later Resume), or with none the notes
   // side's, named as Studio items there
-  const skipWarnings = plan.ambiguous.map(item => NLME.skippedNoMenuWarning(item.label));
+  const skipWarnings = plan.noMenuWarnings;
   const seeds = !skipWarnings.length ? {}
-    : plan.artifacts.length ? { Artifacts: { seedErrors: skipWarnings, recordFailed: plan.ambiguous } }
+    : plan.artifacts.length ? { Artifacts: { seedErrors: skipWarnings, recordFailed: plan.noMenu } }
       : { Notes: { seedErrors: skipWarnings.map(w => ({ ...w, title: `Studio: ${w.title}`, prefixed: true })) } };
   return runChain(async () => {
     const { steps, notRun } = await runRetryChain({ Artifacts: plan.artifacts, Notes: plan.notes }, tabId, 'Export', GENERATED_EXPORT_STEPS, zip, seeds);

@@ -1302,9 +1302,11 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined out
 - **Same-title no-More artifacts (1.9.5).** Every artifact download resolves an item by title among the items that
   have a More button (`getArtifactItemsWithMore`), so an item still being generated (no More button, `index` -1)
   would fetch a ready item of the same title. `NLME.artifactExportPlan(items, { all })` skips exactly that case: no
-  More button AND a ready item in `all` (the whole scan) with a matching title (`titlesMatch`). A no-More item with its
-  own title is tried as in 1.9.4 (it fails harmlessly with "Item changed", or exports if it finished meanwhile). Two
-  ready items of one title both export. Each skip is `{ type: 'skipped_ambiguous', title, message: 'still being
+  More button AND an item in `all` (the whole scan) that has one (`index >= 0`, Flashcards and Quiz included: the
+  title pick lands on them too) with a matching title (`titlesMatch`). A no-More item with its own title is tried as in
+  1.9.4; if it fails, `fetchNoMenuSafe` reports `NLME.NO_MENU_FAILED` ("Still being generated. Try again when it is
+  ready (Resume will retry it).") instead of "Item changed", and it stays failed in the record. Two ready items of one
+  title both export. Each skip is `{ type: 'skipped_ambiguous', title, message: 'still being
   generated or has no menu; a ready item has the same title' }`; errors.md heads it "Skipped: same title as another
   item" (`ERROR_HEADINGS`), and it counts as an error (`countExportErrors`), so the checker WARNs. Full Takeout seeds the
   warnings into `runArtifactsJob` (`seedErrors`), so they lead `artifacts/errors.md` and the root one; skips are in
@@ -1313,18 +1315,21 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined out
   `takeoutCategoryStatus({ skipped })`). Skipped items are recorded and marked failed, so the banner offers them again.
   Resume applies the same plan to its matched keys (keys stay) and seeds the warnings into its Artifacts step
   (`runRetryChain(…, seeds)`, `seeds[name] = { seedErrors, recordFailed? }`); a step that does not run gives them to the
-  panel; `combineRetryOutcomes` says "— N skipped" and keeps N of M without them. The Studio export uses the same
-  narrowed rule (`generatedExportPlan(selected, _studioItems)`, `plan.ambiguous`): warnings and `recordFailed` go to
-  the artifacts side, or (no artifact exported) to the notes side's errors.md as `Studio: <title>` with `prefixed: true`,
-  which `prefixExportErrors` leaves unprefixed. The row's own Download stays off for any no-More item.
+  panel; `combineRetryOutcomes` says "— N skipped" and keeps N of M without them. The Studio export keeps the 1.9.4
+  rule (every no-More row skipped, like its disabled row Download) but reports them: `generatedExportPlan(selected,
+  _studioItems)` gives `noMenu` (artifact shape, recorded failed via `recordFailed`) and `noMenuWarnings`
+  (`skipped_ambiguous` when a row with a menu shares the title, else `skipped_not_ready`, "Skipped: still being
+  generated"). They go to the artifacts side, or (no artifact exported) to the notes side's errors.md as
+  `Studio: <title>` with `prefixed: true`, which `prefixExportErrors` leaves unprefixed.
 - **Notes settle (1.9.5).** The notes scan of Export everything and Resume is `scanNotesSettled` (sidebar-notes.js):
   SCAN_NOTES every 400 ms; content.js answers `list: notesListState()` (`items`: Studio rows, `library`: the list
   container is there, `loading`: a spinner and no rows). `NLME.notesSettleDecision` (`NLME.NOTES_SETTLE`): rows drawn
   → believed when two reads agree; a drawn list with no rows → "none in notebook" after 4 s of that; no list, a spinner,
   or no answer → wait up to 8 s. Then notes found anyway (Sources-panel notes) are `partial`: exported, with a
-  `scan_incomplete` warning (`NLME.NOTES_STUDIO_HIDDEN`) seeded into the notes errors.md; nothing found → a failed scan
-  ("The Studio list did not appear within 8 s. Close any open Studio item (or reload the notebook) and export again",
-  or "No answer from the page …"). Resume closes an open Studio item first (`closeOpenStudioItem`, NAVIGATE_BACK, as the
+  `scan_incomplete` warning (`NLME.NOTES_STUDIO_HIDDEN`, or `NOTES_STUDIO_LOADING` when the list showed a spinner)
+  seeded into the notes errors.md; nothing found → a failed scan ("The Studio list did not appear within 8 s. Close any
+  open Studio item (or reload the notebook) and export again", "… was still loading after 8 s …", or "No answer from
+  the page …"). Resume then lists no per-key "could not be checked" lines for the notes: the one warning says it. Resume closes an open Studio item first (`closeOpenStudioItem`, NAVIGATE_BACK, as the
   export shell does). A Cancel during the wait cancels the takeout (no "Scan failed").
 - **Formula audit (1.9.5).** "Written" is what the converter wrote, not a re-read of the Markdown. The KaTeX
   rule marks each formula it writes (`NLME.markWrittenFormula`, a private-use `\uE002` before its `$`); `convert()` takes the

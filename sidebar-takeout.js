@@ -1257,7 +1257,9 @@ function resumeJob(record) {
       }
       if (runnable.length) itemsByName[name] = runnable;
       if (scanWarnings[name]) seeds[name] = { seedErrors: scanWarnings[name] };
-      if (unknown.length) {
+      // A notes list read without the Studio list says so once (scanWarnings): the
+      // Studio keys it could not check are not listed one by one for that cause
+      if (unknown.length && !scanWarnings[name]) {
         for (const key of unknown) extraErrors.push({ type: 'scan_failed', title: name, message: `${NLME.jobKeyTitle(key)} could not be checked (the ${name.toLowerCase()} list looks incomplete; the page may still be loading); it stays in the list to resume` });
       }
       if (missing.length) {

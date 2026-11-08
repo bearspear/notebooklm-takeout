@@ -767,6 +767,19 @@ async function triggerItemDownload(tabId, itemIndex, artifactName, artifactType)
 }
 
 
+// An item with no More button (index -1, still being generated) is found by
+// title only; when that fails, say why instead of the title pick's "Item
+// changed: expected …". Its key stays failed in the job record for Resume.
+async function fetchNoMenuSafe(item, run) {
+  try {
+    return await run();
+  } catch (error) {
+    if (item.index >= 0) throw error;
+    console.warn('[NotebookLM Takeout] An item with no More button failed:', item.label, error);
+    throw new Error(NLME.NO_MENU_FAILED);
+  }
+}
+
 // Size cap of one artifacts ZIP (ZIP mode): JSZip builds a ZIP in the side
 // panel's memory, so a big notebook is split into parts. The size is checked
 // after each item; a part may pass the cap by one item.
@@ -850,7 +863,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
       // extension (the guessed one follows the format; the background's
       // real-extension rename keeps them apart)
       const formats = NLME.slideFormatsFor(item.type, { both: bothSlideFormats, preferred: settings.slidesFormat });
-      const fetched = await fetchSlideFormats(item, formats, async format => {
+      const fetched = await fetchNoMenuSafe(item, () => fetchSlideFormats(item, formats, async format => {
         const one = await retryDownload(() => fetchArtifactFiles(shell.tab.id, item, {
           stem: stemOf.get(item),
           mode: zipMode ? 'zip' : 'folder',
@@ -865,7 +878,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
         // path from the takeout to it, so the viewer cannot link it (errors.md does)
         if (capture && one.savedName && !zipMode) reportSaved(capture, pathPrefix + NLMEViewer.outsidePath(typeFolder, one.savedName), null);
         return one;
-      }, ctx);
+      }, ctx));
       if (fetched.savedOutside) {
         savedOutside++;
         // Folder mode: the background captured it into the folder's top level

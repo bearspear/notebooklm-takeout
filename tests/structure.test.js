@@ -409,14 +409,14 @@ test('a Generated export hands the skipped items\' warnings to the side named fo
   assert.deepEqual(JSON.parse(JSON.stringify(notesOnly.calls)), [['notes', ['n1'], { tabId: 7, seedErrors: [warning] }]]);
 });
 
-test('the Studio export seeds its same-title skips: artifacts side (and its record) first, else notes as Studio items', () => {
+test('the Studio export seeds its no-More skips: artifacts side (and its record) first, else notes as Studio items', () => {
   const run = fnSource('sidebar-generated.js', 'runGeneratedExport');
   assert.match(run, /NLME\.generatedExportPlan\(_studioListController \? _studioListController\.selectedItems\(\) : \[\], _studioItems\)/);
   // Every plan in the Studio tab sees the whole list, for the shared titles
   const generated = fs.readFileSync(path.join(ROOT, 'sidebar-generated.js'), 'utf8');
   assert.equal([...generated.matchAll(/NLME\.generatedExportPlan\(/g)].length, [...generated.matchAll(/NLME\.generatedExportPlan\([^\n]*, _studioItems\)/g)].length);
-  assert.match(run, /const skipWarnings = plan\.ambiguous\.map\(item => NLME\.skippedNoMenuWarning\(item\.label\)\);/);
-  assert.match(run, /plan\.artifacts\.length \? \{ Artifacts: \{ seedErrors: skipWarnings, recordFailed: plan\.ambiguous \} \}/);
+  assert.match(run, /const skipWarnings = plan\.noMenuWarnings;/);
+  assert.match(run, /plan\.artifacts\.length \? \{ Artifacts: \{ seedErrors: skipWarnings, recordFailed: plan\.noMenu \} \}/);
   assert.match(run, /\{ Notes: \{ seedErrors: skipWarnings\.map\(w => \(\{ \.\.\.w, title: `Studio: \$\{w\.title\}`, prefixed: true \}\)\) \} \}/);
   const artifacts = fnSource('sidebar-artifacts.js', 'downloadAllArtifacts');
   assert.match(artifacts, /withJobRecord\(shell, 'artifacts', 'Artifacts', 'artifacts', \[\.\.\.items, \.\.\.recordFailed\]/);
@@ -1093,4 +1093,21 @@ test('the page says with its notes whether the Studio list has drawn', () => {
   const state = content.slice(content.indexOf('function notesListState()'), content.indexOf('function scanForNotes()'));
   assert.match(state, /artifact-library-item, artifact-library-note/);
   assert.match(state, /return \{ items, library: !!container, loading: /);
+});
+
+test('an item with no More button that fails says it is still being generated', async () => {
+  const vm = require('node:vm');
+  const sandbox = { NLME: require('../takeout-shared.js'), console: { warn() {} } };
+  vm.createContext(sandbox);
+  vm.runInContext(fnSource('sidebar-artifacts.js', 'fetchNoMenuSafe'), sandbox);
+  const broke = async () => { throw new Error('Item changed: expected "Fresh"'); };
+  await assert.rejects(sandbox.fetchNoMenuSafe({ index: -1, label: 'Fresh' }, broke), /^Error: Still being generated\. Try again when it is ready \(Resume will retry it\)\.$/);
+  await assert.rejects(sandbox.fetchNoMenuSafe({ index: 2, label: 'Fresh' }, broke), /Item changed/);
+  assert.equal(await sandbox.fetchNoMenuSafe({ index: -1 }, async () => 'ok'), 'ok');
+  assert.match(fnSource('sidebar-artifacts.js', 'runArtifactsJob'), /const fetched = await fetchNoMenuSafe\(item, \(\) => fetchSlideFormats\(/);
+});
+
+test('Resume reports a notes list read without the Studio list once, not once per Studio note', () => {
+  const resume = fnSource('sidebar-takeout.js', 'resumeJob');
+  assert.match(resume, /if \(unknown\.length && !scanWarnings\[name\]\) \{/);
 });

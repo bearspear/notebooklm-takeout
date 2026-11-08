@@ -1383,15 +1383,21 @@ test('Full Takeout with one ready item and its no-More namesake writes the skip,
   assert.doesNotMatch(log.panels[0].message, /artifacts none/);
 });
 
-test('Full Takeout tries a lone no-More artifact, and one whose namesake cannot be exported, as in 1.9.4', async () => {
+test('Full Takeout tries a lone no-More artifact, as in 1.9.4', async () => {
   const lone = takeoutPanel({ artifacts: [{ index: -1, label: 'Fresh', type: 'Report' }] });
   await lone.sandbox.runFullTakeout();
   assert.deepEqual(JSON.parse(JSON.stringify(lone.runnerArgs.artifacts.items.map(i => i.index))), [-1]);
   assert.equal(lone.log.zipped['Book/errors.md'], undefined);
-  // A disabled item (Flashcards) has no download to hit
-  const quiz = takeoutPanel({ artifacts: [{ index: 0, label: 'Deck', type: 'Flashcards', disabled: true }, { index: -1, label: 'Deck', type: 'Report' }] });
-  await quiz.sandbox.runFullTakeout();
-  assert.deepEqual(JSON.parse(JSON.stringify(quiz.runnerArgs.artifacts.items.map(i => i.index))), [-1]);
+});
+
+test('Full Takeout skips a no-More artifact whose namesake is a Flashcards or Quiz row with a menu: the title pick lands there', async () => {
+  for (const type of ['Flashcards', 'Quiz']) {
+    const { sandbox, log, runnerArgs } = takeoutPanel({ artifacts: [{ index: 0, label: 'Deck', type, disabled: true }, { index: -1, label: 'Deck', type: 'Report' }] });
+    await sandbox.runFullTakeout();
+    assert.deepEqual(JSON.parse(JSON.stringify(runnerArgs.artifacts.items)), [], type);
+    assert.match(log.zipped['Book/errors.md'], /^## Skipped: same title as another item \(1\)\n\n- Artifacts: Deck: still being generated/m, type);
+    assert.match(log.panels[0].message, /artifacts 0\/0 \(1 skipped\)/, type);
+  }
 });
 
 test('Full Takeout: notes read without the Studio list are exported with a warning in errors.md', async () => {

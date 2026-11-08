@@ -2333,7 +2333,7 @@ test('an artifact with no More button is not exported: its index would resolve b
   assert.deepEqual(plan.skipped.map(i => i.moreIndex), [-1]);
 });
 
-test('the export plan skips what the row check refuses, but tries a no-More item with its own title', () => {
+test('the Studio export plan skips exactly what the row check refuses (1.9.4), no-More rows included', () => {
   const rows = [
     { kind: 'artifact', moreIndex: 0, label: 'A', type: 'Slides', downloadable: true },
     { kind: 'artifact', moreIndex: -1, label: 'A', type: 'Slides', downloadable: true },
@@ -2344,9 +2344,8 @@ test('the export plan skips what the row check refuses, but tries a no-More item
     { kind: 'source-note', sourceIndex: 1, label: 'F', type: 'Note (Sources panel)' }
   ];
   const skipped = NLME.generatedExportPlan(rows).skipped;
-  // The row's own Download stays off for B: a single click is not an archive
-  assert.deepEqual(rows.filter(NLME.isStudioItemUnavailable).map(i => i.label), ['A', 'B', 'C', 'D']);
-  assert.deepEqual(skipped, [rows[1], rows[3], rows[4]]);
+  assert.deepEqual(rows.filter(NLME.isStudioItemUnavailable), skipped);
+  assert.deepEqual(skipped.map(i => i.label), ['A', 'B', 'C', 'D']);
 });
 
 test('an unavailable row says why it cannot download', () => {
@@ -3512,20 +3511,40 @@ test('artifactExportPlan takes the ready titles from the whole scan when given a
   assert.deepEqual(NLME.artifactExportPlan([all[1]]).skipped, []);
 });
 
-test('generatedExportPlan narrows the no-More rule to a shared title and lists those as ambiguous', () => {
+test('generatedExportPlan skips every no-More row, and words each skip by whether a row with a menu shares its title', () => {
   const rows = [
     { kind: 'artifact', label: 'Deck', moreIndex: 0, downloadable: true, type: 'Slides' },
     { kind: 'artifact', label: 'Deck', moreIndex: -1, downloadable: true, type: 'Slides', jobKey: 'Slides\u0000Deck#2' },
     { kind: 'artifact', label: 'Fresh', moreIndex: -1, downloadable: true, type: 'Report' },
-    { kind: 'artifact', label: 'Quiz me', moreIndex: 1, downloadable: false, type: 'Quiz' }
+    { kind: 'artifact', label: 'Cards', moreIndex: 1, downloadable: false, type: 'Flashcards' },
+    { kind: 'artifact', label: 'Cards', moreIndex: -1, downloadable: true, type: 'Report' },
+    { kind: 'artifact', label: 'Quiz me', moreIndex: 2, downloadable: false, type: 'Quiz' }
   ];
-  const selected = rows.slice(1);
-  const plan = NLME.generatedExportPlan(selected, rows);
-  assert.deepEqual(plan.artifacts.map(a => [a.index, a.label]), [[-1, 'Fresh']]);
-  assert.deepEqual(plan.skipped.map(i => i.label), ['Deck', 'Quiz me']);
-  assert.deepEqual(plan.ambiguous.map(a => [a.index, a.label, a._listKey]), [[-1, 'Deck', 'Slides\u0000Deck#2']]);
-  // Without the whole list the ready Deck is not known: the no-More Deck is tried
-  assert.deepEqual(NLME.generatedExportPlan(selected).ambiguous, []);
+  const plan = NLME.generatedExportPlan(rows.slice(1), rows);
+  assert.deepEqual(plan.artifacts, []);
+  assert.deepEqual(plan.skipped.map(i => [i.label, i.type]), [['Deck', 'Slides'], ['Fresh', 'Report'], ['Cards', 'Flashcards'], ['Cards', 'Report'], ['Quiz me', 'Quiz']]);
+  assert.deepEqual(plan.noMenu.map(a => [a.index, a.label]), [[-1, 'Deck'], [-1, 'Fresh'], [-1, 'Cards']]);
+  assert.equal(plan.noMenu[0]._listKey, 'Slides\u0000Deck#2');
+  // A Flashcards row with a menu is a title the pick can land on, too
+  assert.deepEqual(plan.noMenuWarnings.map(w => [w.type, w.title]), [['skipped_ambiguous', 'Deck'], ['skipped_not_ready', 'Fresh'], ['skipped_ambiguous', 'Cards']]);
+  assert.equal(plan.noMenuWarnings[1].message, 'still being generated or has no menu');
+});
+
+test('artifactExportPlan: a Flashcards or Quiz row with a menu makes its no-More namesake a skip', () => {
+  for (const type of ['Flashcards', 'Quiz']) {
+    const plan = NLME.artifactExportPlan([{ index: 0, label: 'Deck', type, disabled: true }, { index: -1, label: 'Deck', type: 'Report' }]);
+    assert.deepEqual(plan.runnable, [], type);
+    assert.deepEqual(plan.warnings.map(w => [w.type, w.title]), [['skipped_ambiguous', 'Deck']], type);
+  }
+});
+
+test('the still-generating skip has its own heading and counts as skipped', () => {
+  const warning = NLME.skippedNoMenuWarning('Fresh', false);
+  assert.equal(NLME.countExportErrors([warning]), 1);
+  assert.match(NLME.buildErrorReport({ errors: [warning] }), /^## Skipped: still being generated \(1\)\n\n- Fresh: still being generated or has no menu$/m);
+  const step = { name: 'Artifacts', message: 'm', level: 'warning', saved: [], errors: [warning], failedItems: [], exported: 1, selected: 1 };
+  assert.match(NLME.combineRetryOutcomes({ steps: [step] }).message, /— 1 skipped$/);
+  assert.equal(NLME.NO_MENU_FAILED, 'Still being generated. Try again when it is ready (Resume will retry it).');
 });
 
 test('a skipped item is an error in errors.md (the checker warns), under a plain heading', () => {
@@ -3645,4 +3664,14 @@ test('notesSettleDecision: Sources-panel notes found while the Studio list never
   assert.deepEqual(NLME.notesSettleDecision([read(0, sourceNotes, none), read(8000, sourceNotes, none)]),
     { state: 'partial', message: "The Studio list wasn't visible, so notes saved only there may be missing. Close any open Studio item and export again." });
   assert.equal(NLME.NOTES_STUDIO_HIDDEN, "The Studio list wasn't visible, so notes saved only there may be missing. Close any open Studio item and export again.");
+});
+
+test('notesSettleDecision: a list still loading at the bound says so, not "wasn\'t visible"', () => {
+  const sourceNotes = [{ index: -1, sourceIndex: 2, title: 'S', elementType: 'source-note' }];
+  const loading = { items: 0, library: true, loading: true };
+  assert.deepEqual(NLME.notesSettleDecision([read(0, sourceNotes, loading), read(8000, sourceNotes, loading)]),
+    { state: 'partial', message: 'The Studio list was still loading, so notes saved only there may be missing. Wait for it to load and export again.' });
+  const failed = NLME.notesSettleDecision([read(0, [], loading), read(8000, [], loading)]);
+  assert.equal(failed.state, 'failed');
+  assert.match(failed.message, /^The Studio list was still loading after 8 s\. Wait for it to load/);
 });
