@@ -957,13 +957,10 @@
       const titleEl = container.querySelector('.source-title');
       const title = titleEl?.textContent?.trim() || `Source ${index + 1}`;
 
-      // Get source icon to determine type
-      const iconEl = container.querySelector('.source-item-source-icon');
-      const iconType = iconEl?.textContent?.trim() || 'document';
-      // A web source has no type icon, only a favicon whose src holds the
-      // original URL; only the decoded URL is kept (1.9.6)
-      let webUrl = null;
-      if (!iconEl) webUrl = NLME.sourceUrlFromFavicon(container.querySelector('img.favicon-icon')?.getAttribute('src'));
+      // The type from the row's type icon (a mat-icon; the favicon <img> of a
+      // web source carries the same class but is none). A web source's
+      // original URL comes from its favicon; only the decoded URL is kept
+      const { type: iconType, webUrl } = NLME.sourceRowIcon(container);
 
       // Only process if visible
       const rect = container.getBoundingClientRect();

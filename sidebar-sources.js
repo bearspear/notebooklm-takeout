@@ -476,9 +476,13 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
     : convertCounted(audit, sourceData.html,
       () => convertToMarkdown(sourceData.html, sourceData.sources || [], '', false, false, null, false));
 
+  // The page's type icon, or web / web_pdf and the original URL
+  const typeFields = NLME.sourceTypeFields(source);
   const buildMarkdown = includeMeta => {
     let md = `# ${source.title}\n\n`;
     if (sourceData.youtubeUrl) md += `**YouTube Video:** ${sourceData.youtubeUrl}\n\n`;
+    // A web source's original URL, the same kind of line (1.9.7)
+    md += NLME.sourceWebLine(typeFields);
     if (includeMeta) {
       if (hasSummary) md += `## Summary\n\n${sourceData.guideMarkdown}\n\n`;
       if (hasKeyTopics) md += `## Key Topics\n\n${sourceData.keyTopics.map(topic => `- ${topic}`).join('\n')}\n\n`;
@@ -532,7 +536,7 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
     youtubeUrl: sourceData.youtubeUrl || null,
     // The page's type icon ('document' is only the scan's default), or
     // web / web_pdf and the original URL for a web source
-    ...NLME.sourceTypeFields(source),
+    ...typeFields,
     // Metadata for _index.md
     summary: sourceData.guideMarkdown || null,
     keyTopics: sourceData.keyTopics || [],

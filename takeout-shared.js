@@ -1533,6 +1533,23 @@
     return isGoogleDownloadUrl(url) ? null : url.href;
   }
 
+  // One source row of the panel: its type icon and, for a web source, the
+  // original URL. The type is the text of the row's type icon, a mat-icon
+  // (video_youtube, drive_pdf, ...), 'document' when there is none. Live
+  // (1.9.7), a web row's favicon is <img class="source-item-source-icon
+  // favicon-icon">: it carries the type-icon class but is no type icon, so an
+  // <img> is never read as one. A row without a type icon gets webUrl from
+  // its img.favicon-icon (the decoded URL only, never the favicon address).
+  // container: an element with querySelector(All). { type, webUrl|null }
+  function sourceRowIcon(container) {
+    if (!container) return { type: 'document', webUrl: null };
+    const iconEl = Array.from(container.querySelectorAll('.source-item-source-icon') || [])
+      .find(el => el.tagName !== 'IMG') || null;
+    const type = String(iconEl?.textContent || '').trim() || 'document';
+    const webUrl = iconEl ? null : sourceUrlFromFavicon(container.querySelector('img.favicon-icon')?.getAttribute('src'));
+    return { type, webUrl };
+  }
+
   // Google-hosted downloads and redirects: *.usercontent.google.com,
   // *.googleusercontent.com, google.com/url, and *.google.com links that
   // download (private, short-lived; never a source's original page)
@@ -1555,6 +1572,18 @@
     const s = source || {};
     if (s.webUrl) return { sourceType: webSourceType(s.webUrl), sourceUrl: s.webUrl };
     return { sourceType: s.type === 'document' ? null : s.type || null, sourceUrl: null };
+  }
+
+  // A web source's line under the title of its Markdown, like a YouTube
+  // source's "**YouTube Video:** <url>" (1.9.7): "**Web Page:** <url>" or,
+  // for web_pdf, "**Web PDF:** <url>". fields: NLME.sourceTypeFields'
+  // { sourceType, sourceUrl }. Any other source: ''.
+  function sourceWebLine(fields) {
+    const { sourceType, sourceUrl } = fields || {};
+    if (!sourceUrl) return '';
+    if (sourceType === 'web') return `**Web Page:** ${sourceUrl}\n\n`;
+    if (sourceType === 'web_pdf') return `**Web PDF:** ${sourceUrl}\n\n`;
+    return '';
   }
 
   // A web source's line in the Sources _index.md: its URL as a link (the
@@ -3635,6 +3664,8 @@ footer { margin-top: 3rem; }
     toBlockquote,
     isThoughtIconName,
     sourceUrlFromFavicon,
+    sourceRowIcon,
+    sourceWebLine,
     webSourceType,
     sourceTypeFields,
     sourceOriginalLine,
