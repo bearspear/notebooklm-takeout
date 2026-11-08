@@ -1475,12 +1475,13 @@
     return String(text || '').split('\n').map(line => (line.trim() ? `> ${line}` : '>')).join('\n');
   }
 
-  // A Material Symbols ligature name ("neurology", "document_search"): what
-  // an icon's text reads when its element was not stripped. Lower-case
-  // snake_case only, so a title or sentence never matches.
-  function isMaterialIconName(text) {
-    const value = String(text || '').trim();
-    return value.length > 0 && value.length <= 40 && /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/.test(value);
+  // The icon names a Thoughts section shows (mat-icon text, seen live:
+  // neurology, document_search; and the header's chevrons). Only these are
+  // dropped, never another one-word title.
+  const THOUGHT_ICON_NAMES = new Set(['neurology', 'document_search', 'expand_more', 'expand_less',
+    'keyboard_arrow_down', 'keyboard_arrow_up', 'chevron_right', 'arrow_drop_down']);
+  function isThoughtIconName(text) {
+    return THOUGHT_ICON_NAMES.has(String(text || '').trim());
   }
 
   // Where a chat answer's "Thoughts" section was: content.js puts this in
@@ -1498,7 +1499,7 @@
     const blocks = [];
     for (const thought of Array.isArray(thoughts) ? thoughts : []) {
       let title = String(thought?.title || '').replace(/\s+/g, ' ').trim();
-      if (isMaterialIconName(title)) title = '';
+      if (isThoughtIconName(title)) title = '';
       const body = String(thought?.body || '').replace(/\r\n?/g, '\n')
         .split('\n').map(line => line.replace(/\s+$/, '')).join('\n')
         .trim().replace(/\n{3,}/g, '\n\n');
@@ -3424,7 +3425,7 @@ footer { margin-top: 3rem; }
     citationTitleFromAriaLabel,
     fenceFor,
     toBlockquote,
-    isMaterialIconName,
+    isThoughtIconName,
     THOUGHTS_PLACEHOLDER_HTML,
     thoughtsMarkdown,
     chatScanErrors,

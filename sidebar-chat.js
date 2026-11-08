@@ -112,6 +112,9 @@ function renderChatSummary(chatData) {
   if (chatStatsInfo.thoughtsUnread?.length > 0) {
     html += `<div class="summary-stat warning">The Thoughts of ${chatStatsInfo.thoughtsUnread.length} answer(s) could not be read. They are listed in errors.md after export.</div>`;
   }
+  if (chatStatsInfo.thoughtsCancelled > 0) {
+    html += `<div class="summary-stat">The scan was cancelled before the Thoughts of ${chatStatsInfo.thoughtsCancelled} answer(s) were read. Load the chat again to include them.</div>`;
+  }
   html += `<div class="summary-stat"><strong>${chatData.notebookTitle}</strong></div>`;
 
   if (chatData.dateRange) {

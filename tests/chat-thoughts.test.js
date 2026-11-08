@@ -65,13 +65,15 @@ test('thoughtsMarkdown: Material icon names never appear', () => {
   assert.equal(NLME.thoughtsMarkdown([{ title: 'neurology', body: 'Body' }]), '> **Thoughts**\n>\n> Body');
 });
 
-test('isMaterialIconName: snake_case ligature names, never a sentence', () => {
+test('isThoughtIconName: only the icon names a Thoughts section shows, never another one-word title', () => {
   for (const name of ['neurology', 'document_search', 'expand_more', 'keyboard_arrow_down']) {
-    assert.equal(NLME.isMaterialIconName(name), true, name);
+    assert.equal(NLME.isThoughtIconName(name), true, name);
   }
-  for (const text of ['Searched your sources', 'Thoughts', 'Investigating Paul Cohen', '', 'x'.repeat(60), 'C++']) {
-    assert.equal(NLME.isMaterialIconName(text), false, text);
+  for (const text of ['Searched your sources', 'Thoughts', 'Investigating Paul Cohen', '', 'summarizing', 'search', 'C++']) {
+    assert.equal(NLME.isThoughtIconName(text), false, text);
   }
+  // A one-word lower-case title is kept
+  assert.equal(NLME.thoughtsMarkdown([{ title: 'summarizing', body: '' }]), '> **Thoughts**\n>\n> **summarizing**');
 });
 
 // ---------- scan warnings ----------
@@ -90,6 +92,9 @@ test('chatScanErrors: skipped messages, collapsed groups, then unread Thoughts',
   // 'none' drops citations on purpose; Thoughts are still missing
   assert.deepEqual(NLME.chatScanErrors(stats, 'none').map(e => e.type), ['message_skipped', 'thoughts_unread']);
   assert.deepEqual(NLME.chatScanErrors({}, 'quotes'), []);
+  // Thoughts not read because the scan was cancelled are no failure: no
+  // errors.md entry (which would also force a ZIP)
+  assert.deepEqual(NLME.chatScanErrors({ thoughtsUnread: [], thoughtsCancelled: 3 }, 'quotes'), []);
   assert.deepEqual(NLME.chatScanErrors(undefined, 'quotes'), []);
 });
 
@@ -208,6 +213,8 @@ test('content.js reads Thoughts during the chat scan and collapses them again in
   const body = src.slice(start, src.indexOf('\n  }\n', start));
   assert.match(body, /finally/);
   assert.match(body, /isExportCancelled\(\)/);
+  assert.match(body, /waitForStable\(/);
+  assert.match(body, /scrollTo\(\{ top: scrollTop/);
   assert.match(body, /isThoughtsOpen\(view\)/);
   // scanChat reads them after the citation groups are open and before extraction
   const scan = src.slice(src.indexOf('  async function scanChat('));
