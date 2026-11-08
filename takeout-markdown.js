@@ -372,6 +372,8 @@
   //     NLME.footnoteLabel(noteIndex, n, { combined: true }); chat does the same
   //     with the current message index, so every label is unique in chat.md.
   //   anchorPrefix (note), getMessageIndex (chat), log(context, message)
+  //   getThoughts (chat): the current answer's thoughts, [{ title, body }],
+  //     written where its Thoughts placeholder is (NLME.thoughtsMarkdown)
   // Returns { turndownService, convert(html), citedNumbers(messageIndex?) } —
   // callers use convert() (turndownService.turndown() leaves formula marks in);
   // citedNumbers: the distinct marker numbers converted so far (note variant),
@@ -380,7 +382,7 @@
   // order. Only rules with overlapping filters depend on it (reportHeadings vs
   // blockquotes, sourceLink vs citationButtons), and both sets ordered those
   // the same way.
-  function createConverter({ variant = 'note', citations = 'links', anchorPrefix = '', getMessageIndex = () => 0, footnoteLabel = null, log = null } = {}) {
+  function createConverter({ variant = 'note', citations = 'links', anchorPrefix = '', getMessageIndex = () => 0, getThoughts = () => [], footnoteLabel = null, log = null } = {}) {
     const isChat = variant === 'chat';
     const dropCitations = citations === 'none';
     const footnotes = citations === 'footnotes';
@@ -458,6 +460,20 @@
         return content; // Return inner content, strip wrapper
       }
     });
+
+    // A chat answer's Thoughts (1.9.6): content.js leaves
+    // NLME.THOUGHTS_PLACEHOLDER_HTML where the page's thinking-chain-view
+    // was; the section goes there. Thoughts that could not be read write
+    // nothing, not the stray word.
+    if (isChat) {
+      turndownService.addRule('chatThoughts', {
+        filter: (node) => node.nodeName === 'DIV' && node.hasAttribute('data-nlme-thoughts'),
+        replacement: () => {
+          const section = NLME.thoughtsMarkdown(getThoughts());
+          return section ? `\n\n${section}\n\n` : '';
+        }
+      });
+    }
 
     // Lists whose <li> elements sit inside Angular wrapper components
     turndownService.addRule('listsWithWrappers', {

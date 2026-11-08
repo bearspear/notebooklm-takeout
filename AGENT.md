@@ -514,6 +514,21 @@ side panel.
      where `NLME.isCollapsedCitationGroup` is true: an open group's button reads "Hide
      additional citations" (`unfold_less`), and clicking it would close the group again
      (this lost ~250 citations on a second scan before Nov 2026). Up to 3 passes, re-scanned.
+   - Then `readChatThoughts` (1.9.6) reads each answer's Thoughts: a `thinking-chain-view`
+     (header `button.thinking-chain__header`, `aria-expanded`; rows `.thinking-chain__item`,
+     `.thought-block__title` / `.thought-block__body`, step lines like "Searched your sources")
+     has no content while collapsed. It clicks a closed header, waits up to 3 s for rows,
+     reads them (icons and citation markers removed) and clicks it closed again in a
+     `finally`; a last `finally` closes anything it opened that is still open (error,
+     Cancel). A section that was open before the scan stays open. Cancel stops reading.
+     `extractMessagePair` replaces the `thinking-chain-view` in a clone of the answer with
+     `NLME.THOUGHTS_PLACEHOLDER_HTML` and returns `thoughts: [{ title, body }]`; an answer
+     without one is read exactly as before. Unread Thoughts go to
+     `stats.thoughtsUnread` ("Message N: Thoughts could not be read"), which
+     `NLME.chatScanErrors` puts in errors.md. The chat converter's `chatThoughts` rule writes
+     `NLME.thoughtsMarkdown` (a `> **Thoughts**` blockquote) at the placeholder, or nothing
+     when they could not be read. Thoughts are not in the answer HTML, so the audit
+     (`countPageContent`) and the citation reading never count them.
 2. `exportChat(chatData)` reads `NLME.chatCitationMode(settings)` (the run's citations:
    `'quotes'` default | `'titles'` | `'none'`) and passes it to
    `runChatJob(shell, chatData, { citationMode, forceZip, pathPrefix, zipKind, folder })`;

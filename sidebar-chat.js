@@ -109,6 +109,9 @@ function renderChatSummary(chatData) {
   if (chatData.messagePairs.length < pairsInDom || chatStatsInfo.collapsedRemaining > 0) {
     html += `<div class="summary-stat warning">${pairsInDom - chatData.messagePairs.length} message(s) could not be read; ${chatStatsInfo.collapsedRemaining || 0} citation group(s) still collapsed. They are listed in errors.md after export.</div>`;
   }
+  if (chatStatsInfo.thoughtsUnread?.length > 0) {
+    html += `<div class="summary-stat warning">The Thoughts of ${chatStatsInfo.thoughtsUnread.length} answer(s) could not be read. They are listed in errors.md after export.</div>`;
+  }
   html += `<div class="summary-stat"><strong>${chatData.notebookTitle}</strong></div>`;
 
   if (chatData.dateRange) {
@@ -198,13 +201,9 @@ async function exportChat(chatData) {
 async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip = false, pathPrefix = '', zipKind = 'chat', folder = null, variantSettings = settings, written = newWritten(), capture = null } = {}) {
   const messagePairs = chatData.messagePairs;
   // Scan completeness (Milestone 2, Resilience #2): known before the job
-  // starts, so they lead errors.md
-  const seedErrors = (chatData.stats?.skipped || [])
-    .map(skippedMessage => ({ type: 'message_skipped', message: skippedMessage }));
-  // 'none' drops citations on purpose: nothing is missing there
-  if (citationMode !== 'none' && chatData.stats?.collapsedRemaining > 0) {
-    seedErrors.push({ type: 'collapsed_citations', message: `${chatData.stats.collapsedRemaining} citation group(s) were still collapsed after the scan; their citations are missing` });
-  }
+  // starts, so they lead errors.md. 'none' drops citations on purpose, so
+  // collapsed groups miss nothing there; unread Thoughts always do.
+  const seedErrors = NLME.chatScanErrors(chatData.stats, citationMode);
   let auditDoc = null;
 
   console.log('[NotebookLM Takeout] Processing messages and extracting citations...');
@@ -305,6 +304,7 @@ async function readChatPair(shell, pair, ctx, { citationMode = 'quotes', total, 
     date: pair.date,
     userMessage: pair.userMessage,
     aiResponseHTML: pair.aiResponseHTML,
+    thoughts: pair.thoughts || [],
     sources,
     fullCitations: citationMode === 'quotes',
     stats,
@@ -720,6 +720,7 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
     variant: 'chat',
     citations: dropCitations ? 'none' : (useFootnotes ? 'footnotes' : (citationsCodeBlock ? 'code-blocks' : 'links')),
     getMessageIndex: () => currentMessageIndex,
+    getThoughts: () => messages[currentMessageIndex]?.thoughts || [],
     footnoteLabel: n => labelOf(currentMessageIndex, n)
   });
 

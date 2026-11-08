@@ -1475,6 +1475,53 @@
     return String(text || '').split('\n').map(line => (line.trim() ? `> ${line}` : '>')).join('\n');
   }
 
+  // A Material Symbols ligature name ("neurology", "document_search"): what
+  // an icon's text reads when its element was not stripped. Lower-case
+  // snake_case only, so a title or sentence never matches.
+  function isMaterialIconName(text) {
+    const value = String(text || '').trim();
+    return value.length > 0 && value.length <= 40 && /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/.test(value);
+  }
+
+  // Where a chat answer's "Thoughts" section was: content.js puts this in
+  // place of the page's thinking-chain-view, and the chat converter writes
+  // thoughtsMarkdown there. It keeps the word, so any other converter writes
+  // what 1.9.5 wrote.
+  const THOUGHTS_PLACEHOLDER_HTML = '<div data-nlme-thoughts="">Thoughts</div>';
+
+  // A chat answer's Thoughts as one blockquote section: "> **Thoughts**",
+  // then per thought its bold title and its body, every line quoted and the
+  // parts separated by ">" lines. thoughts: [{ title, body }]; a step line
+  // ("Searched your sources") is a title with an empty body. Icon names are
+  // left out. No thoughts: ''.
+  function thoughtsMarkdown(thoughts) {
+    const blocks = [];
+    for (const thought of Array.isArray(thoughts) ? thoughts : []) {
+      let title = String(thought?.title || '').replace(/\s+/g, ' ').trim();
+      if (isMaterialIconName(title)) title = '';
+      const body = String(thought?.body || '').replace(/\r\n?/g, '\n')
+        .split('\n').map(line => line.replace(/\s+$/, '')).join('\n')
+        .trim().replace(/\n{3,}/g, '\n\n');
+      if (title) blocks.push(`**${title}**`);
+      if (body.trim()) blocks.push(body);
+    }
+    if (blocks.length === 0) return '';
+    return toBlockquote(['**Thoughts**', ...blocks].join('\n\n'));
+  }
+
+  // Scan problems that lead a chat export's errors.md: messages that could
+  // not be read, citation groups still collapsed (not with citations 'none',
+  // which drops them on purpose) and answers whose Thoughts could not be read
+  function chatScanErrors(stats, citationMode) {
+    const s = stats || {};
+    const errors = (s.skipped || []).map(message => ({ type: 'message_skipped', message }));
+    if (citationMode !== 'none' && s.collapsedRemaining > 0) {
+      errors.push({ type: 'collapsed_citations', message: `${s.collapsedRemaining} citation group(s) were still collapsed after the scan; their citations are missing` });
+    }
+    for (const message of s.thoughtsUnread || []) errors.push({ type: 'thoughts_unread', message });
+    return errors;
+  }
+
   // Source title from a citation marker's aria-label ("3: Title"); markers
   // without one become "Source N" (titles-only mode, report Sources)
   function citationTitleFromAriaLabel(label, number) {
@@ -3377,6 +3424,10 @@ footer { margin-top: 3rem; }
     citationTitleFromAriaLabel,
     fenceFor,
     toBlockquote,
+    isMaterialIconName,
+    THOUGHTS_PLACEHOLDER_HTML,
+    thoughtsMarkdown,
+    chatScanErrors,
     noteVariants,
     sourceVariants,
     presetOverrides,
