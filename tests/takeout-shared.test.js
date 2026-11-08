@@ -3518,9 +3518,8 @@ test('artifactExportPlan keeps two ready items of one title, and skips two no-Mo
 test('a title-only pick (index -1) refuses two candidates, and still resolves one', () => {
   assert.throws(() => NLME.pickByIndexThenTitleStrict(['Twin', 'Other', 'Twin'], -1, 'Twin'), err => err.message === NLME.SAME_TITLE_REFUSED);
   assert.equal(NLME.pickByIndexThenTitleStrict(['Twin', 'Other', 'Twin'], -1, 'Other'), 1);
-  // An index of its own still wins, and a stale index still follows the title as before
+  // An index of its own still wins
   assert.equal(NLME.pickByIndexThenTitleStrict(['Twin', 'Other', 'Twin'], 2, 'Twin'), 2);
-  assert.equal(NLME.pickByIndexThenTitleStrict(['Twin', 'Other', 'Twin'], 1, 'Twin'), 0);
   assert.throws(() => NLME.pickByIndexThenTitleStrict(['Other'], -1, 'Twin'), /Item changed: expected "Twin"/);
 });
 
@@ -3703,4 +3702,57 @@ test('notesSettleDecision: a list still loading at the bound says so, not "wasn\
   const failed = NLME.notesSettleDecision([read(0, [], loading), read(8000, [], loading)]);
   assert.equal(failed.state, 'failed');
   assert.match(failed.message, /^The Studio list was still loading after 8 s\. Wait for it to load/);
+});
+
+// ---- Task 2b: a stale index with a duplicate title is refused, on every path ----
+
+test('a stale index with two rows of its title is refused, on the artifact, note and source lists', () => {
+  // An item finished generating above two ready Decks: every row moved down one.
+  // The panel scanned [Deck, Deck, Other]: ordinals 0 and 1
+  const artifactRows = ['New report', 'Deck', 'Deck', 'Other'];
+  const refused = err => err.message === NLME.SAME_TITLE_SHIFTED;
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(artifactRows, 0, 'Deck', 0), refused, 'first twin: its row is gone');
+  // The second twin's old index now holds the FIRST twin: same title, wrong ordinal
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(artifactRows, 1, 'Deck', 1), refused, 'second twin: never the first one');
+  // Notes: a note added above two notes of one title
+  const notes = ['Added', 'Ideas', 'Ideas'];
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(notes, 0, 'Ideas', 0), refused);
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(notes, 1, 'Ideas', 1), refused);
+  // Sources: note containers read as '' and a source was added above two of one title
+  const sources = ['', 'Added.pdf', 'Paper.pdf', 'Paper.pdf'];
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(sources, 1, 'Paper.pdf', 0), refused);
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(sources, 2, 'Paper.pdf', 1), refused);
+  // A stale index past the end with two rows of the title is refused too
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(['Deck', 'Deck'], 5, 'Deck'), refused);
+  assert.ok(NLME.isSameTitleRefusal(new Error(NLME.SAME_TITLE_SHIFTED)) && NLME.isSameTitleRefusal(new Error(NLME.SAME_TITLE_REFUSED)));
+  assert.ok(!NLME.isSameTitleRefusal(new Error('Item changed: expected "Deck"')) && !NLME.isSameTitleRefusal(null));
+  assert.equal(NLME.SAME_TITLE_SHIFTED, 'The list changed and another item has the same title, so this one cannot be found safely. Resume finds it again.');
+});
+
+test('a stale index with a unique title follows it; a matching index (and ordinal) is kept even with twins', () => {
+  assert.equal(NLME.pickByIndexThenTitleStrict(['New report', 'Deck', 'Other'], 0, 'Deck', 0), 1);
+  assert.equal(NLME.pickByIndexThenTitleStrict(['', 'Added.pdf', 'Paper.pdf'], 1, 'Paper.pdf', 0), 2);
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Deck', 'Deck'], 0, 'Deck', 0), 0);
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Deck', 'Deck'], 1, 'Deck', 1), 1);
+  // No ordinal (a single row download): the title check alone, as before
+  assert.equal(NLME.pickByIndexThenTitleStrict(['New report', 'Deck', 'Deck'], 1, 'Deck'), 1);
+});
+
+test('stampTitleOrdinals counts earlier items of the same title by index, out of sight of JSON', () => {
+  const items = [{ index: 2, label: 'Deck' }, { index: 0, label: 'Deck' }, { index: -1, label: 'Deck' }, { index: 1, label: 'Other' }];
+  NLME.stampTitleOrdinals(items, { titleOf: i => i.label, indexOf: i => i.index });
+  assert.deepEqual(items.map(i => i._titleOrdinal), [1, 0, undefined, 0]);
+  assert.equal(JSON.stringify(items[0]), '{"index":2,"label":"Deck"}');
+  assert.equal(NLME.titleOrdinalAt(['Deck', 'X', 'Deck'], 2, 'Deck'), 1);
+});
+
+test('the Studio export plan sends each artifact and note its ordinal over the whole list', () => {
+  const rows = [
+    { kind: 'artifact', label: 'Deck', moreIndex: 0, downloadable: true, type: 'Slides' },
+    { kind: 'artifact', label: 'Deck', moreIndex: 1, downloadable: true, type: 'Slides' },
+    { kind: 'note', label: 'Ideas', kindIndex: 0, type: 'Note' },
+    { kind: 'note', label: 'Ideas', kindIndex: 1, type: 'Note' }
+  ];
+  const plan = NLME.generatedExportPlan([rows[1], rows[3]], rows);
+  assert.deepEqual([plan.artifacts[0]._titleOrdinal, plan.notes[0]._titleOrdinal], [1, 1]);
 });

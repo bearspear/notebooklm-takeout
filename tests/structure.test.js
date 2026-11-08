@@ -577,12 +577,12 @@ test('a failed scan never reads as an empty list', async () => {
   const vm = require('node:vm');
   let answers = {};
   const sandbox = {
-    NLME: { MSG: { SCAN_NOTES: 'n', SCAN_STUDIO_ITEMS: 's' }, stampGeneratedJobKeys() {} },
+    NLME: { MSG: { SCAN_NOTES: 'n', SCAN_STUDIO_ITEMS: 's' }, stampGeneratedJobKeys() {}, stampTitleOrdinals: list => list },
     chrome: { tabs: { sendMessage: async (id, m) => answers[m.type] } },
     ensureContentScriptLoaded: async () => {}, stampJobKeys() {}, console: { warn() {} }
   };
   vm.createContext(sandbox);
-  vm.runInContext(fnSource('sidebar-notes.js', 'scanNotesData') + fnSource('sidebar-generated.js', 'scanGeneratedItems'), sandbox);
+  vm.runInContext(fnSource('sidebar-notes.js', 'scanNotesData') + fnSource('sidebar-notes.js', 'stampNoteOrdinals') + fnSource('sidebar-generated.js', 'scanGeneratedItems'), sandbox);
   const { scanNotesData, scanGeneratedItems } = sandbox;
   answers = { n: undefined };
   assert.equal((await scanNotesData(1)).length, 0); // the default the Notes tab keeps
@@ -1046,7 +1046,7 @@ function settledScan(answers) {
     ensureContentScriptLoaded: async () => {}, console: { warn() {} }
   };
   vm.createContext(sandbox);
-  vm.runInContext(fnSource('sidebar-notes.js', 'scanNotesSettled'), sandbox);
+  vm.runInContext(fnSource('sidebar-notes.js', 'scanNotesSettled') + fnSource('sidebar-notes.js', 'stampNoteOrdinals'), sandbox);
   const run = (opts = {}) => sandbox.scanNotesSettled(1, { now: () => clock, sleep: async ms => { clock += ms; }, ...opts });
   return { run, asked };
 }
@@ -1114,4 +1114,28 @@ test('an item with no More button that fails says it is still being generated', 
 test('Resume reports a notes list read without the Studio list once, not once per Studio note', () => {
   const resume = fnSource('sidebar-takeout.js', 'resumeJob');
   assert.match(resume, /if \(unknown\.length && !scanWarnings\[name\]\) \{/);
+});
+
+test('artifact, note and source picks all go through the strict resolver, and the note path keeps its refusal', () => {
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  assert.match(content, /NLME\.pickByIndexThenTitleStrict\(rowTitles, artifactIndex, artifactName, requestTitleOrdinal\)/);
+  assert.match(content, /NLME\.pickByIndexThenTitleStrict\(titles, artifactIndex, title, requestTitleOrdinal\)/);
+  assert.match(content, /NLME\.pickByIndexThenTitleStrict\(containerTitles, sourceIndex, expectedTitle, requestTitleOrdinal\)/);
+  assert.match(content, /pick = NLME\.pickByIndexThenTitleStrict\(noteTitles, noteIndex, noteTitle, requestTitleOrdinal\);\s+\} catch \(e\) \{[^}]*if \(NLME\.isSameTitleRefusal\(e\)\) throw e;\s+pick = -1;/);
+  // Every request that resolves an item sets the ordinal it was sent (or none)
+  assert.equal([...content.matchAll(/requestTitleOrdinal = titleOrdinalOf\(message\.data\);/g)].length, 3);
+  // The panel stamps the scans and sends the ordinal with the job's requests
+  assert.match(fs.readFileSync(path.join(ROOT, 'sidebar-artifacts.js'), 'utf8'), /return NLME\.stampTitleOrdinals\(items, \{ titleOf: item => item\.label, indexOf: item => item\.index \}\);/);
+  assert.match(fs.readFileSync(path.join(ROOT, 'sidebar-sources.js'), 'utf8'), /NLME\.stampTitleOrdinals\(response\.sources \|\| \[\], \{ titleOf: s => s\.title, indexOf: s => s\.index \}\)/);
+  assert.match(fnSource('sidebar-notes.js', 'scanNotesData'), /return stampNoteOrdinals\(/);
+  assert.match(fnSource('sidebar-notes.js', 'scanNotesSettled'), /return stampNoteOrdinals\(/);
+  for (const [file, fn] of [['sidebar-artifacts.js', 'fetchArtifactFiles'], ['sidebar-notes.js', 'extractNoteItem'], ['sidebar-sources.js', 'extractSourceItem']]) {
+    assert.match(fnSource(file, fn), /\._titleOrdinal\) \? \{ titleOrdinal: \w+\._titleOrdinal \} : \{\}/, fn);
+  }
+  assert.equal([...content.matchAll(/pickByIndexThenTitleStrict\(/g)].length, 4);
+  assert.match(fnSource('sidebar-artifacts.js', 'fetchNoMenuSafe'), /NLME\.isSameTitleRefusal\(error\)/);
+});
+
+test('a pick refused for a shared title is not retried', () => {
+  assert.match(fnSource('sidebar-core.js', 'retryDownload'), /if \(error && \(error\.formatNotOffered \|\| NLME\.isSameTitleRefusal\(error\)\)\) throw error;/);
 });

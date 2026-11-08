@@ -163,7 +163,9 @@ async function scanSourcesData(tabId) {
   const response = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.SCAN_SOURCES });
   if (!response) throw new Error('No response from the page');
   if (response.error) throw new ScanError(response.error);
-  return { sources: response.sources || [], skippedNotes: response.skippedNotes || 0 };
+  // Each source's place among sources of its title (NLME.stampTitleOrdinals)
+  const sources = NLME.stampTitleOrdinals(response.sources || [], { titleOf: s => s.title, indexOf: s => s.index });
+  return { sources, skippedNotes: response.skippedNotes || 0 };
 }
 
 // The Sources tab's list controller (sidebar-list.js); replaced on every redraw
@@ -428,7 +430,7 @@ async function extractSourceItem(shell, source, ctx, state, variantSettings = se
     sourceData = await retryOperation(
       () => chrome.tabs.sendMessage(shell.tab.id, {
         type: NLME.MSG.EXTRACT_SOURCE,
-        data: { sourceIndex: source.index, title: source.title, needsGuide: needsMeta }
+        data: { sourceIndex: source.index, title: source.title, needsGuide: needsMeta, ...(Number.isInteger(source._titleOrdinal) ? { titleOrdinal: source._titleOrdinal } : {}) }
       }),
       2, // maxRetries
       1500, // baseDelay (1.5s)

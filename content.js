@@ -385,6 +385,14 @@
 
   // Condition waits instead of fixed sleeps (Milestone 1, Speed): resolve once
   // the measured size stops changing; on timeout continue with what is there.
+  // The current request's titleOrdinal (NLME.stampTitleOrdinals): how many items
+  // of its title came before it when the panel scanned. Set by each extract and
+  // download request, like citationDetailMode; null when the panel sent none.
+  let requestTitleOrdinal = null;
+  function titleOrdinalOf(data) {
+    return data && Number.isInteger(data.titleOrdinal) ? data.titleOrdinal : null;
+  }
+
   async function waitForStable(measure, { interval = 50, checks = 2, minLength = 1, timeout = 5000 } = {}) {
     const tracker = NLME.createStabilityTracker({ checks, minLength });
     const deadline = Date.now() + timeout;
@@ -469,6 +477,7 @@
         // 'titles' and 'none' both skip hovering ('none' drops the markers later)
         citationDetailMode = ['titles', 'none'].includes(message.data.citationDetail) ? 'titles' : 'quotes';
         reuseCitations = message.data.reuseCitations === true;
+        requestTitleOrdinal = titleOrdinalOf(message.data);
         withRequestTiming(() => (typeof message.data.sourceIndex === 'number'
           ? extractSourcesPanelNote(message.data.sourceIndex, message.data.noteTitle, message.data.includeCitationImages)
           : extractNoteContent(message.data.noteIndex, message.data.noteTitle, message.data.includeCitationImages)))
@@ -498,6 +507,7 @@
       async: true,
       run(message, sender, sendResponse) {
         // Extract source content
+        requestTitleOrdinal = titleOrdinalOf(message.data);
         withRequestTiming(() => extractSourceContent(message.data.sourceIndex, message.data.title || '', message.data.needsGuide !== false))
           .then(result => sendResponse(result))
           .catch(error => sendResponse({ error: error.message }));
@@ -540,6 +550,7 @@
       async: true,
       run(message, sender, sendResponse) {
         // Download artifact via message passing (new pattern)
+        requestTitleOrdinal = titleOrdinalOf(message.data);
         handleArtifactDownload(
           message.data.artifactIndex,
           message.data.artifactType,
@@ -1923,8 +1934,10 @@
       // Strict: never fall back to an index whose title differs (Milestone 1)
       let pick = -1;
       try {
-        pick = NLME.pickByIndexThenTitleStrict(noteTitles, noteIndex, noteTitle);
+        pick = NLME.pickByIndexThenTitleStrict(noteTitles, noteIndex, noteTitle, requestTitleOrdinal);
       } catch (e) {
+        // Two notes of this title and the list moved: say so, not "not found"
+        if (NLME.isSameTitleRefusal(e)) throw e;
         pick = -1;
       }
       const noteEl = pick === -1 ? null : noteElements[pick];
@@ -2176,7 +2189,7 @@
       const containerTitles = Array.from(sourceContainers).map(c =>
         isNoteSourceContainer(c) ? '' : getSourceContainerTitle(c));
       const resolvedIndex = expectedTitle
-        ? NLME.pickByIndexThenTitleStrict(containerTitles, sourceIndex, expectedTitle)
+        ? NLME.pickByIndexThenTitleStrict(containerTitles, sourceIndex, expectedTitle, requestTitleOrdinal)
         : sourceIndex;
       if (resolvedIndex >= sourceContainers.length) {
         throw new Error(`Source index ${sourceIndex} out of range (total: ${sourceContainers.length})`);
@@ -2699,7 +2712,7 @@
     const titles = items.map(item => item.querySelector('.artifact-title')?.textContent?.trim() || '');
     // Strict (Milestone 1): throws "Item changed" instead of falling back to
     // an index whose title differs
-    const pick = title ? NLME.pickByIndexThenTitleStrict(titles, artifactIndex, title) : artifactIndex;
+    const pick = title ? NLME.pickByIndexThenTitleStrict(titles, artifactIndex, title, requestTitleOrdinal) : artifactIndex;
     return items[pick] || null;
   }
 
@@ -3183,7 +3196,7 @@
       const rows = getArtifactItemsWithMore();
       const rowTitles = rows.map(item => item.querySelector('.artifact-title')?.textContent?.trim() || '');
       const pick = artifactName
-        ? NLME.pickByIndexThenTitleStrict(rowTitles, artifactIndex, artifactName)
+        ? NLME.pickByIndexThenTitleStrict(rowTitles, artifactIndex, artifactName, requestTitleOrdinal)
         : artifactIndex;
       if (pick < 0 || pick >= rows.length) {
         throw new Error(`Artifact index ${artifactIndex} out of range (0-${rows.length - 1})`);

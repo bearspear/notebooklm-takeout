@@ -13,7 +13,13 @@ async function scanNotesData(tabId, { strict = false } = {}) {
   await ensureContentScriptLoaded(tabId);
   const response = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.SCAN_NOTES });
   if (strict && !Array.isArray(response?.notes)) throw new Error(response?.error || 'No response from the page');
-  return response?.notes || [];
+  return stampNoteOrdinals(response?.notes || []);
+}
+
+// Studio notes get their place among notes of their title, which the page checks
+// before it trusts a scanned index (NLME.pickByIndexThenTitleStrict)
+function stampNoteOrdinals(notes) {
+  return NLME.stampTitleOrdinals(notes, { titleOf: n => n.title, indexOf: n => (n.elementType === 'source-note' ? -1 : n.index) });
 }
 
 // Notes for Export everything and Resume: SCAN_NOTES again every pollMs until the
@@ -37,7 +43,7 @@ async function scanNotesSettled(tabId, { isCancelled = () => false, onPartial = 
     reads.push({ at: now() - started, notes: Array.isArray(response?.notes) ? response.notes : null, list: response?.list });
     const decision = NLME.notesSettleDecision(reads, timing);
     if (decision.state === 'partial') onPartial(decision.message);
-    if (['found', 'empty', 'partial'].includes(decision.state)) return reads[reads.length - 1].notes;
+    if (['found', 'empty', 'partial'].includes(decision.state)) return stampNoteOrdinals(reads[reads.length - 1].notes);
     if (decision.state === 'failed') throw new Error(decision.message);
     if (isCancelled()) throw new Error('Cancelled while reading the notes list');
     await sleep(timing.pollMs);
@@ -364,6 +370,8 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
         noteIndex: note.index,
         noteTitle: note.title,
         sourceIndex: note.sourceIndex,
+        // the scan's place among notes of this title (NLME.stampTitleOrdinals)
+        ...(Number.isInteger(note._titleOrdinal) ? { titleOrdinal: note._titleOrdinal } : {}),
         // Only download images if user has enabled an image version
         includeCitationImages: !!variantSettings.exportNoteWithImages,
         citationDetail: settings.citationDetail,

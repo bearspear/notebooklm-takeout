@@ -84,6 +84,8 @@ function reportFile(stem, response, title, meta) {
 async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', slidesFormat = settings.slidesFormat, onlyIfOffered = false }) {
   const { index, type, label } = item;
   const format = slidesFormat === 'pptx' ? 'pptx' : 'pdf';
+  // the scan's place among items of this title (NLME.stampTitleOrdinals)
+  const ordinal = Number.isInteger(item._titleOrdinal) ? { titleOrdinal: item._titleOrdinal } : {};
   logger.info('Download', `Downloading artifact ${index} (${type})`, label);
   await ensureContentScriptLoaded(tabId);
 
@@ -100,8 +102,8 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
     const response = await chrome.tabs.sendMessage(tabId, {
       type: NLME.MSG.DOWNLOAD_ARTIFACT,
       data: extractable
-        ? { artifactIndex: index, artifactType: type, artifactName: label, skipMoreButton: true }
-        : { artifactIndex: index, artifactType: type, artifactName: label, downloadPreference: format, ...(onlyIfOffered ? { requireFormat: true } : {}) }
+        ? { artifactIndex: index, artifactType: type, artifactName: label, skipMoreButton: true, ...ordinal }
+        : { artifactIndex: index, artifactType: type, artifactName: label, downloadPreference: format, ...(onlyIfOffered ? { requireFormat: true } : {}), ...ordinal }
     });
     if (!response || !response.success) {
       throw new Error(response?.error || 'Download failed');
@@ -232,7 +234,7 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
 async function scanArtifactsData(tabId) {
   await ensureContentScriptLoaded(tabId);
   const scan = await chrome.tabs.sendMessage(tabId, { type: NLME.MSG.SCAN_STUDIO_ITEMS });
-  return (scan?.items || [])
+  const items = (scan?.items || [])
     .filter(item => item.kind === 'artifact')
     .map(item => ({
       index: item.moreIndex,
@@ -241,6 +243,8 @@ async function scanArtifactsData(tabId) {
       details: item.details,
       disabled: !item.downloadable
     }));
+  // Over every row with a More button, disabled ones included: the page's list
+  return NLME.stampTitleOrdinals(items, { titleOf: item => item.label, indexOf: item => item.index });
 }
 
 function convertTableToCSV(htmlContent) {
@@ -776,7 +780,7 @@ async function fetchNoMenuSafe(item, run) {
   try {
     return await run();
   } catch (error) {
-    if (item.index >= 0 || (error && error.message === NLME.SAME_TITLE_REFUSED)) throw error;
+    if (item.index >= 0 || NLME.isSameTitleRefusal(error)) throw error;
     console.warn('[NotebookLM Takeout] An item with no More button failed:', item.label, error);
     const friendly = new Error(NLME.NO_MENU_FAILED);
     friendly.detail = (error && error.message) || String(error);

@@ -559,18 +559,28 @@
   // index of its own (-1: an item that had no More button when scanned) the title
   // alone decides, so it must name one item only: two candidates of that title
   // are refused (SAME_TITLE_REFUSED) instead of taking the first (1.9.5; a Retry
-  // reuses the scanned -1 without a rescan).
-  function pickByIndexThenTitleStrict(titles, index, title) {
+  // reuses the scanned -1 without a rescan). The same goes for a scanned index
+  // whose row no longer has this title (the list shifted: an item finished or was
+  // added above it): with one row of that title it is followed, with two or more
+  // it is refused (SAME_TITLE_SHIFTED), since the first match is right only by
+  // luck. Every caller fails the item on a throw; Resume rescans.
+  // ordinal (stampTitleOrdinals): how many rows of this title came before the item
+  // when it was scanned. A shift can put the item's twin at its old index; the
+  // title still matches there, but the count before it does not, so that index is
+  // stale too. Without an ordinal (a single-row download) the title check alone
+  // decides, as before.
+  function pickByIndexThenTitleStrict(titles, index, title, ordinal = null) {
     const list = titles || [];
     const inRange = Number.isInteger(index) && index >= 0 && index < list.length;
     if (!normalizeTitle(title)) {
       if (inRange) return index;
       throw new Error(`Item changed: index ${index} is out of range`);
     }
-    if (inRange && titlesMatch(list[index], title)) return index;
+    if (inRange && titlesMatch(list[index], title) &&
+      (!Number.isInteger(ordinal) || titleOrdinalAt(list, index, title) === ordinal)) return index;
     const byTitle = list.findIndex(t => titlesMatch(t, title));
-    if (byTitle !== -1 && Number.isInteger(index) && index < 0 && list.filter(t => titlesMatch(t, title)).length > 1) {
-      throw new Error(SAME_TITLE_REFUSED);
+    if (byTitle !== -1 && list.filter(t => titlesMatch(t, title)).length > 1) {
+      throw new Error(Number.isInteger(index) && index >= 0 ? SAME_TITLE_SHIFTED : SAME_TITLE_REFUSED);
     }
     if (byTitle !== -1) return byTitle;
     throw new Error(`Item changed: expected "${title}"`);
@@ -2192,6 +2202,14 @@
     // button (Flashcards and Quiz included) now, a no-More twin once it is ready
     const artifactRows = (allItems || []).filter(item => item && item.kind === 'artifact');
     const namesakesOf = item => artifactRows.filter(other => other !== item && titlesMatch(other.label, item.label));
+    // Ordinals over the whole list (stampTitleOrdinals), for the items it builds
+    const withMenu = (allItems || []).filter(item => item && item.kind === 'artifact' && item.moreIndex >= 0);
+    const notesAll = (allItems || []).filter(item => item && item.kind === 'note');
+    const ordinalIn = (list, item, indexOf) => list.filter(other => indexOf(other) < indexOf(item) && titlesMatch(other.label, item.label)).length;
+    const withOrdinal = (out, ordinal) => {
+      Object.defineProperty(out, '_titleOrdinal', { value: ordinal, configurable: true, writable: true });
+      return out;
+    };
     for (const item of items || []) {
       if (!item) continue;
       if (isStudioItemUnavailable(item)) {
@@ -2203,9 +2221,9 @@
           plan.noMenuWarnings.push(skippedNoMenuWarning(item.label, namesakes.length > 0, namesakes.some(other => other.moreIndex >= 0)));
         }
       } else if (item.kind === 'artifact') {
-        plan.artifacts.push(asArtifact(item));
+        plan.artifacts.push(withOrdinal(asArtifact(item), ordinalIn(withMenu, item, row => row.moreIndex)));
       } else if (item.kind === 'note') {
-        plan.notes.push(keyed({ index: item.kindIndex, title: item.label, type: item.type }, item));
+        plan.notes.push(withOrdinal(keyed({ index: item.kindIndex, title: item.label, type: item.type }, item), ordinalIn(notesAll, item, row => row.kindIndex)));
       } else if (item.kind === 'source-note') {
         plan.notes.push(keyed({ index: -1, sourceIndex: item.sourceIndex, title: item.label, type: item.type }, item));
       } else {
@@ -2230,6 +2248,33 @@
   const NO_MENU_FAILED = 'Still being generated. Try again when it is ready (Resume will retry it).';
   // pickByIndexThenTitleStrict's refusal: a title-only pick with two candidates
   const SAME_TITLE_REFUSED = 'Another item has the same title, so this one cannot be found by its title alone. Resume finds it again by its place in the list.';
+  // ... and with a scanned index whose row has moved
+  const SAME_TITLE_SHIFTED = 'The list changed and another item has the same title, so this one cannot be found safely. Resume finds it again.';
+
+  // How many of `titles` before `index` match `title`
+  function titleOrdinalAt(titles, index, title) {
+    let n = 0;
+    for (let i = 0; i < index && i < titles.length; i++) if (titlesMatch(titles[i], title)) n++;
+    return n;
+  }
+
+  // Stamps each item with an index of its own (indexOf >= 0) with its ordinal
+  // among the items of its title, by index: the `ordinal` pickByIndexThenTitleStrict
+  // checks. Non-enumerable (_titleOrdinal), like _listKey: never in a file.
+  function stampTitleOrdinals(items, { titleOf, indexOf }) {
+    const placed = (items || []).filter(item => item && Number.isInteger(indexOf(item)) && indexOf(item) >= 0)
+      .sort((a, b) => indexOf(a) - indexOf(b));
+    placed.forEach((item, i) => {
+      const ordinal = placed.slice(0, i).filter(other => titlesMatch(titleOf(other), titleOf(item))).length;
+      Object.defineProperty(item, '_titleOrdinal', { value: ordinal, configurable: true, writable: true });
+    });
+    return items;
+  }
+
+  function isSameTitleRefusal(error) {
+    const message = error && error.message;
+    return message === SAME_TITLE_REFUSED || message === SAME_TITLE_SHIFTED;
+  }
 
   // sharesTitle: another item has this title; ready: one of them has a More button
   // (else a twin still being generated)
@@ -3225,6 +3270,10 @@ footer { margin-top: 3rem; }
     SKIPPED_NO_MENU_TYPE,
     NO_MENU_FAILED,
     SAME_TITLE_REFUSED,
+    SAME_TITLE_SHIFTED,
+    isSameTitleRefusal,
+    titleOrdinalAt,
+    stampTitleOrdinals,
     skippedNoMenuWarning,
     artifactExportPlan,
     resumeBannerLabel,
