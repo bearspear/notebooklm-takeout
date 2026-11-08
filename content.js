@@ -151,6 +151,64 @@
     }
   `;
 
+  // The extension can be reloaded, updated or turned off under an open page. This
+  // script is then cut off: chrome.runtime has no id and sendMessage throws
+  // "Extension context invalidated". Returns whether the cancel went out.
+  function sendCancelExport() {
+    if (!chrome.runtime?.id) return false;
+    try {
+      const sent = chrome.runtime.sendMessage({ type: NLME.MSG.CANCEL_EXPORT });
+      if (sent && typeof sent.catch === 'function') sent.catch(() => {}); // no panel listening
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // In the overlay's place when its export died with a reload: a small note at the
+  // foot of the page, not blocking it, gone after RELOADED_NOTE_MS or on Dismiss.
+  // The overlay's own styles and tokens, in its own shadow root.
+  const RELOADED_NOTE_MS = 6000;
+  function showReloadedNote() {
+    document.getElementById('notebooklm-export-reloaded')?.remove();
+    const host = document.createElement('div');
+    host.id = 'notebooklm-export-reloaded';
+    const shadow = host.attachShadow({ mode: 'open' });
+    const style = document.createElement('style');
+    style.textContent = OVERLAY_STYLE + `
+      .scrim.reloaded { inset: auto 0 16px 0; align-items: flex-end; background: none; pointer-events: none; }
+      .reloaded .card { pointer-events: auto; padding: 16px; }
+      .reloaded .heading { font-size: 13px; }
+      .reloaded .footer { margin-top: 12px; min-height: 0; }
+    `;
+    const scrim = document.createElement('div');
+    scrim.className = 'scrim reloaded';
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.setAttribute('role', 'status');
+    const label = document.createElement('p');
+    label.className = 'label';
+    label.textContent = 'Takeout for Gemini Notebook';
+    const text = document.createElement('p');
+    text.className = 'heading';
+    text.textContent = 'This export stopped when the extension was reloaded. Refresh the page to use Takeout again.';
+    const footer = document.createElement('div');
+    footer.className = 'footer';
+    const dismiss = document.createElement('button');
+    dismiss.type = 'button';
+    dismiss.className = 'cancel';
+    dismiss.textContent = 'Dismiss';
+    const remove = () => host.remove();
+    dismiss.addEventListener('click', remove);
+    footer.appendChild(dismiss);
+    card.append(label, text, footer);
+    scrim.appendChild(card);
+    shadow.append(style, scrim);
+    document.body.appendChild(host);
+    dismiss.focus({ preventScroll: true });
+    setTimeout(remove, RELOADED_NOTE_MS);
+  }
+
   function createExportOverlay() {
     if (exportOverlay) return exportOverlay;
 
@@ -193,8 +251,8 @@
     cancelButton.type = 'button';
     cancelButton.addEventListener('click', () => {
       exportCancelled = true;
-      chrome.runtime.sendMessage({ type: NLME.MSG.CANCEL_EXPORT });
       removeExportOverlay();
+      if (!sendCancelExport()) showReloadedNote();
     });
     footer.appendChild(cancelButton);
 
@@ -379,8 +437,8 @@
       run(message, sender, sendResponse) {
         // Side panel Cancel button: same effect as the overlay's Cancel
         exportCancelled = true;
-        chrome.runtime.sendMessage({ type: NLME.MSG.CANCEL_EXPORT }).catch(() => {});
         removeExportOverlay();
+        sendCancelExport();
         sendResponse({ success: true });
       }
     },

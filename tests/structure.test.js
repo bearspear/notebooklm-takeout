@@ -966,3 +966,33 @@ test('the panel says Gemini Notebook, not NotebookLM (1.9.4)', () => {
   // Export output keeps the old name, byte for byte
   assert.match(fs.readFileSync(path.join(ROOT, 'takeout-shared.js'), 'utf8'), /exporter: `NotebookLM Takeout \$\{version\}`/);
 });
+
+// content.js is one indented IIFE: its functions start at two spaces
+function contentFn(name) {
+  const src = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const start = src.search(new RegExp(`^  function ${name}\\(`, 'm'));
+  assert.ok(start >= 0, `${name} not found in content.js`);
+  return src.slice(start, src.indexOf('\n  }\n', start) + 4);
+}
+
+test('an overlay Cancel never leaves a dead card when the extension was reloaded', () => {
+  // The send is guarded: no extension id, or a throw, means the context is gone
+  const send = contentFn('sendCancelExport');
+  assert.match(send, /if \(!chrome\.runtime\?\.id\) return false;/);
+  assert.match(send, /try \{[\s\S]*chrome\.runtime\.sendMessage\(\{ type: NLME\.MSG\.CANCEL_EXPORT \}\)[\s\S]*\} catch \(_\) \{\s*return false;\s*\}/);
+  assert.match(send, /\.catch\(\(\) => \{\}\)/);
+  // The card goes first, then the send; a lost context leaves a note, not the card
+  const overlay = contentFn('createExportOverlay');
+  assert.match(overlay, /exportCancelled = true;\s*removeExportOverlay\(\);\s*if \(!sendCancelExport\(\)\) showReloadedNote\(\);/);
+  assert.doesNotMatch(overlay, /chrome\.runtime\.sendMessage/);
+  const note = contentFn('showReloadedNote');
+  assert.match(note, /This export stopped when the extension was reloaded\. Refresh the page to use Takeout again\./);
+  assert.match(note, /attachShadow/);
+  assert.match(note, /setTimeout\(remove, RELOADED_NOTE_MS\)/);
+  assert.match(note, /'Dismiss'/);
+  assert.match(fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8'), /const RELOADED_NOTE_MS = 6000;/);
+  // The side panel's Cancel goes through the same guard
+  const content = fs.readFileSync(path.join(ROOT, 'content.js'), 'utf8');
+  const handler = content.slice(content.indexOf('[NLME.MSG.REQUEST_EXPORT_CANCEL]'), content.indexOf('[NLME.MSG.EXTRACT_NOTE]'));
+  assert.match(handler, /exportCancelled = true;\s*removeExportOverlay\(\);\s*sendCancelExport\(\);/);
+});
