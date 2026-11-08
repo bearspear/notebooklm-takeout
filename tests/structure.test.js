@@ -1102,7 +1102,11 @@ test('an item with no More button that fails says it is still being generated', 
   vm.runInContext(fnSource('sidebar-artifacts.js', 'fetchNoMenuSafe'), sandbox);
   const broke = async () => { throw new Error('Item changed: expected "Fresh"'); };
   await assert.rejects(sandbox.fetchNoMenuSafe({ index: -1, label: 'Fresh' }, broke), /^Error: Still being generated\. Try again when it is ready \(Resume will retry it\)\.$/);
+  await assert.rejects(sandbox.fetchNoMenuSafe({ index: -1, label: 'Fresh' }, broke), err => err.detail === 'Item changed: expected "Fresh"');
   await assert.rejects(sandbox.fetchNoMenuSafe({ index: 2, label: 'Fresh' }, broke), /Item changed/);
+  // A refused same-title pick keeps its own words
+  const twin = async () => { throw new Error(sandbox.NLME.SAME_TITLE_REFUSED); };
+  await assert.rejects(sandbox.fetchNoMenuSafe({ index: -1, label: 'Twin' }, twin), err => err.message === sandbox.NLME.SAME_TITLE_REFUSED && !err.detail);
   assert.equal(await sandbox.fetchNoMenuSafe({ index: -1 }, async () => 'ok'), 'ok');
   assert.match(fnSource('sidebar-artifacts.js', 'runArtifactsJob'), /const fetched = await fetchNoMenuSafe\(item, \(\) => fetchSlideFormats\(/);
 });

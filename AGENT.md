@@ -1302,11 +1302,16 @@ category) and `manifest.json`. It does not call `shell.finish`: one combined out
 - **Same-title no-More artifacts (1.9.5).** Every artifact download resolves an item by title among the items that
   have a More button (`getArtifactItemsWithMore`), so an item still being generated (no More button, `index` -1)
   would fetch a ready item of the same title. `NLME.artifactExportPlan(items, { all })` skips exactly that case: no
-  More button AND an item in `all` (the whole scan) that has one (`index >= 0`, Flashcards and Quiz included: the
-  title pick lands on them too) with a matching title (`titlesMatch`). A no-More item with its own title is tried as in
-  1.9.4; if it fails, `fetchNoMenuSafe` reports `NLME.NO_MENU_FAILED` ("Still being generated. Try again when it is
-  ready (Resume will retry it).") instead of "Item changed", and it stays failed in the record. Two ready items of one
-  title both export. Each skip is `{ type: 'skipped_ambiguous', title, message: 'still being
+  More button AND any OTHER item in `all` (the whole scan) with a matching title (`titlesMatch`): one with a More button
+  (Flashcards and Quiz included) is where the title pick lands now, a no-More twin is where it lands once that twin is
+  ready. Twins are both skipped ("another item being generated has the same title"), kept failed in the record and
+  resumed later with their own indices. A no-More item with its own title is tried as in 1.9.4; if it fails,
+  `fetchNoMenuSafe` reports `NLME.NO_MENU_FAILED` ("Still being generated. Try again when it is ready (Resume will retry
+  it).") with the original error as `detail` (runExportJob writes it as errors.md's second line), and it stays failed
+  in the record. Two ready items of one title both export. Defence in depth: `pickByIndexThenTitleStrict` (every
+  title pick, content.js included) refuses a title-only pick (index < 0) that matches two candidates with
+  `NLME.SAME_TITLE_REFUSED` instead of taking the first, so a Retry (which reuses the scanned -1 without a rescan)
+  never saves one twin twice; `fetchNoMenuSafe` keeps that message. Each skip is `{ type: 'skipped_ambiguous', title, message: 'still being
   generated or has no menu; a ready item has the same title' }`; errors.md heads it "Skipped: same title as another
   item" (`ERROR_HEADINGS`), and it counts as an error (`countExportErrors`), so the checker WARNs. Full Takeout seeds the
   warnings into `runArtifactsJob` (`seedErrors`), so they lead `artifacts/errors.md` and the root one; skips are in

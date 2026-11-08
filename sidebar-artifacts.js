@@ -769,14 +769,18 @@ async function triggerItemDownload(tabId, itemIndex, artifactName, artifactType)
 
 // An item with no More button (index -1, still being generated) is found by
 // title only; when that fails, say why instead of the title pick's "Item
-// changed: expected …". Its key stays failed in the job record for Resume.
+// changed: expected …", which stays as the error's detail (errors.md's second
+// line). A refused same-title pick keeps its own message. Its key stays failed
+// in the job record for Resume.
 async function fetchNoMenuSafe(item, run) {
   try {
     return await run();
   } catch (error) {
-    if (item.index >= 0) throw error;
+    if (item.index >= 0 || (error && error.message === NLME.SAME_TITLE_REFUSED)) throw error;
     console.warn('[NotebookLM Takeout] An item with no More button failed:', item.label, error);
-    throw new Error(NLME.NO_MENU_FAILED);
+    const friendly = new Error(NLME.NO_MENU_FAILED);
+    friendly.detail = (error && error.message) || String(error);
+    throw friendly;
   }
 }
 

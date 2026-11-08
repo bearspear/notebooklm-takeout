@@ -73,7 +73,10 @@
       } catch (err) {
         failed = true;
         failedItems.push(item);
-        errors.push(`[${titleOf(item)}] ${(err && err.message) || err}`);
+        // err.detail: the cause under a friendly message, errors.md's second line
+        errors.push(err && err.detail
+          ? { type: 'error', title: titleOf(item), message: err.message, stack: String(err.detail) }
+          : `[${titleOf(item)}] ${(err && err.message) || err}`);
       }
       if (afterEach) {
         try { await afterEach(item, { failed }); } catch (_) { /* cleanup must never fail the item */ }

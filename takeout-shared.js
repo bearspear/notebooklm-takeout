@@ -555,7 +555,11 @@
   }
 
   // Like pickByIndexThenTitle, but never falls back to an index whose title
-  // differs: the item the user picked must still be the item we open.
+  // differs: the item the user picked must still be the item we open. With no
+  // index of its own (-1: an item that had no More button when scanned) the title
+  // alone decides, so it must name one item only: two candidates of that title
+  // are refused (SAME_TITLE_REFUSED) instead of taking the first (1.9.5; a Retry
+  // reuses the scanned -1 without a rescan).
   function pickByIndexThenTitleStrict(titles, index, title) {
     const list = titles || [];
     const inRange = Number.isInteger(index) && index >= 0 && index < list.length;
@@ -565,6 +569,9 @@
     }
     if (inRange && titlesMatch(list[index], title)) return index;
     const byTitle = list.findIndex(t => titlesMatch(t, title));
+    if (byTitle !== -1 && Number.isInteger(index) && index < 0 && list.filter(t => titlesMatch(t, title)).length > 1) {
+      throw new Error(SAME_TITLE_REFUSED);
+    }
     if (byTitle !== -1) return byTitle;
     throw new Error(`Item changed: expected "${title}"`);
   }
@@ -2181,9 +2188,10 @@
       return out;
     };
     const asArtifact = item => keyed({ index: item.moreIndex, label: item.label, type: item.type, details: item.details, disabled: false }, item);
-    // Every row with a More button is something a title pick can land on,
-    // Flashcards and Quiz included
-    const menuTitles = (allItems || []).filter(item => item && item.kind === 'artifact' && item.moreIndex >= 0).map(item => item.label);
+    // Any other row of the same title makes the skip "same title": one with a More
+    // button (Flashcards and Quiz included) now, a no-More twin once it is ready
+    const artifactRows = (allItems || []).filter(item => item && item.kind === 'artifact');
+    const namesakesOf = item => artifactRows.filter(other => other !== item && titlesMatch(other.label, item.label));
     for (const item of items || []) {
       if (!item) continue;
       if (isStudioItemUnavailable(item)) {
@@ -2191,7 +2199,8 @@
         plan.skipped.push(item);
         if (item.kind === 'artifact' && item.downloadable) {
           plan.noMenu.push(asArtifact(item));
-          plan.noMenuWarnings.push(skippedNoMenuWarning(item.label, hitsTitle(item.label, menuTitles)));
+          const namesakes = namesakesOf(item);
+          plan.noMenuWarnings.push(skippedNoMenuWarning(item.label, namesakes.length > 0, namesakes.some(other => other.moreIndex >= 0)));
         }
       } else if (item.kind === 'artifact') {
         plan.artifacts.push(asArtifact(item));
@@ -2219,34 +2228,49 @@
   const SKIPPED_NOT_READY_TYPE = 'skipped_not_ready'; // Studio export: no More button
   const SKIP_TYPES = [SKIPPED_NO_MENU_TYPE, SKIPPED_NOT_READY_TYPE];
   const NO_MENU_FAILED = 'Still being generated. Try again when it is ready (Resume will retry it).';
+  // pickByIndexThenTitleStrict's refusal: a title-only pick with two candidates
+  const SAME_TITLE_REFUSED = 'Another item has the same title, so this one cannot be found by its title alone. Resume finds it again by its place in the list.';
 
-  function skippedNoMenuWarning(title, sharesTitle = true) {
-    return sharesTitle
-      ? { type: SKIPPED_NO_MENU_TYPE, title: String(title || ''), message: 'still being generated or has no menu; a ready item has the same title' }
-      : { type: SKIPPED_NOT_READY_TYPE, title: String(title || ''), message: 'still being generated or has no menu' };
-  }
-
-  // One of `titles` matches this title (titlesMatch, the title pick's own rule)
-  function hitsTitle(title, titles) {
-    return titles.some(t => titlesMatch(t, title));
+  // sharesTitle: another item has this title; ready: one of them has a More button
+  // (else a twin still being generated)
+  function skippedNoMenuWarning(title, sharesTitle = true, ready = true) {
+    const name = String(title || '');
+    if (!sharesTitle) return { type: SKIPPED_NOT_READY_TYPE, title: name, message: 'still being generated or has no menu' };
+    return {
+      type: SKIPPED_NO_MENU_TYPE,
+      title: name,
+      message: ready
+        ? 'still being generated or has no menu; a ready item has the same title'
+        : 'still being generated or has no menu; another item being generated has the same title'
+    };
   }
 
   // scanArtifactsData's items as Export everything and Resume take them: runnable
   // (everything enabled but the skipped), skipped (no More button, index -1, and
-  // an item with a More button of the same title, disabled ones included: a title
-  // pick lands on those too) and one warning per skip. Disabled types (Flashcards,
-  // Quiz) are not exported, as before. Two ready items of one title both stay
-  // runnable. all: the whole scan, when items is a part of it (Resume's matched
-  // keys), for the titles.
+  // any OTHER scanned item of the same title: one with a More button, disabled
+  // ones included, is where a title pick lands now; a no-More twin is where it
+  // lands once that twin is ready) and one warning per skip. Twins are both
+  // skipped, kept failed in the record, and resumed later with their own indices.
+  // Disabled types (Flashcards, Quiz) are not exported, as before. Two ready items
+  // of one title both stay runnable. all: the whole scan, when items is a part of
+  // it (Resume's matched keys), for the titles.
   function artifactExportPlan(items, { all = items } = {}) {
-    const readyTitles = (all || []).filter(item => item && item.index >= 0).map(item => item.label);
+    const scanned = (all || []).filter(Boolean);
+    const others = item => scanned.filter(other => other !== item && titlesMatch(other.label, item.label));
     const runnable = [];
     const skipped = [];
+    const warnings = [];
     for (const item of items || []) {
       if (!item || item.disabled) continue;
-      (!(item.index >= 0) && hitsTitle(item.label, readyTitles) ? skipped : runnable).push(item);
+      const namesakes = item.index >= 0 ? [] : others(item);
+      if (namesakes.length) {
+        skipped.push(item);
+        warnings.push(skippedNoMenuWarning(item.label, true, namesakes.some(other => other.index >= 0)));
+      } else {
+        runnable.push(item);
+      }
     }
-    return { runnable, skipped, warnings: skipped.map(item => skippedNoMenuWarning(item.label)) };
+    return { runnable, skipped, warnings };
   }
 
   // Export everything and Resume read the notes list until it settles (1.9.5). The
@@ -3200,6 +3224,7 @@ footer { margin-top: 3rem; }
     notesSettleDecision,
     SKIPPED_NO_MENU_TYPE,
     NO_MENU_FAILED,
+    SAME_TITLE_REFUSED,
     skippedNoMenuWarning,
     artifactExportPlan,
     resumeBannerLabel,

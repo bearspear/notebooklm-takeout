@@ -3497,12 +3497,41 @@ test('artifactExportPlan skips a no-More item only when a ready item has its tit
   assert.deepEqual(plan.warnings, [{ type: 'skipped_ambiguous', title: 'Deck', message: SKIP_MESSAGE }]);
 });
 
-test('artifactExportPlan keeps two ready items of one title, and two no-More items of one title with no ready one', () => {
+test('artifactExportPlan keeps two ready items of one title, and skips two no-More twins', () => {
   const ready = [{ index: 0, label: 'Deck', type: 'Slides' }, { index: 1, label: 'Deck', type: 'Slides' }];
   assert.deepEqual(NLME.artifactExportPlan(ready).runnable, ready);
   assert.deepEqual(NLME.artifactExportPlan(ready).warnings, []);
-  const drafts = [{ index: -1, label: 'Draft' }, { index: -1, label: 'Draft' }];
-  assert.deepEqual(NLME.artifactExportPlan(drafts).runnable, drafts);
+  // Once one twin is ready, the other's title pick would land on it
+  const drafts = [{ index: -1, label: 'Draft' }, { index: -1, label: 'Draft' }, { index: -1, label: 'Solo' }];
+  const plan = NLME.artifactExportPlan(drafts);
+  assert.deepEqual(plan.runnable, [drafts[2]], 'a lone no-More item is still tried');
+  assert.deepEqual(plan.skipped, drafts.slice(0, 2));
+  assert.deepEqual(plan.warnings.map(w => [w.type, w.message]), [
+    ['skipped_ambiguous', 'still being generated or has no menu; another item being generated has the same title'],
+    ['skipped_ambiguous', 'still being generated or has no menu; another item being generated has the same title']
+  ]);
+  // The item never counts as its own namesake, also when given a part of the scan
+  assert.deepEqual(NLME.artifactExportPlan([drafts[2]], { all: drafts }).runnable, [drafts[2]]);
+  assert.deepEqual(NLME.artifactExportPlan([drafts[0]], { all: drafts }).skipped, [drafts[0]]);
+});
+
+test('a title-only pick (index -1) refuses two candidates, and still resolves one', () => {
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(['Twin', 'Other', 'Twin'], -1, 'Twin'), err => err.message === NLME.SAME_TITLE_REFUSED);
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Twin', 'Other', 'Twin'], -1, 'Other'), 1);
+  // An index of its own still wins, and a stale index still follows the title as before
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Twin', 'Other', 'Twin'], 2, 'Twin'), 2);
+  assert.equal(NLME.pickByIndexThenTitleStrict(['Twin', 'Other', 'Twin'], 1, 'Twin'), 0);
+  assert.throws(() => NLME.pickByIndexThenTitleStrict(['Other'], -1, 'Twin'), /Item changed: expected "Twin"/);
+});
+
+test('Retry of two no-More twins after both are ready never saves the first one twice', () => {
+  // A Retry reuses the scanned items: both still say index -1
+  const rows = ['Twin', 'Twin'];
+  const picks = [];
+  for (const item of [{ index: -1, label: 'Twin' }, { index: -1, label: 'Twin' }]) {
+    try { picks.push(NLME.pickByIndexThenTitleStrict(rows, item.index, item.label)); } catch (e) { picks.push(e.message); }
+  }
+  assert.deepEqual(picks, [NLME.SAME_TITLE_REFUSED, NLME.SAME_TITLE_REFUSED]);
 });
 
 test('artifactExportPlan takes the ready titles from the whole scan when given a part of it', () => {

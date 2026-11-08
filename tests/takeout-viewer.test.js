@@ -1425,3 +1425,16 @@ test('Full Takeout: a Cancel during the notes wait cancels the takeout, it is no
   assert.match(log.zipped['Book/errors.md'], /Cancelled by user during the scan/);
   assert.doesNotMatch(log.zipped['Book/errors.md'], /Scan failed/);
 });
+
+test('Full Takeout skips two no-More twins, keeps them failed in the record, and tries a lone one', async () => {
+  const recorded = { failed: [] };
+  const record = items => { recorded.items = items; return { fail: (cat, item) => recorded.failed.push(item.label), done() {}, commit() {}, discard() {}, finish: async () => {} }; };
+  const { sandbox, log, runnerArgs } = takeoutPanel({ record, artifacts: [
+    { index: -1, label: 'Twin', type: 'Report' }, { index: -1, label: 'Twin', type: 'Report' }, { index: -1, label: 'Solo', type: 'Report' }
+  ] });
+  await sandbox.runFullTakeout();
+  assert.deepEqual(JSON.parse(JSON.stringify(runnerArgs.artifacts.items.map(i => i.label))), ['Solo']);
+  assert.deepEqual(recorded.failed, ['Twin', 'Twin']);
+  assert.match(log.zipped['Book/errors.md'], /^## Skipped: same title as another item \(2\)\n\n- Artifacts: Twin: still being generated or has no menu; another item being generated has the same title$/m);
+  assert.match(log.panels[0].message, /artifacts 1\/1 \(2 skipped\)/);
+});
