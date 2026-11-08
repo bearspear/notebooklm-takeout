@@ -572,7 +572,7 @@ async function exportSingleNote(note) {
       settings.citationDetail === 'none',
       settings.citationStyle
     );
-    markdown = version.stripImages ? stripImagesFromMarkdown(markdown) : NLME.applyImageEmbeds(markdown, imageEmbeds);
+    markdown = version.stripImages ? stripImagesFromMarkdown(markdown) : NLME.embedImagesForVersion(markdown, imageEmbeds);
     markdown = noteFrontMatter(meta, { title: note.title, variant: version.variant }) + markdown;
     const filename = `${NLME.prefixedStem('NOTE', note.title, { obsidian })}${version.fileSuffix}.md`;
     downloadBlob(new Blob([markdown], { type: 'text/markdown' }), filename);
@@ -650,7 +650,7 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
         );
 
         // Strip images, or embed the ones extractNoteItem downloaded
-        markdown = version.stripImages ? stripImagesFromMarkdown(markdown) : NLME.applyImageEmbeds(markdown, note.imageEmbeds);
+        markdown = version.stripImages ? stripImagesFromMarkdown(markdown) : NLME.embedImagesForVersion(markdown, note.imageEmbeds);
 
         const path = `${itemDir}${stems[idx]}${version.fileSuffix}.md`;
         files.push({
@@ -694,7 +694,7 @@ function buildNotesFiles(notes, { meta, errors = [], auditText = null, batchInde
         );
 
         // Strip images, or embed the ones extractNoteItem downloaded
-        noteMarkdown = version.stripImages ? stripImagesFromMarkdown(noteMarkdown) : NLME.applyImageEmbeds(noteMarkdown, note.imageEmbeds);
+        noteMarkdown = version.stripImages ? stripImagesFromMarkdown(noteMarkdown) : NLME.embedImagesForVersion(noteMarkdown, note.imageEmbeds);
 
         combinedMarkdown += noteMarkdown + '\n\n';
         if (idx < regularNotes.length - 1) {

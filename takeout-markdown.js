@@ -350,6 +350,30 @@
   // The audit reads it before and after a conversion (convertCounted).
   let formulasWrittenTotal = 0;
 
+  // A source import card's text, one line per block (DIV, P, H1-H6, LI);
+  // icons and images (the remote favicons) left out
+  const IMPORT_CARD_BLOCKS = new Set(['DIV', 'P', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'SECTION']);
+  function importCardLines(card) {
+    const clone = card.cloneNode(true);
+    clone.querySelectorAll('mat-icon, img').forEach(node => node.remove());
+    const lines = [];
+    let line = '';
+    const flush = () => { if (line.trim()) lines.push(line.replace(/\s+/g, ' ').trim()); line = ''; };
+    const walk = node => {
+      for (const child of Array.from(node.childNodes || [])) {
+        if (child.nodeType === 3) { line += child.textContent; continue; }
+        if (child.nodeType !== 1) continue;
+        const block = IMPORT_CARD_BLOCKS.has(child.nodeName.toUpperCase());
+        if (block) flush();
+        walk(child);
+        if (block) flush();
+      }
+    };
+    walk(clone);
+    flush();
+    return lines;
+  }
+
   // ==================== ONE TURNDOWN RULE SET ====================
   // The notes/sources/reports rule set and the chat rule set were two copies
   // (Milestone 3d merges them). Options:
@@ -460,6 +484,18 @@
         return content; // Return inner content, strip wrapper
       }
     });
+
+    // A source import card in a chat answer (1.9.6): one line of text in its
+    // place (NLME.importCardMarkdown), never its remote favicons
+    if (isChat) {
+      turndownService.addRule('importCard', {
+        filter: (node) => node.nodeName === 'A2UI-SOURCE-IMPORT-CARD',
+        replacement: (_content, node) => {
+          const line = NLME.importCardMarkdown(NLME.importCardFromLines(importCardLines(node)));
+          return line ? `\n\n${line}\n\n` : '';
+        }
+      });
+    }
 
     // A chat answer's Thoughts (1.9.6): content.js leaves
     // NLME.THOUGHTS_PLACEHOLDER_HTML where the page's thinking-chain-view
@@ -1056,6 +1092,7 @@
     convertKatexNodeToLatex,
     createConverter,
     formulasWritten: () => formulasWrittenTotal,
+    importCardLines,
     htmlToMarkdownPlain
   });
 })(globalThis);

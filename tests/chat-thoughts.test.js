@@ -225,3 +225,14 @@ test('content.js reads Thoughts during the chat scan and collapses them again in
 test('the placeholder keeps the word "Thoughts" (any other converter writes what 1.9.5 wrote)', () => {
   assert.match(PLACEHOLDER, /^<div data-nlme-thoughts="">Thoughts<\/div>$/);
 });
+
+// ---------- thought bodies: blocks must hold the whole text (review N2) ----------
+
+test('blocksCoverText: blocks that miss part of the body text do not cover it', () => {
+  assert.equal(NLME.blocksCoverText(['One.', 'Two.'], ' One.\n Two. '), true);
+  assert.equal(NLME.blocksCoverText(['One.'], 'A heading outside the blocks One.'), false);
+  assert.equal(NLME.blocksCoverText([], ''), true);
+  assert.equal(NLME.blocksCoverText([], 'Text'), false);
+  // a few stray characters between blocks are fine
+  assert.equal(NLME.blocksCoverText(['One', 'Two'], 'One · Two'), true);
+});

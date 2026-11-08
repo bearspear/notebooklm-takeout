@@ -4226,8 +4226,11 @@
   function thoughtBody(element) {
     if (!element) return '';
     const clone = stripThoughtExtras(element.cloneNode(true));
-    const blocks = Array.from(clone.querySelectorAll(THOUGHT_BLOCK_SELECTOR))
+    let blocks = Array.from(clone.querySelectorAll(THOUGHT_BLOCK_SELECTOR))
       .filter(block => !block.parentElement?.closest(THOUGHT_BLOCK_SELECTOR));
+    // Text outside the blocks (a heading, an unknown view): the whole body,
+    // so nothing is dropped
+    if (!NLME.blocksCoverText(blocks.map(block => block.textContent), clone.textContent)) blocks = [];
     const parts = (blocks.length > 0 ? blocks : [clone]).map(block => NLMEMarkdown.htmlToMarkdownPlain(block).trim());
     return parts.filter(Boolean).join('\n\n');
   }

@@ -572,7 +572,7 @@ function buildChatFiles(messages, { meta, chatData, errors = [], auditDoc, parti
       const variant = variantName(v.suffix);
       versionFiles.push({
         path: `chat${v.suffix}.md`,
-        data: frontMatter(variant) + (v.images ? NLME.applyImageEmbeds(markdown, imageEmbeds) : stripImagesFromMarkdown(markdown)),
+        data: frontMatter(variant) + (v.images ? NLME.embedImagesForVersion(markdown, imageEmbeds) : stripImagesFromMarkdown(markdown)),
         title: CHAT_VERSION_INFO[v.suffix].title,
         description: CHAT_VERSION_INFO[v.suffix].description,
         variant,

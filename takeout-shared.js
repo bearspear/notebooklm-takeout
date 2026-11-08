@@ -1484,6 +1484,67 @@
     return THOUGHT_ICON_NAMES.has(String(text || '').trim());
   }
 
+  // Do these blocks hold (nearly) all of the element's text? Counts
+  // non-space characters; a few may be missing (stray separators), not more.
+  function blocksCoverText(blockTexts, wholeText) {
+    const size = text => String(text || '').replace(/\s+/g, '').length;
+    const whole = size(wholeText);
+    const covered = (blockTexts || []).reduce((n, text) => n + size(text), 0);
+    return whole - covered <= Math.max(3, Math.floor(whole * 0.05));
+  }
+
+  // ---------- Source import cards (1.9.6) ----------
+  // A chat answer's a2ui-source-import-card: "Report & Outside sources (5)",
+  // the names ("Research Report, Open Logic Project, and nLab, +2"), a status
+  // ("All sources imported") and a row of remote favicons. Written as one
+  // italic line, never as images.
+  const IMPORT_CARD_ICONS = new Set(['check_circle', 'error', 'progress_activity', 'add', 'check', 'warning']);
+  const IMPORT_CARD_STATUS = /\b(import|imported|importing|added|adding|failed|selected|in progress)\b/i;
+
+  // The card's text lines (one per block, icons out): the first is the
+  // heading; a status-like last line (beyond the heading) is the status; the
+  // rest are the names
+  function importCardFromLines(lines) {
+    const clean = (lines || []).map(line => String(line || '').replace(/\s+/g, ' ').trim())
+      .filter(line => line && !IMPORT_CARD_ICONS.has(line));
+    const heading = clean.shift() || '';
+    const status = clean.length > 0 && IMPORT_CARD_STATUS.test(clean[clean.length - 1]) ? clean.pop() : '';
+    return { heading, names: clean.join(' '), status };
+  }
+
+  function importCardMarkdown({ heading = '', names = '', status = '' } = {}) {
+    const tidy = text => String(text || '').replace(/\s+/g, ' ').trim().replace(/([\\`*_[\]])/g, '\\$1');
+    const stop = text => (/[.!?…]$/.test(text) ? text : `${text}.`);
+    const [h, n, s] = [heading, names, status].map(tidy);
+    const lead = h && n ? `${h}: ${n}` : (h || n);
+    const parts = [lead, s].filter(Boolean).map(stop);
+    return parts.length > 0 ? `*${parts.join(' ')}*` : '';
+  }
+
+  // A favicon service URL (Google's s2/favicons, gstatic faviconV2): never
+  // worth keeping, not even as a link
+  function isFaviconServiceUrl(url) {
+    let parsed;
+    try { parsed = new URL(String(url || '')); } catch (error) { return false; }
+    if (!/^https?:$/.test(parsed.protocol)) return false;
+    const host = parsed.hostname.toLowerCase();
+    if ((host === 'google.com' || host === 'www.google.com') && parsed.pathname.startsWith('/s2/favicons')) return true;
+    return /(^|\.)gstatic\.com$/.test(host) && parsed.pathname.startsWith('/faviconV2');
+  }
+
+  // A -with-images version keeps no remote image: one still remote after
+  // embedding becomes a plain link "[image](url)", a favicon is dropped.
+  // data: and relative images stay.
+  function finishRemoteImages(markdown) {
+    return String(markdown).replace(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g,
+      (match, url) => (isFaviconServiceUrl(url) ? '' : `[image](${url})`));
+  }
+
+  // The -with-images pass: embed what was downloaded, then finishRemoteImages
+  function embedImagesForVersion(markdown, embeds) {
+    return finishRemoteImages(applyImageEmbeds(markdown, embeds));
+  }
+
   // Where a chat answer's "Thoughts" section was: content.js puts this in
   // place of the page's thinking-chain-view, and the chat converter writes
   // thoughtsMarkdown there. It keeps the word, so any other converter writes
@@ -3426,6 +3487,12 @@ footer { margin-top: 3rem; }
     fenceFor,
     toBlockquote,
     isThoughtIconName,
+    importCardFromLines,
+    importCardMarkdown,
+    isFaviconServiceUrl,
+    finishRemoteImages,
+    embedImagesForVersion,
+    blocksCoverText,
     THOUGHTS_PLACEHOLDER_HTML,
     thoughtsMarkdown,
     chatScanErrors,

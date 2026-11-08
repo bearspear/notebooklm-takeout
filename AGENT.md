@@ -535,7 +535,16 @@ side panel.
      converter's `chatThoughts` rule writes `NLME.thoughtsMarkdown` (a `> **Thoughts**`
      blockquote) at the placeholder, or nothing when they were not read. Thoughts are not in
      the answer HTML, so the audit (`countPageContent`) and the citation reading never
-     count them.
+     count them. A thought body whose blocks miss part of its text (`NLME.blocksCoverText`)
+     is converted whole.
+   - A source import card (`a2ui-source-import-card`: heading "Report & Outside sources (5)",
+     names, status "All sources imported", a row of `img.a2ui-favicon-overlap` from
+     `google.com/s2/favicons`) is written by the chat converter's `importCard` rule as one
+     line, `NLMEMarkdown.importCardLines` → `NLME.importCardFromLines` →
+     `NLME.importCardMarkdown`: `*Heading: names. Status.*`. Its favicons are never written.
+   - Every `-with-images` pass (chat and notes) uses `NLME.embedImagesForVersion`: embed,
+     then a remote image that is still remote becomes `[image](url)`, a favicon service
+     image is dropped (`NLME.finishRemoteImages`, 1.9.6).
 2. `exportChat(chatData)` reads `NLME.chatCitationMode(settings)` (the run's citations:
    `'quotes'` default | `'titles'` | `'none'`) and passes it to
    `runChatJob(shell, chatData, { citationMode, forceZip, pathPrefix, zipKind, folder })`;
