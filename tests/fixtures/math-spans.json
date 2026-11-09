@@ -94,5 +94,33 @@
   "formulas": [
    "$x$"
   ]
+ },
+ {
+  "text": "$Harrison\tTM\t(2009)\tThe\tHadean\tcrust:…\tSci$37:479–505",
+  "formulas": []
+ },
+ {
+  "text": "a $x\u0085$ b",
+  "formulas": [
+   "$x\u0085$"
+  ]
+ },
+ {
+  "text": "a $\u0085x$ b",
+  "formulas": [
+   "$\u0085x$"
+  ]
+ },
+ {
+  "text": "a $x\ufeff$ b",
+  "formulas": [
+   "$x\ufeff$"
+  ]
+ },
+ {
+  "text": "a $\ufeffx$ b",
+  "formulas": [
+   "$\ufeffx$"
+  ]
  }
 ]

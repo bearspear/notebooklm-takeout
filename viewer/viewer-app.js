@@ -203,7 +203,7 @@ function showCopyResult(btn, ok, icons, later, cancel) {
 // followed by whitespace and closes at the first "$" that is not preceded by whitespace,
 // on one line. When the content starts with a digit, a digit may not follow the closing "$":
 // "costs $5 and $10" and "$3-$4 million" stay prices, "$T$2" is a formula.
-var MATH_RE = /\$\$[\s\S]+?\$\$|\$(?![\s\d])(?:[^$\n]*?[^\s$])\$|\$(?=\d)(?:[^$\n]*?[^\s$])\$(?!\d)/g;
+var MATH_RE = /\$\$[\s\S]+?\$\$|\$(?![\x20\t\n\r\f\v\d])(?:[^$\n\t]*?[^\x20\t\n\r\f\v$])\$|\$(?=\d)(?:[^$\n\t]*?[^\x20\t\n\r\f\v$])\$(?!\d)/g;
 function findMath(text) {
   var out = [], re = new RegExp(MATH_RE.source, 'g'), m;
   while ((m = re.exec(String(text)))) out.push({ start: m.index, end: m.index + m[0].length, src: m[0], block: m[0].slice(0, 2) === '$$' });
