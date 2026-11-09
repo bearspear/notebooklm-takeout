@@ -13,7 +13,7 @@ const render = (text) => {
 test('bold beside a formula closes on the formula, with no literal **', () => {
   assert.equal(render('**sulphur dioxide (**$SO_2$**)**').trim(), '<p><strong>sulphur dioxide (</strong>[[$SO_2$]]<strong>)</strong></p>');
   assert.equal(render('**Carbon Dioxide (**$CO_2$**):**').trim(), '<p><strong>Carbon Dioxide (</strong>[[$CO_2$]]<strong>):</strong></p>');
-  assert.equal(render("$M$**'s internal domain**").trim(), "<p>[[$M$]]<strong>'s internal domain</strong></p>");
+  assert.equal(render("$M$**'s internal domain**").trim(), '<p>[[$M$]]<strong>&#39;s internal domain</strong></p>');
   assert.equal(render('_$x$_').trim(), '<p><em>[[$x$]]</em></p>');
   assert.match(render('[$x$](https://a.b)'), /<a href="https:\/\/a\.b">\[\[\$x\$\]\]<\/a>/);
 });
