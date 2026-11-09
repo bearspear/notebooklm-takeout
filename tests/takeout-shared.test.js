@@ -2254,7 +2254,7 @@ test('isProseMath spots prose the page marked as math', () => {
     'BΒOД aэpocTaTHoro эOHДa', 'BΒOД']) {
     assert.equal(NLME.isProseMath(tex), true, tex);
   }
-  for (const tex of ['x + y = z', '\\text{for all } n', 'x \\in A', 'f(x) = sin x', 'SO_2', '10^{48}', '\\kappa', 'n', 'ab', '3-', '', null]) {
+  for (const tex of ['x + y = z', '\\text{for all } n', 'x \\in A', 'f(x) = sin x', 'SO_2', '10^{48}', '\\kappa', 'n', 'ab', '3-', 'sin x cos y tan z', 'log n log log n', 'max min sup', 'gcd mod lcm', '', null]) {
     assert.equal(NLME.isProseMath(tex), false, String(tex));
   }
 });

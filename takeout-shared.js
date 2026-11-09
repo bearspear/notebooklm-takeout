@@ -1975,10 +1975,11 @@
   // paper ... TCF ∞", "BΒOД"). Real TeX here has a backslash, ^ _ { } or =;
   // these have none and read as words. Written as plain text, and left out of
   // both audit counts like a price range.
+  const MATH_FUNCTION_NAMES = new Set('sin cos tan cot sec csc log ln exp max min sup inf lim det gcd lcm mod arg deg dim ker hom'.split(' '));
   function isProseMath(tex) {
     const t = String(tex ?? '').trim();
     if (!t || /[\\^_{}=]/.test(t)) return false;
-    return /[\u0400-\u04FF]/.test(t) || (t.match(/\p{L}{3,}/gu) || []).length >= 3;
+    return /[\u0400-\u04FF]/.test(t) || (t.match(/\p{L}{3,}/gu) || []).filter(w => !MATH_FUNCTION_NAMES.has(w)).length >= 3;
   }
 
   // The audit's "written" formulas are the ones the converter wrote, not a
