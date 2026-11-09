@@ -2248,6 +2248,17 @@ test('isPriceRangeFragment spots a price range the page drew as math', () => {
   }
 });
 
+test('isProseMath spots prose the page marked as math', () => {
+  for (const tex of ['Printed on acid-free paper produced from chlorine-free pulp. TCF ∞',
+    'Luna) could end up in about the same position on a ∆17O vs. ∆18O plot.',
+    'BΒOД aэpocTaTHoro эOHДa', 'BΒOД']) {
+    assert.equal(NLME.isProseMath(tex), true, tex);
+  }
+  for (const tex of ['x + y = z', '\\text{for all } n', 'x \\in A', 'f(x) = sin x', 'SO_2', '10^{48}', '\\kappa', 'n', 'ab', '3-', 'sin x cos y tan z', 'log n log log n', 'max min sup', 'gcd mod lcm', '', null]) {
+    assert.equal(NLME.isProseMath(tex), false, String(tex));
+  }
+});
+
 test('listItemMarkdown keeps a nested list inside its item', () => {
   const item = NLME.listItemMarkdown;
   assert.equal(item('*', '**Building:** search\n* _Alberta:_ gym\n* _Fatima:_ green'),
@@ -3909,4 +3920,28 @@ test('the Studio export plan stamps the count over the whole list', () => {
   const plan = NLME.generatedExportPlan([rows[1], rows[2]], rows);
   assert.deepEqual(NLME.titlePlace(plan.artifacts[0]), { titleOrdinal: 1, titleCount: 2 });
   assert.deepEqual(NLME.titlePlace(plan.notes[0]), { titleOrdinal: 0, titleCount: 1 });
+});
+
+test('stripControlChars restores a lost "i" and drops other control characters', () => {
+  assert.equal(NLME.stripControlChars('Rotat\u0000ng'), 'Rotating');
+  assert.equal(NLME.stripControlChars('\u0000nto'), 'into');
+  assert.equal(NLME.stripControlChars('cond\u0000t\u0000ons'), 'conditions');
+  assert.equal(NLME.stripControlChars('a \u0000 b'), 'a  b');
+  assert.equal(NLME.stripControlChars('x\u0001y\u007f'), 'xy');
+  assert.equal(NLME.stripControlChars('a\tb\nc\r\n'), 'a\tb\nc\r\n');
+});
+
+test('cleanOcrArtifacts keeps ~~strike~~ and repairs a NUL in the same quote', () => {
+  const out = NLME.cleanOcrArtifacts('’s Slowly Rotat\u0000ng Surface: ~~strike~~ here');
+  assert.equal(out, '’s Slowly Rotating Surface: ~~strike~~ here');
+  assert.ok(!/\u0000/.test(out));
+});
+
+test('manifest bytes equal the written size of a .md that had control characters', () => {
+  const files = [{ path: 'a/chat.md', data: 'Rotat\u0000ng \u0001é' }];
+  const written = NLME.writtenText(files[0]);
+  assert.ok(!/[\u0000-\u0008]/.test(written));
+  const m = NLME.buildManifest({ meta: {}, kind: 'chat', files });
+  const entry = m.files.find(f => f.path === 'a/chat.md');
+  assert.equal(entry.bytes, Buffer.byteLength(written, 'utf8'));
 });

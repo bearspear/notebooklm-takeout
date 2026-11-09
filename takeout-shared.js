@@ -262,11 +262,21 @@
   // Strip OCR noise (~~~, :~:, =~, ;!) from citation quotes without flattening
   // their structure: only horizontal whitespace is collapsed, fenced code is
   // left alone and ~~strikethrough~~ spans are kept.
+  // Some PDF text layers hand back NUL where a letter was lost; in every
+  // sample it is an "i" (volcan\0c, cond\0t\0ons). NUL next to a Latin letter
+  // becomes "i"; other control characters are dropped. \t \n \r stay.
+  function stripControlChars(text) {
+    return String(text ?? '')
+      .replace(/(?<=[A-Za-z\u00C0-\u024F])\u0000|\u0000(?=[A-Za-z\u00C0-\u024F])/g, 'i')
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+  }
+
   function cleanOcrSegment(text) {
+    text = stripControlChars(text);
     const kept = [];
     const protectedText = text.replace(/~~([^~\n]+?)~~/g, (m) => {
       kept.push(m);
-      return `\u0000${kept.length - 1}\u0000`;
+      return `\uE010${kept.length - 1}\uE010`;
     });
     return protectedText
       .replace(/~{3,}/g, '')
@@ -283,7 +293,7 @@
       .replace(/[ \t]{2,}/g, ' ')
       .replace(/[ \t]+([.,;:!?])/g, '$1')
       .replace(/\n{3,}/g, '\n\n')
-      .replace(/\u0000(\d+)\u0000/g, (_m, i) => kept[Number(i)]);
+      .replace(/\uE010(\d+)\uE010/g, (_m, i) => kept[Number(i)]);
   }
 
   function cleanOcrArtifacts(text) {
@@ -1590,6 +1600,38 @@
     return { type, webUrl };
   }
 
+  // Alt text for an image: an address (or the src itself) is no description
+  function cleanImageAlt(alt, src) {
+    const text = String(alt ?? '').trim();
+    if (!text) return String(alt ?? '');
+    if (/^https?:\/\/\S+$/i.test(text) || text === String(src ?? '').trim()) return '';
+    return String(alt);
+  }
+
+  // A google.com/url?q=<target> redirect (the sources' links come wrapped) is
+  // written as its real address. Only an http(s) target counts; anything else,
+  // and every non-redirect, comes back unchanged.
+  function unwrapGoogleRedirect(href) {
+    if (typeof href !== 'string' || !/^https?:\/\//i.test(href)) return href;
+    let url;
+    try { url = new URL(href); } catch (error) { return href; }
+    const host = url.hostname.toLowerCase();
+    if ((host !== 'google.com' && host !== 'www.google.com') || url.pathname !== '/url') return href;
+    const target = url.searchParams.get('q') || url.searchParams.get('url') || '';
+    // Spaces and angle brackets would end the Markdown link early
+    return /^https?:\/\/[^\s/]/i.test(target) ? target.replace(/ /g, '%20').replace(/</g, '%3C').replace(/>/g, '%3E') : href;
+  }
+
+  // A heading's Markdown without bold: a bold heading is no more than a
+  // heading, and its joined bold runs leave "**A** **B**". Code spans and
+  // formulas ($...$, $$...$$) are kept as they are; escaped asterisks are text and stay.
+  function plainHeading(content) {
+    const text = String(content ?? '');
+    if (!text.includes('**')) return text;
+    const stripped = text.split(/(`+[^`]*`+|\$\$[^$]+\$\$|\$(?=\S)[^$\n]*?\S\$|\$[^\s$]\$)/).map((part, i) => (i % 2 ? part : part.replace(/(?<!\\)\*\*/g, ''))).join('');
+    return stripped === text ? text : stripped.replace(/ {2,}/g, ' ').trim();
+  }
+
   // Google-hosted downloads and redirects: *.usercontent.google.com,
   // *.googleusercontent.com, google.com/url, and *.google.com links that
   // download (private, short-lived; never a source's original page)
@@ -1918,8 +1960,13 @@
   // pair, or nested brackets such as an Obsidian [[link]].
   function relaxBracketEscapes(text) {
     return String(text).replace(
-      /(?<!\\|\\\[)\\\[((?:[^\\\[\]]|\\[^\[\]])+)\\\](?![(\[:]|\\[\[\]])/g,
-      (match, inner) => (/^\^|^[ xX]$/.test(inner) ? match : `[${inner}]`)
+      /(?<!\\|\\\[)\\\[((?:[^\\\[\]]|\\[^\[\]])+)\\\](?![(\[]|\\[\[\]])/g,
+      (match, inner, offset, whole) => {
+        if (/^\^|^[ xX]$/.test(inner)) return match;
+        // "]:" is a link definition only at a line start
+        if (whole[offset + match.length] === ':' && (offset === 0 || whole[offset - 1] === '\n')) return match;
+        return `[${inner}]`;
+      }
     );
   }
 
@@ -1938,6 +1985,17 @@
     return /^\d[\d.,]*(?:\s*(?:thousand|million|billion|k|m|b))?\s*(?:[-–—]|to|or|and)$/i.test(String(tex ?? '').trim());
   }
 
+  // Sentences and Cyrillic text the page drew as math ("Printed on acid-free
+  // paper ... TCF ∞", "BΒOД"). Real TeX here has a backslash, ^ _ { } or =;
+  // these have none and read as words. Written as plain text, and left out of
+  // both audit counts like a price range.
+  const MATH_FUNCTION_NAMES = new Set('sin cos tan cot sec csc log ln exp max min sup inf lim det gcd lcm mod arg deg dim ker hom'.split(' '));
+  function isProseMath(tex) {
+    const t = String(tex ?? '').trim();
+    if (!t || /[\\^_{}=]/.test(t)) return false;
+    return /[\u0400-\u04FF]/.test(t) || (t.match(/\p{L}{3,}/gu) || []).filter(w => !MATH_FUNCTION_NAMES.has(w)).length >= 3;
+  }
+
   // The audit's "written" formulas are the ones the converter wrote, not a
   // re-read of the Markdown: a formula touching a number ($1 micron (μm):
   // 10-6 m$1 nanometre) looks like a price to any regex. The KaTeX rule marks
@@ -1950,7 +2008,7 @@
   const FORMULA_MARK_BEFORE_DOLLAR = /\uE002(?=\$)/g;
 
   function markWrittenFormula(markdown, dataMath) {
-    if (!markdown || isPriceRangeFragment(dataMath)) return markdown;
+    if (!markdown || isPriceRangeFragment(dataMath) || isProseMath(dataMath)) return markdown;
     return FORMULA_MARK + markdown;
   }
 
@@ -2842,8 +2900,15 @@
     };
   }
 
+  // Text as it is written: Markdown/text files lose control characters, so
+  // sizes in the manifest and index match the saved file.
+  function writtenText(entry) {
+    const d = entry && entry.data;
+    return typeof d === 'string' && /\.(md|txt)$/i.test(entry.path || '') ? stripControlChars(d) : d;
+  }
+
   function byteLength(entry) {
-    const data = entry.data;
+    const data = writtenText(entry);
     if (typeof data === 'string') return new TextEncoder().encode(data).length;
     if (typeof Blob !== 'undefined' && data instanceof Blob) return data.size;
     if (data && typeof data.byteLength === 'number') return data.byteLength;
@@ -3713,6 +3778,7 @@ footer { margin-top: 3rem; }
     listItemMarkdown,
     countExportErrors,
     isPriceRangeFragment,
+    isProseMath,
     relaxBracketEscapes,
     citationCoverage,
     unknownStudioIcons,
@@ -3814,6 +3880,11 @@ footer { margin-top: 3rem; }
     createPhaseTimer,
     formatTimingSummary,
     cleanOcrArtifacts,
+    stripControlChars,
+    writtenText,
+    cleanImageAlt,
+    unwrapGoogleRedirect,
+    plainHeading,
     mathSourceHealth,
     mathSourceToMarkdown,
     classifyKatexScript,

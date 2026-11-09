@@ -13,6 +13,30 @@
 (function (root) {
   'use strict';
 
+  // A line of only dashes, em dashes, underscores or equals signs, alone
+  // between blank lines, is a divider the page drew (1.9.9), whatever element
+  // held it. Turndown wrote it as an escaped "\\-----" line; it becomes a
+  // rule. Blank lines around it keep it from reading as a setext heading
+  // underline. Fenced code, table rows and runs touching text are left alone.
+  const DIVIDER_LINE = /^(?:(?:\\?-){3,}|(?:\\?—){3,}|(?:\\?_){3,}|(?:\\?=){3,})$/;
+  function dividerLines(text) {
+    const lines = String(text).split('\n');
+    let fence = null;
+    for (let i = 0; i < lines.length; i++) {
+      const open = /^ {0,3}(`{3,}|~{3,})/.exec(lines[i]);
+      if (fence) {
+        if (open && open[1][0] === fence[0] && open[1].length >= fence.length) fence = null;
+        continue;
+      }
+      if (open) { fence = open[1]; continue; }
+      if (DIVIDER_LINE.test(lines[i]) &&
+          (i === 0 || lines[i - 1] === '') && (i === lines.length - 1 || lines[i + 1] === '')) {
+        lines[i] = '---';
+      }
+    }
+    return lines.join('\n');
+  }
+
   /**
    * Create a standardized TurndownService instance with consistent configuration
    * This ensures all markdown conversions use the same settings
@@ -32,7 +56,10 @@
 
     const service = new TurndownService({ ...defaultOptions, ...customOptions });
     const escape = service.escape;
-    service.escape = text => NLME.relaxBracketEscapes(escape.call(service, text));
+    // "1790) to Baudouin" at a line start would read as an ordered list (as
+    // "1790." does, which Turndown escapes already)
+    service.escape = text => NLME.relaxBracketEscapes(
+      escape.call(service, text).replace(/^(\d+)\)(?=\s)/gm, '$1\\)'));
     return service;
   }
 
@@ -430,7 +457,45 @@
       replacement: (content, node) => {
         const level = parseInt(node.getAttribute('aria-level')) || 1;
         const prefix = '#'.repeat(level);
-        return `\n${prefix} ${content.trim()}\n\n`;
+        return `\n${prefix} ${NLME.plainHeading(content.trim())}\n\n`;
+      }
+    });
+
+    // Headings carry no bold markers (1.9.9): "## **1 Introduction**" is "## 1 Introduction"
+    turndownService.addRule('plainHeadings', {
+      filter: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+      replacement: (content, node) => {
+        const level = Number(node.nodeName.charAt(1));
+        return `\n\n${'#'.repeat(level)} ${NLME.plainHeading(content)}\n\n`;
+      }
+    });
+
+    // Google redirect links (1.9.9) are written as their real address. Same
+    // output as Turndown's inline link, for links that were redirects only.
+    turndownService.addRule('googleRedirectLinks', {
+      filter: (node) => {
+        if (node.nodeName !== 'A') return false;
+        const href = node.getAttribute('href');
+        return !!href && NLME.unwrapGoogleRedirect(href) !== href;
+      },
+      replacement: (content, node) => {
+        const href = NLME.unwrapGoogleRedirect(node.getAttribute('href')).replace(/([()])/g, '\\$1');
+        const title = (node.getAttribute('title') || '').replace(/(\n+\s*)+/g, '\n');
+        const titlePart = title ? ` "${title.replace(/"/g, '\\"')}"` : '';
+        return `[${content}](${href}${titlePart})`;
+      }
+    });
+
+    // Images (1.9.9): Turndown's own image output, except that an address as
+    // alt text is left out
+    turndownService.addRule('images', {
+      filter: 'img',
+      replacement: (_content, node) => {
+        const clean = value => (value ? value.replace(/(\n+\s*)+/g, '\n') : '');
+        const src = node.getAttribute('src') || '';
+        const alt = clean(NLME.cleanImageAlt(node.getAttribute('alt'), src));
+        const title = clean(node.getAttribute('title'));
+        return src ? `![${alt}](${src}${title ? ` "${title}"` : ''})` : '';
       }
     });
 
@@ -636,8 +701,12 @@
     turndownService.addRule('katexMath', {
       filter: (node) => node.nodeName === 'SPAN' && node.classList.contains('katex'),
       // Marked for the audit's count; convert() takes the mark out again
-      replacement: (_content, node) => NLME.markWrittenFormula(
-        convertKatexNodeToLatex(node), node.closest('[data-math]')?.getAttribute('data-math'))
+      replacement: (_content, node) => {
+        const tex = node.closest('[data-math]')?.getAttribute('data-math');
+        // Prose the page drew as math: plain text, escaped, not a formula
+        if (NLME.isProseMath(tex)) return turndownService.escape(tex.replace(/\s+/g, ' ').trim());
+        return NLME.markWrittenFormula(convertKatexNodeToLatex(node), tex);
+      }
     });
 
     // Citation markers
@@ -788,7 +857,7 @@
       convert: (html) => {
         const { text, formulas } = NLME.takeFormulaMarks(turndownService.turndown(html));
         formulasWrittenTotal += formulas;
-        return finishFootnotes(text);
+        return finishFootnotes(dividerLines(text));
       },
       citedNumbers: (messageIndex) => {
         if (isChat && messageIndex !== undefined) {
@@ -1018,17 +1087,17 @@
       switch (tag) {
         // Headings
         case 'h1':
-          return `\n# ${content}\n\n`;
+          return `\n# ${NLME.plainHeading(content)}\n\n`;
         case 'h2':
-          return `\n## ${content}\n\n`;
+          return `\n## ${NLME.plainHeading(content)}\n\n`;
         case 'h3':
-          return `\n### ${content}\n\n`;
+          return `\n### ${NLME.plainHeading(content)}\n\n`;
         case 'h4':
-          return `\n#### ${content}\n\n`;
+          return `\n#### ${NLME.plainHeading(content)}\n\n`;
         case 'h5':
-          return `\n##### ${content}\n\n`;
+          return `\n##### ${NLME.plainHeading(content)}\n\n`;
         case 'h6':
-          return `\n###### ${content}\n\n`;
+          return `\n###### ${NLME.plainHeading(content)}\n\n`;
 
         // Text formatting
         case 'b':
@@ -1045,10 +1114,10 @@
         // Links and images
         case 'a':
           const href = node.getAttribute('href') || '';
-          return href ? `[${content}](${href})` : content;
+          return href ? `[${content}](${NLME.unwrapGoogleRedirect(href)})` : content;
         case 'img':
           const src = node.getAttribute('src') || '';
-          const alt = node.getAttribute('alt') || '';
+          const alt = NLME.cleanImageAlt(node.getAttribute('alt') || '', src);
           return src ? `![${alt}](${src})` : '';
 
         // Code
@@ -1092,6 +1161,7 @@
     convertKatexNodeToLatex,
     createConverter,
     formulasWritten: () => formulasWrittenTotal,
+    dividerLines,
     importCardLines,
     htmlToMarkdownPlain
   });

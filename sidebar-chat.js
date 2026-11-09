@@ -777,7 +777,7 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
     if (useFootnotes) {
       const entries = NLME.buildCitationEntries(msg.sources || [], converter.citedNumbers(idx));
       markdown += NLME.footnoteDefinitions(entries, n => labelOf(idx, n), {
-        quoteOf: entry => (entry.missing || !entry.quote ? '' : (settings.cleanOCRArtifacts ? cleanOCRArtifacts(entry.quote) : entry.quote))
+        quoteOf: entry => (entry.missing || !entry.quote ? '' : (settings.cleanOCRArtifacts ? cleanOCRArtifacts(entry.quote) : NLME.stripControlChars(entry.quote)))
       });
     } else if (!dropCitations && msg.sources && msg.sources.length > 0) {
       markdown += '**Sources:**\n\n';
@@ -793,7 +793,7 @@ function convertChatToMarkdown(notebookTitle, notebookSummary, messages, citatio
         // Add quote if available
         if (source.quote && source.quote.trim().length > 0) {
           // Optionally clean OCR artifacts, then escape markdown
-          const cleanedQuote = settings.cleanOCRArtifacts ? cleanOCRArtifacts(source.quote) : source.quote;
+          const cleanedQuote = settings.cleanOCRArtifacts ? cleanOCRArtifacts(source.quote) : NLME.stripControlChars(source.quote);
           if (citationsCodeBlock) {
             const fence = NLME.fenceFor(cleanedQuote);
             markdown += `${fence}markdown\n${cleanedQuote}\n${fence}\n\n`;

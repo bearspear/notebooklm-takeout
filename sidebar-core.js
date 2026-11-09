@@ -1805,7 +1805,7 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
     // (no "Sources" heading: renderers gather definitions at the end of the file)
     markdown += '\n\n';
     markdown += NLME.footnoteDefinitions(entries, labelOf, {
-      quoteOf: entry => (entry.missing || !entry.quote ? '' : (settings.cleanOCRArtifacts ? cleanOCRArtifacts(entry.quote) : entry.quote))
+      quoteOf: entry => (entry.missing || !entry.quote ? '' : (settings.cleanOCRArtifacts ? cleanOCRArtifacts(entry.quote) : NLME.stripControlChars(entry.quote)))
     });
   } else if (entries.length > 0 && entries.every(entry => !entry.quote)) {
     // No quotes (titles-only, reports): one line per source with all its
@@ -1823,7 +1823,7 @@ function convertToMarkdown(htmlContent, sources, noteTitle, citationsCodeBlock =
 
       if (!entry.missing && entry.quote && entry.quote.length > 0) {
         // Optionally clean OCR artifacts, then escape markdown
-        const cleanedQuote = settings.cleanOCRArtifacts ? cleanOCRArtifacts(entry.quote) : entry.quote;
+        const cleanedQuote = settings.cleanOCRArtifacts ? cleanOCRArtifacts(entry.quote) : NLME.stripControlChars(entry.quote);
         if (citationsCodeBlock) {
           // Fence longer than any backtick run in the quote, so code inside
           // the quote can't close it early and invert the rest of the file
@@ -1896,7 +1896,10 @@ function countPageContent(html) {
     .map(b => NLME.parseCitationIndex(b.querySelector('span')?.textContent))
     .filter(Boolean);
   const formulas = [...doc.querySelectorAll('.katex')]
-    .filter(el => !NLME.isPriceRangeFragment(el.closest('[data-math]')?.getAttribute('data-math'))).length;
+    .filter(el => {
+      const tex = el.closest('[data-math]')?.getAttribute('data-math');
+      return !NLME.isPriceRangeFragment(tex) && !NLME.isProseMath(tex);
+    }).length;
   return { citationNumbers, formulas };
 }
 

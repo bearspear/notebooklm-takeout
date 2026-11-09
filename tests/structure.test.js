@@ -233,7 +233,7 @@ test('countPageContent leaves price ranges drawn as math out of the formula coun
   const start = src.indexOf('function countPageContent(');
   const body = src.slice(start, src.indexOf('\n}\n', start) + 3);
   const katex = math => ({ closest: () => ({ getAttribute: () => math }) });
-  const formulas = [katex('3-'), katex('1-'), katex('x^2'), { closest: () => null }];
+  const formulas = [katex('3-'), katex('1-'), katex('x^2'), katex('Printed on acid-free paper. TCF'), { closest: () => null }];
   class DOMParser {
     parseFromString() { return { querySelectorAll: selector => (selector === '.katex' ? formulas : []) }; }
   }
