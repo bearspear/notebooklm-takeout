@@ -54,9 +54,11 @@ function isLocalUrl(v) {
 
 // Strip scripts, event handlers, script URLs and anything that would fetch a remote
 // file on display. parser is a DOMParser. Links the reader clicks (a href) are kept.
-// restore, when given, gets the cleaned body before it is written out (md() puts formulas back there).
-function sanitizeHtml(html, parser, restore) {
+// math and render, when given, put protectMath()'s formulas back: into attribute values as their source
+// before any check below runs, and into the cleaned text, drawn by render, just before it is written out.
+function sanitizeHtml(html, parser, math, render) {
   var doc = parser.parseFromString(html, 'text/html');
+  if (math) restoreMathAttrs(doc.body, math);
   doc.querySelectorAll(DANGEROUS_TAGS).forEach(function (n) { n.remove(); });
   doc.querySelectorAll('*').forEach(function (n) {
     var tag = String(n.tagName).toLowerCase();
@@ -82,7 +84,7 @@ function sanitizeHtml(html, parser, restore) {
     }
     if (tag === 'a') { n.setAttribute('target', '_blank'); n.setAttribute('rel', 'noopener'); }
   });
-  if (restore) restore(doc.body);
+  if (math) restoreMath(doc.body, math, render, parser);
   return collapseNoImage(doc.body.innerHTML);
 }
 
@@ -224,10 +226,10 @@ function protectMath(text) {
   });
   return { text: t + src0.slice(at), math: math };
 }
-// Formulas come back in the sanitized tree, never in its HTML string. root: the cleaned body.
-// A formula in page text becomes render()'s HTML, parsed by parser into elements. In an attribute value,
-// in code or pre, and in SVG or MathML it is its own source as plain text, so the DOM escapes it.
-// Raw-text elements and comments write their text unescaped: there the placeholder stays.
+// Formulas come back in the parsed tree, never in its HTML string. In an attribute value a formula is
+// its own source (restoreMathAttrs, run before sanitizeHtml checks the value). In page text it becomes
+// render()'s HTML, parsed by parser into elements; in code or pre, and in SVG or MathML, its source as text,
+// so the DOM escapes it. Raw-text elements and comments write their text unescaped: there the placeholder stays.
 var MATH_PH = /\$XMATHX(\d+)XEND\$/g;
 var MATH_AS_SOURCE = /^(code|pre|textarea|title)$/i;
 var MATH_RAW = /^(script|style|xmp|iframe|noembed|noframes|plaintext|noscript|template)$/i;
@@ -235,15 +237,24 @@ var HTML_NS = 'http://www.w3.org/1999/xhtml';
 function mathSource(math) {
   return function (ph, i) { var m = math[+i]; return m === undefined ? ph : m; };
 }
+function restoreMathAttrs(root, math) {
+  var source = mathSource(math);
+  (function walk(node) {
+    Array.prototype.slice.call(node.childNodes).forEach(function (c) {
+      if (c.nodeType !== 1) return;
+      Array.prototype.slice.call(c.attributes).forEach(function (a) {
+        if (a.value.indexOf('XMATHX') >= 0) c.setAttribute(a.name, a.value.replace(MATH_PH, source));
+      });
+      walk(c);
+    });
+  })(root);
+}
 function restoreMath(root, math, render, parser) {
   var doc = root.ownerDocument, texts = [], source = mathSource(math);
   (function walk(node, mode) {
     Array.prototype.slice.call(node.childNodes).forEach(function (c) {
       if (c.nodeType === 3) { if (mode !== 'raw' && c.nodeValue.indexOf('XMATHX') >= 0) texts.push([c, mode]); return; }
       if (c.nodeType !== 1) return;
-      Array.prototype.slice.call(c.attributes).forEach(function (a) {
-        if (a.value.indexOf('XMATHX') >= 0) c.setAttribute(a.name, a.value.replace(MATH_PH, source));
-      });
       var tag = String(c.localName || c.tagName).toLowerCase(), foreign = c.namespaceURI && c.namespaceURI !== HTML_NS;
       walk(c, mode === 'raw' || MATH_RAW.test(tag) ? 'raw' : mode || (foreign || tag === 'svg' || tag === 'math' || MATH_AS_SOURCE.test(tag) ? 'source' : ''));
     });
@@ -297,7 +308,7 @@ function texForKatex(src) {
   }
   return out;
 }
-if (typeof module === 'object' && module.exports) module.exports = { protectMath: protectMath, restoreMath: restoreMath, mathNodes: mathNodes, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
+if (typeof module === 'object' && module.exports) module.exports = { protectMath: protectMath, restoreMath: restoreMath, restoreMathAttrs: restoreMathAttrs, mathNodes: mathNodes, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
 // A source's kind for its icon: the type icon the page showed, which also covers
 // titles with no extension, then the title's extension, then the url. A generic
 // document icon comes after the extension, which may say more ("plan.docx").
@@ -468,11 +479,8 @@ if (typeof document !== 'undefined') (function () {
   function sanitize(html) { return sanitizeHtml(html, new DOMParser()); }
   function md(text) {
     var p = protectMath(text);
-    var parser = new DOMParser();
-    return sanitizeHtml(marked.parse(p.text, { gfm: true }), parser, function (body) {
-      restoreMath(body, p.math, function (src, block, m) {
-        try { return katex.renderToString(texForKatex(src), { displayMode: block, throwOnError: false }); } catch (e) { return esc(m); }
-      }, parser);
+    return sanitizeHtml(marked.parse(p.text, { gfm: true }), new DOMParser(), p.math, function (src, block, m) {
+      try { return katex.renderToString(texForKatex(src), { displayMode: block, throwOnError: false }); } catch (e) { return esc(m); }
     });
   }
   function norm(s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g, ''); }

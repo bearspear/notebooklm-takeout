@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { protectMath, restoreMath, texForKatex, sanitizeHtml } = require('../viewer/viewer-app.js');
+const { protectMath, restoreMath, restoreMathAttrs, texForKatex, sanitizeHtml } = require('../viewer/viewer-app.js');
 const { marked } = require('../viewer/marked.min.js');
 const katex = require('../viewer/katex.min.js');
 const { treeParser, elementsOf } = require('./fixtures/tree-parser.js');
@@ -10,7 +10,7 @@ const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(
 const parser = treeParser();
 function mdWith(text, draw) {
   const p = protectMath(text);
-  return sanitizeHtml(marked.parse(p.text, { gfm: true }), parser, body => restoreMath(body, p.math, draw, parser));
+  return sanitizeHtml(marked.parse(p.text, { gfm: true }), parser, p.math, draw);
 }
 const render = text => mdWith(text, (src, block, m) => '[[' + (block ? 'B:' : '') + esc(m) + ']]');
 
@@ -113,6 +113,7 @@ test('formulas in text still render, beside bold too', () => {
   assert.match(out, /style="/);
   // a formula placeholder with no formula behind it stays as typed
   const body = parser.parseFromString('<p title="$XMATHX7XEND$">a $XMATHX7XEND$ b $XMATHX0XEND$</p>').body;
+  restoreMathAttrs(body, ['$x$']);
   restoreMath(body, ['$x$'], drawK, parser);
   assert.equal(body.innerHTML, '<p title="$XMATHX7XEND$">a $XMATHX7XEND$ b <span class="k">$x$</span></p>');
 });
@@ -122,6 +123,21 @@ test('rendered formula markup loses handlers and scripts', () => {
   assert.deepEqual(onAttrs(out), [], out);
   assert.doesNotMatch(out, /<script/, out);
   assert.match(out, /<span class="k">x<\/span>/, out);
+});
+
+test('attribute checks see the value with its formulas put back', () => {
+  const styles = html => elementsOf(html).map(e => e.getAttribute('style')).filter(v => v != null);
+  for (const t of ['<p style="color:red/*$x*/background:url(//evil.example/x.png);/*$*/">s</p>',
+    '<p style="color:red\\/*$x*/;background:u\\rl(images/x.png)/*$*/">s</p>',
+    '<p style="a:b/*$x*/;@import x;/*$*/">s</p>']) {
+    const out = mdWith(t, drawK);
+    assert.deepEqual(styles(out).filter(v => /url\s*\(|\\|@import/i.test(v)), [], t + ' -> ' + out);
+  }
+  const attr = (html, tag, name) => (elementsOf(html).find(e => e.localName === tag) || { getAttribute: () => null }).getAttribute(name);
+  assert.equal(attr(mdWith('<a href="javascript:alert($x$)">q</a>', drawK), 'a', 'href'), null);
+  assert.equal(attr(mdWith('<img src="//evil.example/$x$.png" alt="a">', drawK), 'img', 'src'), null);
+  assert.equal(attr(mdWith('<img src="images/$x$.png" alt="a">', drawK), 'img', 'src'), 'images/$x$.png');
+  assert.equal(attr(mdWith('<p style="color:red/*$x$*/">s</p>', drawK), 'p', 'style'), 'color:red/*$x$*/');
 });
 
 test('sanitizeHtml drops attributes whose name is not a plain name', () => {

@@ -261,7 +261,7 @@ test('viewer app removes scripts and handlers', () => {
   assert.match(out, /rel="noopener"/);
   // every markdown render passes through sanitize
   const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8');
-  assert.match(src, /return sanitizeHtml\(marked\.parse\(p\.text, \{ gfm: true \}\), parser, function \(body\) \{\s+restoreMath\(body, /);
+  assert.match(src, /return sanitizeHtml\(marked\.parse\(p\.text, \{ gfm: true \}\), new DOMParser\(\), p\.math, function \(src, block, m\) \{/);
   assert.equal((src.match(/marked\.parse\(/g) || []).length, 1);
 });
 
