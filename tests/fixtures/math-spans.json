@@ -74,5 +74,25 @@
  {
   "text": "$x $",
   "formulas": []
+ },
+ {
+  "text": "$T$2 = 4",
+  "formulas": [
+   "$T$"
+  ]
+ },
+ {
+  "text": "$3-$4 million",
+  "formulas": []
+ },
+ {
+  "text": "US$1.9 billion; US$2",
+  "formulas": []
+ },
+ {
+  "text": "$x$5",
+  "formulas": [
+   "$x$"
+  ]
  }
 ]

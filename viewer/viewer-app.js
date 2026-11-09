@@ -200,9 +200,10 @@ function showCopyResult(btn, ok, icons, later, cancel) {
 }
 
 // The formulas md() draws. A $$..$$ pair is a block. An inline span opens at a "$" not
-// followed by whitespace and closes at the first "$" that is not preceded by whitespace and
-// not followed by a digit, on one line: "costs $5 and $10" and "$3-$4 million" stay prices.
-var MATH_RE = /\$\$[\s\S]+?\$\$|\$(?!\s)(?:[^$\n]*?[^\s$])\$(?!\d)/g;
+// followed by whitespace and closes at the first "$" that is not preceded by whitespace,
+// on one line. When the content starts with a digit, a digit may not follow the closing "$":
+// "costs $5 and $10" and "$3-$4 million" stay prices, "$T$2" is a formula.
+var MATH_RE = /\$\$[\s\S]+?\$\$|\$(?![\s\d])(?:[^$\n]*?[^\s$])\$|\$(?=\d)(?:[^$\n]*?[^\s$])\$(?!\d)/g;
 function findMath(text) {
   var out = [], re = new RegExp(MATH_RE.source, 'g'), m;
   while ((m = re.exec(String(text)))) out.push({ start: m.index, end: m.index + m[0].length, src: m[0], block: m[0].slice(0, 2) === '$$' });

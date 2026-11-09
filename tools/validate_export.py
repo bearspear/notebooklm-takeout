@@ -162,8 +162,8 @@ def _strip_code(text):
 
 # The viewer's formula rule (viewer/viewer-app.js findMath): $$..$$, or an inline span that
 # opens at a "$" not followed by whitespace and closes at the first "$" not preceded by
-# whitespace and not followed by a digit, on one line. tests/fixtures/math-spans.json pins both.
-_VIEWER_MATH = re.compile(r'\$\$[\s\S]+?\$\$|\$(?!\s)(?:[^$\n]*?[^\s$])\$(?!\d)')
+# whitespace, on one line; a digit may not follow it when the content starts with a digit. tests/fixtures/math-spans.json pins both.
+_VIEWER_MATH = re.compile(r'\$\$[\s\S]+?\$\$|\$(?![\s\d])(?:[^$\n]*?[^\s$])\$|\$(?=\d)(?:[^$\n]*?[^\s$])\$(?!\d)')
 
 
 def viewer_math_spans(text):
