@@ -32,7 +32,10 @@
 
     const service = new TurndownService({ ...defaultOptions, ...customOptions });
     const escape = service.escape;
-    service.escape = text => NLME.relaxBracketEscapes(escape.call(service, text));
+    // "1790) to Baudouin" at a line start would read as an ordered list (as
+    // "1790." does, which Turndown escapes already)
+    service.escape = text => NLME.relaxBracketEscapes(
+      escape.call(service, text).replace(/^(\d+)\)(?=\s)/gm, '$1\\)'));
     return service;
   }
 
@@ -441,6 +444,14 @@
         const level = Number(node.nodeName.charAt(1));
         return `\n\n${'#'.repeat(level)} ${NLME.plainHeading(content)}\n\n`;
       }
+    });
+
+    // A paragraph of only dashes, em dashes, underscores or equals signs is a
+    // divider the page drew (1.9.9). Turndown would write it as an escaped
+    // "\-----" line; it is a rule, with blank lines so it is no heading underline.
+    turndownService.addRule('dividerParagraphs', {
+      filter: (node) => node.nodeName === 'P' && /^\s*(?:-{3,}|—{3,}|_{3,}|={3,})\s*$/.test(node.textContent || ''),
+      replacement: () => '\n\n---\n\n'
     });
 
     // Google redirect links (1.9.9) are written as their real address. Same

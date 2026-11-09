@@ -1951,8 +1951,13 @@
   // pair, or nested brackets such as an Obsidian [[link]].
   function relaxBracketEscapes(text) {
     return String(text).replace(
-      /(?<!\\|\\\[)\\\[((?:[^\\\[\]]|\\[^\[\]])+)\\\](?![(\[:]|\\[\[\]])/g,
-      (match, inner) => (/^\^|^[ xX]$/.test(inner) ? match : `[${inner}]`)
+      /(?<!\\|\\\[)\\\[((?:[^\\\[\]]|\\[^\[\]])+)\\\](?![(\[]|\\[\[\]])/g,
+      (match, inner, offset, whole) => {
+        if (/^\^|^[ xX]$/.test(inner)) return match;
+        // "]:" is a link definition only at a line start
+        if (whole[offset + match.length] === ':' && (offset === 0 || whole[offset - 1] === '\n')) return match;
+        return `[${inner}]`;
+      }
     );
   }
 
