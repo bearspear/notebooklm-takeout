@@ -996,6 +996,23 @@ test('the citation popover shows images and never a link', () => {
   assert.doesNotMatch(app.citeHtml({ t: 'A', q: 'quote' }, false), /<img|not available|Click/);
 });
 
+test('citeHtml renders the quote as Markdown when given a renderer', () => {
+  const render = q => '<h2>' + q + '</h2>';
+  const html = app.citeHtml({ t: 'A<b', q: 'Q&1', imgs: ['images/cccccccccccccccc.jpg'], lost: 1 }, true, render);
+  assert.match(html, /^<b>A&lt;b<\/b><div class="md"><h2>Q&1<\/h2><\/div>/);
+  assert.doesNotMatch(html, /<p>Q/);
+  assert.match(html, /<img alt="" src="images\/cccccccccccccccc\.jpg">/);
+  assert.match(html, /Click the number/);
+  assert.equal(app.citeHtml({ t: 'A', q: 'x<y' }, false), '<b>A</b><p>x&lt;y</p>');
+});
+
+test('the app passes its sanitizing renderer to citeHtml and styles the popup Markdown', () => {
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8'), /citeHtml\(c, srcByTitle\[norm\(c\.t\)\] !== undefined, md\)/);
+  const css = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-template.html'), 'utf8');
+  assert.match(css, /#pop \.md h1[^{]*\{[^}]*font-size/);
+  assert.match(css, /#pop \.md table[^{]*\{[^}]*overflow-x: auto/);
+});
+
 test('images/ links survive sanitizeHtml', () => {
   const out = clean('<img src="images/0123456789abcdef.png" alt="A chart">');
   assert.match(out, /<img[^>]*src="images\/0123456789abcdef\.png"/);

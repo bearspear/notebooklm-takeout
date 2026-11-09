@@ -84,8 +84,9 @@ function sanitizeHtml(html, parser) {
 function escHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
 // A citation popover. c.imgs are paths the builder made; known: its source is in this archive.
-function citeHtml(c, known) {
-  return '<b>' + escHtml(c.t) + '</b><p>' + escHtml(c.q) + '</p>' +
+// render, when given, turns the quote's Markdown into safe HTML (the app passes its sanitizing md).
+function citeHtml(c, known, render) {
+  return '<b>' + escHtml(c.t) + '</b>' + (render ? '<div class="md">' + render(c.q) + '</div>' : '<p>' + escHtml(c.q) + '</p>') +
     (c.imgs || []).map(function (src) { return '<img alt="" src="' + escHtml(src) + '">'; }).join('') +
     (c.lost ? '<p>' + noImageHtml(c.lost) + '</p>' : '') +
     (known ? '<small>Click the number to open this source</small>' : '');
@@ -634,7 +635,7 @@ if (typeof document !== 'undefined') (function () {
   function showPop(btn) {
     clearTimeout(hideT);
     var c = D.cites[+btn.dataset.c]; if (!c) return;
-    pop.innerHTML = citeHtml(c, srcByTitle[norm(c.t)] !== undefined);
+    pop.innerHTML = citeHtml(c, srcByTitle[norm(c.t)] !== undefined, md);
     pop.hidden = false; pop.scrollTop = 0;
     function place() {
       var r = btn.getBoundingClientRect(), pr = pop.getBoundingClientRect();
