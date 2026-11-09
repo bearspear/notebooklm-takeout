@@ -40,3 +40,27 @@ test('guideHtml builds (summary is already-sanitized HTML) an accessible card fr
   assert.doesNotMatch(html, /<b>/);
   assert.equal(app.guideHtml(null, []), '');
 });
+
+test('splitSourceGuide without a Content heading only takes a guide at the very start', () => {
+  const lead = '**Web Page:** <https://x.example/>\n\n## Summary\n\nS.\n\n## Key Topics\n\n- A\n\nBody after.\n';
+  const g = app.splitSourceGuide(lead);
+  assert.equal(g.summary, 'S.');
+  assert.deepEqual(g.topics, ['A']);
+  for (const md of ['Intro paragraph.\n\n## Summary\n\nNot a guide.\n', '# Notes\n\n## Intro\n\ntext\n\n## Summary\n\nLater.\n\n## Key Topics\n\n- A\n']) {
+    const r = app.splitSourceGuide(md);
+    assert.deepEqual([r.summary, r.topics, r.rest], [null, [], md]);
+  }
+});
+
+test('the guide icon is a neutral cluster of straight-edged sparkles', () => {
+  const html = app.guideHtml('<p>x</p>', []);
+  assert.doesNotMatch(html, /var\(--accent\)/);
+  assert.doesNotMatch(html.split('chev')[0], / c[-.\d]/);
+  assert.match(html, /class="spark"/);
+});
+
+test('splitSourceGuide keeps prose that follows the topics list', () => {
+  const g = app.splitSourceGuide('## Key Topics\n\n- A\n\nBody after.\n');
+  assert.deepEqual(g.topics, ['A']);
+  assert.match(g.rest, /Body after\./);
+});

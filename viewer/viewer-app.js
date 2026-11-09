@@ -93,10 +93,18 @@ function escHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt
 function splitSourceGuide(text) {
   var md = String(text == null ? '' : text), lines = md.split('\n'), end = lines.length, i;
   for (i = 0; i < lines.length; i++) if (/^##\s+Content\s*$/.test(lines[i])) { end = i; break; }
+  if (end === lines.length) {
+    // No Content heading: a guide counts only at the very start (just a link or "**Web ...:**" line before it)
+    var firstH = -1;
+    for (i = 0; i < lines.length; i++) if (/^##\s/.test(lines[i])) { firstH = i; break; }
+    var lead = firstH < 0 ? ['x'] : lines.slice(0, firstH).filter(function (l) { return l.trim() && !/^(\*\*[^*]+:\*\*|<?https?:\/\/|\[[^\]]*\]\()/.test(l.trim()); });
+    if (lead.length || !/^##\s+(summary|key topics)\s*$/i.test(lines[firstH])) return { summary: null, topics: [], rest: md };
+    for (i = firstH; i < lines.length; i++) if (/^##\s/.test(lines[i]) && !/^##\s+(summary|key topics)\s*$/i.test(lines[i])) { end = i; break; }
+  }
   var summary = null, topics = [], keep = [], mode = null, body = [], took = false;
   function flush() {
     if (mode === 'sum') { var t = body.join('\n').trim(); if (t) { summary = t; took = true; } }
-    else if (mode === 'top') body.forEach(function (l) { var m = /^\s*[-*+]\s+(.+?)\s*$/.exec(l); if (m) { topics.push(m[1]); took = true; } });
+    else if (mode === 'top') body.forEach(function (l) { var m = /^\s*[-*+]\s+(.+?)\s*$/.exec(l); if (m) { topics.push(m[1]); took = true; } else if (l.trim()) keep.push(l); });
     mode = null; body = [];
   }
   for (i = 0; i < lines.length; i++) {
@@ -109,7 +117,7 @@ function splitSourceGuide(text) {
   return took ? { summary: summary, topics: topics, rest: keep.join('\n') } : { summary: null, topics: [], rest: md };
 }
 // The source guide card. summaryHtml must already be sanitized (md() output); topics are escaped here.
-var SPARKLE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" stroke="none" d="M12 2c.6 5.2 4.8 9.4 10 10-5.2.6-9.4 4.8-10 10-.6-5.2-4.8-9.4-10-10 5.2-.6 9.4-4.8 10-10z"/></svg>';
+var SPARKLE = '<svg class="spark" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" stroke="none" d="M9 3l1.8 5.2L16 10l-5.2 1.8L9 17l-1.8-5.2L2 10l5.2-1.8zM19 2l.9 2.1L22 5l-2.1.9L19 8l-.9-2.1L16 5l2.1-.9zM18 14l.9 2.1L21 17l-2.1.9L18 20l-.9-2.1L15 17l2.1-.9z"/></svg>';
 function guideHtml(summaryHtml, topics) {
   if (!summaryHtml && !(topics && topics.length)) return '';
   return '<section class="guide"><button class="guide-head" type="button" aria-expanded="true">' + SPARKLE + '<span>Source guide</span>' +
@@ -733,7 +741,7 @@ if (typeof document !== 'undefined') (function () {
     var sc = box.closest('.scroll') || $('chatscroll'), mr = mark.getBoundingClientRect(), sr = sc.getBoundingClientRect();
     sc.scrollTop += mr.top - sr.top - sc.clientHeight * 0.25;
   }
-  function markQuote(box, quote, ignoreCase) {
+  function markQuote(box, quote, ignoreCase, noScroll) {
     var w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT), nodes = [], n, full = '';
     while ((n = w.nextNode())) { nodes.push(n); full += n.nodeValue; }
     var hit = findQuote(full, quote, ignoreCase); if (!hit) return false;
@@ -746,13 +754,12 @@ if (typeof document !== 'undefined') (function () {
       var nd = nodes[k], s = Math.max(0, from - offs[k]), e = Math.min(nd.nodeValue.length, to - offs[k]);
       if (!nd.nodeValue.slice(s, e).trim()) continue;
       var r = document.createRange(); r.setStart(nd, s); r.setEnd(nd, e);
-      var m = document.createElement('mark'); r.surroundContents(m); first = m;
+      var m = document.createElement('mark'); m.className = 'hit'; r.surroundContents(m); first = m;
     }
     if (first) {
       // A quote inside a closed section (Thoughts): open it so the mark shows
       for (var d = first.closest('details'); d && box.contains(d); d = d.parentElement && d.parentElement.closest('details')) d.open = true;
-      var sc = box.closest('.scroll'), mr = first.getBoundingClientRect(), sr = sc.getBoundingClientRect();
-      sc.scrollTop += mr.top - sr.top - sc.clientHeight * 0.25;
+      if (!noScroll) scrollToMark(box, first);
     }
     return !!first;
   }
@@ -895,7 +902,9 @@ if (typeof document !== 'undefined') (function () {
         if (!pair) return;
         if (markMatches(pair, parsed)) {
           if (!scrolled) { scrolled = true; scrollToMark(pair, pair.querySelector('mark.hit')); }
-        } else if (markTerms(parsed).some(function (t) { return markQuote(pair, t, true); })) scrolled = true; // a phrase spanning two elements
+        } else if (markTerms(parsed).some(function (t) { return markQuote(pair, t, true, true); }) && !scrolled) { // a phrase spanning two elements
+          scrolled = true; scrollToMark(pair, pair.querySelector('mark.hit'));
+        }
       });
       setTimeout(batch, 0);
     })();
@@ -1036,7 +1045,7 @@ if (typeof document !== 'undefined') (function () {
 
   document.addEventListener('click', function (e) {
     if (!results.hidden && e.target.closest && !e.target.closest('#results, .gsearch')) results.hidden = true;
-    if (!$('qhelptext').hidden && e.target.closest && !e.target.closest('#qhelptext, #qhelp')) setHelp(false);
+    if (!$('qhelptext').hidden && e.target.closest && !e.target.closest('#qhelptext, #qhelp, .gsearch')) setHelp(false);
     var t = e.target.closest ? e.target.closest('button') : null; if (!t) return;
     if (t.id === 'qhelp') { setHelp($('qhelptext').hidden); return; }
     if (t.classList.contains('guide-head')) {
@@ -1046,7 +1055,9 @@ if (typeof document !== 'undefined') (function () {
       return;
     }
     if (t.classList.contains('topic')) {
-      var inp = $('allq'); inp.value = '"' + t.textContent.replace(/"/g, '') + '"';
+      var topic = t.textContent.replace(/["\u201c\u201d\u201e]/g, '').trim();
+      if (!/[a-z0-9\u00c0-\uffff]/i.test(topic)) return;
+      var inp = $('allq'); inp.value = '"' + topic + '"';
       clearTimeout(runSearch.d); runSearch(inp.value);
       var first = results.querySelector('button.hit');
       if (first) first.focus(); else { results.tabIndex = -1; results.focus(); }
