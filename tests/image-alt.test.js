@@ -38,3 +38,35 @@ test('the converter writes images through cleanImageAlt, so the data-URI src sta
   assert.match(out, /!\[\]\(data:image\/png;base64,aa\)/);
   assert.match(out, /!\[Venus\]\(data:image\/png;base64,bb\)/);
 });
+
+// Review round: the Turndown converters (notes, sources, chat) have their own image rule
+class FakeTurndown {
+  constructor(options) { this.options = options; this.rules = {}; }
+  escape(text) { return text; }
+  addRule(name, rule) { this.rules[name] = rule; }
+}
+const imgNode = attrs => ({ nodeName: 'IMG', getAttribute: n => (n in attrs ? attrs[n] : null) });
+for (const variant of ['note', 'chat']) {
+  test(`${variant}: Turndown image rule drops an address as alt, otherwise writes what Turndown writes`, () => {
+    const sandbox = { TurndownService: FakeTurndown, NLME };
+    sandbox.globalThis = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'takeout-markdown.js'), 'utf8'), sandbox);
+    const r = sandbox.NLMEMarkdown.createConverter({ variant }).turndownService.rules.images;
+    assert.ok(r, 'images rule exists');
+    assert.equal(r.filter, 'img');
+    assert.equal(r.replacement('', imgNode({ src: URL_A, alt: URL_A })), `![](${URL_A})`);
+    assert.equal(r.replacement('', imgNode({ src: URL_A, alt: 'Surface\n  of Venus', title: 'T\n x' })), `![Surface\nof Venus](${URL_A} "T\nx")`);
+    assert.equal(r.replacement('', imgNode({ src: URL_A })), `![](${URL_A})`);
+    assert.equal(r.replacement('', imgNode({ alt: 'x' })), '');
+  });
+}
+
+test('embedImagesInMarkdown keeps an empty alt', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'sidebar-sources.js'), 'utf8');
+  assert.ok(src.includes('([^\\]]*)'), 'alt pattern accepts an empty alt');
+  const re = /!\[([^\]]*)\]\((https:\/\/lh3\.google(?:usercontent)?\.com\/[^\)]+)\)/g;
+  const m = [...`![](${URL_A})`.matchAll(re)];
+  assert.equal(m.length, 1);
+  assert.equal(`![${m[0][1]}](data:x)`, '![](data:x)');
+});

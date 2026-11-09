@@ -1600,9 +1600,6 @@
     return { type, webUrl };
   }
 
-  // A google.com/url?q=<target> redirect (the sources' links come wrapped) is
-  // written as its real address. Only an http(s) target counts; anything else,
-  // and every non-redirect, comes back unchanged.
   // Alt text for an image: an address (or the src itself) is no description
   function cleanImageAlt(alt, src) {
     const text = String(alt ?? '').trim();
@@ -1611,6 +1608,9 @@
     return String(alt);
   }
 
+  // A google.com/url?q=<target> redirect (the sources' links come wrapped) is
+  // written as its real address. Only an http(s) target counts; anything else,
+  // and every non-redirect, comes back unchanged.
   function unwrapGoogleRedirect(href) {
     if (typeof href !== 'string' || !/^https?:\/\//i.test(href)) return href;
     let url;
@@ -1618,16 +1618,17 @@
     const host = url.hostname.toLowerCase();
     if ((host !== 'google.com' && host !== 'www.google.com') || url.pathname !== '/url') return href;
     const target = url.searchParams.get('q') || url.searchParams.get('url') || '';
-    return /^https?:\/\/[^\s/]/i.test(target) ? target : href;
+    // Spaces and angle brackets would end the Markdown link early
+    return /^https?:\/\/[^\s/]/i.test(target) ? target.replace(/ /g, '%20').replace(/</g, '%3C').replace(/>/g, '%3E') : href;
   }
 
   // A heading's Markdown without bold: a bold heading is no more than a
-  // heading, and its joined bold runs leave "**A** **B**". Code spans are
-  // kept as they are; escaped asterisks are text and stay.
+  // heading, and its joined bold runs leave "**A** **B**". Code spans and
+  // formulas ($...$, $$...$$) are kept as they are; escaped asterisks are text and stay.
   function plainHeading(content) {
     const text = String(content ?? '');
     if (!text.includes('**')) return text;
-    const stripped = text.split(/(`+[^`]*`+)/).map((part, i) => (i % 2 ? part : part.replace(/(?<!\\)\*\*/g, ''))).join('');
+    const stripped = text.split(/(`+[^`]*`+|\$\$[^$]+\$\$|\$(?=\S)[^$\n]*?\S\$|\$[^\s$]\$)/).map((part, i) => (i % 2 ? part : part.replace(/(?<!\\)\*\*/g, ''))).join('');
     return stripped === text ? text : stripped.replace(/ {2,}/g, ' ').trim();
   }
 

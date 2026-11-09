@@ -89,3 +89,14 @@ for (const variant of ['note', 'chat']) {
     assert.equal(r.replacement('Plain', node), '\n## Plain\n\n');
   });
 }
+
+test('plainHeading: bold markers inside formulas stay', () => {
+  assert.equal(NLME.plainHeading('Dual **space** $V^{**}$'), 'Dual space $V^{**}$');
+  assert.equal(NLME.plainHeading('**A** $$x^{**}$$ **B**'), 'A $$x^{**}$$ B');
+  assert.equal(NLME.plainHeading('**A** $a**b$'), 'A $a**b$');
+});
+
+test('unwrapGoogleRedirect: spaces and angle brackets in the target are percent-encoded', () => {
+  assert.equal(NLME.unwrapGoogleRedirect('https://www.google.com/url?q=https%3A%2F%2Fex.org%2Fa%20b%3Cc%3E'), 'https://ex.org/a%20b%3Cc%3E');
+  assert.equal(NLME.unwrapGoogleRedirect('https://www.google.com/url?q=https://ex.org/a%20b'), 'https://ex.org/a%20b');
+});

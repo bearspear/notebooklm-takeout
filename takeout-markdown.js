@@ -486,6 +486,19 @@
       }
     });
 
+    // Images (1.9.9): Turndown's own image output, except that an address as
+    // alt text is left out
+    turndownService.addRule('images', {
+      filter: 'img',
+      replacement: (_content, node) => {
+        const clean = value => (value ? value.replace(/(\n+\s*)+/g, '\n') : '');
+        const src = node.getAttribute('src') || '';
+        const alt = clean(NLME.cleanImageAlt(node.getAttribute('alt'), src));
+        const title = clean(node.getAttribute('title'));
+        return src ? `![${alt}](${src}${title ? ` "${title}"` : ''})` : '';
+      }
+    });
+
     // Blockquotes (callout boxes)
     turndownService.addRule('blockquotes', {
       filter: (node) => {
