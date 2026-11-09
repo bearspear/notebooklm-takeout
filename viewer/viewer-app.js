@@ -308,7 +308,83 @@ function texForKatex(src) {
   }
   return out;
 }
-if (typeof module === 'object' && module.exports) module.exports = { protectMath: protectMath, restoreMath: restoreMath, restoreMathAttrs: restoreMathAttrs, mathNodes: mathNodes, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, parseQuery: parseQuery, matchQuery: matchQuery, filterSources: filterSources, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
+// The words to highlight for a parsed query: a plain query is one contiguous phrase (as chat search
+// reads it), otherwise every positive term and every OR alternative. Longest first.
+function markTerms(parsed) {
+  var out = [];
+  if (!parsed) return out;
+  if (parsed.plain) { var all = parsed.terms.map(function (t) { return t.text; }).join(' '); if (all) out.push(all); }
+  else {
+    parsed.terms.forEach(function (t) { if (!t.negate && t.text && !(t.text === 'OR' && !t.phrase)) out.push(t.text); });
+    parsed.anyOf.forEach(function (g) { g.forEach(function (t) { if (t.text) out.push(t.text); }); });
+  }
+  return out.map(function (t) { return t.toLowerCase(); }).sort(function (a, b) { return b.length - a.length; });
+}
+
+// Wrap every match of the query's terms under root in <mark class="hit">, using DOM calls on text
+// nodes only (never HTML strings). Skips formulas (.katex), script and style, and existing marks.
+// A match is found inside one text node. Closed <details> holding a mark are opened. Returns the count.
+function markMatches(root, parsed) {
+  var terms = markTerms(parsed), count = 0;
+  if (!terms.length) return 0;
+  function spansIn(text) {
+    var low = text.toLowerCase(), spans = [];
+    if (low.length !== text.length) return spans;
+    terms.forEach(function (t) { for (var p = low.indexOf(t); p > -1; p = low.indexOf(t, p + t.length)) spans.push([p, p + t.length]); });
+    spans.sort(function (a, b) { return a[0] - b[0] || b[1] - a[1]; });
+    var merged = [];
+    spans.forEach(function (sp) {
+      var last = merged[merged.length - 1];
+      if (last && sp[0] < last[1]) last[1] = Math.max(last[1], sp[1]); else merged.push([sp[0], sp[1]]);
+    });
+    return merged;
+  }
+  function walk(node, details) {
+    var kids = node.childNodes.slice ? node.childNodes.slice() : Array.prototype.slice.call(node.childNodes);
+    kids.forEach(function (c) {
+      if (c.nodeType === 3) {
+        var spans = spansIn(c.nodeValue);
+        for (var k = spans.length - 1; k >= 0; k--) {
+          if (spans[k][1] < c.nodeValue.length) c.splitText(spans[k][1]);
+          var mid = spans[k][0] > 0 ? c.splitText(spans[k][0]) : c;
+          var m = c.ownerDocument.createElement('mark');
+          m.className = 'hit';
+          mid.parentNode.insertBefore(m, mid);
+          m.appendChild(mid);
+          count++;
+          details.forEach(function (d) { d.open = true; });
+        }
+      } else if (c.nodeType === 1) {
+        var name = String(c.localName || c.tagName).toLowerCase(), cls = ' ' + (c.className && c.className.baseVal != null ? c.className.baseVal : c.className || '') + ' ';
+        if (name === 'script' || name === 'style' || cls.indexOf(' katex ') > -1 || cls.indexOf(' katex-display ') > -1 || (name === 'mark' && cls.indexOf(' hit ') > -1)) return;
+        walk(c, name === 'details' ? details.concat([c]) : details);
+      }
+    });
+  }
+  walk(root, []);
+  return count;
+}
+
+// Take the highlights out again and join the text back together.
+function clearMarks(box) {
+  (function walk(node) {
+    Array.prototype.slice.call(node.childNodes).forEach(function (c) {
+      if (c.nodeType !== 1) return;
+      walk(c);
+      if (String(c.localName || c.tagName).toLowerCase() === 'mark') {
+        var t = c.ownerDocument.createTextNode(c.textContent);
+        c.parentNode.insertBefore(t, c);
+        c.parentNode.removeChild(c);
+      }
+    });
+    for (var i = node.childNodes.length - 1; i > 0; i--) {
+      var a = node.childNodes[i - 1], b = node.childNodes[i];
+      if (a.nodeType === 3 && b.nodeType === 3) { a.nodeValue += b.nodeValue; node.removeChild(b); }
+    }
+  })(box);
+}
+
+if (typeof module === 'object' && module.exports) module.exports = { markMatches: markMatches, clearMarks: clearMarks, protectMath: protectMath, restoreMath: restoreMath, restoreMathAttrs: restoreMathAttrs, mathNodes: mathNodes, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, parseQuery: parseQuery, matchQuery: matchQuery, filterSources: filterSources, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
 // A source's kind for its icon: the type icon the page showed, which also covers
 // titles with no extension, then the title's extension, then the url. A generic
 // document icon comes after the extension, which may say more ("plan.docx").
@@ -614,6 +690,10 @@ if (typeof document !== 'undefined') (function () {
   function norm(s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g, ''); }
   var srcByTitle = {}; D.sources.forEach(function (s, i) { srcByTitle[norm(s.title)] = i; });
 
+  function scrollToMark(box, mark) {
+    var sc = box.closest('.scroll') || $('chatscroll'), mr = mark.getBoundingClientRect(), sr = sc.getBoundingClientRect();
+    sc.scrollTop += mr.top - sr.top - sc.clientHeight * 0.25;
+  }
   function markQuote(box, quote, ignoreCase) {
     var w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT), nodes = [], n, full = '';
     while ((n = w.nextNode())) { nodes.push(n); full += n.nodeValue; }
@@ -723,7 +803,7 @@ if (typeof document !== 'undefined') (function () {
     listScroller('left').scrollTop = listTop.l;
     saveView();
   }
-  function openSource(i, quote, ignoreCase) {
+  function openSource(i, quote, ignoreCase, parsed) {
     var s = D.sources[i];
     if (view.source === null) listTop.l = listScroller('left').scrollTop;
     view.source = i;
@@ -731,7 +811,8 @@ if (typeof document !== 'undefined') (function () {
     $('left').innerHTML = '<div class="p-head"><button class="icon-btn" id="srcback" aria-label="Back to sources">' + icon(BACK) + '</button><h2 style="flex:1">' + esc(s.title) + '</h2>' + copyButton('source', i) + colBtn('l') + '</div><div class="scroll"><div class="reader md" id="srcbody">' +
       (isWebUrl(s.url) ? '<p><a class="ext" href="' + esc(s.url) + '" target="_blank" rel="noopener">' + (sourceKind(s.type, s.title, s.url) === 'youtube' ? 'Open original video' : 'Open original page') + '</a></p>' : '') + md(s.md) + '</div></div>';
     applyCols();
-    if (quote) setTimeout(function () { markQuote($('srcbody'), quote, ignoreCase); }, 200);
+    if (parsed) setTimeout(function () { markAll($('srcbody'), parsed, quote); }, 200);
+    else if (quote) setTimeout(function () { markQuote($('srcbody'), quote, ignoreCase); }, 200);
     saveView();
   }
 
@@ -759,6 +840,7 @@ if (typeof document !== 'undefined') (function () {
     var box = $('chat');
     box.innerHTML = top;
     $('chatcount').textContent = low ? idx.length + ' of ' + D.pairs.length : D.sources.length + ' sources';
+    var parsed = low && searchText(q) ? parseQuery(q) : null, scrolled = false;
     var at = 0, token = (renderChat.t = (renderChat.t || 0) + 1);
     (function batch() {
       if (token !== renderChat.t) return;
@@ -768,6 +850,10 @@ if (typeof document !== 'undefined') (function () {
       }
       var part = idx.slice(at, at + 15); at += 15;
       box.insertAdjacentHTML('beforeend', chatHtml(part));
+      if (parsed) part.forEach(function (i) {
+        var pair = $('pair-' + i);
+        if (pair && markMatches(pair, parsed) && !scrolled) { scrolled = true; scrollToMark(pair, pair.querySelector('mark.hit')); }
+      });
       setTimeout(batch, 0);
     })();
   }
@@ -877,26 +963,31 @@ if (typeof document !== 'undefined') (function () {
     results.scrollTop = 0;
     results.hidden = false;
   }
-  function clearMarks(box) {
-    box.querySelectorAll('mark').forEach(function (m) { m.replaceWith(document.createTextNode(m.textContent)); });
-    box.normalize();
+  // Mark every match of the archive search in an opened item and scroll to the first one
+  function markAll(box, parsed, find) {
+    clearMarks(box);
+    var n = parsed ? markMatches(box, parsed) : 0;
+    if (!n) return find ? markQuote(box, find, true) : false;
+    scrollToMark(box, box.querySelector('mark.hit'));
+    return true;
   }
-  function jumpToPair(i, find, tries) {
+  function jumpToPair(i, find, parsed, tries) {
     var pair = $('pair-' + i);
-    if (!pair) { if (tries > 0) setTimeout(function () { jumpToPair(i, find, tries - 1); }, 100); return; }
+    if (!pair) { if (tries > 0) setTimeout(function () { jumpToPair(i, find, parsed, tries - 1); }, 100); return; }
     clearMarks($('chat'));
-    if (!find || !markQuote(pair, find, true)) pair.scrollIntoView({ block: 'start' });
+    if (!markAll(pair, parsed, find)) pair.scrollIntoView({ block: 'start' });
   }
   function openHit(kind, i, find) {
     results.hidden = true;
-    if (kind === 'source') openSource(i, find, true);
+    var parsed = parseQuery($('allq').value);
+    if (kind === 'source') openSource(i, find, true, parsed);
     else if (kind === 'studio') {
       openArt(i);
       var reader = $('right').querySelector('.reader');
-      if (reader && find) setTimeout(function () { markQuote(reader, find, true); }, 200);
+      if (reader) setTimeout(function () { markAll(reader, parsed, find); }, 200);
     } else {
       if ($('chatq').value) { $('chatq').value = ''; renderChat(''); }
-      jumpToPair(i, find, 40);
+      jumpToPair(i, find, parsed, 40);
     }
   }
 
