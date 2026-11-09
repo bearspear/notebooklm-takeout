@@ -42,3 +42,22 @@ test('texForKatex leaves fractions alone inside text-mode groups', () => {
   const html = katex.renderToString(texForKatex('\\text{½ cup}'), { throwOnError: false });
   assert.doesNotMatch(html, /katex-error|#cc0000/);
 });
+
+// Formulas go into text only. Sanitized attribute values keep "<" raw, so KaTeX markup in an attribute would turn live.
+function renderSafe(text) {
+  const p = protectMath(text);
+  const html = marked.parse(p.text, { gfm: true });
+  return restoreMath(html, p.math, (src, block, m) => '<K>' + m.replace(/"/g, '&quot;') + '</K>');
+}
+test('formulas in attributes come back as their plain source, never as markup', () => {
+  for (const t of ['<a title="$a$ <img src=x onerror=alert(1)>">q</a>', '[q](http://x "$a$ <img src=x onerror=alert(1)>")', '![$a$ <img src=x onerror=alert(1)>](images/x.png)', '<span title="$a$ &lt;img src=x onerror=alert(1)&gt;">q</span>']) {
+    const out = renderSafe(t);
+    const bare = out.replace(/"[^"]*"/g, '""');
+    assert.doesNotMatch(bare, /\son\w+=/i, out);
+    assert.ok((bare.match(/<img/gi) || []).length <= (t[0] === '!' ? 1 : 0), out);
+    assert.ok(!/="[^"]*<K>/.test(out), out);
+  }
+  assert.match(renderSafe('[q](http://x "$a$ b")'), /title="\$a\$ b"/);
+  assert.match(renderSafe('[a](http://x/$y$)'), /href="http:\/\/x\/\$y\$"/);
+  assert.match(renderSafe('see $a$ and **$b$**'), /<p>see <K>\$a\$<\/K> and <strong><K>\$b\$<\/K><\/strong><\/p>/);
+});

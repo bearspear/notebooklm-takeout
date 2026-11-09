@@ -219,13 +219,24 @@ function protectMath(text) {
   });
   return { text: t + src0.slice(at), math: math };
 }
+// Sanitized HTML is cut into tags (a quoted attribute value may hold a raw ">" or "<") and text.
+// A formula in text becomes render()'s HTML. In a tag it becomes its own source as plain attribute text,
+// so rendered markup can never land inside an attribute and turn into live elements.
 function restoreMath(html, math, render) {
-  return html.replace(/\$XMATHX(\d+)XEND\$/g, function (_, i) {
-    var m = math[+i];
-    if (m === undefined) return _;
-    var block = m.slice(0, 2) === '$$', src = m.replace(/^\$+|\$+$/g, '');
-    src = src.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-    return render(src, block, m);
+  var PH = /\$XMATHX(\d+)XEND\$/g;
+  return String(html).replace(/(<!--[\s\S]*?-->|<(?:[^>"]|"[^"]*")*>)|([^<]+)|</g, function (all, tag, text) {
+    if (tag) return tag.replace(PH, function (_, i) {
+      var m = math[+i];
+      return m === undefined ? _ : m.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    });
+    if (!text) return all;
+    return text.replace(PH, function (_, i) {
+      var m = math[+i];
+      if (m === undefined) return _;
+      var block = m.slice(0, 2) === '$$', src = m.replace(/^\$+|\$+$/g, '');
+      src = src.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+      return render(src, block, m);
+    });
   });
 }
 var FRACTIONS = { '\u00bd': [1, 2], '\u00bc': [1, 4], '\u00be': [3, 4], '\u2153': [1, 3], '\u2154': [2, 3], '\u215b': [1, 8], '\u215c': [3, 8], '\u215d': [5, 8], '\u215e': [7, 8], '\u2155': [1, 5] };
