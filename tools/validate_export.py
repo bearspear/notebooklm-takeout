@@ -160,6 +160,27 @@ def _strip_code(text):
     return re.sub(r'`[^`\n]*`', '', text)
 
 
+# The viewer's formula rule (viewer/viewer-app.js findMath): $$..$$, or an inline span that
+# opens at a "$" not followed by whitespace and closes at the first "$" not preceded by
+# whitespace and not followed by a digit, on one line. tests/fixtures/math-spans.json pins both.
+_VIEWER_MATH = re.compile(r'\$\$[\s\S]+?\$\$|\$(?!\s)(?:[^$\n]*?[^\s$])\$(?!\d)')
+
+
+def viewer_math_spans(text):
+    return [m.group(0) for m in _VIEWER_MATH.finditer(text)]
+
+
+def _undrawn_math(text):
+    """TeX-looking $..$ spans the viewer would leave as raw text."""
+    rest = _VIEWER_MATH.sub(lambda m: ' ' * len(m.group(0)), text)
+    out = []
+    for m in re.finditer(r'\$([^$\n]+)\$', rest):
+        inner = m.group(1)
+        if re.search(r'\\[A-Za-z]|[\^_{]', inner) or re.fullmatch(r'[A-Za-z0-9]+', inner):
+            out.append(m.group(0))
+    return out
+
+
 def check_markdown(report, rel, text):
     for s in SENTINELS:
         if s in text:
@@ -181,6 +202,8 @@ def check_markdown(report, rel, text):
         report.add('fail', 'footnote-undefined', f'{rel}: [^{r}]')
     for d in sorted(seen - refs):
         report.add('info', 'footnote-unused', f'{rel}: [^{d}]')
+    for f in _undrawn_math(body):
+        report.add('fail', 'viewer-math-raw', f'{rel}: the viewer would show {f} as raw text')
 
 
 def check_links(report, root, rel):

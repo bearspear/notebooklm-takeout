@@ -199,7 +199,16 @@ function showCopyResult(btn, ok, icons, later, cancel) {
   }, 1500);
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
+// The formulas md() draws. A $$..$$ pair is a block. An inline span opens at a "$" not
+// followed by whitespace and closes at the first "$" that is not preceded by whitespace and
+// not followed by a digit, on one line: "costs $5 and $10" and "$3-$4 million" stay prices.
+var MATH_RE = /\$\$[\s\S]+?\$\$|\$(?!\s)(?:[^$\n]*?[^\s$])\$(?!\d)/g;
+function findMath(text) {
+  var out = [], re = new RegExp(MATH_RE.source, 'g'), m;
+  while ((m = re.exec(String(text)))) out.push({ start: m.index, end: m.index + m[0].length, src: m[0], block: m[0].slice(0, 2) === '$$' });
+  return out;
+}
+if (typeof module === 'object' && module.exports) module.exports = { findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
 // A source's kind for its icon: the type icon the page showed, which also covers
 // titles with no extension, then the title's extension, then the url. A generic
 // document icon comes after the extension, which may say more ("plan.docx").
@@ -370,9 +379,11 @@ if (typeof document !== 'undefined') (function () {
   function sanitize(html) { return sanitizeHtml(html, new DOMParser()); }
   function md(text) {
     var math = [];
-    var t = String(text).replace(/\$\$[\s\S]+?\$\$|\$(?![\s\d])(?:[^$\n]*?[^\s$])\$(?!\d)/g, function (m) {
-      math.push(m); return 'XMATHX' + (math.length - 1) + 'XEND';
+    var src0 = String(text), t = '', at = 0;
+    findMath(src0).forEach(function (f) {
+      math.push(f.src); t += src0.slice(at, f.start) + 'XMATHX' + (math.length - 1) + 'XEND'; at = f.end;
     });
+    t += src0.slice(at);
     var html = sanitize(marked.parse(t, { gfm: true }));
     return html.replace(/XMATHX(\d+)XEND/g, function (_, i) {
       var m = math[+i];

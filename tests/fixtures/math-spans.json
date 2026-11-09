@@ -1,0 +1,78 @@
+[
+ {
+  "text": "Sum $1$ end",
+  "formulas": [
+   "$1$"
+  ]
+ },
+ {
+  "text": "Sum $1 + 2 + 4 + 8...$ end",
+  "formulas": [
+   "$1 + 2 + 4 + 8...$"
+  ]
+ },
+ {
+  "text": "Sum $-1$ end",
+  "formulas": [
+   "$-1$"
+  ]
+ },
+ {
+  "text": "Sum $½ + ¼ + ⅛...$ end",
+  "formulas": [
+   "$½ + ¼ + ⅛...$"
+  ]
+ },
+ {
+  "text": "Sum $10^{48}$ end",
+  "formulas": [
+   "$10^{48}$"
+  ]
+ },
+ {
+  "text": "Sum $x$ end",
+  "formulas": [
+   "$x$"
+  ]
+ },
+ {
+  "text": "Sum $$\\sum_i i$$ end",
+  "formulas": [
+   "$$\\sum_i i$$"
+  ]
+ },
+ {
+  "text": "Sum $SO_2$ end",
+  "formulas": [
+   "$SO_2$"
+  ]
+ },
+ {
+  "text": "costs $5 and $10",
+  "formulas": []
+ },
+ {
+  "text": "$3-$4 million",
+  "formulas": []
+ },
+ {
+  "text": "$5 per user ($60 per year)",
+  "formulas": []
+ },
+ {
+  "text": "from $1,000 to $2,000",
+  "formulas": []
+ },
+ {
+  "text": "pay $20.",
+  "formulas": []
+ },
+ {
+  "text": "$ x$",
+  "formulas": []
+ },
+ {
+  "text": "$x $",
+  "formulas": []
+ }
+]
