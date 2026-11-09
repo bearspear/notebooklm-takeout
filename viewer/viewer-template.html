@@ -10,11 +10,11 @@
 :root {
   --page: #f8f9fb; --pane: #ffffff; --soft: #f0f2f5; --soft2: #e9ecf1; --line: #e3e6ea; --ink: #1f1f1f; --muted: #5f6368;
   --accent: #0b57d0; --bubble: #e9eef6; --chip: #eceff3; --mark: #fdeeb5; --yt: #e62117; --pop: #ffffff;
-  --blue: #4285f4; --pink: #d6336c; --green: #0f9d58; --purple: #6f5bd6; --orange: #e8710a;
+  --guide: #eef3fc; --guide-line: #d3e0f7; --topic: #ffffff; --topic-line: #c4d3ec; --blue: #4285f4; --pink: #d6336c; --green: #0f9d58; --purple: #6f5bd6; --orange: #e8710a;
 }
 @media (prefers-color-scheme: dark) { :root {
   --page: #131416; --pane: #1e1f22; --soft: #2a2c30; --soft2: #33363b; --line: #36393e; --ink: #e8eaed; --muted: #a2a7ad;
-  --accent: #a8c7fa; --bubble: #2d3440; --chip: #383b41; --mark: #5c4b12; --pop: #2a2c30; color-scheme: dark;
+  --accent: #a8c7fa; --bubble: #2d3440; --chip: #383b41; --mark: #5c4b12; --pop: #2a2c30; --guide: #232b3a; --guide-line: #34415a; --topic: #2d3646; --topic-line: #46536c; color-scheme: dark;
 } }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -65,6 +65,17 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .yt::after { content: ''; border-left: 6px solid #fff; border-top: 4px solid transparent; border-bottom: 4px solid transparent; margin-left: 1px; }
 .reader { padding: 2px 22px 24px; }
 .reader h3 { font-size: 16px; font-weight: 500; margin: 18px 0 6px; }
+.guide { margin: 8px 0 14px; padding: 4px 14px 12px; border-radius: 14px; background: var(--guide); border: 1px solid var(--guide-line); }
+.guide-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 14px; font-weight: 500; text-align: left; }
+.guide-head > span { flex: 1; }
+.guide-head svg:first-child { width: 18px; height: 18px; color: var(--accent); }
+.guide-head .chev { transition: transform .15s; color: var(--muted); }
+.guide-head[aria-expanded="false"] .chev { transform: rotate(-90deg); }
+.guide-body[hidden] { display: none; }
+.guide-body > :first-child { margin-top: 0; }
+.topics { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.topic { padding: 4px 12px; border-radius: 16px; background: var(--topic); border: 1px solid var(--topic-line); font-size: 13px; line-height: 1.4; text-align: left; overflow-wrap: anywhere; }
+.topic:hover { border-color: var(--accent); color: var(--accent); }
 .reader a.ext { font-size: 13px; color: var(--accent); }
 .chat { max-width: 760px; margin: 0 auto; padding: 8px 24px 28px; }
 .nb-emoji { font-size: 34px; line-height: 1.2; margin-top: 18px; }

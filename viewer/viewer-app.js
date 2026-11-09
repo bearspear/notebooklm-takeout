@@ -89,6 +89,33 @@ function sanitizeHtml(html, parser, math, render) {
 }
 
 function escHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+// The "## Summary" and "## Key Topics" sections a source starts with, before its "## Content"
+function splitSourceGuide(text) {
+  var md = String(text == null ? '' : text), lines = md.split('\n'), end = lines.length, i;
+  for (i = 0; i < lines.length; i++) if (/^##\s+Content\s*$/.test(lines[i])) { end = i; break; }
+  var summary = null, topics = [], keep = [], mode = null, body = [], took = false;
+  function flush() {
+    if (mode === 'sum') { var t = body.join('\n').trim(); if (t) { summary = t; took = true; } }
+    else if (mode === 'top') body.forEach(function (l) { var m = /^\s*[-*+]\s+(.+?)\s*$/.exec(l); if (m) { topics.push(m[1]); took = true; } });
+    mode = null; body = [];
+  }
+  for (i = 0; i < lines.length; i++) {
+    var h = i < end ? /^##\s+(.+?)\s*$/.exec(lines[i]) : null;
+    if (h) { flush(); mode = /^summary$/i.test(h[1]) ? 'sum' : /^key topics$/i.test(h[1]) ? 'top' : null; if (mode) continue; }
+    else if (i >= end) flush();
+    if (mode) body.push(lines[i]); else keep.push(lines[i]);
+  }
+  flush();
+  return took ? { summary: summary, topics: topics, rest: keep.join('\n') } : { summary: null, topics: [], rest: md };
+}
+// The source guide card. summaryHtml must already be sanitized (md() output); topics are escaped here.
+var SPARKLE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" stroke="none" d="M12 2c.6 5.2 4.8 9.4 10 10-5.2.6-9.4 4.8-10 10-.6-5.2-4.8-9.4-10-10 5.2-.6 9.4-4.8 10-10z"/></svg>';
+function guideHtml(summaryHtml, topics) {
+  if (!summaryHtml && !(topics && topics.length)) return '';
+  return '<section class="guide"><button class="guide-head" type="button" aria-expanded="true">' + SPARKLE + '<span>Source guide</span>' +
+    '<svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><div class="guide-body">' + (summaryHtml || '') +
+    (topics && topics.length ? '<div class="topics">' + topics.map(function (t) { return '<button class="topic" type="button">' + escHtml(t) + '</button>'; }).join('') + '</div>' : '') + '</div></section>';
+}
 
 // A citation popover. c.imgs are paths the builder made; known: its source is in this archive.
 // render, when given, turns the quote's Markdown into safe HTML (the app passes its sanitizing md).
@@ -396,7 +423,7 @@ function clearMarks(box) {
   })(box);
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { markMatches: markMatches, clearMarks: clearMarks, protectMath: protectMath, restoreMath: restoreMath, restoreMathAttrs: restoreMathAttrs, mathNodes: mathNodes, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, parseQuery: parseQuery, matchQuery: matchQuery, filterSources: filterSources, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
+if (typeof module === 'object' && module.exports) module.exports = { splitSourceGuide: splitSourceGuide, guideHtml: guideHtml, markMatches: markMatches, clearMarks: clearMarks, protectMath: protectMath, restoreMath: restoreMath, restoreMathAttrs: restoreMathAttrs, mathNodes: mathNodes, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, parseQuery: parseQuery, matchQuery: matchQuery, filterSources: filterSources, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
 // A source's kind for its icon: the type icon the page showed, which also covers
 // titles with no extension, then the title's extension, then the url. A generic
 // document icon comes after the extension, which may say more ("plan.docx").
@@ -816,12 +843,12 @@ if (typeof document !== 'undefined') (function () {
     saveView();
   }
   function openSource(i, quote, ignoreCase, parsed) {
-    var s = D.sources[i];
+    var s = D.sources[i], guide = splitSourceGuide(s.md);
     if (view.source === null) listTop.l = listScroller('left').scrollTop;
     view.source = i;
     reveal('l', Math.round(innerWidth * 0.36));
     $('left').innerHTML = '<div class="p-head"><button class="icon-btn" id="srcback" aria-label="Back to sources">' + icon(BACK) + '</button><h2 style="flex:1">' + esc(s.title) + '</h2>' + copyButton('source', i) + colBtn('l') + '</div><div class="scroll"><div class="reader md" id="srcbody">' +
-      (isWebUrl(s.url) ? '<p><a class="ext" href="' + esc(s.url) + '" target="_blank" rel="noopener">' + (sourceKind(s.type, s.title, s.url) === 'youtube' ? 'Open original video' : 'Open original page') + '</a></p>' : '') + md(s.md) + '</div></div>';
+      (isWebUrl(s.url) ? '<p><a class="ext" href="' + esc(s.url) + '" target="_blank" rel="noopener">' + (sourceKind(s.type, s.title, s.url) === 'youtube' ? 'Open original video' : 'Open original page') + '</a></p>' : '') + (guide.summary || guide.topics.length ? guideHtml(guide.summary ? md(guide.summary) : '', guide.topics) : '') + md(guide.rest) + '</div></div>';
     applyCols();
     if (parsed) setTimeout(function () { markAll($('srcbody'), parsed, quote); }, 200);
     else if (quote) setTimeout(function () { markQuote($('srcbody'), quote, ignoreCase); }, 200);
@@ -1012,6 +1039,19 @@ if (typeof document !== 'undefined') (function () {
     if (!$('qhelptext').hidden && e.target.closest && !e.target.closest('#qhelptext, #qhelp')) setHelp(false);
     var t = e.target.closest ? e.target.closest('button') : null; if (!t) return;
     if (t.id === 'qhelp') { setHelp($('qhelptext').hidden); return; }
+    if (t.classList.contains('guide-head')) {
+      var open = t.getAttribute('aria-expanded') !== 'true';
+      t.setAttribute('aria-expanded', String(open));
+      t.nextElementSibling.hidden = !open;
+      return;
+    }
+    if (t.classList.contains('topic')) {
+      var inp = $('allq'); inp.value = '"' + t.textContent.replace(/"/g, '') + '"';
+      clearTimeout(runSearch.d); runSearch(inp.value);
+      var first = results.querySelector('button.hit');
+      if (first) first.focus(); else { results.tabIndex = -1; results.focus(); }
+      return;
+    }
     if (t.dataset.hit) { openHit(t.dataset.hit, +t.dataset.i, t.dataset.find); return; }
     if (t.classList.contains('cite')) {
       var c = D.cites[+t.dataset.c], i = c && srcByTitle[norm(c.t)];
