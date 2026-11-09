@@ -10,11 +10,11 @@
 :root {
   --page: #f8f9fb; --pane: #ffffff; --soft: #f0f2f5; --soft2: #e9ecf1; --line: #e3e6ea; --ink: #1f1f1f; --muted: #5f6368;
   --accent: #0b57d0; --bubble: #e9eef6; --chip: #eceff3; --mark: #fdeeb5; --yt: #e62117; --pop: #ffffff;
-  --blue: #4285f4; --pink: #d6336c; --green: #0f9d58; --purple: #6f5bd6; --orange: #e8710a;
+  --guide: #eef3fc; --guide-line: #d3e0f7; --topic: #ffffff; --topic-line: #c4d3ec; --blue: #4285f4; --pink: #d6336c; --green: #0f9d58; --purple: #6f5bd6; --orange: #e8710a;
 }
 @media (prefers-color-scheme: dark) { :root {
   --page: #131416; --pane: #1e1f22; --soft: #2a2c30; --soft2: #33363b; --line: #36393e; --ink: #e8eaed; --muted: #a2a7ad;
-  --accent: #a8c7fa; --bubble: #2d3440; --chip: #383b41; --mark: #5c4b12; --pop: #2a2c30; color-scheme: dark;
+  --accent: #a8c7fa; --bubble: #2d3440; --chip: #383b41; --mark: #5c4b12; --pop: #2a2c30; --guide: #232b3a; --guide-line: #34415a; --topic: #2d3646; --topic-line: #46536c; color-scheme: dark;
 } }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -32,6 +32,13 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 #results[hidden] { display: none; }
 #results h3 { margin: 10px 16px 4px; font-size: 12.5px; font-weight: 500; color: var(--muted); }
 #results h3 span { font-weight: 400; }
+.qwrap { position: relative; display: flex; }
+.qhelp { width: 24px; height: 24px; border-radius: 50%; background: var(--soft); color: var(--muted); font-size: 13px; line-height: 24px; text-align: center; }
+.qhelp:hover, .qhelp:focus-visible, .qhelp[aria-expanded="true"] { color: var(--ink); }
+.qhelptext { position: absolute; z-index: 16; top: 32px; right: 0; width: 340px; max-width: calc(100vw - 24px); padding: 10px 14px; border-radius: 12px; background: var(--pop); box-shadow: 0 6px 28px rgba(0, 0, 0, .22); font-size: 13px; line-height: 1.5; font-weight: 400; }
+.qhelptext[hidden] { display: none; }
+.qhelptext ul { margin: 6px 0 0; padding-left: 18px; }
+.qhelptext code { font-size: 12.5px; }
 #results .more { margin: 8px 16px; font-size: 13px; color: var(--muted); }
 .hit { display: block; width: 100%; padding: 8px 16px; text-align: left; }
 .hit:hover, .hit:focus-visible { background: var(--soft); }
@@ -57,6 +64,17 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .yt::after { content: ''; border-left: 6px solid #fff; border-top: 4px solid transparent; border-bottom: 4px solid transparent; margin-left: 1px; }
 .reader { padding: 2px 22px 24px; }
 .reader h3 { font-size: 16px; font-weight: 500; margin: 18px 0 6px; }
+.guide { margin: 8px 0 14px; padding: 4px 14px 12px; border-radius: 14px; background: var(--guide); border: 1px solid var(--guide-line); }
+.guide-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 0; font-size: 14px; font-weight: 500; text-align: left; }
+.guide-head > span { flex: 1; }
+.guide-head svg:first-child { width: 18px; height: 18px; color: var(--muted); }
+.guide-head .chev { transition: transform .15s; color: var(--muted); }
+.guide-head[aria-expanded="false"] .chev { transform: rotate(-90deg); }
+.guide-body[hidden] { display: none; }
+.guide-body > :first-child { margin-top: 0; }
+.topics { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.topic { padding: 4px 12px; border-radius: 16px; background: var(--topic); border: 1px solid var(--topic-line); font-size: 13px; line-height: 1.4; text-align: left; overflow-wrap: anywhere; }
+.topic:hover { border-color: var(--accent); color: var(--accent); }
 .reader a.ext { font-size: 13px; color: var(--accent); }
 .chat { max-width: 760px; margin: 0 auto; padding: 8px 24px 28px; }
 .nb-emoji { font-size: 34px; line-height: 1.2; margin-top: 18px; }
@@ -92,6 +110,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .cite { display: inline-grid; place-items: center; min-width: 19px; height: 19px; padding: 0 5px; margin: 0 1px; border-radius: 10px; background: var(--chip); color: var(--muted); font-size: 11px; font-weight: 500; line-height: 1; vertical-align: 1px; font-variant-numeric: tabular-nums; }
 .cite:hover, .cite:focus-visible { background: var(--accent); color: var(--pane); }
 mark { background: var(--mark); color: inherit; border-radius: 2px; }
+mark.hit { box-shadow: 0 0 0 1px var(--mark); }
 .dock { flex: none; padding: 8px 24px 10px; }
 .bar { max-width: 640px; margin: 0 auto; display: flex; align-items: center; gap: 12px; border-radius: 28px; padding: 12px 20px; box-shadow: 0 1px 8px rgba(40, 50, 70, .16); background: var(--pane); color: var(--muted); }
 .bar input { flex: 1; min-width: 0; border: 0; outline: none; background: none; font: inherit; color: var(--ink); }
@@ -147,7 +166,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 <body>
 <header class="top">
   <span class="logo"><svg viewBox="0 0 24 24"><path d="M4 8h16v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1zM3 4h18v4H3zM10 12h4"/></svg></span>
-  <h1 id="nb"></h1><label class="gsearch"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input id="allq" type="search" aria-label="Search everything" placeholder="Search everything"></label><span class="pill" id="stamp"></span>
+  <h1 id="nb"></h1><label class="gsearch"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input id="allq" type="search" aria-label="Search everything" placeholder="Search everything"></label><span class="qwrap"><button id="qhelp" class="qhelp" type="button" aria-label="Search help" aria-expanded="false" aria-controls="qhelptext" title="Search help">?</button><div id="qhelptext" class="qhelptext" hidden><b>Search tips</b><ul><li><code>word word</code> finds items with every word</li><li><code>"exact phrase"</code> finds the words together, in order</li><li><code>-word</code> or <code>-"a phrase"</code> leaves out items that have it</li><li><code>cat OR dog</code> finds either one (OR in capitals)</li><li><code>in:chat</code>, <code>in:notes</code> or <code>in:sources</code> looks in one place only</li><li><code>source:name</code> looks only in sources whose title has that name</li><li><code>type:pdf</code> keeps one kind of source: pdf, youtube, web, audio or image</li></ul></div></span><span class="pill" id="stamp"></span>
 </header>
 <div id="results" hidden></div>
 <main class="main" id="main">

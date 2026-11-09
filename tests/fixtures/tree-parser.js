@@ -30,11 +30,20 @@ class Node {
     n.parentNode = this; return n;
   }
   appendChild(n) { return this.insertBefore(n, null); }
+  get nextSibling() { const p = this.parentNode; return p ? p.childNodes[p.childNodes.indexOf(this) + 1] || null : null; }
   get firstChild() { return this.childNodes[0] || null; }
   get textContent() { return this.nodeType === 3 ? this.nodeValue : this.nodeType === 8 ? '' : this.childNodes.map(c => c.textContent).join(''); }
   set textContent(t) { this.childNodes.forEach(c => { c.parentNode = null; }); this.childNodes = []; if (t) this.appendChild(this.ownerDocument.createTextNode(t)); }
 }
-class Text extends Node { constructor(doc, v, type) { super(doc); this.nodeType = type || 3; this.nodeValue = v; } }
+class Text extends Node {
+  constructor(doc, v, type) { super(doc); this.nodeType = type || 3; this.nodeValue = v; }
+  splitText(at) {
+    const rest = new Text(this.ownerDocument, this.nodeValue.slice(at), this.nodeType);
+    this.nodeValue = this.nodeValue.slice(0, at);
+    if (this.parentNode) { const p = this.parentNode; p.insertBefore(rest, p.childNodes[p.childNodes.indexOf(this) + 1] || null); }
+    return rest;
+  }
+}
 class Element extends Node {
   constructor(doc, tag, ns) { super(doc); this.nodeType = 1; this.tagName = tag.toUpperCase(); this.localName = tag.toLowerCase(); this.namespaceURI = ns || HTML_NS; this.attributes = []; }
   get nodeName() { return this.tagName; }

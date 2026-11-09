@@ -89,6 +89,41 @@ function sanitizeHtml(html, parser, math, render) {
 }
 
 function escHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+// The "## Summary" and "## Key Topics" sections a source starts with, before its "## Content"
+function splitSourceGuide(text) {
+  var md = String(text == null ? '' : text), lines = md.split('\n'), end = lines.length, i;
+  for (i = 0; i < lines.length; i++) if (/^##\s+Content\s*$/.test(lines[i])) { end = i; break; }
+  if (end === lines.length) {
+    // No Content heading: a guide counts only at the very start (just a link or "**Web ...:**" line before it)
+    var firstH = -1;
+    for (i = 0; i < lines.length; i++) if (/^##\s/.test(lines[i])) { firstH = i; break; }
+    var lead = firstH < 0 ? ['x'] : lines.slice(0, firstH).filter(function (l) { return l.trim() && !/^(\*\*[^*]+:\*\*|<?https?:\/\/|\[[^\]]*\]\()/.test(l.trim()); });
+    if (lead.length || !/^##\s+(summary|key topics)\s*$/i.test(lines[firstH])) return { summary: null, topics: [], rest: md };
+    for (i = firstH; i < lines.length; i++) if (/^##\s/.test(lines[i]) && !/^##\s+(summary|key topics)\s*$/i.test(lines[i])) { end = i; break; }
+  }
+  var summary = null, topics = [], keep = [], mode = null, body = [], took = false;
+  function flush() {
+    if (mode === 'sum') { var t = body.join('\n').trim(); if (t) { summary = t; took = true; } }
+    else if (mode === 'top') body.forEach(function (l) { var m = /^\s*[-*+]\s+(.+?)\s*$/.exec(l); if (m) { topics.push(m[1]); took = true; } else if (l.trim()) keep.push(l); });
+    mode = null; body = [];
+  }
+  for (i = 0; i < lines.length; i++) {
+    var h = i < end ? /^##\s+(.+?)\s*$/.exec(lines[i]) : null;
+    if (h) { flush(); mode = /^summary$/i.test(h[1]) ? 'sum' : /^key topics$/i.test(h[1]) ? 'top' : null; if (mode) continue; }
+    else if (i >= end) flush();
+    if (mode) body.push(lines[i]); else keep.push(lines[i]);
+  }
+  flush();
+  return took ? { summary: summary, topics: topics, rest: keep.join('\n') } : { summary: null, topics: [], rest: md };
+}
+// The source guide card. summaryHtml must already be sanitized (md() output); topics are escaped here.
+var SPARKLE = '<svg class="spark" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" stroke="none" d="M9 3l1.8 5.2L16 10l-5.2 1.8L9 17l-1.8-5.2L2 10l5.2-1.8zM19 2l.9 2.1L22 5l-2.1.9L19 8l-.9-2.1L16 5l2.1-.9zM18 14l.9 2.1L21 17l-2.1.9L18 20l-.9-2.1L15 17l2.1-.9z"/></svg>';
+function guideHtml(summaryHtml, topics) {
+  if (!summaryHtml && !(topics && topics.length)) return '';
+  return '<section class="guide"><button class="guide-head" type="button" aria-expanded="true">' + SPARKLE + '<span>Source guide</span>' +
+    '<svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><div class="guide-body">' + (summaryHtml || '') +
+    (topics && topics.length ? '<div class="topics">' + topics.map(function (t) { return '<button class="topic" type="button">' + escHtml(t) + '</button>'; }).join('') + '</div>' : '') + '</div></section>';
+}
 
 // A citation popover. c.imgs are paths the builder made; known: its source is in this archive.
 // render, when given, turns the quote's Markdown into safe HTML (the app passes its sanitizing md).
@@ -308,7 +343,95 @@ function texForKatex(src) {
   }
   return out;
 }
-if (typeof module === 'object' && module.exports) module.exports = { protectMath: protectMath, restoreMath: restoreMath, restoreMathAttrs: restoreMathAttrs, mathNodes: mathNodes, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
+// The words to highlight for a parsed query: a plain query is one contiguous phrase (as chat search
+// reads it), otherwise every positive term and every OR alternative. Longest first.
+function markTerms(parsed) {
+  var out = [];
+  if (!parsed) return out;
+  if (parsed.plain) { var all = parsed.terms.map(function (t) { return t.text; }).join(' '); if (all) out.push(all); }
+  else {
+    parsed.terms.forEach(function (t) { if (!t.negate && t.text && !(t.text === 'OR' && !t.phrase)) out.push(t.text); });
+    parsed.anyOf.forEach(function (g) { g.forEach(function (t) { if (t.text) out.push(t.text); }); });
+  }
+  return out.map(function (t) { return t.toLowerCase(); }).sort(function (a, b) { return b.length - a.length; });
+}
+
+// Wrap every match of the query's terms under root in <mark class="hit">, using DOM calls on text
+// nodes only (never HTML strings). Skips formulas (.katex), script and style, and existing marks.
+// A match is found inside one text node. Closed <details> holding a mark are opened. Returns the count.
+function markMatches(root, parsed) {
+  var terms = markTerms(parsed), count = 0;
+  if (!terms.length) return 0;
+  function spansIn(text) {
+    var low = text.toLowerCase(), spans = [], from = null, to = null;
+    if (low.length !== text.length) {
+      // Some letters change length in lower case: lower them one by one and remember where each came from
+      low = ''; from = []; to = [];
+      for (var c = 0; c < text.length; c++) {
+        var ch = text[c], l = ch.toLowerCase();
+        for (var u = 0; u < l.length; u++) { from.push(c); to.push(c + 1); }
+        low += l;
+      }
+    }
+    terms.forEach(function (t) {
+      for (var p = low.indexOf(t); p > -1; p = low.indexOf(t, p + t.length)) {
+        spans.push(from ? [from[p], to[p + t.length - 1]] : [p, p + t.length]);
+      }
+    });
+    spans.sort(function (a, b) { return a[0] - b[0] || b[1] - a[1]; });
+    var merged = [];
+    spans.forEach(function (sp) {
+      var last = merged[merged.length - 1];
+      if (last && sp[0] < last[1]) last[1] = Math.max(last[1], sp[1]); else merged.push([sp[0], sp[1]]);
+    });
+    return merged;
+  }
+  function walk(node, details) {
+    var kids = node.childNodes.slice ? node.childNodes.slice() : Array.prototype.slice.call(node.childNodes);
+    kids.forEach(function (c) {
+      if (c.nodeType === 3) {
+        var spans = spansIn(c.nodeValue);
+        for (var k = spans.length - 1; k >= 0; k--) {
+          if (spans[k][1] < c.nodeValue.length) c.splitText(spans[k][1]);
+          var mid = spans[k][0] > 0 ? c.splitText(spans[k][0]) : c;
+          var m = c.ownerDocument.createElement('mark');
+          m.className = 'hit';
+          mid.parentNode.insertBefore(m, mid);
+          m.appendChild(mid);
+          count++;
+          details.forEach(function (d) { d.open = true; });
+        }
+      } else if (c.nodeType === 1) {
+        var name = String(c.localName || c.tagName).toLowerCase(), cls = ' ' + (c.className && c.className.baseVal != null ? c.className.baseVal : c.className || '') + ' ';
+        if (name === 'script' || name === 'style' || cls.indexOf(' katex ') > -1 || cls.indexOf(' katex-display ') > -1 || (name === 'mark' && cls.indexOf(' hit ') > -1)) return;
+        walk(c, name === 'details' ? details.concat([c]) : details);
+      }
+    });
+  }
+  walk(root, []);
+  return count;
+}
+
+// Take the highlights out again and join the text back together.
+function clearMarks(box) {
+  (function walk(node) {
+    Array.prototype.slice.call(node.childNodes).forEach(function (c) {
+      if (c.nodeType !== 1) return;
+      walk(c);
+      if (String(c.localName || c.tagName).toLowerCase() === 'mark') {
+        var t = c.ownerDocument.createTextNode(c.textContent);
+        c.parentNode.insertBefore(t, c);
+        c.parentNode.removeChild(c);
+      }
+    });
+    for (var i = node.childNodes.length - 1; i > 0; i--) {
+      var a = node.childNodes[i - 1], b = node.childNodes[i];
+      if (a.nodeType === 3 && b.nodeType === 3) { a.nodeValue += b.nodeValue; node.removeChild(b); }
+    }
+  })(box);
+}
+
+if (typeof module === 'object' && module.exports) module.exports = { splitSourceGuide: splitSourceGuide, guideHtml: guideHtml, markMatches: markMatches, clearMarks: clearMarks, protectMath: protectMath, restoreMath: restoreMath, restoreMathAttrs: restoreMathAttrs, mathNodes: mathNodes, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, parseQuery: parseQuery, matchQuery: matchQuery, filterSources: filterSources, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
 // A source's kind for its icon: the type icon the page showed, which also covers
 // titles with no extension, then the title's extension, then the url. A generic
 // document icon comes after the extension, which may say more ("plan.docx").
@@ -354,27 +477,142 @@ function searchText(md) {
     .replace(/\s+/g, ' ').trim();
 }
 
+// The search language. Words are ANDed. "a phrase" must be contiguous, -word and -"a phrase"
+// exclude, upper-case OR joins two terms, in:chat / in:notes / in:studio / in:sources limit where
+// to look, source:title limits to sources whose title has it, type:pdf|youtube|web|audio|image
+// limits sources by kind. Anything malformed becomes ordinary words. plain: no operator was used.
+var QUERY_SCOPES = { source: 'source', sources: 'source', notes: 'studio', note: 'studio', studio: 'studio', chat: 'chat' };
+var QUERY_TYPES = { pdf: 1, youtube: 1, web: 1, audio: 1, image: 1 };
+function parseQuery(q) {
+  var s = String(q == null ? '' : q).replace(/[‘’]/g, "'").replace(/[“”]/g, '"');
+  var items = [], i = 0, n = s.length;
+  function word(text) { var t = searchText(text); if (t) items.push({ text: t, phrase: false, negate: false }); }
+  while (i < n) {
+    if (/\s/.test(s.charAt(i))) { i++; continue; }
+    var neg = false, key = '';
+    if (s.charAt(i) === '-' && i + 1 < n && !/[\s-]/.test(s.charAt(i + 1))) { neg = true; i++; }
+    var km = !neg && /^(in|source|type):/i.exec(s.slice(i, i + 8));
+    if (km) { key = km[1].toLowerCase(); i += km[0].length; }
+    if (s.charAt(i) === '"') {
+      var end = s.indexOf('"', i + 1);
+      if (end < 0) { // never closed: the rest is plain words
+        s.slice(i + 1).split(/\s+/).forEach(word);
+        break;
+      }
+      var inner = searchText(s.slice(i + 1, end));
+      i = end + 1;
+      if (key) { items.push({ key: key, value: inner }); continue; }
+      if (inner) items.push({ text: inner, phrase: true, negate: neg });
+      continue;
+    }
+    var j = i;
+    while (j < n && !/\s/.test(s.charAt(j))) j++;
+    var w = s.slice(i, j);
+    i = j;
+    if (key) { if (w) items.push({ key: key, value: w }); else word(key + ':'); continue; }
+    if (neg) { var t = searchText(w); if (t) items.push({ text: t, phrase: false, negate: true }); continue; }
+    if (w === 'OR') { items.push({ or: true }); continue; }
+    word(w);
+  }
+  var out = { terms: [], anyOf: [], scopes: [], sourceTitle: null, types: [], plain: true };
+  var terms = [];
+  items.forEach(function (it) {
+    if (!it.key) { terms.push(it); return; }
+    var v = it.value.toLowerCase();
+    if (it.key === 'in' && QUERY_SCOPES[v]) { if (out.scopes.indexOf(QUERY_SCOPES[v]) < 0) out.scopes.push(QUERY_SCOPES[v]); }
+    else if (it.key === 'type' && QUERY_TYPES[v] === 1) { if (out.types.indexOf(v) < 0) out.types.push(v); }
+    else if (it.key === 'source' && it.value) out.sourceTitle = v;
+    else terms.push({ text: searchText(it.key + ':' + it.value), phrase: false, negate: false });
+  });
+  function positive(t) { return t && !t.or && !t.negate; }
+  for (var k = 0; k < terms.length; k++) {
+    var it = terms[k];
+    if (it.or) { out.terms.push({ text: 'OR', phrase: false, negate: false }); continue; }
+    if (positive(it) && terms[k + 1] && terms[k + 1].or && positive(terms[k + 2])) {
+      var group = [it];
+      while (terms[k + 1] && terms[k + 1].or && positive(terms[k + 2])) { group.push(terms[k + 2]); k += 2; }
+      out.anyOf.push(group);
+      continue;
+    }
+    out.terms.push(it);
+  }
+  out.plain = !(out.anyOf.length || out.scopes.length || out.types.length || out.sourceTitle !== null ||
+    out.terms.some(function (t) { return t.phrase || t.negate; }));
+  return out;
+}
+
+// Does the text satisfy the parsed query? item ({ kind, title, type, url }) is checked against the
+// scope / source / type filters; without it they are ignored. A term may also match the item's title.
+// spans: where each positive term sits in text, every occurrence, overlaps merged.
+function matchQuery(parsed, text, item) {
+  var low = String(text == null ? '' : text).toLowerCase();
+  var titleLow = item ? String(item.title || '').toLowerCase() : '';
+  var none = { ok: false, spans: [] };
+  if (item) {
+    if (parsed.scopes.length && parsed.scopes.indexOf(item.kind) < 0) return none;
+    if (parsed.sourceTitle !== null && (item.kind !== 'source' || titleLow.indexOf(parsed.sourceTitle) < 0)) return none;
+    if (parsed.types.length && (item.kind !== 'source' || parsed.types.indexOf(sourceKind(item.type, item.title, item.url)) < 0)) return none;
+  }
+  function has(t) { var x = t.text.toLowerCase(); return low.indexOf(x) > -1 || (titleLow && titleLow.indexOf(x) > -1); }
+  var spans = [];
+  function collect(t) {
+    var x = t.text.toLowerCase();
+    if (!x) return;
+    for (var p = low.indexOf(x); p > -1; p = low.indexOf(x, p + x.length)) spans.push([p, p + x.length]);
+  }
+  for (var a = 0; a < parsed.terms.length; a++) {
+    var t = parsed.terms[a];
+    if (t.negate) { if (has(t)) return none; }
+    else { if (!has(t)) return none; collect(t); }
+  }
+  for (var g = 0; g < parsed.anyOf.length; g++) {
+    var any = false;
+    parsed.anyOf[g].forEach(function (o) { if (has(o)) { any = true; collect(o); } });
+    if (!any) return none;
+  }
+  spans.sort(function (x, y) { return x[0] - y[0] || x[1] - y[1]; });
+  var merged = [];
+  spans.forEach(function (sp) {
+    var last = merged[merged.length - 1];
+    if (last && sp[0] <= last[1]) last[1] = Math.max(last[1], sp[1]);
+    else merged.push([sp[0], sp[1]]);
+  });
+  return { ok: true, spans: merged };
+}
+
 // Search this chat: the pairs whose question or answer holds the query, matched on their
 // text as searchText reads it (no markup, so "summary" does not match every Thoughts section).
 // flat: optional cache, one searchText per pair. Returns pair indexes.
 function filterPairs(pairs, query, flat) {
-  var low = searchText(query).toLowerCase(), idx = [];
+  var low = searchText(query).toLowerCase(), idx = [], parsed = parseQuery(query);
   pairs.forEach(function (p, i) {
     if (!low) { idx.push(i); return; }
     var text = flat && flat[i] != null ? flat[i] : searchText(p.q + ' ' + p.a).toLowerCase();
     if (flat) flat[i] = text;
-    if (text.indexOf(low) > -1) idx.push(i);
+    if (parsed.plain ? text.indexOf(low) > -1 : matchQuery(parsed, text).ok) idx.push(i);
   });
   return idx;
 }
 
+// The sources list: indexes of the sources whose title fits the query. Only words, quotes, -, OR and
+// type: count here, and only in titles. A plain query is a title substring.
+function filterSources(sources, query) {
+  var q = String(query || '').toLowerCase(), pq = parseQuery(query), hits = [];
+  pq.scopes = []; pq.sourceTitle = null;
+  sources.forEach(function (s, i) {
+    if (!q || (pq.plain ? s.title.toLowerCase().indexOf(q) > -1 : matchQuery(pq, s.title, { kind: 'source', title: s.title, type: s.type, url: s.url }).ok)) hits.push(i);
+  });
+  return hits;
+}
+
 function buildSearchIndex(data) {
-  function entry(kind, i, title, text) {
+  function entry(kind, i, title, text, from) {
     var flat = searchText(text);
-    return { kind: kind, i: i, title: String(title || ''), text: flat, low: flat.toLowerCase(), titleLow: String(title || '').toLowerCase() };
+    return { kind: kind, i: i, title: String(title || ''), text: flat, low: flat.toLowerCase(), titleLow: String(title || '').toLowerCase(),
+      type: from ? from.type : '', url: from ? from.url : '' };
   }
   var out = [];
-  (data.sources || []).forEach(function (s, i) { out.push(entry('source', i, s.title, s.md)); });
+  (data.sources || []).forEach(function (s, i) { out.push(entry('source', i, s.title, s.md, s)); });
   (data.studio || []).forEach(function (a, i) {
     out.push(entry('studio', i, a.title, a.md != null ? a.md : (a.rows || []).map(function (r) { return r.join(' '); }).join(' ')));
   });
@@ -390,17 +628,30 @@ function searchArchive(index, query, perGroup) {
   var phrase = searchText(query).toLowerCase(), limit = perGroup || 30;
   var words = phrase.split(' ').filter(Boolean);
   if (phrase.length < 2) return { total: 0, groups: [] };
+  var parsed = parseQuery(query), firsts = [];
+  parsed.terms.concat.apply(parsed.terms, parsed.anyOf).forEach(function (t) { if (!t.negate) firsts.push(t.text.toLowerCase()); });
   var found = { source: [], studio: [], chat: [] }, total = 0;
   index.forEach(function (e) {
-    for (var w = 0; w < words.length; w++) {
-      if (e.low.indexOf(words[w]) < 0 && e.titleLow.indexOf(words[w]) < 0) return;
+    var find, at, count = 0, inTitle;
+    if (parsed.plain) {
+      for (var w = 0; w < words.length; w++) {
+        if (e.low.indexOf(words[w]) < 0 && e.titleLow.indexOf(words[w]) < 0) return;
+      }
+      find = e.low.indexOf(phrase) > -1 ? phrase : words[0];
+      at = e.low.indexOf(find);
+      for (var p = at; p > -1; p = e.low.indexOf(find, p + find.length)) count++;
+      inTitle = e.titleLow.indexOf(words[0]) > -1;
+    } else {
+      var m = matchQuery(parsed, e.low, e);
+      if (!m.ok) return;
+      count = m.spans.length;
+      at = count ? m.spans[0][0] : -1;
+      find = { length: count ? m.spans[0][1] - at : 0 };
+      inTitle = firsts.some(function (x) { return e.titleLow.indexOf(x) > -1; });
     }
-    var find = e.low.indexOf(phrase) > -1 ? phrase : words[0];
-    var at = e.low.indexOf(find), count = 0;
-    for (var p = at; p > -1; p = e.low.indexOf(find, p + find.length)) count++;
     var from = Math.max(0, at - 70), to = at + find.length + 110;
     found[e.kind].push({
-      kind: e.kind, i: e.i, title: e.title, count: count, inTitle: e.titleLow.indexOf(words[0]) > -1,
+      kind: e.kind, i: e.i, title: e.title, count: count, inTitle: inTitle,
       before: at < 0 ? '' : (from > 0 ? '…' : '') + e.text.slice(from, at),
       match: at < 0 ? '' : e.text.slice(at, at + find.length),
       after: at < 0 ? '' : e.text.slice(at + find.length, to) + (to < e.text.length ? '…' : '')
@@ -486,7 +737,11 @@ if (typeof document !== 'undefined') (function () {
   function norm(s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g, ''); }
   var srcByTitle = {}; D.sources.forEach(function (s, i) { srcByTitle[norm(s.title)] = i; });
 
-  function markQuote(box, quote, ignoreCase) {
+  function scrollToMark(box, mark) {
+    var sc = box.closest('.scroll') || $('chatscroll'), mr = mark.getBoundingClientRect(), sr = sc.getBoundingClientRect();
+    sc.scrollTop += mr.top - sr.top - sc.clientHeight * 0.25;
+  }
+  function markQuote(box, quote, ignoreCase, noScroll) {
     var w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT), nodes = [], n, full = '';
     while ((n = w.nextNode())) { nodes.push(n); full += n.nodeValue; }
     var hit = findQuote(full, quote, ignoreCase); if (!hit) return false;
@@ -499,13 +754,12 @@ if (typeof document !== 'undefined') (function () {
       var nd = nodes[k], s = Math.max(0, from - offs[k]), e = Math.min(nd.nodeValue.length, to - offs[k]);
       if (!nd.nodeValue.slice(s, e).trim()) continue;
       var r = document.createRange(); r.setStart(nd, s); r.setEnd(nd, e);
-      var m = document.createElement('mark'); r.surroundContents(m); first = m;
+      var m = document.createElement('mark'); m.className = 'hit'; r.surroundContents(m); first = m;
     }
     if (first) {
       // A quote inside a closed section (Thoughts): open it so the mark shows
       for (var d = first.closest('details'); d && box.contains(d); d = d.parentElement && d.parentElement.closest('details')) d.open = true;
-      var sc = box.closest('.scroll'), mr = first.getBoundingClientRect(), sr = sc.getBoundingClientRect();
-      sc.scrollTop += mr.top - sr.top - sc.clientHeight * 0.25;
+      if (!noScroll) scrollToMark(box, first);
     }
     return !!first;
   }
@@ -584,8 +838,7 @@ if (typeof document !== 'undefined') (function () {
   function sourcesList() {
     auto.l = null;
     view.source = null;
-    var q = srcQ.toLowerCase(), hits = [];
-    D.sources.forEach(function (s, i) { if (!q || s.title.toLowerCase().indexOf(q) > -1) hits.push(i); });
+    var hits = filterSources(D.sources, srcQ);
     $('left').innerHTML = '<div class="p-head"><h2>Sources</h2>' + colBtn('l') + '</div><label class="search-block">' + icon('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>') +
       '<input id="srcq" type="search" aria-label="Search sources" placeholder="Search sources" value="' + esc(srcQ) + '"></label><div class="group">' + hits.length + ' of ' + D.sources.length + '</div><div class="scroll">' +
       hits.map(function (i) {
@@ -596,15 +849,16 @@ if (typeof document !== 'undefined') (function () {
     listScroller('left').scrollTop = listTop.l;
     saveView();
   }
-  function openSource(i, quote, ignoreCase) {
-    var s = D.sources[i];
+  function openSource(i, quote, ignoreCase, parsed) {
+    var s = D.sources[i], guide = splitSourceGuide(s.md);
     if (view.source === null) listTop.l = listScroller('left').scrollTop;
     view.source = i;
     reveal('l', Math.round(innerWidth * 0.36));
     $('left').innerHTML = '<div class="p-head"><button class="icon-btn" id="srcback" aria-label="Back to sources">' + icon(BACK) + '</button><h2 style="flex:1">' + esc(s.title) + '</h2>' + copyButton('source', i) + colBtn('l') + '</div><div class="scroll"><div class="reader md" id="srcbody">' +
-      (isWebUrl(s.url) ? '<p><a class="ext" href="' + esc(s.url) + '" target="_blank" rel="noopener">' + (sourceKind(s.type, s.title, s.url) === 'youtube' ? 'Open original video' : 'Open original page') + '</a></p>' : '') + md(s.md) + '</div></div>';
+      (isWebUrl(s.url) ? '<p><a class="ext" href="' + esc(s.url) + '" target="_blank" rel="noopener">' + (sourceKind(s.type, s.title, s.url) === 'youtube' ? 'Open original video' : 'Open original page') + '</a></p>' : '') + (guide.summary || guide.topics.length ? guideHtml(guide.summary ? md(guide.summary) : '', guide.topics) : '') + md(guide.rest) + '</div></div>';
     applyCols();
-    if (quote) setTimeout(function () { markQuote($('srcbody'), quote, ignoreCase); }, 200);
+    if (parsed) setTimeout(function () { markAll($('srcbody'), parsed, quote); }, 200);
+    else if (quote) setTimeout(function () { markQuote($('srcbody'), quote, ignoreCase); }, 200);
     saveView();
   }
 
@@ -632,15 +886,26 @@ if (typeof document !== 'undefined') (function () {
     var box = $('chat');
     box.innerHTML = top;
     $('chatcount').textContent = low ? idx.length + ' of ' + D.pairs.length : D.sources.length + ' sources';
+    var parsed = low && searchText(q) ? parseQuery(q) : null, scrolled = false;
     var at = 0, token = (renderChat.t = (renderChat.t || 0) + 1);
     (function batch() {
       if (token !== renderChat.t) return;
       if (at >= idx.length) {
+        if (parsed && !scrolled && idx.length && $('pair-' + idx[0])) { scrolled = true; $('pair-' + idx[0]).scrollIntoView({ block: 'start' }); }
         if (chatTop !== null) { $('chatscroll').scrollTop = chatTop; chatTop = null; }
         return;
       }
       var part = idx.slice(at, at + 15); at += 15;
       box.insertAdjacentHTML('beforeend', chatHtml(part));
+      if (parsed) part.forEach(function (i) {
+        var pair = $('pair-' + i);
+        if (!pair) return;
+        if (markMatches(pair, parsed)) {
+          if (!scrolled) { scrolled = true; scrollToMark(pair, pair.querySelector('mark.hit')); }
+        } else if (markTerms(parsed).some(function (t) { return markQuote(pair, t, true, true); }) && !scrolled) { // a phrase spanning two elements
+          scrolled = true; scrollToMark(pair, pair.querySelector('mark.hit'));
+        }
+      });
       setTimeout(batch, 0);
     })();
   }
@@ -733,45 +998,71 @@ if (typeof document !== 'undefined') (function () {
       (where ? '<small>' + where + '</small>' : '') +
       (h.match ? '<p>' + esc(h.before) + '<mark>' + esc(h.match) + '</mark>' + esc(h.after) + '</p>' : '') + '</button>';
   }
+  function setHelp(open) {
+    $('qhelptext').hidden = !open;
+    $('qhelp').setAttribute('aria-expanded', String(open));
+  }
   function runSearch(q) {
     if (searchText(q).length < 2) { results.hidden = true; return; }
     searchIndex = searchIndex || buildSearchIndex(D);
     var found = searchArchive(searchIndex, q);
-    results.innerHTML = found.total
+    results.innerHTML = (found.total
       ? found.groups.map(function (g) {
           return '<h3>' + esc(g.label) + ' <span>' + g.total + '</span></h3>' + g.hits.map(hitHtml).join('') +
             (g.total > g.hits.length ? '<p class="more">Showing the first ' + g.hits.length + ' of ' + g.total + '. Add a word to narrow it down.</p>' : '');
         }).join('')
-      : '<p class="more">Nothing found.</p>';
+      : '<p class="more">Nothing found.</p>');
     results.scrollTop = 0;
     results.hidden = false;
   }
-  function clearMarks(box) {
-    box.querySelectorAll('mark').forEach(function (m) { m.replaceWith(document.createTextNode(m.textContent)); });
-    box.normalize();
+  // Mark every match of the archive search in an opened item and scroll to the first one
+  function markAll(box, parsed, find) {
+    clearMarks(box);
+    var n = parsed ? markMatches(box, parsed) : 0;
+    if (!n) return find ? markQuote(box, find, true) : false;
+    scrollToMark(box, box.querySelector('mark.hit'));
+    return true;
   }
-  function jumpToPair(i, find, tries) {
+  function jumpToPair(i, find, parsed, tries) {
     var pair = $('pair-' + i);
-    if (!pair) { if (tries > 0) setTimeout(function () { jumpToPair(i, find, tries - 1); }, 100); return; }
+    if (!pair) { if (tries > 0) setTimeout(function () { jumpToPair(i, find, parsed, tries - 1); }, 100); return; }
     clearMarks($('chat'));
-    if (!find || !markQuote(pair, find, true)) pair.scrollIntoView({ block: 'start' });
+    if (!markAll(pair, parsed, find)) pair.scrollIntoView({ block: 'start' });
   }
   function openHit(kind, i, find) {
     results.hidden = true;
-    if (kind === 'source') openSource(i, find, true);
+    var parsed = parseQuery($('allq').value);
+    if (kind === 'source') openSource(i, find, true, parsed);
     else if (kind === 'studio') {
       openArt(i);
       var reader = $('right').querySelector('.reader');
-      if (reader && find) setTimeout(function () { markQuote(reader, find, true); }, 200);
+      if (reader) setTimeout(function () { markAll(reader, parsed, find); }, 200);
     } else {
       if ($('chatq').value) { $('chatq').value = ''; renderChat(''); }
-      jumpToPair(i, find, 40);
+      jumpToPair(i, find, parsed, 40);
     }
   }
 
   document.addEventListener('click', function (e) {
     if (!results.hidden && e.target.closest && !e.target.closest('#results, .gsearch')) results.hidden = true;
+    if (!$('qhelptext').hidden && e.target.closest && !e.target.closest('#qhelptext, #qhelp, .gsearch')) setHelp(false);
     var t = e.target.closest ? e.target.closest('button') : null; if (!t) return;
+    if (t.id === 'qhelp') { setHelp($('qhelptext').hidden); return; }
+    if (t.classList.contains('guide-head')) {
+      var open = t.getAttribute('aria-expanded') !== 'true';
+      t.setAttribute('aria-expanded', String(open));
+      t.nextElementSibling.hidden = !open;
+      return;
+    }
+    if (t.classList.contains('topic')) {
+      var topic = t.textContent.replace(/["\u201c\u201d\u201e]/g, '').trim();
+      if (!/[a-z0-9\u00c0-\uffff]/i.test(topic)) return;
+      var inp = $('allq'); inp.value = '"' + topic + '"';
+      clearTimeout(runSearch.d); runSearch(inp.value);
+      var first = results.querySelector('button.hit');
+      if (first) first.focus(); else { results.tabIndex = -1; results.focus(); }
+      return;
+    }
     if (t.dataset.hit) { openHit(t.dataset.hit, +t.dataset.i, t.dataset.find); return; }
     if (t.classList.contains('cite')) {
       var c = D.cites[+t.dataset.c], i = c && srcByTitle[norm(c.t)];
@@ -793,6 +1084,7 @@ if (typeof document !== 'undefined') (function () {
   });
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Escape') return;
+    if (!$('qhelptext').hidden) { setHelp(false); $('qhelp').focus(); return; }
     if (!results.hidden) { results.hidden = true; return; }
     pop.hidden = true;
     if (opened !== null) studioList();
