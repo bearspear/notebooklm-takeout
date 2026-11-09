@@ -1104,7 +1104,7 @@
           return href ? `[${content}](${NLME.unwrapGoogleRedirect(href)})` : content;
         case 'img':
           const src = node.getAttribute('src') || '';
-          const alt = node.getAttribute('alt') || '';
+          const alt = NLME.cleanImageAlt(node.getAttribute('alt') || '', src);
           return src ? `![${alt}](${src})` : '';
 
         // Code

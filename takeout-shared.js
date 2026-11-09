@@ -1603,6 +1603,14 @@
   // A google.com/url?q=<target> redirect (the sources' links come wrapped) is
   // written as its real address. Only an http(s) target counts; anything else,
   // and every non-redirect, comes back unchanged.
+  // Alt text for an image: an address (or the src itself) is no description
+  function cleanImageAlt(alt, src) {
+    const text = String(alt ?? '').trim();
+    if (!text) return String(alt ?? '');
+    if (/^https?:\/\/\S+$/i.test(text) || text === String(src ?? '').trim()) return '';
+    return String(alt);
+  }
+
   function unwrapGoogleRedirect(href) {
     if (typeof href !== 'string' || !/^https?:\/\//i.test(href)) return href;
     let url;
@@ -3873,6 +3881,7 @@ footer { margin-top: 3rem; }
     cleanOcrArtifacts,
     stripControlChars,
     writtenText,
+    cleanImageAlt,
     unwrapGoogleRedirect,
     plainHeading,
     mathSourceHealth,
