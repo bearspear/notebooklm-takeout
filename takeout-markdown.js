@@ -430,7 +430,32 @@
       replacement: (content, node) => {
         const level = parseInt(node.getAttribute('aria-level')) || 1;
         const prefix = '#'.repeat(level);
-        return `\n${prefix} ${content.trim()}\n\n`;
+        return `\n${prefix} ${NLME.plainHeading(content.trim())}\n\n`;
+      }
+    });
+
+    // Headings carry no bold markers (1.9.9): "## **1 Introduction**" is "## 1 Introduction"
+    turndownService.addRule('plainHeadings', {
+      filter: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+      replacement: (content, node) => {
+        const level = Number(node.nodeName.charAt(1));
+        return `\n\n${'#'.repeat(level)} ${NLME.plainHeading(content)}\n\n`;
+      }
+    });
+
+    // Google redirect links (1.9.9) are written as their real address. Same
+    // output as Turndown's inline link, for links that were redirects only.
+    turndownService.addRule('googleRedirectLinks', {
+      filter: (node) => {
+        if (node.nodeName !== 'A') return false;
+        const href = node.getAttribute('href');
+        return !!href && NLME.unwrapGoogleRedirect(href) !== href;
+      },
+      replacement: (content, node) => {
+        const href = NLME.unwrapGoogleRedirect(node.getAttribute('href')).replace(/([()])/g, '\\$1');
+        const title = (node.getAttribute('title') || '').replace(/(\n+\s*)+/g, '\n');
+        const titlePart = title ? ` "${title.replace(/"/g, '\\"')}"` : '';
+        return `[${content}](${href}${titlePart})`;
       }
     });
 
@@ -1018,17 +1043,17 @@
       switch (tag) {
         // Headings
         case 'h1':
-          return `\n# ${content}\n\n`;
+          return `\n# ${NLME.plainHeading(content)}\n\n`;
         case 'h2':
-          return `\n## ${content}\n\n`;
+          return `\n## ${NLME.plainHeading(content)}\n\n`;
         case 'h3':
-          return `\n### ${content}\n\n`;
+          return `\n### ${NLME.plainHeading(content)}\n\n`;
         case 'h4':
-          return `\n#### ${content}\n\n`;
+          return `\n#### ${NLME.plainHeading(content)}\n\n`;
         case 'h5':
-          return `\n##### ${content}\n\n`;
+          return `\n##### ${NLME.plainHeading(content)}\n\n`;
         case 'h6':
-          return `\n###### ${content}\n\n`;
+          return `\n###### ${NLME.plainHeading(content)}\n\n`;
 
         // Text formatting
         case 'b':
@@ -1045,7 +1070,7 @@
         // Links and images
         case 'a':
           const href = node.getAttribute('href') || '';
-          return href ? `[${content}](${href})` : content;
+          return href ? `[${content}](${NLME.unwrapGoogleRedirect(href)})` : content;
         case 'img':
           const src = node.getAttribute('src') || '';
           const alt = node.getAttribute('alt') || '';

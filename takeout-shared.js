@@ -1600,6 +1600,29 @@
     return { type, webUrl };
   }
 
+  // A google.com/url?q=<target> redirect (the sources' links come wrapped) is
+  // written as its real address. Only an http(s) target counts; anything else,
+  // and every non-redirect, comes back unchanged.
+  function unwrapGoogleRedirect(href) {
+    if (typeof href !== 'string' || !/^https?:\/\//i.test(href)) return href;
+    let url;
+    try { url = new URL(href); } catch (error) { return href; }
+    const host = url.hostname.toLowerCase();
+    if ((host !== 'google.com' && host !== 'www.google.com') || url.pathname !== '/url') return href;
+    const target = url.searchParams.get('q') || url.searchParams.get('url') || '';
+    return /^https?:\/\/[^\s/]/i.test(target) ? target : href;
+  }
+
+  // A heading's Markdown without bold: a bold heading is no more than a
+  // heading, and its joined bold runs leave "**A** **B**". Code spans are
+  // kept as they are; escaped asterisks are text and stay.
+  function plainHeading(content) {
+    const text = String(content ?? '');
+    if (!text.includes('**')) return text;
+    const stripped = text.split(/(`+[^`]*`+)/).map((part, i) => (i % 2 ? part : part.replace(/(?<!\\)\*\*/g, ''))).join('');
+    return stripped === text ? text : stripped.replace(/ {2,}/g, ' ').trim();
+  }
+
   // Google-hosted downloads and redirects: *.usercontent.google.com,
   // *.googleusercontent.com, google.com/url, and *.google.com links that
   // download (private, short-lived; never a source's original page)
@@ -3833,6 +3856,8 @@ footer { margin-top: 3rem; }
     cleanOcrArtifacts,
     stripControlChars,
     writtenText,
+    unwrapGoogleRedirect,
+    plainHeading,
     mathSourceHealth,
     mathSourceToMarkdown,
     classifyKatexScript,
