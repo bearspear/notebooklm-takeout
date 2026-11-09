@@ -209,7 +209,29 @@ function findMath(text) {
   while ((m = re.exec(String(text)))) out.push({ start: m.index, end: m.index + m[0].length, src: m[0], block: m[0].slice(0, 2) === '$$' });
   return out;
 }
-if (typeof module === 'object' && module.exports) module.exports = { findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
+// Formulas leave the text as "$XMATHX<i>XEND$" while marked runs: the "$" at both ends keep emphasis
+// flanking as it was ("**(**$x$**)**" still closes), and marked and the sanitizer leave it alone.
+function protectMath(text) {
+  var math = [], src0 = String(text), t = '', at = 0;
+  findMath(src0).forEach(function (f) {
+    math.push(f.src); t += src0.slice(at, f.start) + '$XMATHX' + (math.length - 1) + 'XEND$'; at = f.end;
+  });
+  return { text: t + src0.slice(at), math: math };
+}
+function restoreMath(html, math, render) {
+  return html.replace(/\$XMATHX(\d+)XEND\$/g, function (_, i) {
+    var m = math[+i];
+    if (m === undefined) return _;
+    var block = m.slice(0, 2) === '$$', src = m.replace(/^\$+|\$+$/g, '');
+    src = src.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+    return render(src, block, m);
+  });
+}
+var FRACTIONS = { '\u00bd': [1, 2], '\u00bc': [1, 4], '\u00be': [3, 4], '\u2153': [1, 3], '\u2154': [2, 3], '\u215b': [1, 8], '\u215c': [3, 8], '\u215d': [5, 8], '\u215e': [7, 8], '\u2155': [1, 5] };
+function texForKatex(src) {
+  return String(src).replace(/[\u00bc-\u00be\u2153-\u2155\u215b-\u215e]/g, function (c) { var f = FRACTIONS[c]; return '\\frac{' + f[0] + '}{' + f[1] + '}'; });
+}
+if (typeof module === 'object' && module.exports) module.exports = { protectMath: protectMath, restoreMath: restoreMath, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
 // A source's kind for its icon: the type icon the page showed, which also covers
 // titles with no extension, then the title's extension, then the url. A generic
 // document icon comes after the extension, which may say more ("plan.docx").
@@ -379,19 +401,10 @@ if (typeof document !== 'undefined') (function () {
   // Exported text comes from third-party sources, so scripts and handlers never survive
   function sanitize(html) { return sanitizeHtml(html, new DOMParser()); }
   function md(text) {
-    var math = [];
-    var src0 = String(text), t = '', at = 0;
-    findMath(src0).forEach(function (f) {
-      math.push(f.src); t += src0.slice(at, f.start) + 'XMATHX' + (math.length - 1) + 'XEND'; at = f.end;
-    });
-    t += src0.slice(at);
-    var html = sanitize(marked.parse(t, { gfm: true }));
-    return html.replace(/XMATHX(\d+)XEND/g, function (_, i) {
-      var m = math[+i];
-      if (m === undefined) return _;
-      var block = m.slice(0, 2) === '$$', src = m.replace(/^\$+|\$+$/g, '');
-      src = src.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-      try { return katex.renderToString(src, { displayMode: block, throwOnError: false }); } catch (e) { return esc(m); }
+    var p = protectMath(text);
+    var html = sanitize(marked.parse(p.text, { gfm: true }));
+    return restoreMath(html, p.math, function (src, block, m) {
+      try { return katex.renderToString(texForKatex(src), { displayMode: block, throwOnError: false }); } catch (e) { return esc(m); }
     });
   }
   function norm(s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g, ''); }
