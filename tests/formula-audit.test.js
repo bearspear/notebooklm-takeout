@@ -102,6 +102,13 @@ test('a price range the page drew as math counts on neither side', () => {
   assert.deepEqual(r.formulas, [0, 0]);
 });
 
+test('prose the page marked as math is written as text and counts on neither side', () => {
+  const prose = 'Printed on acid-free paper produced from chlorine-free pulp. TCF ∞';
+  const r = audit(['See ', katex('x^2'), ' then ', katex(prose), ' end.']);
+  assert.equal(r.markdown, `See $x^2$ then ${prose} end.`);
+  assert.deepEqual(r.formulas, [1, 1]);
+});
+
 test('adjacent formulas count one each', () => {
   const r = audit([katex('a'), katex('b'), ' and ', katex('c'), 'word']);
   assert.equal(r.markdown, '$a$$b$ and $c$word');
@@ -121,8 +128,8 @@ test('a formula in a table cell, and in a list in a cell, counts once', () => {
   assert.deepEqual(r.formulas, [2, 2]);
 });
 
-test('the Venus Sheehan source: all four page formulas count, where the regex found three', () => {
-  // The live page drew exactly these four; the lines are the export's own
+test('the Venus Sheehan source: the two real formulas count, the two prose fragments are text', () => {
+  // The live page drew these four (two of them prose, written as text since 1.9.9); the lines are the export's own
   // (sources/Venus-William-Sheehan.pdf.md, Venus takeout 2026-11-08)
   const r = audit([
     'on which the ', katex('now-famous Y- and ψ-shaped markings figure prominently. It looks'), 'at least vaguely similar\n\n',
@@ -134,8 +141,9 @@ test('the Venus Sheehan source: all four page formulas count, where the regex fo
   const lines = r.markdown.split('\n');
   assert.ok(lines.includes('## 1 kilometre (km): 103 m = 0.621371 miles 1 mile\\* (mi.): 1.609344 km 1 centimetre (cm): 10-1 m = 0.393701 inches 1 millimetre (mm): 10-3 m $1 micron (μm): 10-6 m$1 nanometre (nm): 10-9 m 1 angstrom\\* (Å): 0.1 nm'));
   assert.ok(lines.includes('## $2π radians = 360o$'));
-  assert.deepEqual(r.formulas, [4, 4]);
-  assert.equal(NLME.countMarkdownFormulas(r.markdown), 3, 'the old counter missed the micron formula');
+  assert.ok(r.markdown.includes('on which the now-famous Y- and ψ-shaped markings figure prominently. It looks'));
+  assert.ok(!r.markdown.includes('$now-famous') && !r.markdown.includes('$J. Lecacheux'));
+  assert.deepEqual(r.formulas, [2, 2]);
 });
 
 test('convert() leaves no formula mark in its text', () => {

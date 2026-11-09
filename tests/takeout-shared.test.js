@@ -2248,6 +2248,17 @@ test('isPriceRangeFragment spots a price range the page drew as math', () => {
   }
 });
 
+test('isProseMath spots prose the page marked as math', () => {
+  for (const tex of ['Printed on acid-free paper produced from chlorine-free pulp. TCF ∞',
+    'Luna) could end up in about the same position on a ∆17O vs. ∆18O plot.',
+    'BΒOД aэpocTaTHoro эOHДa', 'BΒOД']) {
+    assert.equal(NLME.isProseMath(tex), true, tex);
+  }
+  for (const tex of ['x + y = z', '\\text{for all } n', 'x \\in A', 'f(x) = sin x', 'SO_2', '10^{48}', '\\kappa', 'n', 'ab', '3-', '', null]) {
+    assert.equal(NLME.isProseMath(tex), false, String(tex));
+  }
+});
+
 test('listItemMarkdown keeps a nested list inside its item', () => {
   const item = NLME.listItemMarkdown;
   assert.equal(item('*', '**Building:** search\n* _Alberta:_ gym\n* _Fatima:_ green'),

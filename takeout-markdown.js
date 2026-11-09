@@ -661,8 +661,12 @@
     turndownService.addRule('katexMath', {
       filter: (node) => node.nodeName === 'SPAN' && node.classList.contains('katex'),
       // Marked for the audit's count; convert() takes the mark out again
-      replacement: (_content, node) => NLME.markWrittenFormula(
-        convertKatexNodeToLatex(node), node.closest('[data-math]')?.getAttribute('data-math'))
+      replacement: (_content, node) => {
+        const tex = node.closest('[data-math]')?.getAttribute('data-math');
+        // Prose the page drew as math: plain text, escaped, not a formula
+        if (NLME.isProseMath(tex)) return turndownService.escape(tex.replace(/\s+/g, ' ').trim());
+        return NLME.markWrittenFormula(convertKatexNodeToLatex(node), tex);
+      }
     });
 
     // Citation markers

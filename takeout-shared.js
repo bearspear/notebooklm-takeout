@@ -1971,6 +1971,16 @@
     return /^\d[\d.,]*(?:\s*(?:thousand|million|billion|k|m|b))?\s*(?:[-–—]|to|or|and)$/i.test(String(tex ?? '').trim());
   }
 
+  // Sentences and Cyrillic text the page drew as math ("Printed on acid-free
+  // paper ... TCF ∞", "BΒOД"). Real TeX here has a backslash, ^ _ { } or =;
+  // these have none and read as words. Written as plain text, and left out of
+  // both audit counts like a price range.
+  function isProseMath(tex) {
+    const t = String(tex ?? '').trim();
+    if (!t || /[\\^_{}=]/.test(t)) return false;
+    return /[\u0400-\u04FF]/.test(t) || (t.match(/\p{L}{3,}/gu) || []).length >= 3;
+  }
+
   // The audit's "written" formulas are the ones the converter wrote, not a
   // re-read of the Markdown: a formula touching a number ($1 micron (μm):
   // 10-6 m$1 nanometre) looks like a price to any regex. The KaTeX rule marks
@@ -1983,7 +1993,7 @@
   const FORMULA_MARK_BEFORE_DOLLAR = /\uE002(?=\$)/g;
 
   function markWrittenFormula(markdown, dataMath) {
-    if (!markdown || isPriceRangeFragment(dataMath)) return markdown;
+    if (!markdown || isPriceRangeFragment(dataMath) || isProseMath(dataMath)) return markdown;
     return FORMULA_MARK + markdown;
   }
 
@@ -3753,6 +3763,7 @@ footer { margin-top: 3rem; }
     listItemMarkdown,
     countExportErrors,
     isPriceRangeFragment,
+    isProseMath,
     relaxBracketEscapes,
     citationCoverage,
     unknownStudioIcons,

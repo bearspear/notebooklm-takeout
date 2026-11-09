@@ -1896,7 +1896,10 @@ function countPageContent(html) {
     .map(b => NLME.parseCitationIndex(b.querySelector('span')?.textContent))
     .filter(Boolean);
   const formulas = [...doc.querySelectorAll('.katex')]
-    .filter(el => !NLME.isPriceRangeFragment(el.closest('[data-math]')?.getAttribute('data-math'))).length;
+    .filter(el => {
+      const tex = el.closest('[data-math]')?.getAttribute('data-math');
+      return !NLME.isPriceRangeFragment(tex) && !NLME.isProseMath(tex);
+    }).length;
   return { citationNumbers, formulas };
 }
 
