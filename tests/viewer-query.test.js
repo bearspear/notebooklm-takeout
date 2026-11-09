@@ -132,10 +132,38 @@ test('searchArchive uses operators and filters', () => {
   assert.equal(app.searchArchive(idx, 'venus acid').total, 1);
 });
 
-test('the sources list filters on titles with type, and the help popover exists', () => {
+test('filterSources: titles only, with type and exclusion', () => {
+  const sources = [
+    { title: 'Henkin 1999.pdf', type: 'pdf', md: 'x' },
+    { title: 'Venus page', type: 'web', md: 'x' },
+    { title: 'Venus talk', type: 'audio', md: 'x' }
+  ];
+  assert.deepEqual(app.filterSources(sources, ''), [0, 1, 2]);
+  assert.deepEqual(app.filterSources(sources, 'VENUS'), [1, 2]);
+  assert.deepEqual(app.filterSources(sources, 'venus pa'), [1]);
+  assert.deepEqual(app.filterSources(sources, 'type:pdf'), [0]);
+  assert.deepEqual(app.filterSources(sources, 'venus type:audio'), [2]);
+  assert.deepEqual(app.filterSources(sources, 'venus -page'), [2]);
+  assert.deepEqual(app.filterSources(sources, 'in:chat source:zzz venus'), [1, 2]);
+  assert.deepEqual(app.filterSources(sources, 'x'), []);
+});
+
+test('filter-only and exclusion-only searches give hits with no snippet', () => {
+  const idx = app.buildSearchIndex({ sources: [], studio: [], pairs: [{ q: 'hello there', a: 'general' }] });
+  for (const q of ['in:chat', '-zebra']) {
+    const h = app.searchArchive(idx, q).groups[0].hits[0];
+    assert.deepEqual([h.match, h.before, h.after], ['', '', '']);
+  }
+});
+
+test('the help button sits next to the search box, not in the results', () => {
   const fs = require('node:fs'), path = require('node:path');
-  const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8');
-  assert.match(src, /parseQuery\(srcQ\)/);
-  assert.match(src, /id="qhelp"/);
-  assert.doesNotMatch(src.slice(src.indexOf('id="qhelp"'), src.indexOf('id="qhelp"') + 1500), /NotebookLM/);
+  const tpl = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-template.html'), 'utf8');
+  const code = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8');
+  assert.match(tpl, /placeholder="Search everything"/);
+  assert.match(tpl, /<button[^>]*id="qhelp"[^>]*aria-label="Search help"[^>]*aria-expanded="false"/);
+  assert.match(tpl, /id="qhelptext"[^>]*hidden/);
+  assert.doesNotMatch(tpl.slice(tpl.indexOf('id="qhelptext"'), tpl.indexOf('id="qhelptext"') + 1500), /NotebookLM/i);
+  assert.doesNotMatch(code, /QUERY_HELP/);
+  assert.match(code, /filterSources\(D\.sources, srcQ\)/);
 });

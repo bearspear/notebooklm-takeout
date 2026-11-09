@@ -32,10 +32,11 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 #results[hidden] { display: none; }
 #results h3 { margin: 10px 16px 4px; font-size: 12.5px; font-weight: 500; color: var(--muted); }
 #results h3 span { font-weight: 400; }
-#results .qbar { display: flex; justify-content: flex-end; padding: 0 12px; }
-.qhelp { width: 22px; height: 22px; border-radius: 50%; background: var(--soft); color: var(--muted); font-size: 13px; line-height: 22px; text-align: center; }
 .qhelp:hover, .qhelp:focus-visible { color: var(--ink); }
-.qhelptext { margin: 4px 16px 8px; padding: 10px 12px; border-radius: 10px; background: var(--soft); font-size: 13px; line-height: 1.5; }
+.qwrap { position: relative; display: flex; }
+.qhelp { width: 24px; height: 24px; border-radius: 50%; background: var(--soft); color: var(--muted); font-size: 13px; line-height: 24px; text-align: center; }
+.qhelp:hover, .qhelp:focus-visible, .qhelp[aria-expanded="true"] { color: var(--ink); }
+.qhelptext { position: absolute; z-index: 16; top: 32px; right: 0; width: 340px; max-width: calc(100vw - 24px); padding: 10px 14px; border-radius: 12px; background: var(--pop); box-shadow: 0 6px 28px rgba(0, 0, 0, .22); font-size: 13px; line-height: 1.5; font-weight: 400; }
 .qhelptext[hidden] { display: none; }
 .qhelptext ul { margin: 6px 0 0; padding-left: 18px; }
 .qhelptext code { font-size: 12.5px; }
@@ -154,7 +155,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 <body>
 <header class="top">
   <span class="logo"><svg viewBox="0 0 24 24"><path d="M4 8h16v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1zM3 4h18v4H3zM10 12h4"/></svg></span>
-  <h1 id="nb"></h1><label class="gsearch"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input id="allq" type="search" aria-label="Search everything" placeholder="Search everything"></label><span class="pill" id="stamp"></span>
+  <h1 id="nb"></h1><label class="gsearch"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input id="allq" type="search" aria-label="Search everything" placeholder="Search everything"></label><span class="qwrap"><button id="qhelp" class="qhelp" type="button" aria-label="Search help" aria-expanded="false" aria-controls="qhelptext" title="Search help">?</button><div id="qhelptext" class="qhelptext" hidden><b>Search tips</b><ul><li><code>word word</code> finds items with every word</li><li><code>"exact phrase"</code> finds the words together, in order</li><li><code>-word</code> or <code>-"a phrase"</code> leaves out items that have it</li><li><code>cat OR dog</code> finds either one (OR in capitals)</li><li><code>in:chat</code>, <code>in:notes</code> or <code>in:sources</code> looks in one place only</li><li><code>source:name</code> looks only in sources whose title has that name</li><li><code>type:pdf</code> keeps one kind of source: pdf, youtube, web, audio or image</li></ul></div></span><span class="pill" id="stamp"></span>
 </header>
 <div id="results" hidden></div>
 <main class="main" id="main">

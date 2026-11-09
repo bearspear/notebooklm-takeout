@@ -308,7 +308,7 @@ function texForKatex(src) {
   }
   return out;
 }
-if (typeof module === 'object' && module.exports) module.exports = { protectMath: protectMath, restoreMath: restoreMath, restoreMathAttrs: restoreMathAttrs, mathNodes: mathNodes, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, parseQuery: parseQuery, matchQuery: matchQuery, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
+if (typeof module === 'object' && module.exports) module.exports = { protectMath: protectMath, restoreMath: restoreMath, restoreMathAttrs: restoreMathAttrs, mathNodes: mathNodes, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, parseQuery: parseQuery, matchQuery: matchQuery, filterSources: filterSources, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
 // A source's kind for its icon: the type icon the page showed, which also covers
 // titles with no extension, then the title's extension, then the url. A generic
 // document icon comes after the extension, which may say more ("plan.docx").
@@ -469,6 +469,17 @@ function filterPairs(pairs, query, flat) {
     if (parsed.plain ? text.indexOf(low) > -1 : matchQuery(parsed, text).ok) idx.push(i);
   });
   return idx;
+}
+
+// The sources list: indexes of the sources whose title fits the query. Only words, quotes, -, OR and
+// type: count here, and only in titles. A plain query is a title substring.
+function filterSources(sources, query) {
+  var q = String(query || '').toLowerCase(), pq = parseQuery(query), hits = [];
+  pq.scopes = []; pq.sourceTitle = null;
+  sources.forEach(function (s, i) {
+    if (!q || (pq.plain ? s.title.toLowerCase().indexOf(q) > -1 : matchQuery(pq, s.title, { kind: 'source', title: s.title, type: s.type, url: s.url }).ok)) hits.push(i);
+  });
+  return hits;
 }
 
 function buildSearchIndex(data) {
@@ -701,11 +712,7 @@ if (typeof document !== 'undefined') (function () {
   function sourcesList() {
     auto.l = null;
     view.source = null;
-    var q = srcQ.toLowerCase(), hits = [], pq = parseQuery(srcQ);
-    pq.scopes = []; pq.sourceTitle = null; // only words and type: count in this list, and only in titles
-    D.sources.forEach(function (s, i) {
-      if (!q || (pq.plain ? s.title.toLowerCase().indexOf(q) > -1 : matchQuery(pq, s.title, { kind: 'source', title: s.title, type: s.type, url: s.url }).ok)) hits.push(i);
-    });
+    var hits = filterSources(D.sources, srcQ);
     $('left').innerHTML = '<div class="p-head"><h2>Sources</h2>' + colBtn('l') + '</div><label class="search-block">' + icon('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>') +
       '<input id="srcq" type="search" aria-label="Search sources" placeholder="Search sources" value="' + esc(srcQ) + '"></label><div class="group">' + hits.length + ' of ' + D.sources.length + '</div><div class="scroll">' +
       hits.map(function (i) {
@@ -853,21 +860,15 @@ if (typeof document !== 'undefined') (function () {
       (where ? '<small>' + where + '</small>' : '') +
       (h.match ? '<p>' + esc(h.before) + '<mark>' + esc(h.match) + '</mark>' + esc(h.after) + '</p>' : '') + '</button>';
   }
-  var QUERY_HELP = '<div class="qbar"><button id="qhelp" class="qhelp" type="button" aria-label="Search tips" aria-expanded="false" title="Search tips">?</button></div>' +
-    '<div id="qhelptext" class="qhelptext" hidden><b>Search tips</b><ul>' +
-    '<li><code>word word</code> finds items with every word</li>' +
-    '<li><code>"exact phrase"</code> finds the words together, in order</li>' +
-    '<li><code>-word</code> or <code>-"a phrase"</code> leaves out items that have it</li>' +
-    '<li><code>cat OR dog</code> finds either one (OR in capitals)</li>' +
-    '<li><code>in:chat</code>, <code>in:notes</code> or <code>in:sources</code> looks in one place only</li>' +
-    '<li><code>source:name</code> looks only in sources whose title has that name</li>' +
-    '<li><code>type:pdf</code> keeps one kind of source: pdf, youtube, web, audio or image</li>' +
-    '</ul></div>';
+  function setHelp(open) {
+    $('qhelptext').hidden = !open;
+    $('qhelp').setAttribute('aria-expanded', String(open));
+  }
   function runSearch(q) {
     if (searchText(q).length < 2) { results.hidden = true; return; }
     searchIndex = searchIndex || buildSearchIndex(D);
     var found = searchArchive(searchIndex, q);
-    results.innerHTML = QUERY_HELP + (found.total
+    results.innerHTML = (found.total
       ? found.groups.map(function (g) {
           return '<h3>' + esc(g.label) + ' <span>' + g.total + '</span></h3>' + g.hits.map(hitHtml).join('') +
             (g.total > g.hits.length ? '<p class="more">Showing the first ' + g.hits.length + ' of ' + g.total + '. Add a word to narrow it down.</p>' : '');
@@ -901,12 +902,9 @@ if (typeof document !== 'undefined') (function () {
 
   document.addEventListener('click', function (e) {
     if (!results.hidden && e.target.closest && !e.target.closest('#results, .gsearch')) results.hidden = true;
+    if (!$('qhelptext').hidden && e.target.closest && !e.target.closest('#qhelptext, #qhelp')) setHelp(false);
     var t = e.target.closest ? e.target.closest('button') : null; if (!t) return;
-    if (t.id === 'qhelp') {
-      var tip = $('qhelptext'); tip.hidden = !tip.hidden;
-      t.setAttribute('aria-expanded', String(!tip.hidden));
-      return;
-    }
+    if (t.id === 'qhelp') { setHelp($('qhelptext').hidden); return; }
     if (t.dataset.hit) { openHit(t.dataset.hit, +t.dataset.i, t.dataset.find); return; }
     if (t.classList.contains('cite')) {
       var c = D.cites[+t.dataset.c], i = c && srcByTitle[norm(c.t)];
@@ -928,6 +926,7 @@ if (typeof document !== 'undefined') (function () {
   });
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Escape') return;
+    if (!$('qhelptext').hidden) { setHelp(false); $('qhelp').focus(); return; }
     if (!results.hidden) { results.hidden = true; return; }
     pop.hidden = true;
     if (opened !== null) studioList();
