@@ -266,8 +266,7 @@
   // sample it is an "i" (volcan\0c, cond\0t\0ons). NUL next to a Latin letter
   // becomes "i"; other control characters are dropped. \t \n \r stay.
   function stripControlChars(text) {
-    if (!text) return text === 0 ? text : (text || '');
-    return String(text)
+    return String(text ?? '')
       .replace(/(?<=[A-Za-z\u00C0-\u024F])\u0000|\u0000(?=[A-Za-z\u00C0-\u024F])/g, 'i')
       .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
   }
@@ -2853,8 +2852,15 @@
     };
   }
 
+  // Text as it is written: Markdown/text files lose control characters, so
+  // sizes in the manifest and index match the saved file.
+  function writtenText(entry) {
+    const d = entry && entry.data;
+    return typeof d === 'string' && /\.(md|txt)$/i.test(entry.path || '') ? stripControlChars(d) : d;
+  }
+
   function byteLength(entry) {
-    const data = entry.data;
+    const data = writtenText(entry);
     if (typeof data === 'string') return new TextEncoder().encode(data).length;
     if (typeof Blob !== 'undefined' && data instanceof Blob) return data.size;
     if (data && typeof data.byteLength === 'number') return data.byteLength;
@@ -3826,6 +3832,7 @@ footer { margin-top: 3rem; }
     formatTimingSummary,
     cleanOcrArtifacts,
     stripControlChars,
+    writtenText,
     mathSourceHealth,
     mathSourceToMarkdown,
     classifyKatexScript,

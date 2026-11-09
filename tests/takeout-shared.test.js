@@ -3925,3 +3925,12 @@ test('cleanOcrArtifacts keeps ~~strike~~ and repairs a NUL in the same quote', (
   assert.equal(out, '’s Slowly Rotating Surface: ~~strike~~ here');
   assert.ok(!/\u0000/.test(out));
 });
+
+test('manifest bytes equal the written size of a .md that had control characters', () => {
+  const files = [{ path: 'a/chat.md', data: 'Rotat\u0000ng \u0001é' }];
+  const written = NLME.writtenText(files[0]);
+  assert.ok(!/[\u0000-\u0008]/.test(written));
+  const m = NLME.buildManifest({ meta: {}, kind: 'chat', files });
+  const entry = m.files.find(f => f.path === 'a/chat.md');
+  assert.equal(entry.bytes, Buffer.byteLength(written, 'utf8'));
+});

@@ -203,7 +203,7 @@ function reportSaved(capture, path, data) {
  */
 async function saveFiles(files, { zipName, folder, capture = null } = {}) {
   // Final write guard: no NUL/control characters in any Markdown or text file.
-  files = files.map(f => (typeof f.data === 'string' && /\.(md|txt)$/i.test(f.path) ? { ...f, data: NLME.stripControlChars(f.data) } : f));
+  files = files.map(f => (typeof f.data === 'string' ? { ...f, data: NLME.writtenText(f) } : f));
   if (zipName) {
     const zip = new JSZip();
     for (const entry of files) {
