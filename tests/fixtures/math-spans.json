@@ -1,0 +1,126 @@
+[
+ {
+  "text": "Sum $1$ end",
+  "formulas": [
+   "$1$"
+  ]
+ },
+ {
+  "text": "Sum $1 + 2 + 4 + 8...$ end",
+  "formulas": [
+   "$1 + 2 + 4 + 8...$"
+  ]
+ },
+ {
+  "text": "Sum $-1$ end",
+  "formulas": [
+   "$-1$"
+  ]
+ },
+ {
+  "text": "Sum $½ + ¼ + ⅛...$ end",
+  "formulas": [
+   "$½ + ¼ + ⅛...$"
+  ]
+ },
+ {
+  "text": "Sum $10^{48}$ end",
+  "formulas": [
+   "$10^{48}$"
+  ]
+ },
+ {
+  "text": "Sum $x$ end",
+  "formulas": [
+   "$x$"
+  ]
+ },
+ {
+  "text": "Sum $$\\sum_i i$$ end",
+  "formulas": [
+   "$$\\sum_i i$$"
+  ]
+ },
+ {
+  "text": "Sum $SO_2$ end",
+  "formulas": [
+   "$SO_2$"
+  ]
+ },
+ {
+  "text": "costs $5 and $10",
+  "formulas": []
+ },
+ {
+  "text": "$3-$4 million",
+  "formulas": []
+ },
+ {
+  "text": "$5 per user ($60 per year)",
+  "formulas": []
+ },
+ {
+  "text": "from $1,000 to $2,000",
+  "formulas": []
+ },
+ {
+  "text": "pay $20.",
+  "formulas": []
+ },
+ {
+  "text": "$ x$",
+  "formulas": []
+ },
+ {
+  "text": "$x $",
+  "formulas": []
+ },
+ {
+  "text": "$T$2 = 4",
+  "formulas": [
+   "$T$"
+  ]
+ },
+ {
+  "text": "$3-$4 million",
+  "formulas": []
+ },
+ {
+  "text": "US$1.9 billion; US$2",
+  "formulas": []
+ },
+ {
+  "text": "$x$5",
+  "formulas": [
+   "$x$"
+  ]
+ },
+ {
+  "text": "$Harrison\tTM\t(2009)\tThe\tHadean\tcrust:…\tSci$37:479–505",
+  "formulas": []
+ },
+ {
+  "text": "a $x\u0085$ b",
+  "formulas": [
+   "$x\u0085$"
+  ]
+ },
+ {
+  "text": "a $\u0085x$ b",
+  "formulas": [
+   "$\u0085x$"
+  ]
+ },
+ {
+  "text": "a $x\ufeff$ b",
+  "formulas": [
+   "$x\ufeff$"
+  ]
+ },
+ {
+  "text": "a $\ufeffx$ b",
+  "formulas": [
+   "$\ufeffx$"
+  ]
+ }
+]

@@ -261,7 +261,7 @@ test('viewer app removes scripts and handlers', () => {
   assert.match(out, /rel="noopener"/);
   // every markdown render passes through sanitize
   const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8');
-  assert.match(src, /var html = sanitize\(marked\.parse\(/);
+  assert.match(src, /return sanitizeHtml\(marked\.parse\(p\.text, \{ gfm: true \}\), new DOMParser\(\), p\.math, function \(src, block, m\) \{/);
   assert.equal((src.match(/marked\.parse\(/g) || []).length, 1);
 });
 
@@ -306,12 +306,10 @@ test('viewer page makes no remote requests', () => {
 });
 
 test('literal XMATHX token in text renders as text and never throws', () => {
+  // the page's md(): a token with no formula behind it is left as typed (math-bold.test.js runs it on a tree)
   const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8');
-  assert.match(src, /m === undefined\) return _;/);
-  // same logic as md(): a token beyond the formula count must come back unchanged
-  const math = ['$x$'];
-  const out = 'a XMATHX7XEND b XMATHX0XEND'.replace(/XMATHX(\d+)XEND/g, (_, i) => { const m = math[+i]; if (m === undefined) return _; return m; });
-  assert.equal(out, 'a XMATHX7XEND b $x$');
+  assert.match(src, /return m === undefined \? ph : m;/);
+  assert.match(src, /if \(f === undefined\) continue;/);
 });
 
 test('viewer data: odd data:image forms go, and unclosed starts stay fast', () => {
@@ -994,6 +992,23 @@ test('the citation popover shows images and never a link', () => {
   assert.match(html, /A&lt;b/);
   assert.match(html, /Click the number/);
   assert.doesNotMatch(app.citeHtml({ t: 'A', q: 'quote' }, false), /<img|not available|Click/);
+});
+
+test('citeHtml renders the quote as Markdown when given a renderer', () => {
+  const render = q => '<h2>' + q + '</h2>';
+  const html = app.citeHtml({ t: 'A<b', q: 'Q&1', imgs: ['images/cccccccccccccccc.jpg'], lost: 1 }, true, render);
+  assert.match(html, /^<b>A&lt;b<\/b><div class="md"><h2>Q&1<\/h2><\/div>/);
+  assert.doesNotMatch(html, /<p>Q/);
+  assert.match(html, /<img alt="" src="images\/cccccccccccccccc\.jpg">/);
+  assert.match(html, /Click the number/);
+  assert.equal(app.citeHtml({ t: 'A', q: 'x<y' }, false), '<b>A</b><p>x&lt;y</p>');
+});
+
+test('the app passes its sanitizing renderer to citeHtml and styles the popup Markdown', () => {
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8'), /citeHtml\(c, srcByTitle\[norm\(c\.t\)\] !== undefined, md\)/);
+  const css = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-template.html'), 'utf8');
+  assert.match(css, /#pop \.md h1[^{]*\{[^}]*font-size/);
+  assert.match(css, /#pop \.md table[^{]*\{[^}]*overflow-x: auto/);
 });
 
 test('images/ links survive sanitizeHtml', () => {

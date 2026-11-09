@@ -5,6 +5,8 @@
 var DANGEROUS_TAGS = 'script,style,iframe,object,embed,link,meta,form,base,frame,frameset,applet,noscript,template';
 var URL_ATTRS = /^(href|src|xlink:href|action|formaction|srcdoc|poster|data)$/i;
 var SMIL_TAGS = /^(animate|set|animatetransform|animatemotion)$/i;
+// A name as markup writes it. Anything else (x" from <p x" title=..>) is a parse accident and goes.
+var ATTR_NAME = /^[a-z_:][-a-z0-9_:.]*$/i;
 var BAD_URL = /^[\s\u0000-\u001f]*(javascript|vbscript|data\s*:\s*text\/html)/i;
 
 // Elements that load something on display. Their URLs must stay inside the archive.
@@ -52,8 +54,11 @@ function isLocalUrl(v) {
 
 // Strip scripts, event handlers, script URLs and anything that would fetch a remote
 // file on display. parser is a DOMParser. Links the reader clicks (a href) are kept.
-function sanitizeHtml(html, parser) {
+// math and render, when given, put protectMath()'s formulas back: into attribute values as their source
+// before any check below runs, and into the cleaned text, drawn by render, just before it is written out.
+function sanitizeHtml(html, parser, math, render) {
   var doc = parser.parseFromString(html, 'text/html');
+  if (math) restoreMathAttrs(doc.body, math);
   doc.querySelectorAll(DANGEROUS_TAGS).forEach(function (n) { n.remove(); });
   doc.querySelectorAll('*').forEach(function (n) {
     var tag = String(n.tagName).toLowerCase();
@@ -66,7 +71,8 @@ function sanitizeHtml(html, parser) {
     var loads = LOADING_TAGS.test(tag);
     Array.prototype.slice.call(n.attributes).forEach(function (a) {
       var name = a.name;
-      if (/^(on|ping$|background$)/i.test(name) || (URL_ATTRS.test(name) && BAD_URL.test(String(a.value).replace(/[\u0000-\u001f\s]+/g, '')))) n.removeAttribute(name);
+      if (!ATTR_NAME.test(name)) n.removeAttribute(name);
+      else if (/^(on|ping$|background$)/i.test(name) || (URL_ATTRS.test(name) && BAD_URL.test(String(a.value).replace(/[\u0000-\u001f\s]+/g, '')))) n.removeAttribute(name);
       else if (/^style$/i.test(name) && /url\s*\(|image-set|[@]import|expression|\\/i.test(a.value)) n.removeAttribute(name);
       else if (loads && LOADING_ATTRS.test(name) && (/^srcset$/i.test(name) || !isLocalUrl(a.value))) n.removeAttribute(name);
     });
@@ -78,14 +84,16 @@ function sanitizeHtml(html, parser) {
     }
     if (tag === 'a') { n.setAttribute('target', '_blank'); n.setAttribute('rel', 'noopener'); }
   });
+  if (math) restoreMath(doc.body, math, render, parser);
   return collapseNoImage(doc.body.innerHTML);
 }
 
 function escHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
 // A citation popover. c.imgs are paths the builder made; known: its source is in this archive.
-function citeHtml(c, known) {
-  return '<b>' + escHtml(c.t) + '</b><p>' + escHtml(c.q) + '</p>' +
+// render, when given, turns the quote's Markdown into safe HTML (the app passes its sanitizing md).
+function citeHtml(c, known, render) {
+  return '<b>' + escHtml(c.t) + '</b>' + (render ? '<div class="md">' + render(c.q) + '</div>' : '<p>' + escHtml(c.q) + '</p>') +
     (c.imgs || []).map(function (src) { return '<img alt="" src="' + escHtml(src) + '">'; }).join('') +
     (c.lost ? '<p>' + noImageHtml(c.lost) + '</p>' : '') +
     (known ? '<small>Click the number to open this source</small>' : '');
@@ -199,7 +207,108 @@ function showCopyResult(btn, ok, icons, later, cancel) {
   }, 1500);
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
+// The formulas md() draws. A $$..$$ pair is a block. An inline span opens at a "$" not
+// followed by whitespace and closes at the first "$" that is not preceded by whitespace,
+// on one line. When the content starts with a digit, a digit may not follow the closing "$":
+// "costs $5 and $10" and "$3-$4 million" stay prices, "$T$2" is a formula.
+var MATH_RE = /\$\$[\s\S]+?\$\$|\$(?![\x20\t\n\r\f\v\d])(?:[^$\n\t]*?[^\x20\t\n\r\f\v$])\$|\$(?=\d)(?:[^$\n\t]*?[^\x20\t\n\r\f\v$])\$(?!\d)/g;
+function findMath(text) {
+  var out = [], re = new RegExp(MATH_RE.source, 'g'), m;
+  while ((m = re.exec(String(text)))) out.push({ start: m.index, end: m.index + m[0].length, src: m[0], block: m[0].slice(0, 2) === '$$' });
+  return out;
+}
+// Formulas leave the text as "$XMATHX<i>XEND$" while marked runs: the "$" at both ends keep emphasis
+// flanking as it was ("**(**$x$**)**" still closes), and marked and the sanitizer leave it alone.
+function protectMath(text) {
+  var math = [], src0 = String(text), t = '', at = 0;
+  findMath(src0).forEach(function (f) {
+    math.push(f.src); t += src0.slice(at, f.start) + '$XMATHX' + (math.length - 1) + 'XEND$'; at = f.end;
+  });
+  return { text: t + src0.slice(at), math: math };
+}
+// Formulas come back in the parsed tree, never in its HTML string. In an attribute value a formula is
+// its own source (restoreMathAttrs, run before sanitizeHtml checks the value). In page text it becomes
+// render()'s HTML, parsed by parser into elements; in code or pre, and in SVG or MathML, its source as text,
+// so the DOM escapes it. Raw-text elements and comments write their text unescaped: there the placeholder stays.
+var MATH_PH = /\$XMATHX(\d+)XEND\$/g;
+var MATH_AS_SOURCE = /^(code|pre|textarea|title)$/i;
+var MATH_RAW = /^(script|style|xmp|iframe|noembed|noframes|plaintext|noscript|template)$/i;
+var HTML_NS = 'http://www.w3.org/1999/xhtml';
+function mathSource(math) {
+  return function (ph, i) { var m = math[+i]; return m === undefined ? ph : m; };
+}
+function restoreMathAttrs(root, math) {
+  var source = mathSource(math);
+  (function walk(node) {
+    Array.prototype.slice.call(node.childNodes).forEach(function (c) {
+      if (c.nodeType !== 1) return;
+      Array.prototype.slice.call(c.attributes).forEach(function (a) {
+        if (a.value.indexOf('XMATHX') >= 0) c.setAttribute(a.name, a.value.replace(MATH_PH, source));
+      });
+      walk(c);
+    });
+  })(root);
+}
+function restoreMath(root, math, render, parser) {
+  var doc = root.ownerDocument, texts = [], source = mathSource(math);
+  (function walk(node, mode) {
+    Array.prototype.slice.call(node.childNodes).forEach(function (c) {
+      if (c.nodeType === 3) { if (mode !== 'raw' && c.nodeValue.indexOf('XMATHX') >= 0) texts.push([c, mode]); return; }
+      if (c.nodeType !== 1) return;
+      var tag = String(c.localName || c.tagName).toLowerCase(), foreign = c.namespaceURI && c.namespaceURI !== HTML_NS;
+      walk(c, mode === 'raw' || MATH_RAW.test(tag) ? 'raw' : mode || (foreign || tag === 'svg' || tag === 'math' || MATH_AS_SOURCE.test(tag) ? 'source' : ''));
+    });
+  })(root, '');
+  texts.forEach(function (t) {
+    var node = t[0];
+    if (t[1] === 'source') { node.nodeValue = node.nodeValue.replace(MATH_PH, source); return; }
+    var text = node.nodeValue, at = 0, parent = node.parentNode, m, re = new RegExp(MATH_PH.source, 'g');
+    var put = function (n) { parent.insertBefore(n, node); };
+    while ((m = re.exec(text))) {
+      var f = math[+m[1]];
+      if (f === undefined) continue;
+      if (m.index > at) put(doc.createTextNode(text.slice(at, m.index)));
+      at = m.index + m[0].length;
+      var block = f.slice(0, 2) === '$$', src = f.replace(/^\$+|\$+$/g, '');
+      src = src.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+      mathNodes(render(src, block, f), parser, doc).forEach(put);
+    }
+    if (at === 0) return;
+    if (at < text.length) put(doc.createTextNode(text.slice(at)));
+    parent.removeChild(node);
+  });
+}
+// render()'s HTML (KaTeX's, made by us) as nodes of doc, with no script and no handler
+function mathNodes(html, parser, doc) {
+  var body = parser.parseFromString(String(html), 'text/html').body, out = [];
+  (function clean(e) {
+    Array.prototype.slice.call(e.childNodes).forEach(function (c) {
+      if (c.nodeType === 3) return;
+      if (c.nodeType !== 1 || MATH_RAW.test(String(c.localName || c.tagName))) { e.removeChild(c); return; }
+      Array.prototype.slice.call(c.attributes).forEach(function (a) {
+        if (!ATTR_NAME.test(a.name) || /^on/i.test(a.name)) c.removeAttribute(a.name);
+      });
+      clean(c);
+    });
+  })(body);
+  Array.prototype.slice.call(body.childNodes).forEach(function (n) { out.push(doc.importNode(n, true)); });
+  return out;
+}
+var FRACTIONS = { '\u00bd': [1, 2], '\u00bc': [1, 4], '\u00be': [3, 4], '\u2153': [1, 3], '\u2154': [2, 3], '\u215b': [1, 8], '\u215c': [3, 8], '\u215d': [5, 8], '\u215e': [7, 8], '\u2155': [1, 5] };
+function texForKatex(src) {
+  var s = String(src), out = '', i = 0, m, group = /^\\(?:text|textrm|textit|textbf|mathrm|operatorname|mbox)\s*\{/;
+  while (i < s.length) {
+    if (s[i] === '\\' && (m = group.exec(s.slice(i)))) {
+      var j = i + m[0].length, depth = 1;
+      while (j < s.length && depth) { if (s[j] === '{') depth++; else if (s[j] === '}') depth--; j++; }
+      out += s.slice(i, j); i = j; continue;
+    }
+    var f = FRACTIONS[s[i]];
+    out += f ? '\\frac{' + f[0] + '}{' + f[1] + '}' : s[i]; i++;
+  }
+  return out;
+}
+if (typeof module === 'object' && module.exports) module.exports = { protectMath: protectMath, restoreMath: restoreMath, restoreMathAttrs: restoreMathAttrs, mathNodes: mathNodes, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
 // A source's kind for its icon: the type icon the page showed, which also covers
 // titles with no extension, then the title's extension, then the url. A generic
 // document icon comes after the extension, which may say more ("plan.docx").
@@ -369,17 +478,9 @@ if (typeof document !== 'undefined') (function () {
   // Exported text comes from third-party sources, so scripts and handlers never survive
   function sanitize(html) { return sanitizeHtml(html, new DOMParser()); }
   function md(text) {
-    var math = [];
-    var t = String(text).replace(/\$\$[\s\S]+?\$\$|\$(?![\s\d])(?:[^$\n]*?[^\s$])\$(?!\d)/g, function (m) {
-      math.push(m); return 'XMATHX' + (math.length - 1) + 'XEND';
-    });
-    var html = sanitize(marked.parse(t, { gfm: true }));
-    return html.replace(/XMATHX(\d+)XEND/g, function (_, i) {
-      var m = math[+i];
-      if (m === undefined) return _;
-      var block = m.slice(0, 2) === '$$', src = m.replace(/^\$+|\$+$/g, '');
-      src = src.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-      try { return katex.renderToString(src, { displayMode: block, throwOnError: false }); } catch (e) { return esc(m); }
+    var p = protectMath(text);
+    return sanitizeHtml(marked.parse(p.text, { gfm: true }), new DOMParser(), p.math, function (src, block, m) {
+      try { return katex.renderToString(texForKatex(src), { displayMode: block, throwOnError: false }); } catch (e) { return esc(m); }
     });
   }
   function norm(s) { return String(s).toLowerCase().replace(/[^a-z0-9]+/g, ''); }
@@ -599,7 +700,7 @@ if (typeof document !== 'undefined') (function () {
   function showPop(btn) {
     clearTimeout(hideT);
     var c = D.cites[+btn.dataset.c]; if (!c) return;
-    pop.innerHTML = citeHtml(c, srcByTitle[norm(c.t)] !== undefined);
+    pop.innerHTML = citeHtml(c, srcByTitle[norm(c.t)] !== undefined, md);
     pop.hidden = false; pop.scrollTop = 0;
     function place() {
       var r = btn.getBoundingClientRect(), pr = pop.getBoundingClientRect();

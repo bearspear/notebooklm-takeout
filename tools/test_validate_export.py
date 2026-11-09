@@ -505,3 +505,27 @@ class ViewerTests(Base):
     def test_category_export_needs_no_viewer(self):
         [r] = self.check(make_export(os.path.join(self.tmp, 'e'), version='1.8.0'))
         self.assertNotIn('viewer-missing', codes(r))
+
+
+class ViewerMathTests(Base):
+    def test_spans_match_the_node_fixture(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tests', 'fixtures', 'math-spans.json')
+        with open(path, encoding='utf-8') as f:
+            cases = json.load(f)
+        for c in cases:
+            self.assertEqual(ve.viewer_math_spans(c['text']), c['formulas'], c['text'])
+
+    def md_codes(self, body):
+        [r] = self.check(make_export(os.path.join(self.tmp, 'e'), files={'notes/A.md': '# A\n\n' + body + '\n', 'combined-notes.md': '# All\n'}))
+        return codes(r)
+
+    def test_drawn_formulas_and_prices_pass(self):
+        for body in ('Sum $1$ and $10^{48}$', 'costs $5 and $10', '$3-$4 million', '`$x_1` and ```\n$1$\n```'):
+            self.assertNotIn('viewer-math-raw', self.md_codes(body), body)
+
+    def test_formula_the_viewer_would_not_draw_fails(self):
+        self.assertIn('viewer-math-raw', self.md_codes('Value $x_1 $ here'))
+        self.assertIn('viewer-math-raw', self.md_codes('Value $a^2 $ here'))
+
+    def test_escaped_star_in_prices_is_not_tex(self):
+        self.assertNotIn('viewer-math-raw', self.md_codes(r'US$1.9 billion; \* Uranus, US$2 billion'))
