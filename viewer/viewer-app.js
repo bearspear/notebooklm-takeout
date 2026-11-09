@@ -328,9 +328,21 @@ function markMatches(root, parsed) {
   var terms = markTerms(parsed), count = 0;
   if (!terms.length) return 0;
   function spansIn(text) {
-    var low = text.toLowerCase(), spans = [];
-    if (low.length !== text.length) return spans;
-    terms.forEach(function (t) { for (var p = low.indexOf(t); p > -1; p = low.indexOf(t, p + t.length)) spans.push([p, p + t.length]); });
+    var low = text.toLowerCase(), spans = [], from = null, to = null;
+    if (low.length !== text.length) {
+      // Some letters change length in lower case: lower them one by one and remember where each came from
+      low = ''; from = []; to = [];
+      for (var c = 0; c < text.length; c++) {
+        var ch = text[c], l = ch.toLowerCase();
+        for (var u = 0; u < l.length; u++) { from.push(c); to.push(c + 1); }
+        low += l;
+      }
+    }
+    terms.forEach(function (t) {
+      for (var p = low.indexOf(t); p > -1; p = low.indexOf(t, p + t.length)) {
+        spans.push(from ? [from[p], to[p + t.length - 1]] : [p, p + t.length]);
+      }
+    });
     spans.sort(function (a, b) { return a[0] - b[0] || b[1] - a[1]; });
     var merged = [];
     spans.forEach(function (sp) {
@@ -845,6 +857,7 @@ if (typeof document !== 'undefined') (function () {
     (function batch() {
       if (token !== renderChat.t) return;
       if (at >= idx.length) {
+        if (parsed && !scrolled && idx.length && $('pair-' + idx[0])) { scrolled = true; $('pair-' + idx[0]).scrollIntoView({ block: 'start' }); }
         if (chatTop !== null) { $('chatscroll').scrollTop = chatTop; chatTop = null; }
         return;
       }
@@ -852,7 +865,10 @@ if (typeof document !== 'undefined') (function () {
       box.insertAdjacentHTML('beforeend', chatHtml(part));
       if (parsed) part.forEach(function (i) {
         var pair = $('pair-' + i);
-        if (pair && markMatches(pair, parsed) && !scrolled) { scrolled = true; scrollToMark(pair, pair.querySelector('mark.hit')); }
+        if (!pair) return;
+        if (markMatches(pair, parsed)) {
+          if (!scrolled) { scrolled = true; scrollToMark(pair, pair.querySelector('mark.hit')); }
+        } else if (markTerms(parsed).some(function (t) { return markQuote(pair, t, true); })) scrolled = true; // a phrase spanning two elements
       });
       setTimeout(batch, 0);
     })();
