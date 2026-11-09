@@ -308,7 +308,7 @@ function texForKatex(src) {
   }
   return out;
 }
-if (typeof module === 'object' && module.exports) module.exports = { protectMath: protectMath, restoreMath: restoreMath, restoreMathAttrs: restoreMathAttrs, mathNodes: mathNodes, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
+if (typeof module === 'object' && module.exports) module.exports = { protectMath: protectMath, restoreMath: restoreMath, restoreMathAttrs: restoreMathAttrs, mathNodes: mathNodes, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, parseQuery: parseQuery, matchQuery: matchQuery, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
 // A source's kind for its icon: the type icon the page showed, which also covers
 // titles with no extension, then the title's extension, then the url. A generic
 // document icon comes after the extension, which may say more ("plan.docx").
@@ -354,27 +354,131 @@ function searchText(md) {
     .replace(/\s+/g, ' ').trim();
 }
 
+// The search language. Words are ANDed. "a phrase" must be contiguous, -word and -"a phrase"
+// exclude, upper-case OR joins two terms, in:chat / in:notes / in:studio / in:sources limit where
+// to look, source:title limits to sources whose title has it, type:pdf|youtube|web|audio|image
+// limits sources by kind. Anything malformed becomes ordinary words. plain: no operator was used.
+var QUERY_SCOPES = { source: 'source', sources: 'source', notes: 'studio', note: 'studio', studio: 'studio', chat: 'chat' };
+var QUERY_TYPES = { pdf: 1, youtube: 1, web: 1, audio: 1, image: 1 };
+function parseQuery(q) {
+  var s = String(q == null ? '' : q).replace(/[‘’]/g, "'").replace(/[“”]/g, '"');
+  var items = [], i = 0, n = s.length;
+  function word(text) { var t = searchText(text); if (t) items.push({ text: t, phrase: false, negate: false }); }
+  while (i < n) {
+    if (/\s/.test(s.charAt(i))) { i++; continue; }
+    var neg = false, key = '';
+    if (s.charAt(i) === '-' && i + 1 < n && !/[\s-]/.test(s.charAt(i + 1))) { neg = true; i++; }
+    var km = !neg && /^(in|source|type):/i.exec(s.slice(i, i + 8));
+    if (km) { key = km[1].toLowerCase(); i += km[0].length; }
+    if (s.charAt(i) === '"') {
+      var end = s.indexOf('"', i + 1);
+      if (end < 0) { // never closed: the rest is plain words
+        s.slice(i + 1).split(/\s+/).forEach(word);
+        break;
+      }
+      var inner = searchText(s.slice(i + 1, end));
+      i = end + 1;
+      if (key) { items.push({ key: key, value: inner }); continue; }
+      if (inner) items.push({ text: inner, phrase: true, negate: neg });
+      continue;
+    }
+    var j = i;
+    while (j < n && !/\s/.test(s.charAt(j))) j++;
+    var w = s.slice(i, j);
+    i = j;
+    if (key) { if (w) items.push({ key: key, value: w }); else word(key + ':'); continue; }
+    if (neg) { var t = searchText(w); if (t) items.push({ text: t, phrase: false, negate: true }); continue; }
+    if (w === 'OR') { items.push({ or: true }); continue; }
+    word(w);
+  }
+  var out = { terms: [], anyOf: [], scopes: [], sourceTitle: null, types: [], plain: true };
+  var terms = [];
+  items.forEach(function (it) {
+    if (!it.key) { terms.push(it); return; }
+    var v = it.value.toLowerCase();
+    if (it.key === 'in' && QUERY_SCOPES[v]) { if (out.scopes.indexOf(QUERY_SCOPES[v]) < 0) out.scopes.push(QUERY_SCOPES[v]); }
+    else if (it.key === 'type' && QUERY_TYPES[v] === 1) { if (out.types.indexOf(v) < 0) out.types.push(v); }
+    else if (it.key === 'source' && it.value) out.sourceTitle = v;
+    else terms.push({ text: searchText(it.key + ':' + it.value), phrase: false, negate: false });
+  });
+  function positive(t) { return t && !t.or && !t.negate; }
+  for (var k = 0; k < terms.length; k++) {
+    var it = terms[k];
+    if (it.or) { out.terms.push({ text: 'OR', phrase: false, negate: false }); continue; }
+    if (positive(it) && terms[k + 1] && terms[k + 1].or && positive(terms[k + 2])) {
+      var group = [it];
+      while (terms[k + 1] && terms[k + 1].or && positive(terms[k + 2])) { group.push(terms[k + 2]); k += 2; }
+      out.anyOf.push(group);
+      continue;
+    }
+    out.terms.push(it);
+  }
+  out.plain = !(out.anyOf.length || out.scopes.length || out.types.length || out.sourceTitle !== null ||
+    out.terms.some(function (t) { return t.phrase || t.negate; }));
+  return out;
+}
+
+// Does the text satisfy the parsed query? item ({ kind, title, type, url }) is checked against the
+// scope / source / type filters; without it they are ignored. A term may also match the item's title.
+// spans: where each positive term sits in text, every occurrence, overlaps merged.
+function matchQuery(parsed, text, item) {
+  var low = String(text == null ? '' : text).toLowerCase();
+  var titleLow = item ? String(item.title || '').toLowerCase() : '';
+  var none = { ok: false, spans: [] };
+  if (item) {
+    if (parsed.scopes.length && parsed.scopes.indexOf(item.kind) < 0) return none;
+    if (parsed.sourceTitle !== null && (item.kind !== 'source' || titleLow.indexOf(parsed.sourceTitle) < 0)) return none;
+    if (parsed.types.length && (item.kind !== 'source' || parsed.types.indexOf(sourceKind(item.type, item.title, item.url)) < 0)) return none;
+  }
+  function has(t) { var x = t.text.toLowerCase(); return low.indexOf(x) > -1 || (titleLow && titleLow.indexOf(x) > -1); }
+  var spans = [];
+  function collect(t) {
+    var x = t.text.toLowerCase();
+    if (!x) return;
+    for (var p = low.indexOf(x); p > -1; p = low.indexOf(x, p + x.length)) spans.push([p, p + x.length]);
+  }
+  for (var a = 0; a < parsed.terms.length; a++) {
+    var t = parsed.terms[a];
+    if (t.negate) { if (has(t)) return none; }
+    else { if (!has(t)) return none; collect(t); }
+  }
+  for (var g = 0; g < parsed.anyOf.length; g++) {
+    var any = false;
+    parsed.anyOf[g].forEach(function (o) { if (has(o)) { any = true; collect(o); } });
+    if (!any) return none;
+  }
+  spans.sort(function (x, y) { return x[0] - y[0] || x[1] - y[1]; });
+  var merged = [];
+  spans.forEach(function (sp) {
+    var last = merged[merged.length - 1];
+    if (last && sp[0] <= last[1]) last[1] = Math.max(last[1], sp[1]);
+    else merged.push([sp[0], sp[1]]);
+  });
+  return { ok: true, spans: merged };
+}
+
 // Search this chat: the pairs whose question or answer holds the query, matched on their
 // text as searchText reads it (no markup, so "summary" does not match every Thoughts section).
 // flat: optional cache, one searchText per pair. Returns pair indexes.
 function filterPairs(pairs, query, flat) {
-  var low = searchText(query).toLowerCase(), idx = [];
+  var low = searchText(query).toLowerCase(), idx = [], parsed = parseQuery(query);
   pairs.forEach(function (p, i) {
     if (!low) { idx.push(i); return; }
     var text = flat && flat[i] != null ? flat[i] : searchText(p.q + ' ' + p.a).toLowerCase();
     if (flat) flat[i] = text;
-    if (text.indexOf(low) > -1) idx.push(i);
+    if (parsed.plain ? text.indexOf(low) > -1 : matchQuery(parsed, text).ok) idx.push(i);
   });
   return idx;
 }
 
 function buildSearchIndex(data) {
-  function entry(kind, i, title, text) {
+  function entry(kind, i, title, text, from) {
     var flat = searchText(text);
-    return { kind: kind, i: i, title: String(title || ''), text: flat, low: flat.toLowerCase(), titleLow: String(title || '').toLowerCase() };
+    return { kind: kind, i: i, title: String(title || ''), text: flat, low: flat.toLowerCase(), titleLow: String(title || '').toLowerCase(),
+      type: from ? from.type : '', url: from ? from.url : '' };
   }
   var out = [];
-  (data.sources || []).forEach(function (s, i) { out.push(entry('source', i, s.title, s.md)); });
+  (data.sources || []).forEach(function (s, i) { out.push(entry('source', i, s.title, s.md, s)); });
   (data.studio || []).forEach(function (a, i) {
     out.push(entry('studio', i, a.title, a.md != null ? a.md : (a.rows || []).map(function (r) { return r.join(' '); }).join(' ')));
   });
@@ -390,17 +494,30 @@ function searchArchive(index, query, perGroup) {
   var phrase = searchText(query).toLowerCase(), limit = perGroup || 30;
   var words = phrase.split(' ').filter(Boolean);
   if (phrase.length < 2) return { total: 0, groups: [] };
+  var parsed = parseQuery(query), firsts = [];
+  parsed.terms.concat.apply(parsed.terms, parsed.anyOf).forEach(function (t) { if (!t.negate) firsts.push(t.text.toLowerCase()); });
   var found = { source: [], studio: [], chat: [] }, total = 0;
   index.forEach(function (e) {
-    for (var w = 0; w < words.length; w++) {
-      if (e.low.indexOf(words[w]) < 0 && e.titleLow.indexOf(words[w]) < 0) return;
+    var find, at, count = 0, inTitle;
+    if (parsed.plain) {
+      for (var w = 0; w < words.length; w++) {
+        if (e.low.indexOf(words[w]) < 0 && e.titleLow.indexOf(words[w]) < 0) return;
+      }
+      find = e.low.indexOf(phrase) > -1 ? phrase : words[0];
+      at = e.low.indexOf(find);
+      for (var p = at; p > -1; p = e.low.indexOf(find, p + find.length)) count++;
+      inTitle = e.titleLow.indexOf(words[0]) > -1;
+    } else {
+      var m = matchQuery(parsed, e.low, e);
+      if (!m.ok) return;
+      count = m.spans.length;
+      at = count ? m.spans[0][0] : -1;
+      find = { length: count ? m.spans[0][1] - at : 0 };
+      inTitle = firsts.some(function (x) { return e.titleLow.indexOf(x) > -1; });
     }
-    var find = e.low.indexOf(phrase) > -1 ? phrase : words[0];
-    var at = e.low.indexOf(find), count = 0;
-    for (var p = at; p > -1; p = e.low.indexOf(find, p + find.length)) count++;
     var from = Math.max(0, at - 70), to = at + find.length + 110;
     found[e.kind].push({
-      kind: e.kind, i: e.i, title: e.title, count: count, inTitle: e.titleLow.indexOf(words[0]) > -1,
+      kind: e.kind, i: e.i, title: e.title, count: count, inTitle: inTitle,
       before: at < 0 ? '' : (from > 0 ? '…' : '') + e.text.slice(from, at),
       match: at < 0 ? '' : e.text.slice(at, at + find.length),
       after: at < 0 ? '' : e.text.slice(at + find.length, to) + (to < e.text.length ? '…' : '')
@@ -584,8 +701,11 @@ if (typeof document !== 'undefined') (function () {
   function sourcesList() {
     auto.l = null;
     view.source = null;
-    var q = srcQ.toLowerCase(), hits = [];
-    D.sources.forEach(function (s, i) { if (!q || s.title.toLowerCase().indexOf(q) > -1) hits.push(i); });
+    var q = srcQ.toLowerCase(), hits = [], pq = parseQuery(srcQ);
+    pq.scopes = []; pq.sourceTitle = null; // only words and type: count in this list, and only in titles
+    D.sources.forEach(function (s, i) {
+      if (!q || (pq.plain ? s.title.toLowerCase().indexOf(q) > -1 : matchQuery(pq, s.title, { kind: 'source', title: s.title, type: s.type, url: s.url }).ok)) hits.push(i);
+    });
     $('left').innerHTML = '<div class="p-head"><h2>Sources</h2>' + colBtn('l') + '</div><label class="search-block">' + icon('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>') +
       '<input id="srcq" type="search" aria-label="Search sources" placeholder="Search sources" value="' + esc(srcQ) + '"></label><div class="group">' + hits.length + ' of ' + D.sources.length + '</div><div class="scroll">' +
       hits.map(function (i) {
@@ -733,16 +853,26 @@ if (typeof document !== 'undefined') (function () {
       (where ? '<small>' + where + '</small>' : '') +
       (h.match ? '<p>' + esc(h.before) + '<mark>' + esc(h.match) + '</mark>' + esc(h.after) + '</p>' : '') + '</button>';
   }
+  var QUERY_HELP = '<div class="qbar"><button id="qhelp" class="qhelp" type="button" aria-label="Search tips" aria-expanded="false" title="Search tips">?</button></div>' +
+    '<div id="qhelptext" class="qhelptext" hidden><b>Search tips</b><ul>' +
+    '<li><code>word word</code> finds items with every word</li>' +
+    '<li><code>"exact phrase"</code> finds the words together, in order</li>' +
+    '<li><code>-word</code> or <code>-"a phrase"</code> leaves out items that have it</li>' +
+    '<li><code>cat OR dog</code> finds either one (OR in capitals)</li>' +
+    '<li><code>in:chat</code>, <code>in:notes</code> or <code>in:sources</code> looks in one place only</li>' +
+    '<li><code>source:name</code> looks only in sources whose title has that name</li>' +
+    '<li><code>type:pdf</code> keeps one kind of source: pdf, youtube, web, audio or image</li>' +
+    '</ul></div>';
   function runSearch(q) {
     if (searchText(q).length < 2) { results.hidden = true; return; }
     searchIndex = searchIndex || buildSearchIndex(D);
     var found = searchArchive(searchIndex, q);
-    results.innerHTML = found.total
+    results.innerHTML = QUERY_HELP + (found.total
       ? found.groups.map(function (g) {
           return '<h3>' + esc(g.label) + ' <span>' + g.total + '</span></h3>' + g.hits.map(hitHtml).join('') +
             (g.total > g.hits.length ? '<p class="more">Showing the first ' + g.hits.length + ' of ' + g.total + '. Add a word to narrow it down.</p>' : '');
         }).join('')
-      : '<p class="more">Nothing found.</p>';
+      : '<p class="more">Nothing found.</p>');
     results.scrollTop = 0;
     results.hidden = false;
   }
@@ -772,6 +902,11 @@ if (typeof document !== 'undefined') (function () {
   document.addEventListener('click', function (e) {
     if (!results.hidden && e.target.closest && !e.target.closest('#results, .gsearch')) results.hidden = true;
     var t = e.target.closest ? e.target.closest('button') : null; if (!t) return;
+    if (t.id === 'qhelp') {
+      var tip = $('qhelptext'); tip.hidden = !tip.hidden;
+      t.setAttribute('aria-expanded', String(!tip.hidden));
+      return;
+    }
     if (t.dataset.hit) { openHit(t.dataset.hit, +t.dataset.i, t.dataset.find); return; }
     if (t.classList.contains('cite')) {
       var c = D.cites[+t.dataset.c], i = c && srcByTitle[norm(c.t)];
