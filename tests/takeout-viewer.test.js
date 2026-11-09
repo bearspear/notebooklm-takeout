@@ -261,7 +261,7 @@ test('viewer app removes scripts and handlers', () => {
   assert.match(out, /rel="noopener"/);
   // every markdown render passes through sanitize
   const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8');
-  assert.match(src, /var html = sanitize\(marked\.parse\(/);
+  assert.match(src, /return sanitizeHtml\(marked\.parse\(p\.text, \{ gfm: true \}\), parser, function \(body\) \{\s+restoreMath\(body, /);
   assert.equal((src.match(/marked\.parse\(/g) || []).length, 1);
 });
 
@@ -306,12 +306,10 @@ test('viewer page makes no remote requests', () => {
 });
 
 test('literal XMATHX token in text renders as text and never throws', () => {
+  // the page's md(): a token with no formula behind it is left as typed (math-bold.test.js runs it on a tree)
   const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8');
-  assert.match(src, /m === undefined\) return _;/);
-  // same logic as md(): a token beyond the formula count must come back unchanged
-  const math = ['$x$'];
-  const out = 'a XMATHX7XEND b XMATHX0XEND'.replace(/XMATHX(\d+)XEND/g, (_, i) => { const m = math[+i]; if (m === undefined) return _; return m; });
-  assert.equal(out, 'a XMATHX7XEND b $x$');
+  assert.match(src, /return m === undefined \? ph : m;/);
+  assert.match(src, /if \(f === undefined\) continue;/);
 });
 
 test('viewer data: odd data:image forms go, and unclosed starts stay fast', () => {

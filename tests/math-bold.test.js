@@ -1,25 +1,29 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { protectMath, restoreMath, texForKatex } = require('../viewer/viewer-app.js');
+const { protectMath, restoreMath, texForKatex, sanitizeHtml } = require('../viewer/viewer-app.js');
 const { marked } = require('../viewer/marked.min.js');
 const katex = require('../viewer/katex.min.js');
+const { treeParser, elementsOf } = require('./fixtures/tree-parser.js');
 
-const render = (text) => {
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+// md() as the page runs it: formulas out, marked, sanitize, and formulas back into the sanitized tree
+const parser = treeParser();
+function mdWith(text, draw) {
   const p = protectMath(text);
-  const html = marked.parse(p.text, { gfm: true });
-  return restoreMath(html, p.math, (src, block, m) => '[[' + (block ? 'B:' : '') + m + ']]');
-};
+  return sanitizeHtml(marked.parse(p.text, { gfm: true }), parser, body => restoreMath(body, p.math, draw, parser));
+}
+const render = text => mdWith(text, (src, block, m) => '[[' + (block ? 'B:' : '') + esc(m) + ']]');
 
 test('bold beside a formula closes on the formula, with no literal **', () => {
   assert.equal(render('**sulphur dioxide (**$SO_2$**)**').trim(), '<p><strong>sulphur dioxide (</strong>[[$SO_2$]]<strong>)</strong></p>');
   assert.equal(render('**Carbon Dioxide (**$CO_2$**):**').trim(), '<p><strong>Carbon Dioxide (</strong>[[$CO_2$]]<strong>):</strong></p>');
-  assert.equal(render("$M$**'s internal domain**").trim(), '<p>[[$M$]]<strong>&#39;s internal domain</strong></p>');
+  assert.equal(render("$M$**'s internal domain**").trim(), "<p>[[$M$]]<strong>'s internal domain</strong></p>");
   assert.equal(render('_$x$_').trim(), '<p><em>[[$x$]]</em></p>');
-  assert.match(render('[$x$](https://a.b)'), /<a href="https:\/\/a\.b">\[\[\$x\$\]\]<\/a>/);
+  assert.match(render('[$x$](https://a.b)'), /<a href="https:\/\/a\.b" target="_blank" rel="noopener">\[\[\$x\$\]\]<\/a>/);
 });
 
 test('block formulas and untouched text survive', () => {
-  assert.match(render('$$a<b$$'), /\[\[B:\$\$a<b\$\$\]\]/);
+  assert.match(render('$$a<b$$'), /\[\[B:\$\$a&lt;b\$\$\]\]/);
   assert.equal(render('plain XMATHX0XEND').trim(), '<p>plain XMATHX0XEND</p>');
 });
 
@@ -43,21 +47,84 @@ test('texForKatex leaves fractions alone inside text-mode groups', () => {
   assert.doesNotMatch(html, /katex-error|#cc0000/);
 });
 
-// Formulas go into text only. Sanitized attribute values keep "<" raw, so KaTeX markup in an attribute would turn live.
-function renderSafe(text) {
-  const p = protectMath(text);
-  const html = marked.parse(p.text, { gfm: true });
-  return restoreMath(html, p.math, (src, block, m) => '<K>' + m.replace(/"/g, '&quot;') + '</K>');
-}
-test('formulas in attributes come back as their plain source, never as markup', () => {
-  for (const t of ['<a title="$a$ <img src=x onerror=alert(1)>">q</a>', '[q](http://x "$a$ <img src=x onerror=alert(1)>")', '![$a$ <img src=x onerror=alert(1)>](images/x.png)', '<span title="$a$ &lt;img src=x onerror=alert(1)&gt;">q</span>']) {
-    const out = renderSafe(t);
-    const bare = out.replace(/"[^"]*"/g, '""');
-    assert.doesNotMatch(bare, /\son\w+=/i, out);
-    assert.ok((bare.match(/<img/gi) || []).length <= (t[0] === '!' ? 1 : 0), out);
-    assert.ok(!/="[^"]*<K>/.test(out), out);
+// Formulas go into the page's text only, through its DOM: a formula in an attribute value comes back
+// as its own source text, and markup in a value can never become an element.
+const drawK = (src, block, m) => '<span class="k">' + esc(m) + '</span>';
+const tags = html => elementsOf(html).filter(e => e.getAttribute('class') !== 'k').map(e => e.localName);
+const onAttrs = html => elementsOf(html).flatMap(e => e.attributes.filter(a => /^on/i.test(a.name)).map(a => e.localName + ' ' + a.name));
+const EXPLOITS = [
+  '<p x" title="$a$ <img src=x onerror=alert(document.domain) $b$">hi</p>',
+  '<p x" title="$a$ <img src=x onerror=alert(1) $b$">hi</p>',
+  '<div x" title="$a$ <img src=x onerror=alert(1) $b$">\n\nhi\n\n</div>',
+  'Some source text.\n\n<p x" title="$a$ <img src=x onerror=alert(document.domain) $b$">hi</p>\n\nmore text with "quotes" here > ok',
+  '<p x" title="$a$">hi</p> and later " quote',
+  '<p x" title="$x$ <img src=x onerror=alert(1)>">hi</p>',
+  '<span a"b title="$x$ <img src=x onerror=alert(1)>">q</span>',
+  '<p a<b="1" title="$a$ <img src=x onerror=alert(1) $b$">x</p>',
+  '<!-- " --><p title="$a$ <img src=x onerror=alert(1) $b$">x</p>',
+  '<a title="$a$ <img src=x onerror=alert(1)>">q</a>',
+  '<span title="$a$ &lt;img src=x onerror=alert(1)&gt;">q</span>',
+  '[q](http://x "$a$ <img src=x onerror=alert(1)>")',
+  '![$a$ <img src=x onerror=alert(1)>](images/x.png)',
+  '<xmp>$a</xmp><img src=x onerror=alert(1)>$</xmp>',
+  '<noembed>$a</noembed><img src=x onerror=alert(1)>$</noembed>',
+  '<!-- $a --><img src=x onerror=alert(1)>b$ -->',
+  '<textarea>$a</textarea><img src=x onerror=alert(1)>$</textarea>',
+  '<svg><text>$a</text></svg><img src=x onerror=alert(1)>$</text></svg>',
+  '`$a</code><img src=x onerror=alert(1)>$`'
+];
+test('formulas never turn attribute values or raw text into elements', () => {
+  for (const t of EXPLOITS) {
+    const out = mdWith(t, drawK);
+    assert.deepEqual(onAttrs(out), [], t + ' -> ' + out);
+    // the elements the Markdown asked for, with the formulas left out as placeholders
+    const asked = sanitizeHtml(marked.parse(protectMath(t).text, { gfm: true }), parser);
+    assert.deepEqual(tags(out), tags(asked), t + ' -> ' + out);
+    // every formula comes back, except in raw text and comments, where the serializer escapes nothing
+    if (!/<(xmp|noembed)>|<!--/.test(t)) assert.doesNotMatch(out, /XMATHX/, t + ' -> ' + out);
   }
-  assert.match(renderSafe('[q](http://x "$a$ b")'), /title="\$a\$ b"/);
-  assert.match(renderSafe('[a](http://x/$y$)'), /href="http:\/\/x\/\$y\$"/);
-  assert.match(renderSafe('see $a$ and **$b$**'), /<p>see <K>\$a\$<\/K> and <strong><K>\$b\$<\/K><\/strong><\/p>/);
+});
+
+test('a formula in an attribute value reads as its source', () => {
+  const attr = (html, tag, name) => elementsOf(html).find(e => e.localName === tag).getAttribute(name);
+  assert.equal(attr(mdWith('[a](http://x/$y$)', drawK), 'a', 'href'), 'http://x/$y$');
+  assert.equal(attr(mdWith('[q](http://x "$a$ b")', drawK), 'a', 'title'), '$a$ b');
+  assert.equal(attr(mdWith('<span title="$a$">q</span>', drawK), 'span', 'title'), '$a$');
+  assert.equal(attr(mdWith('<p x" title="$a$ <img src=x onerror=alert(1) $b$">hi</p>', drawK), 'p', 'title'), '$a$ <img src=x onerror=alert(1) $b$');
+});
+
+test('code, svg and math keep a formula as its source text', () => {
+  assert.equal(mdWith('`$a$`', drawK).trim(), '<p><code>$a$</code></p>');
+  assert.equal(mdWith('```\n$a$ and $$b$$\n```', drawK).trim(), '<pre><code>$a$ and $$b$$\n</code></pre>');
+  assert.equal(mdWith('<code>$a<b$</code>', drawK).trim(), '<p><code>$a&lt;b$</code></p>');
+  assert.equal(mdWith('<svg><text>$a$</text></svg>', drawK).trim(), '<p><svg><text>$a$</text></svg></p>');
+  assert.equal(mdWith('<textarea>$a$</textarea>', drawK).trim(), '<textarea>$a$</textarea>');
+  assert.equal(mdWith('see $a$ and `$b$`', drawK).trim(), '<p>see <span class="k">$a$</span> and <code>$b$</code></p>');
+});
+
+test('formulas in text still render, beside bold too', () => {
+  assert.match(mdWith('see $a$ and **$b$**', drawK), /<p>see <span class="k">\$a\$<\/span> and <strong><span class="k">\$b\$<\/span><\/strong><\/p>/);
+  assert.match(mdWith('**sulphur dioxide (**$SO_2$**)**', drawK), /<strong>sulphur dioxide \(<\/strong><span class="k">\$SO_2\$<\/span><strong>\)<\/strong>/);
+  assert.match(mdWith('a $$x^2$$ b', (src, block) => '<span class="k">' + block + ':' + esc(src) + '</span>'), /<span class="k">true:x\^2<\/span>/);
+  // KaTeX's own output goes in as elements, with its style and MathML
+  const out = mdWith('a $x^2$ b', (src, block) => katex.renderToString(texForKatex(src), { displayMode: block, throwOnError: false }));
+  assert.ok(elementsOf(out).some(e => e.getAttribute('class') === 'katex'), out);
+  assert.ok(elementsOf(out).some(e => e.localName === 'math'), out);
+  assert.match(out, /style="/);
+  // a formula placeholder with no formula behind it stays as typed
+  const body = parser.parseFromString('<p title="$XMATHX7XEND$">a $XMATHX7XEND$ b $XMATHX0XEND$</p>').body;
+  restoreMath(body, ['$x$'], drawK, parser);
+  assert.equal(body.innerHTML, '<p title="$XMATHX7XEND$">a $XMATHX7XEND$ b <span class="k">$x$</span></p>');
+});
+
+test('rendered formula markup loses handlers and scripts', () => {
+  const out = mdWith('a $x$ b', () => '<span class="k" onclick="x()" onmouseover="y()"><script>z()</script>x</span>');
+  assert.deepEqual(onAttrs(out), [], out);
+  assert.doesNotMatch(out, /<script/, out);
+  assert.match(out, /<span class="k">x<\/span>/, out);
+});
+
+test('sanitizeHtml drops attributes whose name is not a plain name', () => {
+  const out = sanitizeHtml('<p x" title="t" a<b="1" ok-1="2" xlink:href="#a">hi</p>', parser);
+  assert.equal(out, '<p title="t" ok-1="2" xlink:href="#a">hi</p>');
 });
