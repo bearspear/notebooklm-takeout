@@ -53,18 +53,30 @@ function rules() {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'takeout-markdown.js'), 'utf8'), sandbox);
   return sandbox.NLMEMarkdown.createConverter({ variant: 'note' }).turndownService.rules;
 }
-const p = (text, tag = 'P') => ({ nodeName: tag, textContent: text });
+const D = '-'.repeat(80);
+const rule = () => sb.NLMEMarkdown.dividerLines;
 
-test('a paragraph of only dashes, dashes, underscores or equals is a divider', () => {
-  const r = rules().dividerParagraphs;
-  for (const t of ['-'.repeat(80), '---', '—'.repeat(40), '_'.repeat(30), '='.repeat(50), '  ' + '-'.repeat(10) + '\n']) {
-    assert.equal(r.filter(p(t)), true, t);
-    assert.equal(r.replacement('x', p(t)), '\n\n---\n\n');
+test('a line of only a dash, em dash, underscore or equals run is a rule', () => {
+  const f = rule();
+  for (const t of [D, '\\' + D.slice(1), '\\-\\-\\-', '—'.repeat(40), '\\_\\_\\_', '___', '\\===', '='.repeat(50), '\\=\\=\\=']) {
+    assert.equal(f('a\n\n' + t + '\n\nb'), 'a\n\n---\n\nb', t);
   }
+  assert.equal(f(D), '---');
+  assert.equal(f(D + '\n\nb'), '---\n\nb');
+  assert.equal(f('a\n\n' + D), 'a\n\n---');
 });
 
-test('other paragraphs are left alone', () => {
-  const r = rules().dividerParagraphs;
-  for (const t of ['--', '-', 'a---', '--- x', '- - -', '', '1---']) assert.equal(r.filter(p(t)), false, t);
-  assert.equal(r.filter(p('---', 'DIV')), false);
+test('runs that touch text, fences, tables or are too short stay as they are', () => {
+  const f = rule();
+  for (const t of [
+    'a\n' + D + '\n\nb', 'a\n\n' + D + '\nb', '--', '\\--', 'a\n\n- - -\n\nb', 'a\n\n--- x\n\nb',
+    '```\n\n' + D + '\n\n```', '~~~\n\n\\---\n\n~~~', '| a |\n| --- |', '* ' + D, 'a\n\n' + D + 'x\n\nb'
+  ]) assert.equal(f(t), t, t);
+  assert.equal(f('```\n\n---\n\n```\n\n' + D + '\n\nz'), '```\n\n---\n\n```\n\n---\n\nz');
+});
+
+test('convert applies it whatever element held the run', () => {
+  const conv = sb.NLMEMarkdown.createConverter({ variant: 'note' });
+  conv.turndownService.turndown = h => h.replace(/<[^>]+>/g, '\n\n').replace(/\n{3,}/g, '\n\n').trim().replace(/^-/, '\\-');
+  assert.equal(conv.convert('<div>a</div><div>' + D + '</div><div>b</div>'), 'a\n\n---\n\nb');
 });

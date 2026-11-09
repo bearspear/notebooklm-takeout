@@ -13,6 +13,30 @@
 (function (root) {
   'use strict';
 
+  // A line of only dashes, em dashes, underscores or equals signs, alone
+  // between blank lines, is a divider the page drew (1.9.9), whatever element
+  // held it. Turndown wrote it as an escaped "\\-----" line; it becomes a
+  // rule. Blank lines around it keep it from reading as a setext heading
+  // underline. Fenced code, table rows and runs touching text are left alone.
+  const DIVIDER_LINE = /^(?:(?:\\?-){3,}|(?:\\?—){3,}|(?:\\?_){3,}|(?:\\?=){3,})$/;
+  function dividerLines(text) {
+    const lines = String(text).split('\n');
+    let fence = null;
+    for (let i = 0; i < lines.length; i++) {
+      const open = /^ {0,3}(`{3,}|~{3,})/.exec(lines[i]);
+      if (fence) {
+        if (open && open[1][0] === fence[0] && open[1].length >= fence.length) fence = null;
+        continue;
+      }
+      if (open) { fence = open[1]; continue; }
+      if (DIVIDER_LINE.test(lines[i]) &&
+          (i === 0 || lines[i - 1] === '') && (i === lines.length - 1 || lines[i + 1] === '')) {
+        lines[i] = '---';
+      }
+    }
+    return lines.join('\n');
+  }
+
   /**
    * Create a standardized TurndownService instance with consistent configuration
    * This ensures all markdown conversions use the same settings
@@ -446,14 +470,6 @@
       }
     });
 
-    // A paragraph of only dashes, em dashes, underscores or equals signs is a
-    // divider the page drew (1.9.9). Turndown would write it as an escaped
-    // "\-----" line; it is a rule, with blank lines so it is no heading underline.
-    turndownService.addRule('dividerParagraphs', {
-      filter: (node) => node.nodeName === 'P' && /^\s*(?:-{3,}|—{3,}|_{3,}|={3,})\s*$/.test(node.textContent || ''),
-      replacement: () => '\n\n---\n\n'
-    });
-
     // Google redirect links (1.9.9) are written as their real address. Same
     // output as Turndown's inline link, for links that were redirects only.
     turndownService.addRule('googleRedirectLinks', {
@@ -828,7 +844,7 @@
       convert: (html) => {
         const { text, formulas } = NLME.takeFormulaMarks(turndownService.turndown(html));
         formulasWrittenTotal += formulas;
-        return finishFootnotes(text);
+        return finishFootnotes(dividerLines(text));
       },
       citedNumbers: (messageIndex) => {
         if (isChat && messageIndex !== undefined) {
@@ -1132,6 +1148,7 @@
     convertKatexNodeToLatex,
     createConverter,
     formulasWritten: () => formulasWrittenTotal,
+    dividerLines,
     importCardLines,
     htmlToMarkdownPlain
   });
