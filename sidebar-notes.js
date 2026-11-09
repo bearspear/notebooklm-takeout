@@ -575,7 +575,7 @@ async function exportSingleNote(note) {
     markdown = version.stripImages ? stripImagesFromMarkdown(markdown) : NLME.embedImagesForVersion(markdown, imageEmbeds);
     markdown = noteFrontMatter(meta, { title: note.title, variant: version.variant }) + markdown;
     const filename = `${NLME.prefixedStem('NOTE', note.title, { obsidian })}${version.fileSuffix}.md`;
-    downloadBlob(new Blob([markdown], { type: 'text/markdown' }), filename);
+    downloadBlob(new Blob([NLME.stripControlChars(markdown)], { type: 'text/markdown' }), filename);
     filesWritten++;
   }
 

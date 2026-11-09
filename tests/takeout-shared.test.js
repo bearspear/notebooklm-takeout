@@ -3910,3 +3910,18 @@ test('the Studio export plan stamps the count over the whole list', () => {
   assert.deepEqual(NLME.titlePlace(plan.artifacts[0]), { titleOrdinal: 1, titleCount: 2 });
   assert.deepEqual(NLME.titlePlace(plan.notes[0]), { titleOrdinal: 0, titleCount: 1 });
 });
+
+test('stripControlChars restores a lost "i" and drops other control characters', () => {
+  assert.equal(NLME.stripControlChars('Rotat\u0000ng'), 'Rotating');
+  assert.equal(NLME.stripControlChars('\u0000nto'), 'into');
+  assert.equal(NLME.stripControlChars('cond\u0000t\u0000ons'), 'conditions');
+  assert.equal(NLME.stripControlChars('a \u0000 b'), 'a  b');
+  assert.equal(NLME.stripControlChars('x\u0001y\u007f'), 'xy');
+  assert.equal(NLME.stripControlChars('a\tb\nc\r\n'), 'a\tb\nc\r\n');
+});
+
+test('cleanOcrArtifacts keeps ~~strike~~ and repairs a NUL in the same quote', () => {
+  const out = NLME.cleanOcrArtifacts('’s Slowly Rotat\u0000ng Surface: ~~strike~~ here');
+  assert.equal(out, '’s Slowly Rotating Surface: ~~strike~~ here');
+  assert.ok(!/\u0000/.test(out));
+});

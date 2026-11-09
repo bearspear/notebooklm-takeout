@@ -262,11 +262,22 @@
   // Strip OCR noise (~~~, :~:, =~, ;!) from citation quotes without flattening
   // their structure: only horizontal whitespace is collapsed, fenced code is
   // left alone and ~~strikethrough~~ spans are kept.
+  // Some PDF text layers hand back NUL where a letter was lost; in every
+  // sample it is an "i" (volcan\0c, cond\0t\0ons). NUL next to a Latin letter
+  // becomes "i"; other control characters are dropped. \t \n \r stay.
+  function stripControlChars(text) {
+    if (!text) return text === 0 ? text : (text || '');
+    return String(text)
+      .replace(/(?<=[A-Za-z\u00C0-\u024F])\u0000|\u0000(?=[A-Za-z\u00C0-\u024F])/g, 'i')
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
+  }
+
   function cleanOcrSegment(text) {
+    text = stripControlChars(text);
     const kept = [];
     const protectedText = text.replace(/~~([^~\n]+?)~~/g, (m) => {
       kept.push(m);
-      return `\u0000${kept.length - 1}\u0000`;
+      return `\uE010${kept.length - 1}\uE010`;
     });
     return protectedText
       .replace(/~{3,}/g, '')
@@ -283,7 +294,7 @@
       .replace(/[ \t]{2,}/g, ' ')
       .replace(/[ \t]+([.,;:!?])/g, '$1')
       .replace(/\n{3,}/g, '\n\n')
-      .replace(/\u0000(\d+)\u0000/g, (_m, i) => kept[Number(i)]);
+      .replace(/\uE010(\d+)\uE010/g, (_m, i) => kept[Number(i)]);
   }
 
   function cleanOcrArtifacts(text) {
@@ -3814,6 +3825,7 @@ footer { margin-top: 3rem; }
     createPhaseTimer,
     formatTimingSummary,
     cleanOcrArtifacts,
+    stripControlChars,
     mathSourceHealth,
     mathSourceToMarkdown,
     classifyKatexScript,
