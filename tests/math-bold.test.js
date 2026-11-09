@@ -33,3 +33,12 @@ test('a formula with fractions renders without a KaTeX error', () => {
   const html = katex.renderToString(texForKatex('½ + ¼ + ⅛'), { throwOnError: false });
   assert.doesNotMatch(html, /katex-error|#cc0000/);
 });
+
+test('texForKatex leaves fractions alone inside text-mode groups', () => {
+  assert.equal(texForKatex('\\text{½ cup}'), '\\text{½ cup}');
+  assert.equal(texForKatex('½ + \\text{½}'), '\\frac{1}{2} + \\text{½}');
+  assert.equal(texForKatex('\\mathrm{a{½}b} ¼'), '\\mathrm{a{½}b} \\frac{1}{4}');
+  for (const c of ['textrm', 'textit', 'textbf', 'mathrm', 'operatorname', 'mbox']) assert.equal(texForKatex('\\' + c + '{½}'), '\\' + c + '{½}');
+  const html = katex.renderToString(texForKatex('\\text{½ cup}'), { throwOnError: false });
+  assert.doesNotMatch(html, /katex-error|#cc0000/);
+});

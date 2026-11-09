@@ -229,7 +229,17 @@ function restoreMath(html, math, render) {
 }
 var FRACTIONS = { '\u00bd': [1, 2], '\u00bc': [1, 4], '\u00be': [3, 4], '\u2153': [1, 3], '\u2154': [2, 3], '\u215b': [1, 8], '\u215c': [3, 8], '\u215d': [5, 8], '\u215e': [7, 8], '\u2155': [1, 5] };
 function texForKatex(src) {
-  return String(src).replace(/[\u00bc-\u00be\u2153-\u2155\u215b-\u215e]/g, function (c) { var f = FRACTIONS[c]; return '\\frac{' + f[0] + '}{' + f[1] + '}'; });
+  var s = String(src), out = '', i = 0, m, group = /^\\(?:text|textrm|textit|textbf|mathrm|operatorname|mbox)\s*\{/;
+  while (i < s.length) {
+    if (s[i] === '\\' && (m = group.exec(s.slice(i)))) {
+      var j = i + m[0].length, depth = 1;
+      while (j < s.length && depth) { if (s[j] === '{') depth++; else if (s[j] === '}') depth--; j++; }
+      out += s.slice(i, j); i = j; continue;
+    }
+    var f = FRACTIONS[s[i]];
+    out += f ? '\\frac{' + f[0] + '}{' + f[1] + '}' : s[i]; i++;
+  }
+  return out;
 }
 if (typeof module === 'object' && module.exports) module.exports = { protectMath: protectMath, restoreMath: restoreMath, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
 // A source's kind for its icon: the type icon the page showed, which also covers
