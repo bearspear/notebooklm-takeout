@@ -70,3 +70,11 @@ test('text whose lower case has another length is still marked at the right plac
   assert.deepEqual(marks(root).map(x => x.textContent), ['stanbul', 'stanbul']);
   assert.equal(root.textContent, '\u0130stanbul and stanbul');
 });
+
+test('result-row styles never reach match marks (both use the class "hit")', () => {
+  const css = require('fs').readFileSync(require('path').join(__dirname, '../viewer/viewer-template.html'), 'utf8');
+  const selectors = [...css.matchAll(/([^{}]+)\{/g)].flatMap(m => m[1].split(',').map(s => s.trim()));
+  const bare = selectors.filter(s => /(^|[\s>+~])\.hit\b/.test(s));
+  assert.deepEqual(bare, [], 'style .hit as button.hit (result rows) or mark.hit (matches)');
+  assert.ok(selectors.includes('button.hit') && selectors.includes('mark.hit'));
+});

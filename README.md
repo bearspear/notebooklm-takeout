@@ -587,6 +587,8 @@ contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
 
+**1.9.13 (Nov 2026)**: viewer fix: highlighted search matches stay inside the line instead of each taking a full-width block. Exported files are unchanged.
+
 **1.9.12 (Nov 2026)**: a real extension icon (a page with a download arrow over a tray) in place of the plain blue square. Exported files are unchanged.
 
 **1.9.11 (Nov 2026)**: viewer search and source guide. The search box takes operators: `"exact phrase"`, `-word`, `OR`, `in:sources`, `in:notes`, `in:chat`, `in:studio`, `source:name` and `type:pdf`, `youtube`, `web`, `audio` or `image`, with a "?" help button beside it. Every match is highlighted in chat search and in opened results, and a Thoughts section opens when a match is inside it. A source's guide shows as a card with its summary and clickable topics; a topic searches the whole archive for that phrase. Exported files are unchanged.
