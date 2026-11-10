@@ -587,6 +587,8 @@ contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
 
+**1.9.12 (Nov 2026)**: a real extension icon (a page with a download arrow over a tray) in place of the plain blue square. Exported files are unchanged.
+
 **1.9.11 (Nov 2026)**: viewer search and source guide. The search box takes operators: `"exact phrase"`, `-word`, `OR`, `in:sources`, `in:notes`, `in:chat`, `in:studio`, `source:name` and `type:pdf`, `youtube`, `web`, `audio` or `image`, with a "?" help button beside it. Every match is highlighted in chat search and in opened results, and a Thoughts section opens when a match is inside it. A source's guide shows as a card with its summary and clickable topics; a topic searches the whole archive for that phrase. Exported files are unchanged.
 
 **1.9.10 (Nov 2026)**: viewer fixes. Formulas that start with a digit are drawn instead of shown as raw text, and no stray `**` is left beside a formula. Fractions inside formulas are drawn. Citation popups now show formatted text (headings, bold, tables, formulas) instead of raw Markdown marks. The export checker flags a formula the viewer cannot draw (`viewer-math-raw`). **Security:** formulas are now put back only into the page's text, after every safety check; before, crafted text with a formula inside an HTML attribute could slip markup past the viewer's cleaning. Text inside code shows `$…$` as written. Exported files are unchanged.
