@@ -132,20 +132,43 @@ test('searchArchive uses operators and filters', () => {
   assert.equal(app.searchArchive(idx, 'venus acid').total, 1);
 });
 
-test('filterSources: titles only, with type and exclusion', () => {
+test('filterSources: titles, with type and exclusion', () => {
   const sources = [
-    { title: 'Henkin 1999.pdf', type: 'pdf', md: 'x' },
-    { title: 'Venus page', type: 'web', md: 'x' },
-    { title: 'Venus talk', type: 'audio', md: 'x' }
+    { title: 'Henkin 1999.pdf', type: 'pdf', md: 'q' },
+    { title: 'Venus page', type: 'web', md: 'q' },
+    { title: 'Venus talk', type: 'audio', md: 'q' }
   ];
-  assert.deepEqual(app.filterSources(sources, ''), [0, 1, 2]);
-  assert.deepEqual(app.filterSources(sources, 'VENUS'), [1, 2]);
-  assert.deepEqual(app.filterSources(sources, 'venus pa'), [1]);
-  assert.deepEqual(app.filterSources(sources, 'type:pdf'), [0]);
-  assert.deepEqual(app.filterSources(sources, 'venus type:audio'), [2]);
-  assert.deepEqual(app.filterSources(sources, 'venus -page'), [2]);
-  assert.deepEqual(app.filterSources(sources, 'in:chat source:zzz venus'), [1, 2]);
-  assert.deepEqual(app.filterSources(sources, 'x'), []);
+  const f = q => app.filterSources(sources, q).titles;
+  assert.deepEqual(f(''), [0, 1, 2]);
+  assert.deepEqual(f('VENUS'), [1, 2]);
+  assert.deepEqual(f('venus pa'), [1]);
+  assert.deepEqual(f('type:pdf'), [0]);
+  assert.deepEqual(f('venus type:audio'), [2]);
+  assert.deepEqual(f('venus -page'), [2]);
+  assert.deepEqual(f('in:chat source:zzz venus'), [1, 2]);
+  assert.deepEqual(f('zzz'), []);
+  assert.deepEqual(app.filterSources(sources, '').texts, []);
+});
+
+test('filterSources: also finds sources by their text, after the title matches', () => {
+  const sources = [
+    { title: 'Sirius notes.md', type: 'markdown', md: '## Content\n\nnothing here' },
+    { title: 'Die Erde.md', type: 'markdown', md: '## Summary\n\n**Inferring the Size** and Distance of Sirius, by parallax' },
+    { title: 'Moons.pdf', type: 'pdf', md: 'Orcus (~910 km) and **Vanth**' }
+  ];
+  assert.deepEqual(app.filterSources(sources, 'Inferring the Size and Distance of Sirius'), { titles: [], texts: [1] });
+  assert.deepEqual(app.filterSources(sources, 'sirius'), { titles: [0], texts: [1] });
+  assert.deepEqual(app.filterSources(sources, '"distance of sirius" -parallax'), { titles: [], texts: [] });
+  assert.deepEqual(app.filterSources(sources, 'vanth type:pdf'), { titles: [], texts: [2] });
+  assert.deepEqual(app.filterSources(sources, 'vanth type:web'), { titles: [], texts: [] });
+  // markup is not text: a phrase across "**" still matches, as in the other searches
+  assert.deepEqual(app.filterSources(sources, '"orcus (~910 km) and vanth"'), { titles: [], texts: [2] });
+  // the flat-text cache is filled once and reused
+  const flat = [];
+  app.filterSources(sources, 'orcus', flat);
+  assert.equal(flat.length, 3);
+  flat[2] = 'cached only';
+  assert.deepEqual(app.filterSources(sources, 'cached', flat).texts, [2]);
 });
 
 test('filter-only and exclusion-only searches give hits with no snippet', () => {
@@ -165,5 +188,5 @@ test('the help button sits next to the search box, not in the results', () => {
   assert.match(tpl, /id="qhelptext"[^>]*hidden/);
   assert.doesNotMatch(tpl.slice(tpl.indexOf('id="qhelptext"'), tpl.indexOf('id="qhelptext"') + 1500), /NotebookLM/i);
   assert.doesNotMatch(code, /QUERY_HELP/);
-  assert.match(code, /filterSources\(D\.sources, srcQ\)/);
+  assert.match(code, /filterSources\(D\.sources, srcQ, srcFlat\)/);
 });
