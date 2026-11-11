@@ -1584,3 +1584,17 @@ test('a data table and its references file are one Studio item', () => {
   assert.equal(big.files.references, 'artifacts/tables/Big-Table-references.txt');
   assert.deepEqual(big.rows, [['a', 'b'], ['x', 'y']]);
 });
+
+test('a data table keeps its references for the viewer', () => {
+  assert.equal(V.keepsText('artifacts/tables/Big-Table-references.txt'), true);
+  assert.equal(V.keepsText('part-1/artifacts/tables/Big-Table-references.txt'), true);
+  assert.equal(V.keepsText('sources/notes-references.txt'), false);
+  const files = {
+    'artifacts/tables/Big-Table.csv': 'a,Source\nx,[2]\n',
+    'artifacts/tables/Big-Table-references.txt': 'REFERENCES\n=====\n\n[1] One.md\n\n[2] Two <b>.md\n',
+    'artifacts/tables/Plain.csv': 'a\n1\n',
+  };
+  const d = V.buildViewerData(files, manifestOpts);
+  assert.deepEqual(d.studio[0].refs, [[1, 'One.md'], [2, 'Two <b>.md']]);
+  assert.equal(d.studio[1].refs, undefined);
+});
