@@ -2246,6 +2246,7 @@ async function retryMissingImages(items, { progress = null, isCancelled = () => 
     } catch (error) {
       // Whatever could not be put into the item stays a link, and is reported
       console.warn('[Takeout] Could not add retried images:', error);
+      // On purpose: report all of the item's failures (safe over-report)
       left = failures;
     } finally {
       reportImageFailures(left.map(({ url, reason }) => ({ url, reason })), label, warn);

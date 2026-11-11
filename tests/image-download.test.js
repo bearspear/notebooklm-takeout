@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const NLME = require('../takeout-shared.js');
+require('../takeout-job.js'); // adds NLME.runExportJob
 
 const ROOT = path.join(__dirname, '..');
 const read = file => fs.readFileSync(path.join(ROOT, file), 'utf8');
@@ -1508,20 +1509,51 @@ test('a throw inside the last try still reports every item and clears what was k
   assert.equal(applied, 2, 'a throwing apply does not stop the next item');
 });
 
-test('a last try that gets every image leaves no image summary, and errors.md counts none', async () => {
+// Runs a notes job through the real runExportJob with the real last try as
+// beforePackage, and builds the package files the way packageBatch does
+async function notesJobFiles(fetchLastTry) {
   let lastTry = false;
   const { sandbox } = notesPanel({
-    fetchImpl: async url => (url === OK_URL || lastTry ? imageResponse() : forbidden()),
+    fetchImpl: async url => (url === OK_URL || (lastTry && fetchLastTry(url)) ? imageResponse() : forbidden()),
     noteData: { html: BODY, sources: [], errors: [] }
   });
   sandbox.beginImageSession(5, () => false, async () => {});
-  const warned = [];
-  const note = await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'Note', index: 0 }, { warn: e => warned.push(e) }, {}, { exportNoteWithImages: true });
-  lastTry = true;
-  await sandbox.retryMissingImages([note]);
-  assert.equal(warned.length, 0);
-  const report = NLME.buildErrorReport({ errors: warned });
-  assert.ok(!report || !/IMAGE DOWNLOAD FAILED/.test(report));
+  const settingsOn = { exportNoteWithImages: true };
+  let files = null;
+  await NLME.runExportJob({
+    kind: 'notes',
+    items: [{ title: 'Note', index: 0 }],
+    extractOne: (note, ctx) => sandbox.extractNoteItem({ tab: { id: 5 } }, note, ctx, {}, settingsOn),
+    beforePackage: async notes => { lastTry = true; await sandbox.retryMissingImages(notes); },
+    packageBatch: async (notes, info) => {
+      files = sandbox.buildNotesFiles(notes, {
+        meta: META, errors: info.errors, variantSettings: settingsOn,
+        batchIndex: info.batchIndex, totalBatches: info.totalBatches
+      });
+    },
+    isCancelled: () => false
+  });
+  return files;
+}
+
+test('a last try that gets every image: no image section, Errors: 0 and no errors.md, manifest errorCount 0', async () => {
+  const files = await notesJobFiles(() => true);
+  assert.ok(!files.some(f => f.path === 'errors.md'), 'no errors.md at all');
+  const manifest = JSON.parse(files.find(f => f.path === 'manifest.json').data);
+  assert.equal(manifest.errorCount, 0);
+  // The builder given the job's errors (none) reports zero and no image section
+  const report = NLME.buildErrorReport({ errors: [] });
+  assert.match(report, /Errors: 0/);
+  assert.doesNotMatch(report, /IMAGE DOWNLOAD FAILED/);
+});
+
+test('a last try that gets some images: the image section counts only what is still missing', async () => {
+  const files = await notesJobFiles(url => url === BAD_URL);
+  const errorsMd = files.find(f => f.path === 'errors.md').data;
+  assert.match(errorsMd, /Errors: 1\n/);
+  assert.match(errorsMd, /IMAGE DOWNLOAD FAILED \(1\)/);
+  const manifest = JSON.parse(files.find(f => f.path === 'manifest.json').data);
+  assert.equal(manifest.errorCount, 1);
 });
 
 test('no progress text once the export is already cancelled', async () => {
