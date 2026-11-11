@@ -589,6 +589,8 @@ contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
 
+**1.9.16 (Nov 2026)**: viewer: a Data Table now shows once in Studio, not twice (its references file joins the table as a fourth download link), and the table's references are listed under it. Exported files are unchanged.
+
 **1.9.15 (Nov 2026)**: missing images: an image that fails to download gets one more try about a minute later during an export, before the files are written (a single note exported from its row reports at once). Items that still have missing images get a "Retry N with missing images" button in the results (for sources and notes; for chat, re-export the chat). Exported files are unchanged when every image downloads.
 
 **1.9.14 (Nov 2026)**: viewer fixes: the sources search also finds sources by their text, listing title matches first and then the others under "Found in the text", and opening one highlights the matches; approximate values such as "(~272 km) … (~910 km)" no longer show as struck-through text (only `~~text~~` strikes through). Exported files are unchanged.
