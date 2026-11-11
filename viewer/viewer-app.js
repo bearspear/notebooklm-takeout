@@ -431,7 +431,7 @@ function clearMarks(box) {
   })(box);
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { splitSourceGuide: splitSourceGuide, guideHtml: guideHtml, markMatches: markMatches, clearMarks: clearMarks, protectMath: protectMath, restoreMath: restoreMath, restoreMathAttrs: restoreMathAttrs, mathNodes: mathNodes, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, parseQuery: parseQuery, matchQuery: matchQuery, filterSources: filterSources, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
+if (typeof module === 'object' && module.exports) module.exports = { splitSourceGuide: splitSourceGuide, guideHtml: guideHtml, markMatches: markMatches, clearMarks: clearMarks, protectMath: protectMath, restoreMath: restoreMath, restoreMathAttrs: restoreMathAttrs, mathNodes: mathNodes, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, parseQuery: parseQuery, matchQuery: matchQuery, filterSources: filterSources, strictStrike: strictStrike, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
 // A source's kind for its icon: the type icon the page showed, which also covers
 // titles with no extension, then the title's extension, then the url. A generic
 // document icon comes after the extension, which may say more ("plan.docx").
@@ -594,15 +594,33 @@ function filterPairs(pairs, query, flat) {
   return idx;
 }
 
-// The sources list: indexes of the sources whose title fits the query. Only words, quotes, -, OR and
-// type: count here, and only in titles. A plain query is a title substring.
-function filterSources(sources, query) {
-  var q = String(query || '').toLowerCase(), pq = parseQuery(query), hits = [];
+// The sources list: the sources whose title fits the query (titles), then those whose text does
+// but not their title (texts). Only words, quotes, -, OR and type: count here. A plain query is a
+// substring of the title, or of the text as searchText reads it. flat: optional cache, one
+// lower-cased searchText per source. With no query every source is a title match.
+function filterSources(sources, query, flat) {
+  var q = String(query || '').toLowerCase(), low = searchText(query).toLowerCase(), pq = parseQuery(query), titles = [], texts = [];
   pq.scopes = []; pq.sourceTitle = null;
   sources.forEach(function (s, i) {
-    if (!q || (pq.plain ? s.title.toLowerCase().indexOf(q) > -1 : matchQuery(pq, s.title, { kind: 'source', title: s.title, type: s.type, url: s.url }).ok)) hits.push(i);
+    if (!q) { titles.push(i); return; }
+    var item = { kind: 'source', title: s.title, type: s.type, url: s.url };
+    if (pq.plain ? s.title.toLowerCase().indexOf(q) > -1 : matchQuery(pq, s.title, item).ok) { titles.push(i); return; }
+    if (!low) return;
+    var text = flat && flat[i] != null ? flat[i] : searchText(s.md).toLowerCase();
+    if (flat) flat[i] = text;
+    // title and text together, so a -word in the title still leaves the source out
+    if (pq.plain ? text.indexOf(low) > -1 : matchQuery(pq, s.title.toLowerCase() + ' \n ' + text, item).ok) texts.push(i);
   });
-  return hits;
+  return { titles: titles, texts: texts };
+}
+
+// marked strikes through text between single tildes too (GFM allows ~a~), which turns
+// approximate values such as "(~272 km) ... (~910 km)" into strikethrough. Only ~~text~~ strikes.
+function strictStrike(markedLib) {
+  markedLib.use({ tokenizer: { del: function (src) {
+    var m = /^~~(?=[^\s~])([\s\S]*?[^\s~])~~(?!~)/.exec(src);
+    if (m) return { type: 'del', raw: m[0], text: m[1], tokens: this.lexer.inlineTokens(m[1]) };
+  } } });
 }
 
 function buildSearchIndex(data) {
@@ -687,6 +705,7 @@ function parseViewState(hash) {
 
 if (typeof document !== 'undefined') (function () {
   var D = JSON.parse(document.getElementById('data').textContent);
+  strictStrike(marked);
   var $ = function (id) { return document.getElementById(id); };
   var KINDS = [
     ['audio', 'Audio Overview', 'var(--blue)', '<path d="M5 10v4M9 7v10M13 10v4M17 8v8"/>'],
@@ -825,7 +844,7 @@ if (typeof document !== 'undefined') (function () {
   addEventListener('resize', applyCols);
 
   /* Sources pane */
-  var srcQ = '';
+  var srcQ = '', srcFlat = [];
   // Open items, and where each list was scrolled before one opened
   var view = { source: null, art: null }, listTop = { l: 0, r: 0 }, savedHash = '';
   function saveView() {
@@ -838,13 +857,14 @@ if (typeof document !== 'undefined') (function () {
   function sourcesList() {
     auto.l = null;
     view.source = null;
-    var hits = filterSources(D.sources, srcQ);
+    var hits = filterSources(D.sources, srcQ, srcFlat);
+    function row(i) {
+      var s = D.sources[i];
+      return '<button class="src" data-src="' + i + '">' + sourceIcon(s) + '<span>' + esc(s.title) + '</span></button>';
+    }
     $('left').innerHTML = '<div class="p-head"><h2>Sources</h2>' + colBtn('l') + '</div><label class="search-block">' + icon('<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>') +
-      '<input id="srcq" type="search" aria-label="Search sources" placeholder="Search sources" value="' + esc(srcQ) + '"></label><div class="group">' + hits.length + ' of ' + D.sources.length + '</div><div class="scroll">' +
-      hits.map(function (i) {
-        var s = D.sources[i];
-        return '<button class="src" data-src="' + i + '">' + sourceIcon(s) + '<span>' + esc(s.title) + '</span></button>';
-      }).join('') + '</div>';
+      '<input id="srcq" type="search" aria-label="Search sources" placeholder="Search sources" value="' + esc(srcQ) + '"></label><div class="group">' + (hits.titles.length + hits.texts.length) + ' of ' + D.sources.length + '</div><div class="scroll">' +
+      hits.titles.map(row).join('') + (hits.texts.length ? '<div class="group in-text">Found in the text</div>' + hits.texts.map(row).join('') : '') + '</div>';
     applyCols();
     listScroller('left').scrollTop = listTop.l;
     saveView();
@@ -1067,7 +1087,7 @@ if (typeof document !== 'undefined') (function () {
     if (t.classList.contains('cite')) {
       var c = D.cites[+t.dataset.c], i = c && srcByTitle[norm(c.t)];
       if (i !== undefined) { pop.hidden = true; openSource(i, c.q); }
-    } else if (t.dataset.src !== undefined) openSource(+t.dataset.src);
+    } else if (t.dataset.src !== undefined) openSource(+t.dataset.src, null, false, t.closest('#left') && searchText(srcQ) ? parseQuery(srcQ) : null);
     else if (t.dataset.collapse) { var cs = t.dataset.collapse + 'c'; cols[cs] = !cols[cs]; saveCols(); applyCols(); }
     else if (t.id === 'srcback') sourcesList();
     else if (t.dataset.art !== undefined) openArt(+t.dataset.art);
