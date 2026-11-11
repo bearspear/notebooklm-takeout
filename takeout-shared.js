@@ -441,6 +441,8 @@
   // { name, failedItems } (their items still failed). Returns the panel's
   // content: one line per category, the worst level, every ZIP, every error
   // prefixed with its category, and what a further Retry would re-run.
+  // imagesMissing: each step's imageFailedItems (items still missing images),
+  // for a further "Retry N with missing images"; a step that did not run has none.
   // verb: 'Retry' (default) or 'Resume' for the message. extraErrors: errors
   // that belong to no step (a resume's items that left the notebook), already
   // in the panel's { type, title, message } shape.
@@ -478,7 +480,8 @@
       saved: steps.flatMap(s => s.saved || []),
       errors: [...steps.flatMap(s => prefixExportErrors(s.name, s.errors)), ...extraErrors],
       remaining,
-      remainingCount
+      remainingCount,
+      imagesMissing: Object.fromEntries(steps.map(s => [s.name, s.imageFailedItems || []]))
     };
   }
 

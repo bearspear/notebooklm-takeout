@@ -283,8 +283,9 @@ async function extractChatPair(shell, pair, ctx, options) {
   // After the citations, so every path gets it: 'none', 'titles', cached
   // quotes, or a message whose citations failed. chat.md itself is built later.
   const question = (pair.userMessage || '').substring(0, 100);
+  // No per-message export to retry with: an image summary says what to do instead
   const warn = failure => ctx.warn({
-    message: failure.message,
+    message: failure.type === 'image_download_failed' ? `${failure.message} (re-export the chat to try again)` : failure.message,
     messageIndex: ctx.index + 1,
     userQuestion: question,
     type: failure.type,

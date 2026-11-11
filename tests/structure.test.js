@@ -1292,3 +1292,142 @@ test('the reload note returns the focus it held', () => {
   assert.match(note, /cameFrom\?\.isConnected[^\n]*cameFrom\.focus\(\{ preventScroll: true \}\)/);
   assert.match(note, /e\.relatedTarget && !host\.contains\(e\.relatedTarget\)/);
 });
+
+// ---- 1.9.15: "Retry N with missing images" ----
+
+// showResults on a stand-in panel: buttons are found by class in its markup
+function resultsPanel({ mayStart = true } = {}) {
+  const NLME = require('../takeout-shared.js');
+  const buttons = new Map();
+  const panel = {
+    _html: '',
+    set innerHTML(html) {
+      this._html = html;
+      buttons.clear();
+      for (const m of html.matchAll(/<button[^>]*class="([^"]+)"[^>]*>([^<]*)<\/button>/g)) {
+        const handlers = [];
+        buttons.set(m[1], { text: m[2], disabled: false, handlers, addEventListener: (type, fn) => handlers.push(fn) });
+      }
+    },
+    get innerHTML() { return this._html; },
+    querySelector: sel => [...buttons].find(([cls]) => cls.split(' ').includes(sel.slice(1)))?.[1] || null
+  };
+  const ctx = vmModule.createContext({
+    NLME, console,
+    document: { getElementById: id => (id === 'results-panel' ? panel : null) },
+    clearTimeout() {}, setDock() {}, keepDockFocus() {}, showToast() {}, closeResults() {},
+    retryMayStart: async () => mayStart
+  });
+  vmModule.runInContext(`
+    let holdStepResults = false, heldStepResults = null, progressRun = null;
+    ${fnSource('sidebar-results.js', 'showResults')}
+    this.showResults = showResults;
+  `, ctx);
+  return { ctx, panel, buttons };
+}
+
+test('the results panel shows Retry failed and Retry with missing images, each with its count', () => {
+  const { ctx, buttons } = resultsPanel();
+  ctx.showResults({ message: 'm', retry: { count: 2, run() {} }, retryImages: { count: 3, run() {} } });
+  assert.equal(buttons.get('btn btn-primary results-retry').text, 'Retry 2 failed');
+  assert.equal(buttons.get('btn btn-secondary results-retry-images').text, 'Retry 3 with missing images');
+});
+
+test('with one list empty, only the other Retry shows', () => {
+  const { ctx, buttons } = resultsPanel();
+  ctx.showResults({ message: 'm', retry: null, retryImages: { count: 1, run() {} } });
+  assert.deepEqual([...buttons.keys()].filter(k => k.includes('retry')), ['btn btn-secondary results-retry-images']);
+  assert.equal(buttons.get('btn btn-secondary results-retry-images').text, 'Retry 1 with missing images');
+  ctx.showResults({ message: 'm', retry: { count: 4, run() {} }, retryImages: null });
+  assert.deepEqual([...buttons.keys()].filter(k => k.includes('retry')), ['btn btn-primary results-retry']);
+  ctx.showResults({ message: 'm', retry: { count: 4, run() {} }, retryImages: { count: 0, run() {} } });
+  assert.deepEqual([...buttons.keys()].filter(k => k.includes('retry')), ['btn btn-primary results-retry']);
+});
+
+test('the missing-images Retry runs its own list, and is refused off the run\'s notebook', async () => {
+  const runs = [];
+  const { ctx, panel } = resultsPanel();
+  ctx.showResults({ message: 'm', retry: { count: 1, run: async () => runs.push('failed') }, retryImages: { count: 1, run: async () => runs.push('images') } });
+  for (const fn of panel.querySelector('.results-retry-images').handlers) await fn();
+  assert.deepEqual(runs, ['images']);
+  const refused = resultsPanel({ mayStart: false });
+  const refusedRuns = [];
+  refused.ctx.showResults({ message: 'm', retryImages: { count: 1, run: async () => refusedRuns.push('images') } });
+  for (const fn of refused.panel.querySelector('.results-retry-images').handlers) await fn();
+  assert.deepEqual(refusedRuns, []);
+});
+
+test('a Full Takeout with missing images in Sources and Notes retries only those, with those items', async () => {
+  const takeout = fs.readFileSync(path.join(ROOT, 'sidebar-takeout.js'), 'utf8');
+  const steps = takeout.slice(takeout.indexOf('const TAKEOUT_RETRY_STEPS'), takeout.indexOf('];\n', takeout.indexOf('const TAKEOUT_RETRY_STEPS')) + 3);
+  const calls = [];
+  const shown = [];
+  const ctx = vmModule.createContext({ calls, shown, console, showToast() {}, NLME: require('../takeout-shared.js') });
+  vmModule.runInContext(`
+    let chainActive = false, chainCancelRequested = false, chainHolds = 0, chainProgress = null, holdStepResults = false, heldStepResults = null;
+    const hideProgressView = () => {};
+    const chainTabOnRunNotebook = async () => true;
+    const runExclusive = (name, fn) => fn();
+    const rememberRunSettings = () => fn => fn();
+    const showResults = options => shown.push(options);
+    const ok = (items, missing = []) => ({ result: { failedItems: [], imageFailedItems: missing, exported: items.length }, selected: items.length, message: 'ok', level: 'success', saved: [], errors: [] });
+    const exportSources = async (items, opts) => { calls.push(['sources', items, opts]); return ok(items, items.slice(0, 1)); };
+    const exportNotesAsMarkdown = async (items, opts) => { calls.push(['notes', items, opts]); return ok(items); };
+    const downloadAllArtifacts = async (...args) => { calls.push(['artifacts', ...args]); return ok([]); };
+    ${fnSource('sidebar-takeout.js', 'showTakeoutResults')}
+    ${fnSource('sidebar-takeout.js', 'runChain')}
+    ${fnSource('sidebar-takeout.js', 'runRetryChain')}
+    ${fnSource('sidebar-takeout.js', 'takeoutRetry')}
+    ${steps}
+    this.show = showTakeoutResults;
+  `, ctx);
+  ctx.show({ message: 'm' }, { Sources: ['f1'], Notes: [], Artifacts: ['a1'] }, 7, true, { Sources: ['s1', 's2'], Notes: ['n1'] });
+  assert.equal(shown[0].retry.count, 2);
+  assert.equal(shown[0].retryImages.count, 3);
+  await shown[0].retryImages.run();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+    ['sources', ['s1', 's2'], { tabId: 7, updateRecord: true }],
+    ['notes', ['n1'], { tabId: 7, updateRecord: true }]
+  ]);
+  // The combined panel offers the images still missing after the retry
+  const after = shown[shown.length - 1];
+  assert.equal(after.retry, null);
+  assert.equal(after.retryImages.count, 1);
+});
+
+test('sources and notes offer a Retry with missing images through the export they retry with', () => {
+  const sources = fnSource('sidebar-sources.js', 'exportSources');
+  assert.match(sources, /retryImages: retryFor\(result\.imageFailedItems, 'Sources export', failed => exportSources\(failed, \{ tabId: shell\.tab\.id, updateRecord: true \}\)\)/);
+  const notes = fnSource('sidebar-notes.js', 'exportNotesAsMarkdown');
+  assert.match(notes, /retryImages: retryFor\(result\.imageFailedItems, 'Notes export', failed => exportNotesAsMarkdown\(failed, \{ tabId: shell\.tab\.id, updateRecord: true \}\)\)/);
+  for (const [file, name] of [['sidebar-sources.js', 'runSourcesJob'], ['sidebar-notes.js', 'runNotesJob']]) {
+    assert.match(fnSource(file, name), /beforePackage: \([a-z]+, \{ markImagesMissing \}\) => retryMissingImages\([a-z]+, \{[^}]*markMissing: markImagesMissing/, name);
+  }
+  assert.match(fs.readFileSync(path.join(ROOT, 'sidebar-takeout.js'), 'utf8'), /saved = \[\], retry = null, retryImages = null \} = \{\}\) \{[^]*?showResults\(\{[^}]*errors, retry, retryImages \}\)/);
+});
+
+test('the last try marks an item only when images are still missing', async () => {
+  const marked = [];
+  const ctx = vmModule.createContext({ NLME: { IMAGE_FINAL_COOLDOWN_MS: 0 }, console, marked });
+  vmModule.runInContext(`
+    const reportImageFailures = () => {};
+    const addRetriedEmbeds = () => {};
+    const imageSession = { finalTry: async entries => ({ fetched: new Map([['ok', 'data']]), still: entries.filter(e => e.url !== 'ok') }) };
+    ${fnSource('sidebar-core.js', 'retryMissingImages')}
+    this.run = items => retryMissingImages(items, { markMissing: item => marked.push(item.name) });
+  `, ctx);
+  const withFailures = (name, urls) => {
+    const item = { name };
+    Object.defineProperty(item, '_imageFailures', { value: { label: name, warn() {}, failures: urls.map(url => ({ url, reason: 'r' })) }, configurable: true, writable: true, enumerable: false });
+    return item;
+  };
+  await ctx.run([withFailures('A', ['ok']), withFailures('B', ['ok', 'gone']), { name: 'C' }]);
+  assert.deepEqual(marked, ['B']);
+});
+
+test('the chat\'s image summary says to re-export the chat; sources and notes do not', () => {
+  assert.match(fnSource('sidebar-chat.js', 'extractChatPair'), /failure\.type === 'image_download_failed' \? `\$\{failure\.message\} \(re-export the chat to try again\)` : failure\.message/);
+  for (const file of ['sidebar-sources.js', 'sidebar-notes.js', 'sidebar-core.js', 'takeout-shared.js']) {
+    assert.doesNotMatch(fs.readFileSync(path.join(ROOT, file), 'utf8'), /re-export the chat/, file);
+  }
+});

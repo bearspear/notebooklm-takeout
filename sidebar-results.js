@@ -219,12 +219,15 @@ function hideProgressView() {
  * @param {{ count: number, run: () => Promise<void> }|null} [options.retry]
  *   a "Retry N failed" button; `run` starts the retry, and refuses first if the
  *   tab has left the run's notebook (retryMayStart)
+ * @param {{ count: number, run: () => Promise<void> }|null} [options.retryImages]
+ *   a "Retry N with missing images" button beside it, for the items whose images
+ *   are still missing; its own list, the same refusal
  * @param {boolean} [options.notify] show the short toast (default
  *   true; false when an earlier panel is put back)
  */
 function showResults(options = {}) {
   if (holdStepResults) { heldStepResults = options; return; }
-  const { message, count = null, lines = [], level = 'info', saved = [], errors = [], retry = null, notify = true } = options;
+  const { message, count = null, lines = [], level = 'info', saved = [], errors = [], retry = null, retryImages = null, notify = true } = options;
   heldStepResults = null;
   const panel = document.getElementById('results-panel');
   if (!panel) return;
@@ -249,6 +252,9 @@ function showResults(options = {}) {
   const retryHtml = retry && retry.count > 0
     ? `<button type="button" class="btn btn-primary results-retry">Retry ${esc(String(retry.count))} failed</button>`
     : '';
+  const retryImagesHtml = retryImages && retryImages.count > 0
+    ? `<button type="button" class="btn btn-secondary results-retry-images">Retry ${esc(String(retryImages.count))} with missing images</button>`
+    : '';
 
   panel.innerHTML = `
     ${countHtml}
@@ -257,6 +263,7 @@ function showResults(options = {}) {
     ${savedHtml}
     <div class="results-actions">
       ${retryHtml}
+      ${retryImagesHtml}
       <button type="button" class="btn btn-secondary results-done" aria-describedby="results-message">Done</button>
     </div>
     ${groupsHtml}`;
@@ -264,8 +271,10 @@ function showResults(options = {}) {
   // Done is the way out of the dock, so it is wired before anything else can throw
   panel.querySelector('.results-done').addEventListener('click', closeResults);
 
-  const retryBtn = panel.querySelector('.results-retry');
-  if (retryBtn) {
+  // Each Retry runs its own list, after the one check of the run's notebook
+  const wireRetry = (selector, retry) => {
+    const retryBtn = panel.querySelector(selector);
+    if (!retryBtn) return;
     retryBtn.addEventListener('click', async () => {
       retryBtn.disabled = true;
       try {
@@ -278,7 +287,9 @@ function showResults(options = {}) {
         retryBtn.disabled = false;
       }
     });
-  }
+  };
+  wireRetry('.results-retry', retry);
+  wireRetry('.results-retry-images', retryImages);
 
   setDock('results');
   keepDockFocus();

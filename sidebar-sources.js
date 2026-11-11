@@ -312,7 +312,8 @@ async function exportSources(selectedSources, { tabId, updateRecord = false, rec
       result,
       auditOk,
       saved: zips,
-      retry: retryFor(result.failedItems, 'Sources export', failed => exportSources(failed, { tabId: shell.tab.id, updateRecord: true }))
+      retry: retryFor(result.failedItems, 'Sources export', failed => exportSources(failed, { tabId: shell.tab.id, updateRecord: true })),
+      retryImages: retryFor(result.imageFailedItems, 'Sources export', failed => exportSources(failed, { tabId: shell.tab.id, updateRecord: true }))
     });
   });
 }
@@ -360,10 +361,11 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
     perZip,
     extractOne: (source, ctx) => extractSourceItem(shell, source, ctx, state, variantSettings),
     // The last try at this batch's missing images
-    beforePackage: sources => retryMissingImages(sources, {
+    beforePackage: (sources, { markImagesMissing }) => retryMissingImages(sources, {
       progress: text => shell.progress(text),
       isCancelled: () => shell.isCancelled() || state.declined,
-      apply: applySourceImageTry
+      apply: applySourceImageTry,
+      markMissing: markImagesMissing
     }),
     // Close the source viewer once per source, whether extraction worked or not
     afterEach: async (source, { failed }) => {

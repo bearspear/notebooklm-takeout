@@ -421,7 +421,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
           ...NLME.overlayView(text, NLME.overlayCount(count, progressRun, { finishing: finishingStarted }), { finishing: finishingStarted })
         }).catch(() => {}); // overlay is cosmetic; never abort the job
       },
-      finish({ kind, selected, result = {}, auditOk = true, stoppedMessage, errorNote, saved = [], retry = null } = {}) {
+      finish({ kind, selected, result = {}, auditOk = true, stoppedMessage, errorNote, saved = [], retry = null, retryImages = null } = {}) {
         // The outcome stays in the results view; a stopped job's message
         // leads it, and the errors still follow
         const composed = stoppedMessage
@@ -429,7 +429,7 @@ async function withExportShell({ label, healthType, preflight, overlayMessage, t
           : NLME.composeOutcome({ kind, selected, result, auditOk, errorNote });
         const errors = result.errors || [];
         const count = { done: result.exported || 0, total: selected };
-        showResults({ message: composed.message, count, level: composed.level, saved, errors, retry });
+        showResults({ message: composed.message, count, level: composed.level, saved, errors, retry, retryImages });
         return { kind, selected, message: composed.message, level: composed.level, result, saved, errors };
       }
     };
@@ -828,6 +828,7 @@ async function runFullTakeout({ zip = NLME.takeoutZipChoice(settings) } = {}) {
         c.failed = out.result.failed;
         c.errors.push(...out.errors);
         c.failedItems = out.result.failedItems || []; // small; kept past `c.items = null`, for Retry
+        c.imageFailedItems = out.result.imageFailedItems || []; // for "Retry N with missing images"
         c.auditOk = out.auditOk;
         // Nothing exported but items failed or errors recorded (e.g. chat
         // messages that could not be read): 'failed', not "complete"
@@ -963,13 +964,16 @@ async function runFullTakeout({ zip = NLME.takeoutZipChoice(settings) } = {}) {
     console.log('[NotebookLM Takeout] Full Takeout finished:', message);
     const saved = folder ? [folder] : [...categories.flatMap(c => c.zips), ...savedImages.zips, ...(indexZip ? [indexZip] : [])];
 
-    // Retry: Sources, Notes and Artifacts items that failed (chat is never retried)
+    // Retry: Sources, Notes and Artifacts items that failed (chat is never retried);
+    // a second Retry for the Sources and Notes items still missing images
     const failedOf = name => categories.find(c => c.name === name).failedItems;
     const failedSources = failedOf('Sources');
     const failedNotes = failedOf('Notes');
     const failedArtifacts = failedOf('Artifacts');
+    const imagesOf = name => categories.find(c => c.name === name).imageFailedItems || [];
     showTakeoutResults({ message, count: NLME.takeoutCount(summary), level, saved, errors },
-      { Sources: failedSources, Notes: failedNotes, Artifacts: failedArtifacts }, tabId, zipMode);
+      { Sources: failedSources, Notes: failedNotes, Artifacts: failedArtifacts }, tabId, zipMode,
+      { Sources: imagesOf('Sources'), Notes: imagesOf('Notes') });
   });
 }
 
@@ -983,10 +987,17 @@ const TAKEOUT_RETRY_STEPS = [
 ];
 
 // Show a takeout-level outcome with "Retry N failed" for `failed`
-// ({ Sources: [...], Notes: [...], Artifacts: [...] }; chat is never retried).
+// ({ Sources: [...], Notes: [...], Artifacts: [...] }; chat is never retried)
+// and "Retry N with missing images" for `imagesMissing` ({ Sources, Notes }).
+// The two run separately, each its own list, through the same steps.
 // zip: the run's save choice, for the Artifacts step of its Retry.
-function showTakeoutResults(panel, failed, tabId, zip) {
-  const shown = { ...panel, retry: takeoutRetry(failed, tabId, () => showResults({ ...shown, notify: false }), zip) };
+function showTakeoutResults(panel, failed, tabId, zip, imagesMissing = {}) {
+  const restore = () => showResults({ ...shown, notify: false });
+  const shown = {
+    ...panel,
+    retry: takeoutRetry(failed, tabId, restore, zip),
+    retryImages: takeoutRetry(imagesMissing, tabId, restore, zip)
+  };
   showResults(shown);
 }
 
@@ -1073,6 +1084,7 @@ async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TA
         saved: out.saved,
         errors: out.errors,
         failedItems: out.result.failedItems || [],
+        imageFailedItems: out.result.imageFailedItems || [],
         exported: out.result.exported,
         selected: out.selected,
         stopped: !!(out.result.cancelled || out.result.stopped)
@@ -1093,8 +1105,10 @@ async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TA
  * health-check dialog in one step ends the chain: later categories do not run.
  * It ends in ONE combined outcome (NLME.combineRetryOutcomes): a line
  * per category, the worst level, every ZIP and error, and a Retry for
- * everything still failed (including categories that did not run). When no
- * category ran at all, `restore` puts the previous panel back.
+ * everything still failed (including categories that did not run), and one for
+ * the items still missing images. When no category ran at all, `restore` puts
+ * the previous panel back. The "Retry N with missing images" is the same chain
+ * on its own list (showTakeoutResults' imagesMissing).
  *
  * @returns {{ count: number, run: () => Promise<any> }|null}
  */
@@ -1119,7 +1133,7 @@ function takeoutRetry(failed, tabId, restore, zip) {
         lines: combined.lines,
         saved: combined.saved,
         errors: combined.errors
-      }, combined.remaining, tabId, zip);
+      }, combined.remaining, tabId, zip, combined.imagesMissing);
     })))
   };
 }
@@ -1302,6 +1316,6 @@ function resumeJob(record) {
       lines: combined.lines,
       saved: combined.saved,
       errors: combined.errors
-    }, combined.remaining, tabId, zip);
+    }, combined.remaining, tabId, zip, combined.imagesMissing);
   })));
 }

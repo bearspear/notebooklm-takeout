@@ -550,3 +550,58 @@ test('size batching: split jobs call beforePackage once per package, in order', 
     ['before', ['N3', 'N4'], true], ['package', ['N3', 'N4'], true]
   ]);
 });
+
+// ---- 1.9.15: imageFailedItems, the items whose images are still missing ----
+
+function imageHarness({ items: list, perZip = Infinity, fail = [], hook }) {
+  return NLME.runExportJob({
+    kind: 'sources', items: list, perZip,
+    // A result is a new object, not the item: the job maps it back
+    extractOne: async item => {
+      if (fail.includes(item.title)) throw new Error('boom');
+      return { from: item.title };
+    },
+    beforePackage: hook,
+    packageBatch: async () => {},
+    isCancelled: () => false
+  });
+}
+
+test('imageFailedItems lists the items marked after the last try, in order and once', async () => {
+  const list = items(4);
+  const r = await imageHarness({
+    items: list, perZip: 2,
+    hook: async (results, { markImagesMissing }) => {
+      for (const result of results) {
+        if (['N2', 'N3'].includes(result.from)) { markImagesMissing(result); markImagesMissing(result); }
+      }
+    }
+  });
+  assert.equal(r.imageFailedItems.length, 2);
+  assert.equal(r.imageFailedItems[0], list[1]);
+  assert.equal(r.imageFailedItems[1], list[2]);
+  assert.deepEqual(r.failedItems, []);
+});
+
+test('imageFailedItems is empty when every image came back, and never holds a failed item', async () => {
+  const clean = await imageHarness({ items: items(2), hook: async () => {} });
+  assert.deepEqual(clean.imageFailedItems, []);
+  const list = items(3);
+  const r = await imageHarness({
+    items: list, fail: ['N2'],
+    hook: async (results, { markImagesMissing }) => {
+      results.forEach(markImagesMissing);
+      markImagesMissing({ from: 'N2' }); // not a result of this batch: ignored
+      markImagesMissing(list[1]);
+    }
+  });
+  assert.deepEqual(r.failedItems, [list[1]]);
+  assert.equal(r.imageFailedItems.length, 2);
+  assert.equal(r.imageFailedItems[0], list[0]);
+  assert.equal(r.imageFailedItems[1], list[2]);
+});
+
+test('imageFailedItems is empty without a beforePackage', async () => {
+  const r = await imageHarness({ items: items(2) });
+  assert.deepEqual(r.imageFailedItems, []);
+});

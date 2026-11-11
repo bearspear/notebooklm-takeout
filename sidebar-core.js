@@ -2041,15 +2041,16 @@ async function retryMayStart() {
   return false;
 }
 
-// The results' "Retry N failed": re-runs `exportFn` on the items that
-// failed, under the job lock (a busy lock only shows its toast; the panel
-// stays). null when nothing failed. It keeps the job's run settings.
-function retryFor(failedItems, jobName, exportFn) {
-  if (!failedItems || failedItems.length === 0) return null;
+// The results' "Retry N failed" and "Retry N with missing images": re-runs
+// `exportFn` on `items` (the failed ones, or those still missing images), under
+// the job lock (a busy lock only shows its toast; the panel stays). null when the
+// list is empty. It keeps the job's run settings.
+function retryFor(items, jobName, exportFn) {
+  if (!items || items.length === 0) return null;
   const rerun = rememberRunSettings();
   return {
-    count: failedItems.length,
-    run: () => runExclusive(jobName, () => rerun(() => exportFn(failedItems)))
+    count: items.length,
+    run: () => runExclusive(jobName, () => rerun(() => exportFn(items)))
   };
 }
 
@@ -2211,12 +2212,13 @@ function addRetriedEmbeds(item, got) {
  * the images that failed in this batch's items, once more after a cool-down
  * (imageSession.finalTry). apply(item, got) puts what came back into the item;
  * what is still missing is reported, one summary per item, through the warn
- * the item was extracted with.
+ * the item was extracted with. markMissing(item) is called for each item that
+ * still lacks images (runExportJob's markImagesMissing: "Retry N with missing images").
  *
  * @param {object[]} items the batch's results
- * @param {{ progress?: Function, isCancelled?: Function, apply?: Function }} [options]
+ * @param {{ progress?: Function, isCancelled?: Function, apply?: Function, markMissing?: Function }} [options]
  */
-async function retryMissingImages(items, { progress = null, isCancelled = () => false, apply = addRetriedEmbeds } = {}) {
+async function retryMissingImages(items, { progress = null, isCancelled = () => false, apply = addRetriedEmbeds, markMissing = null } = {}) {
   const pending = (items || []).filter(item => item && item._imageFailures);
   if (pending.length === 0) return;
   const entries = pending.flatMap(item => item._imageFailures.failures
@@ -2250,6 +2252,7 @@ async function retryMissingImages(items, { progress = null, isCancelled = () => 
       left = failures;
     } finally {
       reportImageFailures(left.map(({ url, reason }) => ({ url, reason })), label, warn);
+      if (markMissing && left.some(f => !f.skipped && !f.cancelled)) markMissing(item);
     }
   }
 }

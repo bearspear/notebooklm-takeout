@@ -1434,6 +1434,18 @@ test('combineRetryOutcomes merges the retried categories into one outcome', () =
   assert.match(c.message, /^Retry finished/);
   assert.match(c.message, /1 still failed/);
 });
+test('combineRetryOutcomes keeps each step\'s items still missing images apart from the failed ones', () => {
+  const c = NLME.combineRetryOutcomes({
+    steps: [
+      { name: 'Sources', level: 'success', failedItems: [{ id: 'f' }], imageFailedItems: [{ id: 's' }] },
+      { name: 'Notes', level: 'success', failedItems: [] }
+    ],
+    notRun: [{ name: 'Artifacts', failedItems: [{ id: 'a' }] }]
+  });
+  assert.deepEqual(c.imagesMissing, { Sources: [{ id: 's' }], Notes: [] });
+  assert.deepEqual(c.remaining, { Sources: [{ id: 'f' }], Notes: [], Artifacts: [{ id: 'a' }] });
+});
+
 test('combineRetryOutcomes is a success only when every category is and nothing was skipped', () => {
   const ok = { name: 'Notes', message: 'Exported 1 of 1 notes', level: 'success', saved: [], errors: [], failedItems: [] };
   assert.equal(NLME.combineRetryOutcomes({ steps: [ok] }).level, 'success');

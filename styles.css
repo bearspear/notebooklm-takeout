@@ -1933,6 +1933,7 @@ body.job-running .list-row {
 
 .results-actions {
   display: flex;
+  flex-wrap: wrap; /* two Retry buttons and Done may not fit one line */
   gap: 8px;
   margin: 8px 0;
 }

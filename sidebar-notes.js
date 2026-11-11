@@ -222,7 +222,8 @@ async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = fals
         ? `Stopped after ${result.exported} of ${selectedNotes.length} notes: citations could not be read (Gemini Notebook may have changed). Run the health check; details in errors.md.`
         : undefined,
       saved: zips,
-      retry: retryFor(result.failedItems, 'Notes export', failed => exportNotesAsMarkdown(failed, { tabId: shell.tab.id, updateRecord: true }))
+      retry: retryFor(result.failedItems, 'Notes export', failed => exportNotesAsMarkdown(failed, { tabId: shell.tab.id, updateRecord: true })),
+      retryImages: retryFor(result.imageFailedItems, 'Notes export', failed => exportNotesAsMarkdown(failed, { tabId: shell.tab.id, updateRecord: true }))
     });
   });
 }
@@ -276,9 +277,10 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
     perZip,
     extractOne: (note, ctx) => extractNoteItem(shell, note, ctx, state, variantSettings),
     // The last try at this batch's missing images
-    beforePackage: notes => retryMissingImages(notes, {
+    beforePackage: (notes, { markImagesMissing }) => retryMissingImages(notes, {
       progress: text => shell.progress(text),
-      isCancelled: () => shell.isCancelled() || state.declined
+      isCancelled: () => shell.isCancelled() || state.declined,
+      markMissing: markImagesMissing
     }),
     // Always close the note viewer, even if extraction failed
     afterEach: async (note, { failed }) => {
