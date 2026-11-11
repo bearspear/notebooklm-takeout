@@ -1475,6 +1475,67 @@ test('a note image the last try gets reaches the with-images files', async () =>
   assert.equal(warned[0].count, 1);
 });
 
+test('a throw inside the last try still reports every item and clears what was kept', async () => {
+  const { sandbox } = notesPanel({
+    fetchImpl: async url => (url === OK_URL ? imageResponse() : forbidden()),
+    noteData: {
+      html: BODY, sources: [], errors: [],
+      imageFailures: [{ url: OK_URL, reason: 'HTTP 500' }, { url: BAD_URL, reason: 'HTTP 403' }]
+    }
+  });
+  sandbox.beginImageSession(5, () => false, async () => {});
+  const warned = [];
+  const a = await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'A', index: 0 }, { warn: e => warned.push(e) }, {}, { exportNoteWithImages: true });
+  const b = await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'B', index: 1 }, { warn: e => warned.push(e) }, {}, { exportNoteWithImages: true });
+  // finalTry throws: reporting must still happen for both items
+  const original = sandbox.NLME.createImageSession;
+  sandbox.NLME.createImageSession = options => ({ ...original(options), finalTry: async () => { throw new Error('boom'); } });
+  sandbox.beginImageSession(5, () => false, async () => {});
+  const seen = [];
+  let applied = 0;
+  try {
+    await sandbox.retryMissingImages([a, b], {
+      progress: text => seen.push(text),
+      apply: () => { applied++; throw new Error('apply boom'); }
+    });
+  } finally {
+    sandbox.NLME.createImageSession = original;
+  }
+  assert.equal(warned.length, 2, 'both items report');
+  assert.equal(warned[0].count, 2);
+  assert.equal(warned[1].count, 2);
+  assert.ok(!a._imageFailures && !b._imageFailures, 'nothing left on the items');
+  assert.equal(applied, 2, 'a throwing apply does not stop the next item');
+});
+
+test('a last try that gets every image leaves no image summary, and errors.md counts none', async () => {
+  let lastTry = false;
+  const { sandbox } = notesPanel({
+    fetchImpl: async url => (url === OK_URL || lastTry ? imageResponse() : forbidden()),
+    noteData: { html: BODY, sources: [], errors: [] }
+  });
+  sandbox.beginImageSession(5, () => false, async () => {});
+  const warned = [];
+  const note = await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'Note', index: 0 }, { warn: e => warned.push(e) }, {}, { exportNoteWithImages: true });
+  lastTry = true;
+  await sandbox.retryMissingImages([note]);
+  assert.equal(warned.length, 0);
+  const report = NLME.buildErrorReport({ errors: warned });
+  assert.ok(!report || !/IMAGE DOWNLOAD FAILED/.test(report));
+});
+
+test('no progress text once the export is already cancelled', async () => {
+  const { sandbox } = notesPanel({
+    fetchImpl: async () => forbidden(),
+    noteData: { html: BODY, sources: [], errors: [] }
+  });
+  sandbox.beginImageSession(5, () => false, async () => {});
+  const note = await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'N', index: 0 }, { warn: () => {} }, {}, { exportNoteWithImages: true });
+  const seen = [];
+  await sandbox.retryMissingImages([note], { progress: t => seen.push(t), isCancelled: () => true });
+  assert.deepEqual(seen, []);
+});
+
 test('notes keep the earlier-failures rule through the last try', async () => {
   const { sandbox } = notesPanel({
     fetchImpl: async url => (url === OK_URL ? imageResponse() : forbidden()),

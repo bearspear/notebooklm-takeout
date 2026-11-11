@@ -2226,16 +2226,30 @@ async function retryMissingImages(items, { progress = null, isCancelled = () => 
   let fetched = new Map();
   let still = entries;
   if (count > 0 && imageSession) {
-    if (progress) progress(`Trying ${count} missing image${count === 1 ? '' : 's'} again…`);
-    ({ fetched, still } = await imageSession.finalTry(entries, { cooldownMs: NLME.IMAGE_FINAL_COOLDOWN_MS, isCancelled }));
+    try {
+      if (progress && !isCancelled()) progress(`Trying ${count} missing image${count === 1 ? '' : 's'} again…`);
+      ({ fetched, still } = await imageSession.finalTry(entries, { cooldownMs: NLME.IMAGE_FINAL_COOLDOWN_MS, isCancelled }));
+    } catch (error) {
+      // The last try never fails an item or a package: the images stay links
+      console.warn('[Takeout] Last try for missing images failed:', error);
+      fetched = new Map();
+      still = entries;
+    }
   }
   for (const item of pending) {
     const { label, warn, failures } = item._imageFailures;
     delete item._imageFailures;
     const got = new Map(failures.filter(f => fetched.has(f.url)).map(f => [f.url, fetched.get(f.url)]));
-    apply(item, got);
-    const missing = [...failures.filter(f => !f.url), ...still.filter(entry => entry.item === item)];
-    reportImageFailures(missing.map(({ url, reason }) => ({ url, reason })), label, warn);
+    let left = [...failures.filter(f => !f.url), ...still.filter(entry => entry.item === item)];
+    try {
+      apply(item, got);
+    } catch (error) {
+      // Whatever could not be put into the item stays a link, and is reported
+      console.warn('[Takeout] Could not add retried images:', error);
+      left = failures;
+    } finally {
+      reportImageFailures(left.map(({ url, reason }) => ({ url, reason })), label, warn);
+    }
   }
 }
 
