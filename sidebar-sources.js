@@ -103,11 +103,33 @@ async function embedImagesInMarkdown(markdown, sourceTitle) {
  * @param {Function} [jobWarn] receives the job-wide summary of skipped images
  * @returns {Promise<Map<string, string>>} url -> data URI for NLME.applyImageEmbeds
  */
-async function embedAndReportImages(markdown, item, earlierFailures, warn, jobWarn = warn) {
+async function embedAndReportImages(markdown, item, earlierFailures, warn, jobWarn = warn, { deferTo = null } = {}) {
   const { embeds, failures } = await embedImagesInMarkdown(markdown, item);
   const stillFailed = (earlierFailures || []).filter(failure => !embeds.has(failure.url));
-  reportImageFailures([...stillFailed, ...failures], item, warn, jobWarn);
+  reportImageFailures([...stillFailed, ...failures], item, warn, jobWarn, { deferTo });
   return embeds;
+}
+
+/**
+ * What the last try before the package got for a source (retryMissingImages'
+ * apply): its with-images versions are built again from the Markdown kept
+ * before finishRemoteImages, and imagesEmbedded counts the new images.
+ *
+ * @param {object} source SourceData from buildSourceData
+ * @param {Map<string, string>} got url -> data URI
+ */
+function applySourceImageTry(source, got) {
+  const raw = source._imageMarkdown;
+  delete source._imageMarkdown;
+  if (!raw || got.size === 0) return;
+  if (raw.withImages && source.versions.withImages !== null) {
+    source.versions.withImages = NLME.embedImagesForVersion(raw.withImages, got);
+  }
+  if (raw.plusMetaWithImages && source.versions.plusMetaWithImages !== null) {
+    source.versions.plusMetaWithImages = NLME.embedImagesForVersion(raw.plusMetaWithImages, got);
+  }
+  const images = [...(raw.withImages || '').matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)];
+  source.imagesEmbedded += images.filter(match => got.has(match[1])).length;
 }
 
 /**
@@ -276,7 +298,9 @@ function exportSelectedSources() {
 // buildSourcesFiles.
 // options.tabId: the tab the sources were scanned on (a retry); default the active tab.
 // Returns withExportShell's outcome, like exportNotesAsMarkdown.
-async function exportSources(selectedSources, { tabId, updateRecord = false, record = true } = {}) {
+// carry: { failedItems, imageFailedItems } the results' other Retry list, kept
+// when one Retry runs (NLME.mergeItemLists); a retry passes it on.
+async function exportSources(selectedSources, { tabId, updateRecord = false, record = true, carry = {} } = {}) {
   startExportTiming();
   console.log(`[NotebookLM Takeout] Exporting ${selectedSources.length} sources...`);
 
@@ -284,13 +308,16 @@ async function exportSources(selectedSources, { tabId, updateRecord = false, rec
     const { result, zips, auditOk } = await withJobRecord(shell, 'sources', 'Sources', 'sources', selectedSources,
       tracker => runSourcesJob(shell, selectedSources, { tracker }), { update: updateRecord, record });
 
+    const failedNext = NLME.mergeItemLists(result.failedItems, carry.failedItems, selectedSources);
+    const imagesNext = NLME.mergeItemLists(result.imageFailedItems, carry.imageFailedItems, selectedSources);
     return shell.finish({
       kind: 'sources',
       selected: selectedSources.length,
       result,
       auditOk,
       saved: zips,
-      retry: retryFor(result.failedItems, 'Sources export', failed => exportSources(failed, { tabId: shell.tab.id, updateRecord: true }))
+      retry: retryFor(failedNext, 'Sources export', failed => exportSources(failed, { tabId: shell.tab.id, updateRecord: true, carry: { imageFailedItems: imagesNext } })),
+      retryImages: retryFor(imagesNext, 'Sources export', items => exportSources(items, { tabId: shell.tab.id, updateRecord: true, carry: { failedItems: failedNext } }))
     });
   });
 }
@@ -337,6 +364,13 @@ async function runSourcesJob(shell, selectedSources, { pathPrefix = '', zipKind 
     items: selectedSources,
     perZip,
     extractOne: (source, ctx) => extractSourceItem(shell, source, ctx, state, variantSettings),
+    // The last try at this batch's missing images
+    beforePackage: (sources, { markImagesMissing }) => retryMissingImages(sources, {
+      progress: text => shell.progress(text),
+      isCancelled: () => shell.isCancelled() || state.declined,
+      apply: applySourceImageTry,
+      markMissing: markImagesMissing
+    }),
     // Close the source viewer once per source, whether extraction worked or not
     afterEach: async (source, { failed }) => {
       if (tracker) (failed ? tracker.fail : tracker.done)('sources', source);
@@ -504,6 +538,9 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
   let imagesFound = 0;
   let imagesEmbedded = 0;
   const imageFailures = [];
+  // Markdown before finishRemoteImages, kept for the last try when an image failed
+  let rawWithImages = null;
+  let rawPlusMetaWithImages = null;
   if (variantSettings.exportSourceWithImages || variantSettings.exportSourcePlusMetaWithImages) {
     try {
       const embedded = await embedImagesInMarkdown(baseMarkdown, source.title);
@@ -512,9 +549,11 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
       imageFailures.push(...embedded.failures);
 
       if (imagesFound > 0) {
+        rawWithImages = embedded.markdown;
         withImages = NLME.finishRemoteImages(embedded.markdown);
         if (plusMetaMarkdown) {
           const embeddedMeta = await embedImagesInMarkdown(plusMetaMarkdown, source.title);
+          rawPlusMetaWithImages = embeddedMeta.markdown;
           plusMetaWithImages = NLME.finishRemoteImages(embeddedMeta.markdown);
           imageFailures.push(...embeddedMeta.failures);
         }
@@ -533,9 +572,8 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
       ctx.warn({ source: source.title, type: 'image_source_not_saved', message: 'This source is an image: turn on a with-images version to save it' });
     }
   }
-  reportImageFailures(imageFailures, source.title, ctx.warn);
 
-  return {
+  const data = {
     title: source.title,
     youtubeUrl: sourceData.youtubeUrl || null,
     // The page's type icon ('document' is only the scan's default), or
@@ -554,6 +592,15 @@ async function buildSourceData(source, sourceData, ctx, audit, needsMeta, varian
       plusMetaWithImages
     }
   };
+  // Failed images wait for the last try before the package (runSourcesJob)
+  reportImageFailures(imageFailures, source.title, ctx.warn, ctx.warn, { deferTo: data });
+  if (data._imageFailures) {
+    Object.defineProperty(data, '_imageMarkdown', {
+      value: { withImages: rawWithImages, plusMetaWithImages: rawPlusMetaWithImages },
+      configurable: true, writable: true, enumerable: false
+    });
+  }
+  return data;
 }
 
 // Front matter for a source file (field order fixed by the Milestone 3a

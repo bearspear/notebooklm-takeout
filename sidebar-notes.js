@@ -205,7 +205,9 @@ function exportSelectedNotes() {
 // { declined } / { aborted }); the Full Takeout retry chain reads it.
 // seedErrors: warnings that lead errors.md (a Studio export's skipped artifacts
 // when it has no artifact side to carry them).
-async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = false, seedErrors = [] } = {}) {
+// carry: { failedItems, imageFailedItems } the results' other Retry list, kept
+// when one Retry runs (NLME.mergeItemLists); a retry passes it on.
+async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = false, seedErrors = [], carry = {} } = {}) {
   startExportTiming();
   console.log('[NotebookLM Takeout] Starting export for notes:', selectedNotes.length);
 
@@ -213,6 +215,8 @@ async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = fals
     const { result, zips, auditOk } = await withJobRecord(shell, 'notes', 'Notes', 'notes', selectedNotes,
       tracker => runNotesJob(shell, selectedNotes, { tracker, seedErrors }), { update: updateRecord });
 
+    const failedNext = NLME.mergeItemLists(result.failedItems, carry.failedItems, selectedNotes);
+    const imagesNext = NLME.mergeItemLists(result.imageFailedItems, carry.imageFailedItems, selectedNotes);
     return shell.finish({
       kind: 'notes',
       selected: selectedNotes.length,
@@ -222,7 +226,8 @@ async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = fals
         ? `Stopped after ${result.exported} of ${selectedNotes.length} notes: citations could not be read (Gemini Notebook may have changed). Run the health check; details in errors.md.`
         : undefined,
       saved: zips,
-      retry: retryFor(result.failedItems, 'Notes export', failed => exportNotesAsMarkdown(failed, { tabId: shell.tab.id, updateRecord: true }))
+      retry: retryFor(failedNext, 'Notes export', failed => exportNotesAsMarkdown(failed, { tabId: shell.tab.id, updateRecord: true, carry: { imageFailedItems: imagesNext } })),
+      retryImages: retryFor(imagesNext, 'Notes export', items => exportNotesAsMarkdown(items, { tabId: shell.tab.id, updateRecord: true, carry: { failedItems: failedNext } }))
     });
   });
 }
@@ -275,6 +280,12 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
     seedErrors,
     perZip,
     extractOne: (note, ctx) => extractNoteItem(shell, note, ctx, state, variantSettings),
+    // The last try at this batch's missing images
+    beforePackage: (notes, { markImagesMissing }) => retryMissingImages(notes, {
+      progress: text => shell.progress(text),
+      isCancelled: () => shell.isCancelled() || state.declined,
+      markMissing: markImagesMissing
+    }),
     // Always close the note viewer, even if extraction failed
     afterEach: async (note, { failed }) => {
       if (tracker) (failed ? tracker.fail : tracker.done)('notes', note);
@@ -402,11 +413,19 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
       if (settings.citationDetail !== 'none') {
         addCitationCoverage(state.audit, noteData.html, noteData.sources, settings.citationDetail === 'quotes', notePage);
       }
-      // The files are built from the HTML later: keep the downloads for -with-images
-      let imageEmbeds = null;
+      const item = {
+        title: note.title,
+        markdown,
+        // Raw data for combined-notes.md (which needs unique noteIds)
+        html: noteData.html,
+        sources: noteData.sources,
+        imageEmbeds: null
+      };
+      // The files are built from the HTML later: keep the downloads for
+      // -with-images. Failed images wait for the last try before the package.
       if (variantSettings.exportNoteWithImages) {
         try {
-          imageEmbeds = await embedAndReportImages(markdown, note.title, noteData.imageFailures, ctx.warn);
+          item.imageEmbeds = await embedAndReportImages(markdown, note.title, noteData.imageFailures, ctx.warn, ctx.warn, { deferTo: item });
         } catch (error) {
           // Images stay links; the note itself is fine
           console.error(`[NotebookLM Takeout] [${note.title}] Error embedding images:`, error);
@@ -430,14 +449,7 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
         ctx.stop(`[${note.title}] Citations could not be read in the first 3 notes that have them; export stopped (Gemini Notebook may have changed — run the health check)`);
       }
 
-      return {
-        title: note.title,
-        markdown,
-        // Raw data for combined-notes.md (which needs unique noteIds)
-        html: noteData.html,
-        sources: noteData.sources,
-        imageEmbeds
-      };
+      return item;
     }
   } catch (error) {
     console.error(`Failed to process note: ${note.title}`, error);

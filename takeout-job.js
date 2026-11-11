@@ -9,12 +9,21 @@
 // Size-based batching: with maxBatchBytes and sizeOf(result) a batch is packaged as
 // soon as its accumulated size reaches the cap (a package may pass it by one item;
 // one item over the cap gets its own). totalBatches is then null (unknown).
+// beforePackage(results, { warn, isLast, markImagesMissing }) runs just before
+// each packageBatch with that batch's results (never for an errors-only package),
+// e.g. the last try at missing images. What it warns reaches the errors of this
+// delivery when it is the last one, of the last delivery otherwise. A throw is
+// logged and kept in the errors; the package is still written.
+// markImagesMissing(result) notes that a result of this batch still lacks images:
+// imageFailedItems lists their items (not the results), in order and once each,
+// for "Retry N with missing images". An item whose extractOne threw has no result,
+// so it is never there; anything not a result of this batch is ignored.
 (function (root) {
   const NLME = root.NLME || require('./takeout-shared.js');
 
   async function runExportJob(opts) {
     const {
-      kind, items, extractOne, afterEach, packageBatch, isCancelled, onProgress,
+      kind, items, extractOne, afterEach, beforePackage, packageBatch, isCancelled, onProgress,
       perZip = Infinity,
       maxBatchBytes = 0, sizeOf = null,
       // Errors known before the first item (e.g. chat messages that could
@@ -28,12 +37,33 @@
     const totalBatches = bySize ? null : Math.ceil(items.length / size);
     const errors = [...seedErrors];
     const failedItems = [];
+    const imageFailedItems = [];
+    // Each result of a batch not yet delivered -> its item (markImagesMissing)
+    const itemOf = new Map();
     let attempted = 0, exported = 0;
     let cancelled = false, stopped = false;
     let errorsDelivered = false;
     let endingBatch = 1;
 
+    // Strings and { source, type, message } objects stay as they are
+    // (buildErrorReport groups objects by type); anything else becomes text
+    const warn = error => { errors.push(typeof error === 'string' || (error && typeof error === 'object') ? error : String(error)); };
+
+    const markImagesMissing = result => {
+      if (!itemOf.has(result)) return;
+      const item = itemOf.get(result);
+      if (!imageFailedItems.includes(item)) imageFailedItems.push(item);
+    };
+
     const deliver = async (results, batchIndex, isLast, extra = {}) => {
+      if (beforePackage && !extra.errorsOnly) {
+        try {
+          await beforePackage(results, { warn, isLast, markImagesMissing });
+        } catch (err) {
+          console.warn('[NotebookLM Takeout] beforePackage failed:', err);
+          errors.push(`Before writing package ${batchIndex}: ${(err && err.message) || err}`);
+        }
+      }
       if (isLast) errorsDelivered = true;
       await packageBatch(results, {
         batchIndex, totalBatches, isLast,
@@ -45,6 +75,8 @@
         exported, failed: attempted - exported,
         ...extra
       });
+      // Delivered: the results can be freed
+      for (const result of results) itemOf.delete(result);
     };
 
     // Runs one item; returns { result } on success, {} on failure. Sets
@@ -59,9 +91,7 @@
 
       const ctx = {
         index: attempted,
-        // Strings and { source, type, message } objects stay as they are
-        // (buildErrorReport groups objects by type); anything else becomes text
-        warn: error => { errors.push(typeof error === 'string' || (error && typeof error === 'object') ? error : String(error)); },
+        warn,
         stop: reason => { stopped = true; errors.push(reason); }
       };
       attempted++;
@@ -69,6 +99,7 @@
       let failed = false;
       try {
         out = { result: await extractOne(item, ctx) };
+        itemOf.set(out.result, item);
         exported++;
       } catch (err) {
         failed = true;
@@ -132,7 +163,7 @@
       await deliver([], endingBatch, true, { errorsOnly: true });
     }
 
-    return { attempted, exported, failed: attempted - exported, cancelled, stopped, errors, failedItems };
+    return { attempted, exported, failed: attempted - exported, cancelled, stopped, errors, failedItems, imageFailedItems };
   }
 
   /**

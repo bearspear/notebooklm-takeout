@@ -217,6 +217,11 @@ async function runChatJob(shell, chatData, { citationMode = 'quotes', forceZip =
     perZip: Infinity,
     seedErrors,
     extractOne: (pair, ctx) => extractChatPair(shell, pair, ctx, { citationMode, total: messagePairs.length, variantSettings }),
+    // The last try at the missing images, before chat-with-images is built
+    beforePackage: messages => retryMissingImages(messages, {
+      progress: text => shell.progress(text),
+      isCancelled: shell.isCancelled
+    }),
     packageBatch: async (messages, info) => {
       console.log(`[NotebookLM Takeout] Processing complete: ${messages.length} messages`);
       shell.progress('Creating export...');
@@ -278,8 +283,9 @@ async function extractChatPair(shell, pair, ctx, options) {
   // After the citations, so every path gets it: 'none', 'titles', cached
   // quotes, or a message whose citations failed. chat.md itself is built later.
   const question = (pair.userMessage || '').substring(0, 100);
+  // No per-message export to retry with: an image summary says what to do instead
   const warn = failure => ctx.warn({
-    message: failure.message,
+    message: failure.type === 'image_download_failed' ? `${failure.message} (re-export the chat to try again)` : failure.message,
     messageIndex: ctx.index + 1,
     userQuestion: question,
     type: failure.type,
@@ -287,7 +293,8 @@ async function extractChatPair(shell, pair, ctx, options) {
   });
   try {
     const markdown = convertChatToMarkdown('', '', [processed], false, citationMode === 'none', citationMode === 'titles', settings.citationStyle);
-    processed.imageEmbeds = await embedAndReportImages(markdown, question, imageFailures, warn, ctx.warn);
+    // Failed images wait for the last try before the package (runChatJob)
+    processed.imageEmbeds = await embedAndReportImages(markdown, question, imageFailures, warn, ctx.warn, { deferTo: processed });
   } catch (error) {
     console.error(`[NotebookLM Takeout] Message ${ctx.index + 1}: Error embedding images:`, error);
     reportImageFailures(imageFailures, question, warn, ctx.warn);

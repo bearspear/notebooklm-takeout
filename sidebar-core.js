@@ -2041,15 +2041,16 @@ async function retryMayStart() {
   return false;
 }
 
-// The results' "Retry N failed": re-runs `exportFn` on the items that
-// failed, under the job lock (a busy lock only shows its toast; the panel
-// stays). null when nothing failed. It keeps the job's run settings.
-function retryFor(failedItems, jobName, exportFn) {
-  if (!failedItems || failedItems.length === 0) return null;
+// The results' "Retry N failed" and "Retry N with missing images": re-runs
+// `exportFn` on `items` (the failed ones, or those still missing images), under
+// the job lock (a busy lock only shows its toast; the panel stays). null when the
+// list is empty. It keeps the job's run settings.
+function retryFor(items, jobName, exportFn) {
+  if (!items || items.length === 0) return null;
   const rerun = rememberRunSettings();
   return {
-    count: failedItems.length,
-    run: () => runExclusive(jobName, () => rerun(() => exportFn(failedItems)))
+    count: items.length,
+    run: () => runExclusive(jobName, () => rerun(() => exportFn(items)))
   };
 }
 
@@ -2170,17 +2171,114 @@ async function downloadImageAsBase64(url, { tabId } = {}) {
 }
 
 /**
- * Send one item's failed images to the job, one summary per item.
+ * Send one item's failed images to the job, one summary per item. With
+ * deferTo they wait on that item for the last try before its package is
+ * written (retryMissingImages), which reports what is still missing.
  *
  * @param {Array<{url: string, reason: string}>} [failures]
  * @param {string} item the note, source or message they belong to
  * @param {Function} warn receives each NLME.summarizeImageFailures entry
  * @param {Function} [jobWarn] receives the job-wide summary of skipped images
+ * @param {{ deferTo?: object }} [options] deferTo: the exported item (source, note, message)
  */
-function reportImageFailures(failures, item, warn, jobWarn = warn) {
+function reportImageFailures(failures, item, warn, jobWarn = warn, { deferTo = null } = {}) {
   const failed = (failures || []).filter(f => !f.skipped && !f.cancelled);
-  NLME.summarizeImageFailures(failed.map(f => ({ ...f, item }))).forEach(warn);
+  if (deferTo) {
+    deferImageFailures(deferTo, failed, item, warn);
+    // Rate-limited images are not tried again, but a later Retry may fix them
+    if ((failures || []).some(f => f.skipped)) markImagesSkipped(deferTo, item, warn);
+  }
+  else NLME.summarizeImageFailures(failed.map(f => ({ ...f, item }))).forEach(warn);
   imageSession?.reportSkipped(jobWarn);
+}
+
+// Keep an item's failed images for the last try: _imageFailures is
+// { label, warn, failures: [{ url, reason }] }, non-enumerable so it never
+// reaches a file, the manifest or a copy of the item.
+function deferImageFailures(target, failures, label, warn) {
+  if (!failures.length) return;
+  const kept = failures.map(({ url, reason, status }) => (status === undefined ? { url, reason } : { url, reason, status }));
+  const earlier = target._imageFailures;
+  Object.defineProperty(target, '_imageFailures', {
+    value: { label, warn, failures: earlier ? [...earlier.failures, ...kept] : kept },
+    configurable: true, writable: true, enumerable: false
+  });
+}
+
+// _imagesSkipped: the item had rate-limited images. Non-enumerable like
+// _imageFailures; retryMissingImages marks the item for "Retry with missing images".
+// Defining it also makes the item pending, so label and warn travel with it.
+function markImagesSkipped(target, label, warn) {
+  Object.defineProperty(target, '_imagesSkipped', {
+    value: { label, warn }, configurable: true, writable: true, enumerable: false
+  });
+}
+
+// What the last try got for a note or chat message: its files are built later
+// from imageEmbeds (NLME.embedImagesForVersion)
+function addRetriedEmbeds(item, got) {
+  if (got.size) item.imageEmbeds = new Map([...(item.imageEmbeds || []), ...got]);
+}
+
+/**
+ * The last try before a package is written (runExportJob's beforePackage):
+ * the images that failed in this batch's items, once more after a cool-down
+ * (imageSession.finalTry). apply(item, got) puts what came back into the item;
+ * what is still missing is reported, one summary per item, through the warn
+ * the item was extracted with. markMissing(item) is called for each item that
+ * still lacks images (runExportJob's markImagesMissing: "Retry N with missing images").
+ *
+ * @param {object[]} items the batch's results
+ * @param {{ progress?: Function, isCancelled?: Function, apply?: Function, markMissing?: Function }} [options]
+ */
+async function retryMissingImages(items, { progress = null, isCancelled = () => false, apply = addRetriedEmbeds, markMissing = null } = {}) {
+  const all = (items || []).filter(item => item && (item._imageFailures || item._imagesSkipped));
+  // Items with rate-limited images only: nothing to try, but a Retry may fix them
+  for (const item of all) {
+    if (item._imageFailures) continue;
+    delete item._imagesSkipped;
+    if (markMissing) markMissing(item);
+  }
+  const pending = all.filter(item => item._imageFailures);
+  if (pending.length === 0) return;
+  const entries = pending.flatMap(item => item._imageFailures.failures
+    .filter(failure => failure.url)
+    .map(failure => ({ ...failure, item })));
+  const count = new Set(entries.map(entry => entry.url)).size;
+  let fetched = new Map();
+  let still = entries;
+  if (count > 0 && imageSession) {
+    try {
+      if (progress && !isCancelled()) progress(`Trying ${count} missing image${count === 1 ? '' : 's'} again…`);
+      ({ fetched, still } = await imageSession.finalTry(entries, { cooldownMs: NLME.IMAGE_FINAL_COOLDOWN_MS, isCancelled }));
+    } catch (error) {
+      // The last try never fails an item or a package: the images stay links
+      console.warn('[NotebookLM Takeout] Last try for missing images failed:', error);
+      fetched = new Map();
+      still = entries;
+    }
+  }
+  for (const item of pending) {
+    const { label, warn, failures } = item._imageFailures;
+    const skippedToo = !!item._imagesSkipped;
+    delete item._imageFailures;
+    delete item._imagesSkipped;
+    const got = new Map(failures.filter(f => fetched.has(f.url)).map(f => [f.url, fetched.get(f.url)]));
+    let left = [...failures.filter(f => !f.url), ...still.filter(entry => entry.item === item)];
+    try {
+      apply(item, got);
+    } catch (error) {
+      // Whatever could not be put into the item stays a link, and is reported
+      console.warn('[NotebookLM Takeout] Could not add retried images:', error);
+      // On purpose: report all of the item's failures (safe over-report)
+      left = failures;
+    } finally {
+      reportImageFailures(left.map(({ url, reason }) => ({ url, reason })), label, warn);
+      // A failure without a url marks the item too: a re-export may not fix it,
+      // but it is the only way to try
+      if (markMissing && (skippedToo || left.some(f => !f.skipped && !f.cancelled))) markMissing(item);
+    }
+  }
 }
 
 // Image downloads of the running job. One job runs at a time (job lock); the

@@ -441,9 +441,31 @@
   // { name, failedItems } (their items still failed). Returns the panel's
   // content: one line per category, the worst level, every ZIP, every error
   // prefixed with its category, and what a further Retry would re-run.
+  // imagesMissing: each step's imageFailedItems (items still missing images),
+  // for a further "Retry N with missing images"; a step that did not run has none.
   // verb: 'Retry' (default) or 'Resume' for the message. extraErrors: errors
   // that belong to no step (a resume's items that left the notebook), already
   // in the panel's { type, title, message } shape.
+  // The other Retry's list after one Retry ran: `next` (what that retry left) and
+  // then each `keep` item it did not run, once. The two Retry buttons ("failed",
+  // "with missing images") run separately; this keeps the one not pressed.
+  function mergeItemLists(next = [], keep = [], ran = []) {
+    const out = [...(next || [])];
+    for (const item of keep || []) {
+      if (!(ran || []).includes(item) && !out.includes(item)) out.push(item);
+    }
+    return out;
+  }
+
+  // mergeItemLists per category name ({ Sources: [...], Notes: [...], ... })
+  function mergeRetryLists(next = {}, keep = {}, ran = {}) {
+    const out = {};
+    for (const name of new Set([...Object.keys(next || {}), ...Object.keys(keep || {})])) {
+      out[name] = mergeItemLists((next || {})[name], (keep || {})[name], (ran || {})[name]);
+    }
+    return out;
+  }
+
   function combineRetryOutcomes({ steps = [], notRun = [], verb = 'Retry', extraErrors = [] } = {}) {
     const rank = { success: 0, info: 0, warning: 1, error: 2 };
     let level = 'success';
@@ -478,7 +500,8 @@
       saved: steps.flatMap(s => s.saved || []),
       errors: [...steps.flatMap(s => prefixExportErrors(s.name, s.errors)), ...extraErrors],
       remaining,
-      remainingCount
+      remainingCount,
+      imagesMissing: Object.fromEntries(steps.map(s => [s.name, s.imageFailedItems || []]))
     };
   }
 
@@ -1036,6 +1059,10 @@
   // these waits, on a budget of their own. Hover downloads never wait on 403.
   const IMAGE_FORBIDDEN_DELAYS_MS = [5000, 15000];
   const IMAGE_FORBIDDEN_WAIT_BUDGET_MS = 10 * 60 * 1000;
+  // The last try before a package is written (finalTry): one cool-down, then
+  // each missing image once more, its 403 waits on a budget of their own
+  const IMAGE_FINAL_COOLDOWN_MS = 60000;
+  const IMAGE_FINAL_WAIT_BUDGET_MS = 3 * 60000;
 
   function isRateLimitedStatus(status) {
     return RATE_LIMIT_STATUSES.includes(status);
@@ -1057,7 +1084,8 @@
     const results = new Map(); // imageFetchUrl(url) -> Promise of its data URI; failures are removed
     const forbidden = new Map(); // key -> 403 error of a patient attempt that gave up, this batch
     const patientKeys = new Set(); // keys whose in-flight request is patient
-    let forbiddenWaitedMs = 0;
+    // 403 waits of patient get() calls; each finalTry call has its own
+    const forbiddenBudget = { limit: IMAGE_FORBIDDEN_WAIT_BUDGET_MS, spent: 0 };
     const skipped = new Set();
     const summary = { source: '', type: 'image_download_failed', count: 0, message: '' };
     let summaryReported = false;
@@ -1098,7 +1126,7 @@
       }
     }
 
-    async function fetchWithRetries(url, patient = false) {
+    async function fetchWithRetries(url, patient = false, budget = forbiddenBudget) {
       let forbiddenAttempt = 0;
       for (let attempt = 0; ; attempt++) {
         stopIfCancelled();
@@ -1113,8 +1141,8 @@
         if (error.status === 403) {
           // Own attempt counter and budget; streak and skipping stay as they are.
           const delay = IMAGE_FORBIDDEN_DELAYS_MS[forbiddenAttempt];
-          if (!patient || delay === undefined || forbiddenWaitedMs + delay > IMAGE_FORBIDDEN_WAIT_BUDGET_MS) throw error;
-          forbiddenWaitedMs += delay;
+          if (!patient || delay === undefined || budget.spent + delay > budget.limit) throw error;
+          budget.spent += delay;
           forbiddenAttempt++;
           await sleep(delay);
           attempt--; // a 403 wait is not a 429/503 attempt
@@ -1173,8 +1201,52 @@
         return result;
     }
 
+    // Whether a failed image may work later: HTTP 403, 429, 5xx, a timeout, or
+    // an error with no status. Other 4xx, "not an image" and "empty image" will not.
+    // The status is the entry's own, else the first "HTTP nnn" of its reason.
+    function isTemporaryFailure(entry) {
+      const reason = String((entry && entry.reason) || '');
+      let status = Number(entry && entry.status);
+      if (!Number.isFinite(status) || status <= 0) status = Number((/\bHTTP (\d{3})\b/.exec(reason) || [])[1]);
+      if (Number.isFinite(status) && status > 0) {
+        return status === 403 || status === 408 || status === 429 || status >= 500;
+      }
+      return !/not an image|empty image/i.test(reason);
+    }
+
+    // The last try before a package is written. entries: [{ item, url, reason }]
+    // that failed earlier. One cool-down (cooldownMs) when any may be temporary, then each url once, in
+    // order, patient on 403 with waits from IMAGE_FINAL_WAIT_BUDGET_MS only (so
+    // a url is tried even when the job's own 403 budget is spent). A rate limit
+    // follows the session's rules. Entries not fetched go to still unchanged,
+    // with their first reason; once the budget is spent, or on Cancel, the rest
+    // are not asked for.
+    async function finalTry(entries = [], { cooldownMs = IMAGE_FINAL_COOLDOWN_MS, isCancelled: cancelledHere = () => false } = {}) {
+      const fetched = new Map();
+      const list = [...(entries || [])];
+      // Nothing to try, or limiting already stopped the job's downloads: no cool-down
+      if (list.length === 0 || skipping) return { fetched, still: list };
+      const cancelled = () => cancelledHere() || isCancelled();
+      // The cool-down only pays off when a failure may be temporary
+      if (!cancelled() && cooldownMs > 0 && list.some(isTemporaryFailure)) await sleep(cooldownMs);
+      const budget = { limit: IMAGE_FINAL_WAIT_BUDGET_MS, spent: 0 };
+      const tried = new Set();
+      for (const { url } of list) {
+        if (tried.has(url)) continue;
+        if (cancelled() || skipping || budget.spent >= budget.limit) break;
+        tried.add(url);
+        try {
+          fetched.set(url, await fetchWithRetries(url, true, budget));
+        } catch (error) {
+          if (error.cancelled) break;
+        }
+      }
+      return { fetched, still: list.filter(entry => !fetched.has(entry.url)) };
+    }
+
     return {
       get,
+      finalTry,
       endBatch() {
         results.clear();
         patientKeys.clear();
@@ -3843,6 +3915,8 @@ footer { margin-top: 3rem; }
     retryAfterMs,
     isRateLimitedStatus,
     createImageSession,
+    IMAGE_FINAL_COOLDOWN_MS,
+    IMAGE_FINAL_WAIT_BUDGET_MS,
     isNotebookDownload,
     NOTEBOOK_HOSTS,
     isNotebookUrl,
@@ -3873,6 +3947,8 @@ footer { margin-top: 3rem; }
     summarizeExportOutcome,
     composeOutcome,
     combineRetryOutcomes,
+    mergeItemLists,
+    mergeRetryLists,
     groupErrorsForPanel,
     createJobLock,
     createSettleGate,

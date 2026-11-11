@@ -313,7 +313,7 @@ function runGeneratedExport(zip) {
       lines: outcome.lines,
       saved: outcome.saved,
       errors: outcome.errors
-    }, outcome.remaining, tabId, zip);
+    }, outcome.remaining, tabId, zip, outcome.imagesMissing);
   });
 }
 

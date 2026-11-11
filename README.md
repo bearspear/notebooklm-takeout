@@ -316,7 +316,9 @@ another export: how many items were exported, a plain line on how it went, the Z
 Downloads folder) it was saved to, and under that the errors grouped by kind (collapsed; the first
 20 of each, the rest are in `errors.md`). If items failed, **Retry N failed** exports just those
 again. It refuses if the tab has moved to another notebook: open the notebook the export ran on.
-(Chat exports have no Retry: re-export the chat.) **Done** goes back to where you started the
+(Chat exports have no Retry: re-export the chat.) If a source or note still has images that did not
+download, **Retry N with missing images** exports just those again; images Google rate-limited count
+too. For a chat, re-export the chat. **Done** goes back to where you started the
 export. If you switch notebooks meanwhile, the results stay, marked with their notebook's name,
 and Done goes to Home.
 
@@ -586,6 +588,8 @@ python3 -I tools/validate_export.py NEW.zip --baseline OLD.zip --allow '\$[^$\n]
 contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
+
+**1.9.15 (Nov 2026)**: missing images: an image that fails to download gets one more try about a minute later during an export, before the files are written (a single note exported from its row reports at once). Items that still have missing images get a "Retry N with missing images" button in the results (for sources and notes; for chat, re-export the chat). Exported files are unchanged when every image downloads.
 
 **1.9.14 (Nov 2026)**: viewer fixes: the sources search also finds sources by their text, listing title matches first and then the others under "Found in the text", and opening one highlights the matches; approximate values such as "(~272 km) … (~910 km)" no longer show as struck-through text (only `~~text~~` strikes through). Exported files are unchanged.
 
