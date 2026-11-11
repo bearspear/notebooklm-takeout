@@ -1446,6 +1446,13 @@ test('combineRetryOutcomes keeps each step\'s items still missing images apart f
   assert.deepEqual(c.remaining, { Sources: [{ id: 'f' }], Notes: [], Artifacts: [{ id: 'a' }] });
 });
 
+test('mergeRetryLists adds the kept items a retry did not run, once, after its own', () => {
+  const a = { id: 'a' }, b = { id: 'b' }, c = { id: 'c' };
+  assert.deepEqual(NLME.mergeItemLists([a], [b, a, c], [c]), [a, b]);
+  assert.deepEqual(NLME.mergeItemLists(undefined, undefined, undefined), []);
+  assert.deepEqual(NLME.mergeRetryLists({ Sources: [a] }, { Sources: [b, c], Notes: [c] }, { Sources: [c] }), { Sources: [a, b], Notes: [c] });
+});
+
 test('combineRetryOutcomes is a success only when every category is and nothing was skipped', () => {
   const ok = { name: 'Notes', message: 'Exported 1 of 1 notes', level: 'success', saved: [], errors: [], failedItems: [] };
   assert.equal(NLME.combineRetryOutcomes({ steps: [ok] }).level, 'success');

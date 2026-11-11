@@ -2223,7 +2223,7 @@ async function retryMissingImages(items, { progress = null, isCancelled = () => 
   if (pending.length === 0) return;
   const entries = pending.flatMap(item => item._imageFailures.failures
     .filter(failure => failure.url)
-    .map(failure => ({ item, url: failure.url, reason: failure.reason })));
+    .map(failure => ({ ...failure, item })));
   const count = new Set(entries.map(entry => entry.url)).size;
   let fetched = new Map();
   let still = entries;
@@ -2252,6 +2252,8 @@ async function retryMissingImages(items, { progress = null, isCancelled = () => 
       left = failures;
     } finally {
       reportImageFailures(left.map(({ url, reason }) => ({ url, reason })), label, warn);
+      // A failure without a url marks the item too: a re-export may not fix it,
+      // but it is the only way to try
       if (markMissing && left.some(f => !f.skipped && !f.cancelled)) markMissing(item);
     }
   }

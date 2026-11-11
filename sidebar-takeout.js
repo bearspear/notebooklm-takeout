@@ -991,12 +991,13 @@ const TAKEOUT_RETRY_STEPS = [
 // and "Retry N with missing images" for `imagesMissing` ({ Sources, Notes }).
 // The two run separately, each its own list, through the same steps.
 // zip: the run's save choice, for the Artifacts step of its Retry.
+// Each keeps the other's list for the panel after it (takeoutRetry's keep).
 function showTakeoutResults(panel, failed, tabId, zip, imagesMissing = {}) {
   const restore = () => showResults({ ...shown, notify: false });
   const shown = {
     ...panel,
-    retry: takeoutRetry(failed, tabId, restore, zip),
-    retryImages: takeoutRetry(imagesMissing, tabId, restore, zip)
+    retry: takeoutRetry(failed, tabId, restore, zip, { imagesMissing }),
+    retryImages: takeoutRetry(imagesMissing, tabId, restore, zip, { failed })
   };
   showResults(shown);
 }
@@ -1108,11 +1109,13 @@ async function runRetryChain(itemsByName, tabId, verb = 'Retry', chainSteps = TA
  * everything still failed (including categories that did not run), and one for
  * the items still missing images. When no category ran at all, `restore` puts
  * the previous panel back. The "Retry N with missing images" is the same chain
- * on its own list (showTakeoutResults' imagesMissing).
+ * on its own list (showTakeoutResults' imagesMissing). keep: the other button's
+ * lists ({ failed, imagesMissing }); the panel after the chain adds the items of
+ * them this chain did not run (NLME.mergeRetryLists).
  *
  * @returns {{ count: number, run: () => Promise<any> }|null}
  */
-function takeoutRetry(failed, tabId, restore, zip) {
+function takeoutRetry(failed, tabId, restore, zip, keep = {}) {
   const count = TAKEOUT_RETRY_STEPS.reduce((sum, step) => sum + (failed[step.name] || []).length, 0);
   if (count === 0) return null;
   const rerun = rememberRunSettings();
@@ -1133,7 +1136,8 @@ function takeoutRetry(failed, tabId, restore, zip) {
         lines: combined.lines,
         saved: combined.saved,
         errors: combined.errors
-      }, combined.remaining, tabId, zip, combined.imagesMissing);
+      }, NLME.mergeRetryLists(combined.remaining, keep.failed, failed), tabId, zip,
+      NLME.mergeRetryLists(combined.imagesMissing, keep.imagesMissing, failed));
     })))
   };
 }

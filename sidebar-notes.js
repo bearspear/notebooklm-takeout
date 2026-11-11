@@ -205,7 +205,9 @@ function exportSelectedNotes() {
 // { declined } / { aborted }); the Full Takeout retry chain reads it.
 // seedErrors: warnings that lead errors.md (a Studio export's skipped artifacts
 // when it has no artifact side to carry them).
-async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = false, seedErrors = [] } = {}) {
+// carry: { failedItems, imageFailedItems } the results' other Retry list, kept
+// when one Retry runs (NLME.mergeItemLists); a retry passes it on.
+async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = false, seedErrors = [], carry = {} } = {}) {
   startExportTiming();
   console.log('[NotebookLM Takeout] Starting export for notes:', selectedNotes.length);
 
@@ -213,6 +215,8 @@ async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = fals
     const { result, zips, auditOk } = await withJobRecord(shell, 'notes', 'Notes', 'notes', selectedNotes,
       tracker => runNotesJob(shell, selectedNotes, { tracker, seedErrors }), { update: updateRecord });
 
+    const failedNext = NLME.mergeItemLists(result.failedItems, carry.failedItems, selectedNotes);
+    const imagesNext = NLME.mergeItemLists(result.imageFailedItems, carry.imageFailedItems, selectedNotes);
     return shell.finish({
       kind: 'notes',
       selected: selectedNotes.length,
@@ -222,8 +226,8 @@ async function exportNotesAsMarkdown(selectedNotes, { tabId, updateRecord = fals
         ? `Stopped after ${result.exported} of ${selectedNotes.length} notes: citations could not be read (Gemini Notebook may have changed). Run the health check; details in errors.md.`
         : undefined,
       saved: zips,
-      retry: retryFor(result.failedItems, 'Notes export', failed => exportNotesAsMarkdown(failed, { tabId: shell.tab.id, updateRecord: true })),
-      retryImages: retryFor(result.imageFailedItems, 'Notes export', failed => exportNotesAsMarkdown(failed, { tabId: shell.tab.id, updateRecord: true }))
+      retry: retryFor(failedNext, 'Notes export', failed => exportNotesAsMarkdown(failed, { tabId: shell.tab.id, updateRecord: true, carry: { imageFailedItems: imagesNext } })),
+      retryImages: retryFor(imagesNext, 'Notes export', items => exportNotesAsMarkdown(items, { tabId: shell.tab.id, updateRecord: true, carry: { failedItems: failedNext } }))
     });
   });
 }

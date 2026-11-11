@@ -1357,7 +1357,9 @@ test('the missing-images Retry runs its own list, and is refused off the run\'s 
   assert.deepEqual(refusedRuns, []);
 });
 
-test('a Full Takeout with missing images in Sources and Notes retries only those, with those items', async () => {
+// The takeout panel and its two Retry chains, with stub exports: 's1' always
+// comes back still missing images, nothing fails
+function takeoutRetryHarness() {
   const takeout = fs.readFileSync(path.join(ROOT, 'sidebar-takeout.js'), 'utf8');
   const steps = takeout.slice(takeout.indexOf('const TAKEOUT_RETRY_STEPS'), takeout.indexOf('];\n', takeout.indexOf('const TAKEOUT_RETRY_STEPS')) + 3);
   const calls = [];
@@ -1370,10 +1372,10 @@ test('a Full Takeout with missing images in Sources and Notes retries only those
     const runExclusive = (name, fn) => fn();
     const rememberRunSettings = () => fn => fn();
     const showResults = options => shown.push(options);
-    const ok = (items, missing = []) => ({ result: { failedItems: [], imageFailedItems: missing, exported: items.length }, selected: items.length, message: 'ok', level: 'success', saved: [], errors: [] });
-    const exportSources = async (items, opts) => { calls.push(['sources', items, opts]); return ok(items, items.slice(0, 1)); };
+    const ok = items => ({ result: { failedItems: [], imageFailedItems: items.filter(i => i === 's1'), exported: items.length }, selected: items.length, message: 'ok', level: 'success', saved: [], errors: [] });
+    const exportSources = async (items, opts) => { calls.push(['sources', items, opts]); return ok(items); };
     const exportNotesAsMarkdown = async (items, opts) => { calls.push(['notes', items, opts]); return ok(items); };
-    const downloadAllArtifacts = async (...args) => { calls.push(['artifacts', ...args]); return ok([]); };
+    const downloadAllArtifacts = async (tabId, items) => { calls.push(['artifacts', items]); return ok(items); };
     ${fnSource('sidebar-takeout.js', 'showTakeoutResults')}
     ${fnSource('sidebar-takeout.js', 'runChain')}
     ${fnSource('sidebar-takeout.js', 'runRetryChain')}
@@ -1382,6 +1384,11 @@ test('a Full Takeout with missing images in Sources and Notes retries only those
     this.show = showTakeoutResults;
   `, ctx);
   ctx.show({ message: 'm' }, { Sources: ['f1'], Notes: [], Artifacts: ['a1'] }, 7, true, { Sources: ['s1', 's2'], Notes: ['n1'] });
+  return { calls, shown };
+}
+
+test('a Full Takeout with missing images in Sources and Notes retries only those, with those items', async () => {
+  const { calls, shown } = takeoutRetryHarness();
   assert.equal(shown[0].retry.count, 2);
   assert.equal(shown[0].retryImages.count, 3);
   await shown[0].retryImages.run();
@@ -1389,17 +1396,78 @@ test('a Full Takeout with missing images in Sources and Notes retries only those
     ['sources', ['s1', 's2'], { tabId: 7, updateRecord: true }],
     ['notes', ['n1'], { tabId: 7, updateRecord: true }]
   ]);
-  // The combined panel offers the images still missing after the retry
+  // The combined panel offers the images still missing after the retry, and
+  // keeps the failed items the images retry did not run
+  const after = shown[shown.length - 1];
+  assert.equal(after.retryImages.count, 1);
+  assert.equal(after.retry.count, 2);
+  calls.length = 0;
+  await after.retry.run();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['sources', ['f1'], { tabId: 7, updateRecord: true }], ['artifacts', ['a1']]]);
+});
+
+test('a Full Takeout Retry failed keeps the items still missing images for their own Retry', async () => {
+  const { calls, shown } = takeoutRetryHarness();
+  await shown[0].retry.run();
   const after = shown[shown.length - 1];
   assert.equal(after.retry, null);
-  assert.equal(after.retryImages.count, 1);
+  assert.equal(after.retryImages.count, 3);
+  calls.length = 0;
+  await after.retryImages.run();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+    ['sources', ['s1', 's2'], { tabId: 7, updateRecord: true }],
+    ['notes', ['n1'], { tabId: 7, updateRecord: true }]
+  ]);
 });
+
+// exportSources / exportNotesAsMarkdown on stubs: each run takes the next result
+function categoryRetryHarness(file, name) {
+  const shown = [];
+  const runs = [];
+  const results = [];
+  const ctx = vmModule.createContext({ shown, runs, results, console, NLME: require('../takeout-shared.js') });
+  vmModule.runInContext(`
+    const startExportTiming = () => {};
+    const runExclusive = (name, fn) => fn();
+    const rememberRunSettings = () => fn => fn();
+    const shell = { tab: { id: 7 }, finish: options => { shown.push(options); return options; } };
+    const withExportShell = (opts, fn) => fn(shell);
+    const withJobRecord = async (shell, category, label, kind, items) => { runs.push(items); return { result: results.shift(), zips: [], auditOk: true }; };
+    ${fnSource('sidebar-core.js', 'retryFor')}
+    ${fnSource(file, name)}
+    this.run = ${name};
+  `, ctx);
+  return { ctx, shown, runs, results };
+}
+
+for (const [file, name] of [['sidebar-sources.js', 'exportSources'], ['sidebar-notes.js', 'exportNotesAsMarkdown']]) {
+  test(`${name}: each Retry keeps the other button's list`, async () => {
+    const { ctx, shown, runs, results } = categoryRetryHarness(file, name);
+    results.push(
+      { failedItems: ['f1'], imageFailedItems: ['m1', 'm2'], errors: [] },
+      { failedItems: [], imageFailedItems: ['m2'], errors: [] }, // the images retry
+      { failedItems: [], imageFailedItems: [], errors: [] } // then Retry failed
+    );
+    await ctx.run(['f1', 'm1', 'm2', 'ok']);
+    await shown[0].retryImages.run();
+    assert.deepEqual(runs[1], ['m1', 'm2']);
+    assert.equal(shown[1].retry.count, 1);
+    assert.equal(shown[1].retryImages.count, 1);
+    await shown[1].retry.run();
+    assert.deepEqual(runs[2], ['f1']);
+    assert.equal(shown[2].retry, null);
+    assert.equal(shown[2].retryImages.count, 1); // m2, kept from before
+    results.push({ failedItems: [], imageFailedItems: [], errors: [] });
+    await shown[2].retryImages.run();
+    assert.deepEqual(runs[3], ['m2']);
+  });
+}
 
 test('sources and notes offer a Retry with missing images through the export they retry with', () => {
   const sources = fnSource('sidebar-sources.js', 'exportSources');
-  assert.match(sources, /retryImages: retryFor\(result\.imageFailedItems, 'Sources export', failed => exportSources\(failed, \{ tabId: shell\.tab\.id, updateRecord: true \}\)\)/);
+  assert.match(sources, /retryImages: retryFor\(imagesNext, 'Sources export', items => exportSources\(items, \{ tabId: shell\.tab\.id, updateRecord: true, carry: \{ failedItems: failedNext \} \}\)\)/);
   const notes = fnSource('sidebar-notes.js', 'exportNotesAsMarkdown');
-  assert.match(notes, /retryImages: retryFor\(result\.imageFailedItems, 'Notes export', failed => exportNotesAsMarkdown\(failed, \{ tabId: shell\.tab\.id, updateRecord: true \}\)\)/);
+  assert.match(notes, /retryImages: retryFor\(imagesNext, 'Notes export', items => exportNotesAsMarkdown\(items, \{ tabId: shell\.tab\.id, updateRecord: true, carry: \{ failedItems: failedNext \} \}\)\)/);
   for (const [file, name] of [['sidebar-sources.js', 'runSourcesJob'], ['sidebar-notes.js', 'runNotesJob']]) {
     assert.match(fnSource(file, name), /beforePackage: \([a-z]+, \{ markImagesMissing \}\) => retryMissingImages\([a-z]+, \{[^}]*markMissing: markImagesMissing/, name);
   }
@@ -1423,6 +1491,12 @@ test('the last try marks an item only when images are still missing', async () =
   };
   await ctx.run([withFailures('A', ['ok']), withFailures('B', ['ok', 'gone']), { name: 'C' }]);
   assert.deepEqual(marked, ['B']);
+  // A leftover keeps its own fields: a skipped one does not mark the item
+  const skipped = withFailures('D', ['gone']);
+  skipped._imageFailures.failures[0].skipped = true;
+  marked.length = 0;
+  await ctx.run([skipped]);
+  assert.deepEqual(marked, []);
 });
 
 test('the chat\'s image summary says to re-export the chat; sources and notes do not', () => {

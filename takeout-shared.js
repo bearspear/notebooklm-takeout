@@ -446,6 +446,26 @@
   // verb: 'Retry' (default) or 'Resume' for the message. extraErrors: errors
   // that belong to no step (a resume's items that left the notebook), already
   // in the panel's { type, title, message } shape.
+  // The other Retry's list after one Retry ran: `next` (what that retry left) and
+  // then each `keep` item it did not run, once. The two Retry buttons ("failed",
+  // "with missing images") run separately; this keeps the one not pressed.
+  function mergeItemLists(next = [], keep = [], ran = []) {
+    const out = [...(next || [])];
+    for (const item of keep || []) {
+      if (!(ran || []).includes(item) && !out.includes(item)) out.push(item);
+    }
+    return out;
+  }
+
+  // mergeItemLists per category name ({ Sources: [...], Notes: [...], ... })
+  function mergeRetryLists(next = {}, keep = {}, ran = {}) {
+    const out = {};
+    for (const name of new Set([...Object.keys(next || {}), ...Object.keys(keep || {})])) {
+      out[name] = mergeItemLists((next || {})[name], (keep || {})[name], (ran || {})[name]);
+    }
+    return out;
+  }
+
   function combineRetryOutcomes({ steps = [], notRun = [], verb = 'Retry', extraErrors = [] } = {}) {
     const rank = { success: 0, info: 0, warning: 1, error: 2 };
     let level = 'success';
@@ -3913,6 +3933,8 @@ footer { margin-top: 3rem; }
     summarizeExportOutcome,
     composeOutcome,
     combineRetryOutcomes,
+    mergeItemLists,
+    mergeRetryLists,
     groupErrorsForPanel,
     createJobLock,
     createSettleGate,

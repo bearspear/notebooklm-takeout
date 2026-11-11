@@ -298,7 +298,9 @@ function exportSelectedSources() {
 // buildSourcesFiles.
 // options.tabId: the tab the sources were scanned on (a retry); default the active tab.
 // Returns withExportShell's outcome, like exportNotesAsMarkdown.
-async function exportSources(selectedSources, { tabId, updateRecord = false, record = true } = {}) {
+// carry: { failedItems, imageFailedItems } the results' other Retry list, kept
+// when one Retry runs (NLME.mergeItemLists); a retry passes it on.
+async function exportSources(selectedSources, { tabId, updateRecord = false, record = true, carry = {} } = {}) {
   startExportTiming();
   console.log(`[NotebookLM Takeout] Exporting ${selectedSources.length} sources...`);
 
@@ -306,14 +308,16 @@ async function exportSources(selectedSources, { tabId, updateRecord = false, rec
     const { result, zips, auditOk } = await withJobRecord(shell, 'sources', 'Sources', 'sources', selectedSources,
       tracker => runSourcesJob(shell, selectedSources, { tracker }), { update: updateRecord, record });
 
+    const failedNext = NLME.mergeItemLists(result.failedItems, carry.failedItems, selectedSources);
+    const imagesNext = NLME.mergeItemLists(result.imageFailedItems, carry.imageFailedItems, selectedSources);
     return shell.finish({
       kind: 'sources',
       selected: selectedSources.length,
       result,
       auditOk,
       saved: zips,
-      retry: retryFor(result.failedItems, 'Sources export', failed => exportSources(failed, { tabId: shell.tab.id, updateRecord: true })),
-      retryImages: retryFor(result.imageFailedItems, 'Sources export', failed => exportSources(failed, { tabId: shell.tab.id, updateRecord: true }))
+      retry: retryFor(failedNext, 'Sources export', failed => exportSources(failed, { tabId: shell.tab.id, updateRecord: true, carry: { imageFailedItems: imagesNext } })),
+      retryImages: retryFor(imagesNext, 'Sources export', items => exportSources(items, { tabId: shell.tab.id, updateRecord: true, carry: { failedItems: failedNext } }))
     });
   });
 }
