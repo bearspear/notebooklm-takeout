@@ -275,6 +275,11 @@ async function runNotesJob(shell, selectedNotes, { pathPrefix = '', zipKind = 'n
     seedErrors,
     perZip,
     extractOne: (note, ctx) => extractNoteItem(shell, note, ctx, state, variantSettings),
+    // The last try at this batch's missing images
+    beforePackage: notes => retryMissingImages(notes, {
+      progress: text => shell.progress(text),
+      isCancelled: () => shell.isCancelled() || state.declined
+    }),
     // Always close the note viewer, even if extraction failed
     afterEach: async (note, { failed }) => {
       if (tracker) (failed ? tracker.fail : tracker.done)('notes', note);
@@ -402,11 +407,19 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
       if (settings.citationDetail !== 'none') {
         addCitationCoverage(state.audit, noteData.html, noteData.sources, settings.citationDetail === 'quotes', notePage);
       }
-      // The files are built from the HTML later: keep the downloads for -with-images
-      let imageEmbeds = null;
+      const item = {
+        title: note.title,
+        markdown,
+        // Raw data for combined-notes.md (which needs unique noteIds)
+        html: noteData.html,
+        sources: noteData.sources,
+        imageEmbeds: null
+      };
+      // The files are built from the HTML later: keep the downloads for
+      // -with-images. Failed images wait for the last try before the package.
       if (variantSettings.exportNoteWithImages) {
         try {
-          imageEmbeds = await embedAndReportImages(markdown, note.title, noteData.imageFailures, ctx.warn);
+          item.imageEmbeds = await embedAndReportImages(markdown, note.title, noteData.imageFailures, ctx.warn, ctx.warn, { deferTo: item });
         } catch (error) {
           // Images stay links; the note itself is fine
           console.error(`[NotebookLM Takeout] [${note.title}] Error embedding images:`, error);
@@ -430,14 +443,7 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
         ctx.stop(`[${note.title}] Citations could not be read in the first 3 notes that have them; export stopped (Gemini Notebook may have changed — run the health check)`);
       }
 
-      return {
-        title: note.title,
-        markdown,
-        // Raw data for combined-notes.md (which needs unique noteIds)
-        html: noteData.html,
-        sources: noteData.sources,
-        imageEmbeds
-      };
+      return item;
     }
   } catch (error) {
     console.error(`Failed to process note: ${note.title}`, error);

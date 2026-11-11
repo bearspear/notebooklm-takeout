@@ -2170,17 +2170,73 @@ async function downloadImageAsBase64(url, { tabId } = {}) {
 }
 
 /**
- * Send one item's failed images to the job, one summary per item.
+ * Send one item's failed images to the job, one summary per item. With
+ * deferTo they wait on that item for the last try before its package is
+ * written (retryMissingImages), which reports what is still missing.
  *
  * @param {Array<{url: string, reason: string}>} [failures]
  * @param {string} item the note, source or message they belong to
  * @param {Function} warn receives each NLME.summarizeImageFailures entry
  * @param {Function} [jobWarn] receives the job-wide summary of skipped images
+ * @param {{ deferTo?: object }} [options] deferTo: the exported item (source, note, message)
  */
-function reportImageFailures(failures, item, warn, jobWarn = warn) {
+function reportImageFailures(failures, item, warn, jobWarn = warn, { deferTo = null } = {}) {
   const failed = (failures || []).filter(f => !f.skipped && !f.cancelled);
-  NLME.summarizeImageFailures(failed.map(f => ({ ...f, item }))).forEach(warn);
+  if (deferTo) deferImageFailures(deferTo, failed, item, warn);
+  else NLME.summarizeImageFailures(failed.map(f => ({ ...f, item }))).forEach(warn);
   imageSession?.reportSkipped(jobWarn);
+}
+
+// Keep an item's failed images for the last try: _imageFailures is
+// { label, warn, failures: [{ url, reason }] }, non-enumerable so it never
+// reaches a file, the manifest or a copy of the item.
+function deferImageFailures(target, failures, label, warn) {
+  if (!failures.length) return;
+  const kept = failures.map(({ url, reason }) => ({ url, reason }));
+  const earlier = target._imageFailures;
+  Object.defineProperty(target, '_imageFailures', {
+    value: { label, warn, failures: earlier ? [...earlier.failures, ...kept] : kept },
+    configurable: true, writable: true, enumerable: false
+  });
+}
+
+// What the last try got for a note or chat message: its files are built later
+// from imageEmbeds (NLME.embedImagesForVersion)
+function addRetriedEmbeds(item, got) {
+  if (got.size) item.imageEmbeds = new Map([...(item.imageEmbeds || []), ...got]);
+}
+
+/**
+ * The last try before a package is written (runExportJob's beforePackage):
+ * the images that failed in this batch's items, once more after a cool-down
+ * (imageSession.finalTry). apply(item, got) puts what came back into the item;
+ * what is still missing is reported, one summary per item, through the warn
+ * the item was extracted with.
+ *
+ * @param {object[]} items the batch's results
+ * @param {{ progress?: Function, isCancelled?: Function, apply?: Function }} [options]
+ */
+async function retryMissingImages(items, { progress = null, isCancelled = () => false, apply = addRetriedEmbeds } = {}) {
+  const pending = (items || []).filter(item => item && item._imageFailures);
+  if (pending.length === 0) return;
+  const entries = pending.flatMap(item => item._imageFailures.failures
+    .filter(failure => failure.url)
+    .map(failure => ({ item, url: failure.url, reason: failure.reason })));
+  const count = new Set(entries.map(entry => entry.url)).size;
+  let fetched = new Map();
+  let still = entries;
+  if (count > 0 && imageSession) {
+    if (progress) progress(`Trying ${count} missing image${count === 1 ? '' : 's'} again…`);
+    ({ fetched, still } = await imageSession.finalTry(entries, { cooldownMs: NLME.IMAGE_FINAL_COOLDOWN_MS, isCancelled }));
+  }
+  for (const item of pending) {
+    const { label, warn, failures } = item._imageFailures;
+    delete item._imageFailures;
+    const got = new Map(failures.filter(f => fetched.has(f.url)).map(f => [f.url, fetched.get(f.url)]));
+    apply(item, got);
+    const missing = [...failures.filter(f => !f.url), ...still.filter(entry => entry.item === item)];
+    reportImageFailures(missing.map(({ url, reason }) => ({ url, reason })), label, warn);
+  }
 }
 
 // Image downloads of the running job. One job runs at a time (job lock); the

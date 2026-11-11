@@ -9,12 +9,17 @@
 // Size-based batching: with maxBatchBytes and sizeOf(result) a batch is packaged as
 // soon as its accumulated size reaches the cap (a package may pass it by one item;
 // one item over the cap gets its own). totalBatches is then null (unknown).
+// beforePackage(results, { warn, isLast }) runs just before each packageBatch
+// with that batch's results (never for an errors-only package), e.g. the last
+// try at missing images. What it warns reaches the errors of this delivery when
+// it is the last one, of the last delivery otherwise. A throw is logged and
+// kept in the errors; the package is still written.
 (function (root) {
   const NLME = root.NLME || require('./takeout-shared.js');
 
   async function runExportJob(opts) {
     const {
-      kind, items, extractOne, afterEach, packageBatch, isCancelled, onProgress,
+      kind, items, extractOne, afterEach, beforePackage, packageBatch, isCancelled, onProgress,
       perZip = Infinity,
       maxBatchBytes = 0, sizeOf = null,
       // Errors known before the first item (e.g. chat messages that could
@@ -33,7 +38,19 @@
     let errorsDelivered = false;
     let endingBatch = 1;
 
+    // Strings and { source, type, message } objects stay as they are
+    // (buildErrorReport groups objects by type); anything else becomes text
+    const warn = error => { errors.push(typeof error === 'string' || (error && typeof error === 'object') ? error : String(error)); };
+
     const deliver = async (results, batchIndex, isLast, extra = {}) => {
+      if (beforePackage && !extra.errorsOnly) {
+        try {
+          await beforePackage(results, { warn, isLast });
+        } catch (err) {
+          console.warn('[NotebookLM Takeout] beforePackage failed:', err);
+          errors.push(`Before writing package ${batchIndex}: ${(err && err.message) || err}`);
+        }
+      }
       if (isLast) errorsDelivered = true;
       await packageBatch(results, {
         batchIndex, totalBatches, isLast,
@@ -59,9 +76,7 @@
 
       const ctx = {
         index: attempted,
-        // Strings and { source, type, message } objects stay as they are
-        // (buildErrorReport groups objects by type); anything else becomes text
-        warn: error => { errors.push(typeof error === 'string' || (error && typeof error === 'object') ? error : String(error)); },
+        warn,
         stop: reason => { stopped = true; errors.push(reason); }
       };
       attempted++;

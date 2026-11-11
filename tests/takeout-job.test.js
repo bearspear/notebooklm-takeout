@@ -465,3 +465,88 @@ test('a failure with a detail keeps it as the second line of errors.md', async (
   ]);
   assert.match(NLME.buildErrorReport({ errors: result.errors }), /^- Fresh: Still being generated\. Try again when it is ready \(Resume will retry it\)\.\n  Item changed: expected "Fresh"$/m);
 });
+
+// ---- 1.9.15: beforePackage, the last try at missing images ----
+
+function hookHarness({ items: list, perZip = Infinity, fail = [], hook, maxBatchBytes = 0 }) {
+  const log = [];
+  const run = NLME.runExportJob({
+    kind: 'sources', items: list, perZip,
+    maxBatchBytes, sizeOf: maxBatchBytes ? () => 1 : null,
+    extractOne: async item => {
+      if (fail.includes(item.title)) throw new Error('boom');
+      return item.title;
+    },
+    beforePackage: async (results, ctx) => { log.push(['before', [...results], ctx.isLast]); if (hook) await hook(results, ctx); },
+    packageBatch: async (results, info) => { log.push(['package', [...results], info.isLast, [...info.errors], info.errorsOnly]); },
+    isCancelled: () => false
+  });
+  return { run, log };
+}
+
+test('beforePackage runs before each packageBatch with that batch\'s results, in order', async () => {
+  const { run, log } = hookHarness({ items: items(3), perZip: 2 });
+  await run;
+  assert.deepEqual(log.map(l => l.slice(0, 3)), [
+    ['before', ['N1', 'N2'], false], ['package', ['N1', 'N2'], false],
+    ['before', ['N3'], true], ['package', ['N3'], true]
+  ]);
+});
+
+test('a beforePackage warning lands in the errors of the last delivery', async () => {
+  const { run, log } = hookHarness({
+    items: items(3), perZip: 2,
+    hook: (results, { warn }) => warn(`missing in ${results[0]}`)
+  });
+  const r = await run;
+  const packages = log.filter(l => l[0] === 'package');
+  assert.deepEqual(packages[0][3], []);
+  assert.deepEqual(packages[1][3], ['missing in N1', 'missing in N3']);
+  assert.deepEqual(r.errors, ['missing in N1', 'missing in N3']);
+});
+
+test('a warning from the hook of a non-last batch reaches a later errors-only delivery', async () => {
+  const { run, log } = hookHarness({
+    items: items(3), perZip: 2, fail: ['N3'],
+    hook: (results, { warn }) => warn({ source: results[0], type: 'image_download_failed', message: 'x' })
+  });
+  await run;
+  const last = log[log.length - 1];
+  assert.equal(last[0], 'package');
+  assert.equal(last[4], true); // errorsOnly
+  assert.equal(last[3].length, 2);
+  assert.deepEqual(last[3][0], { source: 'N1', type: 'image_download_failed', message: 'x' });
+});
+
+test('beforePackage is not called for an errors-only delivery', async () => {
+  const { run, log } = hookHarness({ items: items(2), fail: ['N1', 'N2'] });
+  await run;
+  assert.deepEqual(log.map(l => l[0]), ['package']);
+  assert.equal(log[0][4], true);
+});
+
+test('a throwing beforePackage still delivers the package, and its error is kept', async () => {
+  const originalWarn = console.warn;
+  const logged = [];
+  console.warn = (...args) => logged.push(args);
+  try {
+    const { run, log } = hookHarness({ items: items(1), hook: async () => { throw new Error('final try broke'); } });
+    const r = await run;
+    assert.deepEqual(log.map(l => l[0]), ['before', 'package']);
+    assert.equal(log[1][3].length, 1);
+    assert.match(String(log[1][3][0]), /final try broke/);
+    assert.equal(r.exported, 1);
+    assert.ok(logged.length >= 1);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('size batching: split jobs call beforePackage once per package, in order', async () => {
+  const { run, log } = hookHarness({ items: items(4), maxBatchBytes: 2 });
+  await run;
+  assert.deepEqual(log.map(l => l.slice(0, 3)), [
+    ['before', ['N1', 'N2'], false], ['package', ['N1', 'N2'], false],
+    ['before', ['N3', 'N4'], true], ['package', ['N3', 'N4'], true]
+  ]);
+});

@@ -1036,6 +1036,10 @@
   // these waits, on a budget of their own. Hover downloads never wait on 403.
   const IMAGE_FORBIDDEN_DELAYS_MS = [5000, 15000];
   const IMAGE_FORBIDDEN_WAIT_BUDGET_MS = 10 * 60 * 1000;
+  // The last try before a package is written (finalTry): one cool-down, then
+  // each missing image once more, its 403 waits on a budget of their own
+  const IMAGE_FINAL_COOLDOWN_MS = 60000;
+  const IMAGE_FINAL_WAIT_BUDGET_MS = 3 * 60000;
 
   function isRateLimitedStatus(status) {
     return RATE_LIMIT_STATUSES.includes(status);
@@ -1057,7 +1061,8 @@
     const results = new Map(); // imageFetchUrl(url) -> Promise of its data URI; failures are removed
     const forbidden = new Map(); // key -> 403 error of a patient attempt that gave up, this batch
     const patientKeys = new Set(); // keys whose in-flight request is patient
-    let forbiddenWaitedMs = 0;
+    // 403 waits of patient get() calls; each finalTry call has its own
+    const forbiddenBudget = { limit: IMAGE_FORBIDDEN_WAIT_BUDGET_MS, spent: 0 };
     const skipped = new Set();
     const summary = { source: '', type: 'image_download_failed', count: 0, message: '' };
     let summaryReported = false;
@@ -1098,7 +1103,7 @@
       }
     }
 
-    async function fetchWithRetries(url, patient = false) {
+    async function fetchWithRetries(url, patient = false, budget = forbiddenBudget) {
       let forbiddenAttempt = 0;
       for (let attempt = 0; ; attempt++) {
         stopIfCancelled();
@@ -1113,8 +1118,8 @@
         if (error.status === 403) {
           // Own attempt counter and budget; streak and skipping stay as they are.
           const delay = IMAGE_FORBIDDEN_DELAYS_MS[forbiddenAttempt];
-          if (!patient || delay === undefined || forbiddenWaitedMs + delay > IMAGE_FORBIDDEN_WAIT_BUDGET_MS) throw error;
-          forbiddenWaitedMs += delay;
+          if (!patient || delay === undefined || budget.spent + delay > budget.limit) throw error;
+          budget.spent += delay;
           forbiddenAttempt++;
           await sleep(delay);
           attempt--; // a 403 wait is not a 429/503 attempt
@@ -1173,8 +1178,38 @@
         return result;
     }
 
+    // The last try before a package is written. entries: [{ item, url, reason }]
+    // that failed earlier. One cool-down (cooldownMs), then each url once, in
+    // order, patient on 403 with waits from IMAGE_FINAL_WAIT_BUDGET_MS only (so
+    // a url is tried even when the job's own 403 budget is spent). A rate limit
+    // follows the session's rules. Entries not fetched go to still unchanged,
+    // with their first reason; once the budget is spent, or on Cancel, the rest
+    // are not asked for.
+    async function finalTry(entries = [], { cooldownMs = IMAGE_FINAL_COOLDOWN_MS, isCancelled: cancelledHere = () => false } = {}) {
+      const fetched = new Map();
+      const list = [...(entries || [])];
+      // Nothing to try, or limiting already stopped the job's downloads: no cool-down
+      if (list.length === 0 || skipping) return { fetched, still: list };
+      const cancelled = () => cancelledHere() || isCancelled();
+      if (!cancelled() && cooldownMs > 0) await sleep(cooldownMs);
+      const budget = { limit: IMAGE_FINAL_WAIT_BUDGET_MS, spent: 0 };
+      const tried = new Set();
+      for (const { url } of list) {
+        if (tried.has(url)) continue;
+        if (cancelled() || skipping || budget.spent >= budget.limit) break;
+        tried.add(url);
+        try {
+          fetched.set(url, await fetchWithRetries(url, true, budget));
+        } catch (error) {
+          if (error.cancelled) break;
+        }
+      }
+      return { fetched, still: list.filter(entry => !fetched.has(entry.url)) };
+    }
+
     return {
       get,
+      finalTry,
       endBatch() {
         results.clear();
         patientKeys.clear();
@@ -3843,6 +3878,8 @@ footer { margin-top: 3rem; }
     retryAfterMs,
     isRateLimitedStatus,
     createImageSession,
+    IMAGE_FINAL_COOLDOWN_MS,
+    IMAGE_FINAL_WAIT_BUDGET_MS,
     isNotebookDownload,
     NOTEBOOK_HOSTS,
     isNotebookUrl,

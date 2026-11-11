@@ -181,7 +181,13 @@ test('fetchDownload is unchanged for artifact downloads: any file type, and no l
 function loadImagePass(sandbox) {
   vm.runInContext(topLevelFn('sidebar-sources.js', 'embedImagesInMarkdown'), sandbox);
   vm.runInContext(topLevelFn('sidebar-sources.js', 'embedAndReportImages'), sandbox);
-  vm.runInContext(topLevelFn('sidebar-core.js', 'reportImageFailures'), sandbox);
+  loadLastTry(sandbox);
+}
+// reportImageFailures and the last try before a package (1.9.15)
+function loadLastTry(sandbox) {
+  for (const fn of ['reportImageFailures', 'deferImageFailures', 'retryMissingImages', 'addRetriedEmbeds']) {
+    vm.runInContext(topLevelFn('sidebar-core.js', fn), sandbox);
+  }
 }
 function loadChat(sandbox) {
   loadImagePass(sandbox);
@@ -194,7 +200,8 @@ function sourcesPanel(fetchImpl) {
   vm.runInContext(topLevelFn('sidebar-sources.js', 'embedImagesInMarkdown'), panel.sandbox);
   vm.runInContext(topLevelFn('sidebar-sources.js', 'buildSourceData'), panel.sandbox);
   vm.runInContext(topLevelFn('sidebar-sources.js', 'embedAndReportImages'), panel.sandbox);
-  vm.runInContext(topLevelFn('sidebar-core.js', 'reportImageFailures'), panel.sandbox);
+  vm.runInContext(topLevelFn('sidebar-sources.js', 'applySourceImageTry'), panel.sandbox);
+  loadLastTry(panel.sandbox);
   Object.assign(panel.sandbox, {
     settings: {},
     addContentCoverage() {}, countPageContent: () => ({}), convertCounted: (a, h, run) => run(), convertToMarkdown: h => h,
@@ -266,6 +273,8 @@ test('a source reports a failure from the plus-meta pass too, once per image', a
   );
   assert.ok(calls >= 3);
   assert.equal(built.imagesFound, 1);
+  assert.equal(warned.filter(e => e.type === 'image_download_failed').length, 0); // kept for the last try
+  await sandbox.retryMissingImages([built], { apply: sandbox.applySourceImageTry });
   const images = warned.filter(e => e.type === 'image_download_failed');
   assert.equal(images.length, 1);
   assert.equal(images[0].count, 1);
@@ -305,7 +314,10 @@ test('a note hands its image failures to the job as one summary', async () => {
   loadImagePass(sandbox);
   vm.runInContext(topLevelFn('sidebar-notes.js', 'extractNoteItem'), sandbox);
   const warned = [];
-  await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'Note', index: 0 }, { warn: e => warned.push(e) }, {}, { exportNoteWithImages: true });
+  const note = await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'Note', index: 0 }, { warn: e => warned.push(e) }, {}, { exportNoteWithImages: true });
+  assert.equal(warned.length, 0); // kept for the last try before the package
+  assert.ok(!Object.keys(note).includes('_imageFailures'));
+  await sandbox.retryMissingImages([note]);
   assert.equal(warned.length, 1);
   assert.equal(warned[0].type, 'image_download_failed');
   assert.equal(warned[0].source, 'Note');
@@ -336,6 +348,8 @@ test('a chat message hands its image failures to the job, not as citation errors
     { citationMode: 'quotes', total: 1, variantSettings: { exportNoteWithImages: true } }
   );
   assert.equal(out.stats.failedExtractions, 0);
+  assert.equal(warned.length, 0); // kept for the last try before the package
+  await sandbox.retryMissingImages([out]);
   assert.equal(warned.length, 1);
   assert.equal(warned[0].type, 'image_download_failed');
   assert.equal(warned[0].userQuestion, 'Why?');
@@ -506,6 +520,7 @@ test('a note body image reaches the with-images files, and base files stay byte-
   const warned = [];
   const settingsOn = { exportNoteWithImages: true, exportNoteCodeBlocks: true };
   const note = await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'Note', index: 0 }, { warn: e => warned.push(e) }, {}, settingsOn);
+  await sandbox.retryMissingImages([note]);
 
   const quote = [{ text: 'S', quote: 'q' }];
   const files = sandbox.buildNotesFiles([{ ...note, sources: quote }], { meta: META, variantSettings: settingsOn });
@@ -543,6 +558,7 @@ test('a note from the citation cache still gets its body images', async () => {
   const warned = [];
   const note = await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'Note', index: 0 }, { warn: e => warned.push(e) }, {}, { exportNoteWithImages: true });
   assert.ok(note.imageEmbeds.has(OK_URL));
+  await sandbox.retryMissingImages([note]);
   assert.equal(warned.length, 1);
 });
 
@@ -554,7 +570,8 @@ test('a citation image that failed in the page counts once, or not at all if the
     }
   });
   const warned = [];
-  await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'Note', index: 0 }, { warn: e => warned.push(e) }, {}, { exportNoteWithImages: true });
+  const note = await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'Note', index: 0 }, { warn: e => warned.push(e) }, {}, { exportNoteWithImages: true });
+  await sandbox.retryMissingImages([note]);
   assert.equal(warned.length, 1);
   assert.equal(warned[0].count, 2); // BAD_URL and BAD_URL2; OK_URL recovered
   assert.doesNotMatch(warned[0].message, /HTTP 500/);
@@ -609,6 +626,7 @@ for (const citationMode of ['quotes', 'titles', 'none']) {
       { tab: { id: 5 }, progress() {} }, { userMessage: 'Why?', aiResponseHTML: BODY },
       { index: 0, warn: e => warned.push(e) }, { citationMode, total: 1, variantSettings: on }
     );
+    await sandbox.retryMissingImages([message]);
     assert.equal(warned.length, 1);
     assert.equal(warned[0].type, 'image_download_failed');
     assert.equal(warned[0].userQuestion, 'Why?');
@@ -646,6 +664,7 @@ test('a chat message whose citations failed outright still gets its body images'
     { index: 0, warn: e => warned.push(e) }, { citationMode: 'quotes', total: 1, variantSettings: { exportNoteWithImages: true } }
   );
   assert.ok(message.imageEmbeds.has(OK_URL));
+  await sandbox.retryMissingImages([message]);
   assert.ok(warned.some(e => e.type === 'image_download_failed'));
 });
 
@@ -1307,4 +1326,209 @@ test('the DOWNLOAD_IMAGE_AS_BASE64 handler stays non-patient', async () => {
   const reply = await new Promise(resolve => listener({ type: NLME.MSG.DOWNLOAD_IMAGE_AS_BASE64, url }, { tab: { id: 5 } }, resolve));
   assert.equal(reply.success, false);
   assert.equal(slept, false);
+});
+
+// ---- 1.9.15: the last try before a package is written ----
+
+const entry = (url, reason = 'Fetch failed: HTTP 403', item = 'Venus') => ({ item, url, reason });
+const sum = list => list.reduce((a, b) => a + b, 0);
+
+test('the last-try constants', () => {
+  assert.equal(NLME.IMAGE_FINAL_COOLDOWN_MS, 60000);
+  assert.equal(NLME.IMAGE_FINAL_WAIT_BUDGET_MS, 3 * 60000);
+});
+
+test('finalTry cools down once per call, whatever the number of entries', async () => {
+  const { session, sleeps, calls } = imageSession({ script: url => `data:${url}` });
+  const { fetched, still } = await session.finalTry([entry('a'), entry('b'), entry('c')], { cooldownMs: 60000 });
+  assert.deepEqual(sleeps, [60000]);
+  assert.deepEqual(calls, ['a', 'b', 'c']);
+  assert.equal(fetched.size, 3);
+  assert.deepEqual(still, []);
+});
+
+test('finalTry: a url that now succeeds goes to fetched; one that keeps failing 403 stays with its first reason', async () => {
+  const { session, calls } = imageSession({ script: url => { if (url === 'bad') throw http(403); return `data:${url}`; } });
+  const bad = entry('bad', 'first reason');
+  const { fetched, still } = await session.finalTry([entry('ok'), bad], { cooldownMs: 1 });
+  assert.equal(fetched.get('ok'), 'data:ok');
+  assert.ok(!fetched.has('bad'));
+  assert.equal(still.length, 1);
+  assert.equal(still[0], bad);
+  assert.equal(still[0].reason, 'first reason');
+  assert.equal(calls.filter(u => u === 'bad').length, 3); // patient: the session's 403 waits
+});
+
+test('finalTry asks for a url once even when two entries name it', async () => {
+  const { session, calls } = imageSession({ script: url => { if (url === 'bad') throw http(404); return `data:${url}`; } });
+  const { fetched, still } = await session.finalTry(
+    [entry('ok', 'x', 'A'), entry('ok', 'x', 'B'), entry('bad', 'y', 'A'), entry('bad', 'y', 'B')], { cooldownMs: 1 });
+  assert.deepEqual(calls, ['ok', 'bad']);
+  assert.equal(fetched.size, 1);
+  assert.deepEqual(still.map(e => e.item), ['A', 'B']);
+});
+
+test('finalTry: cancel during the cool-down gives no downloads and everything in still', async () => {
+  let cancelled = false;
+  const calls = [];
+  const session = NLME.createImageSession({
+    download: async url => { calls.push(url); return 'x'; },
+    sleep: async () => { cancelled = true; }
+  });
+  const entries = [entry('a'), entry('b')];
+  const { fetched, still } = await session.finalTry(entries, { cooldownMs: 60000, isCancelled: () => cancelled });
+  assert.equal(calls.length, 0);
+  assert.equal(fetched.size, 0);
+  assert.deepEqual(still, entries);
+});
+
+test('finalTry never waits past its budget, and leaves the rest in still', async () => {
+  const { session, sleeps, calls } = imageSession({ script: () => { throw http(403); } });
+  const entries = Array.from({ length: 30 }, (_, i) => entry(`u${i}`));
+  const { fetched, still } = await session.finalTry(entries, { cooldownMs: NLME.IMAGE_FINAL_COOLDOWN_MS });
+  assert.ok(sum(sleeps) <= NLME.IMAGE_FINAL_WAIT_BUDGET_MS + NLME.IMAGE_FINAL_COOLDOWN_MS, `slept ${sum(sleeps)}`);
+  assert.ok(sum(sleeps) > NLME.IMAGE_FINAL_COOLDOWN_MS);
+  assert.equal(fetched.size, 0);
+  assert.deepEqual(still, entries);
+  assert.ok(calls.length >= 9 && calls.length < 90);
+});
+
+test('finalTry tries each url once even after the job spent its 403 wait budget', async () => {
+  let now = 'forbidden';
+  const { session, sleeps, calls } = imageSession({ script: url => { if (now === 'forbidden' || url === 'bad') throw http(403); return `data:${url}`; } });
+  // 30 patient images of 20 s each spend the job's 10 minutes of 403 waits
+  for (let i = 0; i < 31; i++) await fails(session.get(`spent${i}`, { patient: true }), /403/);
+  assert.equal(sum(sleeps), 10 * 60 * 1000);
+  now = 'fine';
+  const before = sleeps.length;
+  calls.length = 0;
+  const { fetched, still } = await session.finalTry([entry('ok'), entry('bad')], { cooldownMs: 5 });
+  assert.equal(fetched.get('ok'), 'data:ok');
+  assert.equal(still.length, 1);
+  assert.deepEqual(calls, ['ok', 'bad', 'bad', 'bad']);
+  assert.deepEqual(sleeps.slice(before), [5, 5000, 15000]);
+});
+
+test('finalTry with nothing to try neither sleeps nor downloads', async () => {
+  const { session, sleeps, calls } = imageSession({ script: () => 'x' });
+  const { fetched, still } = await session.finalTry([], { cooldownMs: 60000 });
+  assert.deepEqual([sleeps, calls, fetched.size, still], [[], [], 0, []]);
+});
+
+// The last try, wired: what it gets reaches the with-images files, and the
+// summary counts only what is still missing
+const IMG1 = 'https://lh3.googleusercontent.com/notebooklm/one';
+const IMG2 = 'https://lh3.googleusercontent.com/notebooklm/two';
+const forbidden = () => ({ ok: false, status: 403, headers: { get: () => null } });
+
+test('a source image the last try gets is embedded; the other stays a link and counts once', async () => {
+  let lastTry = false;
+  const { sandbox } = sourcesPanel(async url => (lastTry && url === IMG1 ? imageResponse() : forbidden()));
+  const sleeps = [];
+  sandbox.beginImageSession(5, () => false, async ms => { sleeps.push(ms); });
+  const warned = [];
+  const data = { html: 'x', markdown: '', guideMarkdown: 'Sum', keyTopics: ['t'], sourceTitle: 'Venus' };
+  sandbox.convertToMarkdown = () => `![a](${IMG1}) text ![b](${IMG2})`;
+  const built = await sandbox.buildSourceData({ title: 'Venus', index: 0 }, data, { warn: e => warned.push(e) }, {}, true,
+    { exportSourceWithImages: true, exportSourcePlusMetaWithImages: true });
+  assert.equal(built.imagesEmbedded, 0);
+  assert.equal(warned.filter(e => e.type === 'image_download_failed').length, 0);
+  assert.ok(!Object.keys(built).some(key => key.startsWith('_')), 'nothing extra reaches the files');
+
+  lastTry = true;
+  const progress = [];
+  sleeps.length = 0;
+  await sandbox.retryMissingImages([built], { progress: text => progress.push(text), apply: sandbox.applySourceImageTry });
+  assert.deepEqual(progress, ['Trying 2 missing images again…']);
+  assert.equal(sleeps[0], NLME.IMAGE_FINAL_COOLDOWN_MS);
+  for (const version of [built.versions.withImages, built.versions.plusMetaWithImages]) {
+    assert.equal((version.match(/data:image\/png;base64,/g) || []).length, 1);
+    assert.ok(version.includes(`[b](${IMG2})`), 'the missing image stays a plain link');
+    assert.doesNotMatch(version, /!\[b\]/);
+  }
+  assert.equal(built.imagesEmbedded, 1);
+  const images = warned.filter(e => e.type === 'image_download_failed');
+  assert.equal(images.length, 1);
+  assert.equal(images[0].count, 1);
+  assert.equal(images[0].source, 'Venus');
+  assert.ok(!('_imageFailures' in built) && !('_imageMarkdown' in built));
+});
+
+test('a note image the last try gets reaches the with-images files', async () => {
+  let lastTry = false;
+  const { sandbox } = notesPanel({
+    fetchImpl: async url => (url === OK_URL || (lastTry && url === BAD_URL) ? imageResponse() : forbidden()),
+    noteData: { html: BODY, sources: [], errors: [] }
+  });
+  sandbox.beginImageSession(5, () => false, async () => {});
+  const warned = [];
+  const settingsOn = { exportNoteWithImages: true };
+  const note = await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'Note', index: 0 }, { warn: e => warned.push(e) }, {}, settingsOn);
+  assert.equal(warned.length, 0);
+  lastTry = true;
+  await sandbox.retryMissingImages([note]);
+  const files = sandbox.buildNotesFiles([note], { meta: META, variantSettings: settingsOn });
+  const md = files.find(f => f.path === 'notes/Note-with-images.md').data;
+  assert.match(md, /!\[fig2\]\(data:image\/png/);
+  assert.ok(md.includes(`[fig3](${BAD_URL}2)`));
+  assert.equal(warned.length, 1);
+  assert.equal(warned[0].count, 1);
+});
+
+test('notes keep the earlier-failures rule through the last try', async () => {
+  const { sandbox } = notesPanel({
+    fetchImpl: async url => (url === OK_URL ? imageResponse() : forbidden()),
+    noteData: {
+      html: BODY, sources: [], errors: [],
+      imageFailures: [{ url: OK_URL, reason: 'HTTP 500' }, { url: BAD_URL, reason: 'HTTP 403' }]
+    }
+  });
+  sandbox.beginImageSession(5, () => false, async () => {});
+  const warned = [];
+  const note = await sandbox.extractNoteItem({ tab: { id: 5 } }, { title: 'Note', index: 0 }, { warn: e => warned.push(e) }, {}, { exportNoteWithImages: true });
+  await sandbox.retryMissingImages([note]);
+  assert.equal(warned.length, 1);
+  assert.equal(warned[0].count, 2);
+  assert.doesNotMatch(warned[0].message, /HTTP 500/);
+});
+
+test('a chat image the last try gets reaches chat-with-images, and the message summary keeps its fields', async () => {
+  let lastTry = false;
+  const { sandbox } = chatPanel({
+    fetchImpl: async url => (url === OK_URL || (lastTry && url === BAD_URL) ? imageResponse() : forbidden()),
+    chatResponse: { sourcesByIndex: { 1: { text: 'S', quote: 'q' } }, errors: [] }
+  });
+  sandbox.beginImageSession(5, () => false, async () => {});
+  const warned = [];
+  const message = await sandbox.extractChatPair(
+    { tab: { id: 5 }, progress() {} }, { userMessage: 'Why?', aiResponseHTML: BODY },
+    { index: 0, warn: e => warned.push(e) }, { citationMode: 'quotes', total: 1, variantSettings: { exportNoteWithImages: true } }
+  );
+  assert.equal(warned.length, 0);
+  lastTry = true;
+  await sandbox.retryMissingImages([message]);
+  const md = chatFilesFor(sandbox, [message], true).find(f => f.path === 'chat-with-images.md').data;
+  assert.match(md, /!\[fig2\]\(data:image\/png/);
+  assert.equal(warned.length, 1);
+  assert.equal(warned[0].userQuestion, 'Why?');
+  assert.equal(warned[0].messageIndex, 1);
+  assert.match(warned[0].message, /Failed to download image/);
+});
+
+test('the three job runners hand their batch to the last try before packaging', () => {
+  for (const file of ['sidebar-sources.js', 'sidebar-notes.js', 'sidebar-chat.js']) {
+    assert.match(read(file), /beforePackage: [\s\S]{0,120}retryMissingImages\(/, file);
+  }
+});
+
+test('finalTry does not cool down when limiting already stopped the job\'s downloads', async () => {
+  const { session, sleeps, calls } = imageSession({ script: () => { throw http(429); } });
+  for (let i = 0; i < 5; i++) await fails(session.get(`l${i}`));
+  for (let i = 5; i < 10; i++) await fails(session.get(`l${i}`));
+  await fails(session.get('next'), /Skipped/);
+  sleeps.length = 0;
+  calls.length = 0;
+  const entries = [entry('a')];
+  const { fetched, still } = await session.finalTry(entries, { cooldownMs: 60000 });
+  assert.deepEqual([sleeps, calls, fetched.size, still], [[], [], 0, entries]);
 });
