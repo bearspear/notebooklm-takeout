@@ -161,6 +161,10 @@ test('filterSources: also finds sources by their text, after the title matches',
   assert.deepEqual(app.filterSources(sources, '"distance of sirius" -parallax'), { titles: [], texts: [] });
   assert.deepEqual(app.filterSources(sources, 'vanth type:pdf'), { titles: [], texts: [2] });
   assert.deepEqual(app.filterSources(sources, 'vanth type:web'), { titles: [], texts: [] });
+  // a word left out with - leaves the source out when its title has it, even if its text does not
+  assert.deepEqual(app.filterSources([{ title: 'Venus page', md: 'venus orbit' }], 'venus -page'), { titles: [], texts: [] });
+  assert.deepEqual(app.filterSources([{ title: 'Venus', md: 'foo' }], '-venus'), { titles: [], texts: [] });
+  assert.deepEqual(app.filterSources([{ title: 'Venus', md: 'orbit' }], 'venus "orbit"'), { titles: [], texts: [0] });
   // markup is not text: a phrase across "**" still matches, as in the other searches
   assert.deepEqual(app.filterSources(sources, '"orcus (~910 km) and vanth"'), { titles: [], texts: [2] });
   // the flat-text cache is filled once and reused

@@ -608,7 +608,8 @@ function filterSources(sources, query, flat) {
     if (!low) return;
     var text = flat && flat[i] != null ? flat[i] : searchText(s.md).toLowerCase();
     if (flat) flat[i] = text;
-    if (pq.plain ? text.indexOf(low) > -1 : matchQuery(pq, text, item).ok) texts.push(i);
+    // title and text together, so a -word in the title still leaves the source out
+    if (pq.plain ? text.indexOf(low) > -1 : matchQuery(pq, s.title.toLowerCase() + ' \n ' + text, item).ok) texts.push(i);
   });
   return { titles: titles, texts: texts };
 }
