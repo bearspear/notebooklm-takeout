@@ -2183,7 +2183,11 @@ async function downloadImageAsBase64(url, { tabId } = {}) {
  */
 function reportImageFailures(failures, item, warn, jobWarn = warn, { deferTo = null } = {}) {
   const failed = (failures || []).filter(f => !f.skipped && !f.cancelled);
-  if (deferTo) deferImageFailures(deferTo, failed, item, warn);
+  if (deferTo) {
+    deferImageFailures(deferTo, failed, item, warn);
+    // Rate-limited images are not tried again, but a later Retry may fix them
+    if ((failures || []).some(f => f.skipped)) markImagesSkipped(deferTo, item, warn);
+  }
   else NLME.summarizeImageFailures(failed.map(f => ({ ...f, item }))).forEach(warn);
   imageSession?.reportSkipped(jobWarn);
 }
@@ -2193,11 +2197,20 @@ function reportImageFailures(failures, item, warn, jobWarn = warn, { deferTo = n
 // reaches a file, the manifest or a copy of the item.
 function deferImageFailures(target, failures, label, warn) {
   if (!failures.length) return;
-  const kept = failures.map(({ url, reason }) => ({ url, reason }));
+  const kept = failures.map(({ url, reason, status }) => (status === undefined ? { url, reason } : { url, reason, status }));
   const earlier = target._imageFailures;
   Object.defineProperty(target, '_imageFailures', {
     value: { label, warn, failures: earlier ? [...earlier.failures, ...kept] : kept },
     configurable: true, writable: true, enumerable: false
+  });
+}
+
+// _imagesSkipped: the item had rate-limited images. Non-enumerable like
+// _imageFailures; retryMissingImages marks the item for "Retry with missing images".
+// Defining it also makes the item pending, so label and warn travel with it.
+function markImagesSkipped(target, label, warn) {
+  Object.defineProperty(target, '_imagesSkipped', {
+    value: { label, warn }, configurable: true, writable: true, enumerable: false
   });
 }
 
@@ -2219,7 +2232,14 @@ function addRetriedEmbeds(item, got) {
  * @param {{ progress?: Function, isCancelled?: Function, apply?: Function, markMissing?: Function }} [options]
  */
 async function retryMissingImages(items, { progress = null, isCancelled = () => false, apply = addRetriedEmbeds, markMissing = null } = {}) {
-  const pending = (items || []).filter(item => item && item._imageFailures);
+  const all = (items || []).filter(item => item && (item._imageFailures || item._imagesSkipped));
+  // Items with rate-limited images only: nothing to try, but a Retry may fix them
+  for (const item of all) {
+    if (item._imageFailures) continue;
+    delete item._imagesSkipped;
+    if (markMissing) markMissing(item);
+  }
+  const pending = all.filter(item => item._imageFailures);
   if (pending.length === 0) return;
   const entries = pending.flatMap(item => item._imageFailures.failures
     .filter(failure => failure.url)
@@ -2233,28 +2253,30 @@ async function retryMissingImages(items, { progress = null, isCancelled = () => 
       ({ fetched, still } = await imageSession.finalTry(entries, { cooldownMs: NLME.IMAGE_FINAL_COOLDOWN_MS, isCancelled }));
     } catch (error) {
       // The last try never fails an item or a package: the images stay links
-      console.warn('[Takeout] Last try for missing images failed:', error);
+      console.warn('[NotebookLM Takeout] Last try for missing images failed:', error);
       fetched = new Map();
       still = entries;
     }
   }
   for (const item of pending) {
     const { label, warn, failures } = item._imageFailures;
+    const skippedToo = !!item._imagesSkipped;
     delete item._imageFailures;
+    delete item._imagesSkipped;
     const got = new Map(failures.filter(f => fetched.has(f.url)).map(f => [f.url, fetched.get(f.url)]));
     let left = [...failures.filter(f => !f.url), ...still.filter(entry => entry.item === item)];
     try {
       apply(item, got);
     } catch (error) {
       // Whatever could not be put into the item stays a link, and is reported
-      console.warn('[Takeout] Could not add retried images:', error);
+      console.warn('[NotebookLM Takeout] Could not add retried images:', error);
       // On purpose: report all of the item's failures (safe over-report)
       left = failures;
     } finally {
       reportImageFailures(left.map(({ url, reason }) => ({ url, reason })), label, warn);
       // A failure without a url marks the item too: a re-export may not fix it,
       // but it is the only way to try
-      if (markMissing && left.some(f => !f.skipped && !f.cancelled)) markMissing(item);
+      if (markMissing && (skippedToo || left.some(f => !f.skipped && !f.cancelled))) markMissing(item);
     }
   }
 }

@@ -355,7 +355,7 @@ function sourcesSidebar({ variant = { exportSourceWithImages: true }, download =
   };
   vm.createContext(sandbox);
   vm.runInContext(topLevelFn('sidebar-core.js', 'stripImagesFromMarkdown'), sandbox);
-  for (const name of ['reportImageFailures', 'deferImageFailures', 'retryMissingImages', 'addRetriedEmbeds']) {
+  for (const name of ['reportImageFailures', 'deferImageFailures', 'markImagesSkipped', 'retryMissingImages', 'addRetriedEmbeds']) {
     vm.runInContext(topLevelFn('sidebar-core.js', name), sandbox);
   }
   vm.runInContext(topLevelFn('sidebar-sources.js', 'embedImagesInMarkdown'), sandbox);
@@ -463,7 +463,7 @@ async function sourcesJob(extractFor) {
   vm.createContext(sandbox);
   for (const [file, name] of [
     ['sidebar-core.js', 'stripImagesFromMarkdown'], ['sidebar-core.js', 'reportImageFailures'],
-    ['sidebar-core.js', 'deferImageFailures'], ['sidebar-core.js', 'retryMissingImages'], ['sidebar-core.js', 'addRetriedEmbeds'],
+    ['sidebar-core.js', 'deferImageFailures'], ['sidebar-core.js', 'markImagesSkipped'], ['sidebar-core.js', 'retryMissingImages'], ['sidebar-core.js', 'addRetriedEmbeds'],
     ['sidebar-sources.js', 'embedImagesInMarkdown'], ['sidebar-sources.js', 'buildSourceData'],
     ['sidebar-sources.js', 'applySourceImageTry'],
     ['sidebar-sources.js', 'extractSourceItem'], ['sidebar-sources.js', 'runSourcesJob']

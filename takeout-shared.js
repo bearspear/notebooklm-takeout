@@ -1201,8 +1201,21 @@
         return result;
     }
 
+    // Whether a failed image may work later: HTTP 403, 429, 5xx, a timeout, or
+    // an error with no status. Other 4xx, "not an image" and "empty image" will not.
+    // The status is the entry's own, else the first "HTTP nnn" of its reason.
+    function isTemporaryFailure(entry) {
+      const reason = String((entry && entry.reason) || '');
+      let status = Number(entry && entry.status);
+      if (!Number.isFinite(status) || status <= 0) status = Number((/\bHTTP (\d{3})\b/.exec(reason) || [])[1]);
+      if (Number.isFinite(status) && status > 0) {
+        return status === 403 || status === 408 || status === 429 || status >= 500;
+      }
+      return !/not an image|empty image/i.test(reason);
+    }
+
     // The last try before a package is written. entries: [{ item, url, reason }]
-    // that failed earlier. One cool-down (cooldownMs), then each url once, in
+    // that failed earlier. One cool-down (cooldownMs) when any may be temporary, then each url once, in
     // order, patient on 403 with waits from IMAGE_FINAL_WAIT_BUDGET_MS only (so
     // a url is tried even when the job's own 403 budget is spent). A rate limit
     // follows the session's rules. Entries not fetched go to still unchanged,
@@ -1214,7 +1227,8 @@
       // Nothing to try, or limiting already stopped the job's downloads: no cool-down
       if (list.length === 0 || skipping) return { fetched, still: list };
       const cancelled = () => cancelledHere() || isCancelled();
-      if (!cancelled() && cooldownMs > 0) await sleep(cooldownMs);
+      // The cool-down only pays off when a failure may be temporary
+      if (!cancelled() && cooldownMs > 0 && list.some(isTemporaryFailure)) await sleep(cooldownMs);
       const budget = { limit: IMAGE_FINAL_WAIT_BUDGET_MS, spent: 0 };
       const tried = new Set();
       for (const { url } of list) {

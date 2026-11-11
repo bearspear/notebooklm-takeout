@@ -186,7 +186,7 @@ function loadImagePass(sandbox) {
 }
 // reportImageFailures and the last try before a package (1.9.15)
 function loadLastTry(sandbox) {
-  for (const fn of ['reportImageFailures', 'deferImageFailures', 'retryMissingImages', 'addRetriedEmbeds']) {
+  for (const fn of ['reportImageFailures', 'deferImageFailures', 'markImagesSkipped', 'retryMissingImages', 'addRetriedEmbeds']) {
     vm.runInContext(topLevelFn('sidebar-core.js', fn), sandbox);
   }
 }
@@ -1624,4 +1624,41 @@ test('finalTry does not cool down when limiting already stopped the job\'s downl
   const entries = [entry('a')];
   const { fetched, still } = await session.finalTry(entries, { cooldownMs: 60000 });
   assert.deepEqual([sleeps, calls, fetched.size, still], [[], [], 0, entries]);
+});
+
+// ---- final review fixes ----
+
+test('an item with only rate-limited images is marked for Retry with missing images, with no download and no cool-down', async () => {
+  const sandbox = vm.createContext({ NLME, console });
+  const { session, sleeps, calls } = imageSession({ script: () => 'data:x' });
+  sandbox.imageSession = session;
+  loadLastTry(sandbox);
+  const note = {};
+  vm.runInContext('this.report = (note) => reportImageFailures([{ url: "u1", reason: "Skipped: Google limited requests", skipped: true }], "N", () => {}, () => {}, { deferTo: note })', sandbox);
+  sandbox.report(note);
+  assert.equal(Object.keys(note).length, 0, 'the flag never enumerates');
+  const marked = [];
+  await sandbox.retryMissingImages([note], { markMissing: item => marked.push(item) });
+  assert.deepEqual(marked, [note]);
+  assert.deepEqual([sleeps, calls], [[], []]);
+  assert.equal(note._imagesSkipped, undefined, 'the flag is cleared');
+});
+
+test('finalTry: only permanent failures skip the cool-down but each url is tried once', async () => {
+  const { session, sleeps, calls } = imageSession({ script: () => { throw http(404); } });
+  const { still } = await session.finalTry([
+    entry('a', 'Fetch failed: HTTP 404'), entry('b', 'not an image (text/html)'), entry('c', 'x', 'V')
+  ].map((e, i) => (i === 2 ? { ...e, reason: 'Fetch failed: HTTP 410', status: 410 } : e)), { cooldownMs: 60000 });
+  assert.deepEqual(sleeps, []);
+  assert.deepEqual(calls, ['a', 'b', 'c']);
+  assert.equal(still.length, 3);
+});
+
+test('finalTry: one cool-down when any failure may be temporary', async () => {
+  const { session, sleeps } = imageSession({ script: url => `data:${url}` });
+  await session.finalTry([entry('a', 'Fetch failed: HTTP 404'), entry('b', 'Fetch failed: HTTP 503'), entry('c', 'not an image (text/html)')], { cooldownMs: 60000 });
+  assert.deepEqual(sleeps, [60000]);
+  const again = imageSession({ script: url => `data:${url}` });
+  await again.session.finalTry([entry('a', 'Failed to fetch')], { cooldownMs: 60000 });
+  assert.deepEqual(again.sleeps, [60000], 'no status counts as temporary');
 });
