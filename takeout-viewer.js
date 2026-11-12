@@ -12,7 +12,7 @@
 //   escapeJson(data)                   JSON that is safe inside a <script> tag
 //   assembleViewer({template, css, marked, katex, app, data})  one self-contained HTML string
 //   VIEWER_ASSETS                      paths of the five viewer files
-//   keepsText(path)                    wantsText, plus the artifacts manifest (titles)
+//   keepsText(path)                    wantsText, plus the artifacts manifest (titles) and table references
 //   captureEntry(store, relPath, data, addImage)
 //                                      store[relPath] = data for kept strings, else null; a
 //                                      -with-images text goes through extractImages first
@@ -273,6 +273,7 @@
   }
 
   const VARIANT_STEM = stem => SKIP_VARIANTS.some(v => stem.endsWith(v));
+  const TABLE_REFS = '-references';
 
   // Text files of a section, sorted: [normalized path, text, raw path, has images]. A -with-images
   // file replaces its base file's text; one with another title is an item that only sounds alike.
@@ -387,6 +388,16 @@
     return rows;
   }
 
+  // A Data Table's references file: "[n] text" lines -> [[n, text], ...]
+  function parseRefs(text) {
+    const out = [];
+    for (const line of String(text).split(/\r?\n/)) {
+      const m = /^\[(\d+)\]\s+(.*\S)\s*$/.exec(line);
+      if (m) out.push([Number(m[1]), m[2]]);
+    }
+    return out;
+  }
+
   const encodePath = p => p.split('/').map(encodeURIComponent).join('/');
 
   function loadArtifacts(files, mediaBase) {
@@ -404,14 +415,17 @@
       if (!m) continue;
       const name = baseName(p);
       if (name.startsWith('.')) continue;
-      const stem = stripExt(name);
+      let stem = stripExt(name);
       if (VARIANT_STEM(stem)) continue;
+      let ext = extOf(name);
+      // A Data Table's footnotes (<stem>-references.txt) belong to the table, not a new item
+      if (ext === 'txt' && stem.endsWith(TABLE_REFS)) { stem = stem.slice(0, -TABLE_REFS.length); ext = 'references'; }
       if (!kinds.has(m[1])) kinds.set(m[1], new Map());
       const groups = kinds.get(m[1]);
       // Files merge only within one directory, so parts never cross-attach
       const key = raw.slice(0, raw.length - name.length) + '\0' + stem;
       if (!groups.has(key)) groups.set(key, { stem, files: {} });
-      groups.get(key).files[extOf(name)] = raw;
+      groups.get(key).files[ext] = raw;
     }
     const out = [];
     for (const kind of [...kinds.keys()].sort()) {
@@ -422,9 +436,14 @@
       })) {
         const { stem, files: g } = groups.get(key);
         const a = { kind, title: titles[stem] || stem.replace(/-/g, ' '), files: {} };
-        for (const [ext, raw] of Object.entries(g)) a.files[ext] = mediaBase + encodePath(raw);
+        const exts = Object.keys(g).filter(e => e !== 'references').concat(g.references ? ['references'] : []);
+        for (const ext of exts) a.files[ext] = mediaBase + encodePath(g[ext]);
         if (typeof files[g.md] === 'string') a.md = dropH1(front(files[g.md])[1].trimStart());
         if (typeof files[g.csv] === 'string') a.rows = parseCsv(files[g.csv]);
+        if (typeof files[g.references] === 'string') {
+          const refs = parseRefs(files[g.references]);
+          if (refs.length) a.refs = refs;
+        }
         out.push(a);
       }
     }
@@ -453,7 +472,8 @@
   }
 
   function keepsText(path) {
-    return wantsText(path) || normalizePath(String(path)) === 'artifacts/manifest.json';
+    const p = normalizePath(String(path));
+    return wantsText(path) || p === 'artifacts/manifest.json' || /^artifacts\/.+-references\.txt$/i.test(p);
   }
 
   // One saved file for a Full Takeout's viewer. Everything is listed (media links);

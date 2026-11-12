@@ -1563,3 +1563,38 @@ test('Search this chat matches the text, not the Thoughts markup', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer-app.js'), 'utf8');
   assert.match(src, /idx = filterPairs\(D\.pairs, q \|\| '', pairText\)/);
 });
+
+test('a data table and its references file are one Studio item', () => {
+  const files = {
+    'artifacts/tables/Big-Table-references.txt': '[1] A source',
+    'artifacts/tables/Big-Table.csv': 'a,b\nx,y\n',
+    'artifacts/tables/Big-Table.json': '[]',
+    'artifacts/tables/Big-Table.html': '<table></table>',
+    'artifacts/tables/Other.csv': 'a\n1\n',
+    'artifacts/manifest.json': JSON.stringify({ files: [
+      { path: 'tables/Big-Table.csv', title: 'Big Table' },
+      { path: 'tables/Big-Table-references.txt', title: 'Big Table' },
+    ] }),
+  };
+  const d = V.buildViewerData(files, manifestOpts);
+  assert.deepEqual(d.studio.map(s => s.title), ['Big Table', 'Other']);
+  const big = d.studio[0];
+  assert.equal(Object.keys(big.files).at(-1), 'references');
+  assert.deepEqual(Object.keys(big.files).sort(), ['csv', 'html', 'json', 'references']);
+  assert.equal(big.files.references, 'artifacts/tables/Big-Table-references.txt');
+  assert.deepEqual(big.rows, [['a', 'b'], ['x', 'y']]);
+});
+
+test('a data table keeps its references for the viewer', () => {
+  assert.equal(V.keepsText('artifacts/tables/Big-Table-references.txt'), true);
+  assert.equal(V.keepsText('part-1/artifacts/tables/Big-Table-references.txt'), true);
+  assert.equal(V.keepsText('sources/notes-references.txt'), false);
+  const files = {
+    'artifacts/tables/Big-Table.csv': 'a,Source\nx,[2]\n',
+    'artifacts/tables/Big-Table-references.txt': 'REFERENCES\n=====\n\n[1] One.md\n\n[2] Two <b>.md\n',
+    'artifacts/tables/Plain.csv': 'a\n1\n',
+  };
+  const d = V.buildViewerData(files, manifestOpts);
+  assert.deepEqual(d.studio[0].refs, [[1, 'One.md'], [2, 'Two <b>.md']]);
+  assert.equal(d.studio[1].refs, undefined);
+});

@@ -431,7 +431,13 @@ function clearMarks(box) {
   })(box);
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { splitSourceGuide: splitSourceGuide, guideHtml: guideHtml, markMatches: markMatches, clearMarks: clearMarks, protectMath: protectMath, restoreMath: restoreMath, restoreMathAttrs: restoreMathAttrs, mathNodes: mathNodes, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, parseQuery: parseQuery, matchQuery: matchQuery, filterSources: filterSources, strictStrike: strictStrike, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState };
+// A Data Table's references, listed under the table: refs = [[n, text], ...]
+function refsHtml(refs) {
+  if (!refs || !refs.length) return '';
+  return '<h3>References</h3>' + refs.map(function (r) { return '<p class="tref">[' + escHtml(String(r[0])) + '] ' + escHtml(r[1]) + '</p>'; }).join('');
+}
+
+if (typeof module === 'object' && module.exports) module.exports = { splitSourceGuide: splitSourceGuide, guideHtml: guideHtml, markMatches: markMatches, clearMarks: clearMarks, protectMath: protectMath, restoreMath: restoreMath, restoreMathAttrs: restoreMathAttrs, mathNodes: mathNodes, texForKatex: texForKatex, findMath: findMath, copyMarkdown: copyMarkdown, copyText: copyText, showCopyResult: showCopyResult, clampColumns: clampColumns, dragColumn: dragColumn, serializeCols: serializeCols, parseCols: parseCols, foldText: foldText, findQuote: findQuote, sanitizeHtml: sanitizeHtml, citeHtml: citeHtml, collapseNoImage: collapseNoImage, replaceFailedImage: replaceFailedImage, sourceKind: sourceKind, searchText: searchText, parseQuery: parseQuery, matchQuery: matchQuery, filterSources: filterSources, strictStrike: strictStrike, filterPairs: filterPairs, buildSearchIndex: buildSearchIndex, searchArchive: searchArchive, formatViewState: formatViewState, parseViewState: parseViewState, refsHtml: refsHtml };
 // A source's kind for its icon: the type icon the page showed, which also covers
 // titles with no extension, then the title's extension, then the url. A generic
 // document icon comes after the extension, which may say more ("plan.docx").
@@ -967,7 +973,7 @@ if (typeof document !== 'undefined') (function () {
     view.art = i;
     reveal('r', Math.round(innerWidth * 0.40));
     if (a.md != null) body = '<div class="scroll"><div class="reader md">' + md(a.md) + '</div></div>';
-    else if (a.rows) body = '<div class="scroll"><div class="reader md">' + tableHtml(a.rows) + '</div></div>';
+    else if (a.rows) body = '<div class="scroll"><div class="reader md">' + tableHtml(a.rows) + refsHtml(a.refs) + '</div></div>';
     else if (f.pdf) body = '<iframe class="frame" title="' + esc(a.title) + '" src="' + esc(f.pdf) + '"></iframe>';
     else if (f.html && a.kind === 'mind-maps') body = '<iframe class="frame" title="' + esc(a.title) + '" src="' + esc(f.html) + '"></iframe>';
     else if (f.svg) body = '<div class="scroll"><img alt="' + esc(a.title) + '" src="' + esc(f.svg) + '" style="width:100%"></div>';
