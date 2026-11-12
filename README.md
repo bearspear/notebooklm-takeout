@@ -570,7 +570,7 @@ node tools/repair_mindmap_json.js ~/Downloads/"My notebook takeout 2026-11-11T18
 node tools/repair_mindmap_json.js ~/Downloads/"My notebook takeout 2026-11-11T18-30-39" --write  # repair
 ```
 
-It finds every `artifacts/mind-maps/*.json` below the folder, never touches the `.svg` or `.html`,
+It finds every mind map's `.json` below the folder (Studio's `artifacts/mind-maps/` and the Notes tab's `mind-maps/`), never touches the `.svg` or `.html`,
 and skips a file whose counts don't add up rather than writing a wrong tree.
 
 ### Checking an export

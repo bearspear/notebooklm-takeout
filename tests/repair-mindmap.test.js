@@ -119,3 +119,15 @@ test('mixed run: fixes one, skips malformed, leaves ok file, no temp files', () 
   assert.deepEqual(JSON.parse(fs.readFileSync(fixed, 'utf8')).root.children.map(c => c.children.length), [2, 1]);
   assert.deepEqual(fs.readdirSync(path.join(dir, 'artifacts/mind-maps')).filter(f => f.includes('.tmp-repair')), []);
 });
+
+test('Notes-tab mind maps are found too (notes/mind-maps/ and top-level mind-maps/), mode kept', () => {
+  const dir = tmp();
+  const a = put(dir, 'T/notes/mind-maps/n.json', brokenFile());
+  const b = put(dir, 'mind-maps/m.json', brokenFile());
+  fs.chmodSync(a, 0o640);
+  const r = run(dir, '--write');
+  assert.equal(r.status, 0);
+  assert.equal(r.stdout.trim().split('\n').filter(l => l.startsWith('fixed ')).length, 2);
+  for (const p of [a, b]) assert.equal(JSON.parse(fs.readFileSync(p, 'utf8')).root.children[0].children.length, 2);
+  assert.equal(fs.statSync(a).mode & 0o777, 0o640);
+});

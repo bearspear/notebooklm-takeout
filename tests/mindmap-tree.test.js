@@ -121,3 +121,13 @@ test('callers pass the warning to errors.md', () => {
   assert.match(read('sidebar-artifacts.js'), /mindmapWarning\(response\.treeData\)/);
   assert.match(read('sidebar-artifacts.js'), /fetched\.warnings/);
 });
+
+test('child count is read from the end of the label, not from a number in the name', () => {
+  const M = globalThis.__nlmeMindmap;
+  const n = (label, level) => ({ getAttribute: k => ({ 'aria-label': label, 'aria-level': String(level), 'aria-expanded': 'true' })[k] ?? null });
+  const svg = { querySelectorAll: () => [n('Top 5 children books, 1 child', 1), n('Leaf', 2)] };
+  const t = M.extractMindmapTreeData(svg);
+  assert.equal(t.root.childCount, 1);
+  assert.equal(t.root.children.length, 1);
+  assert.equal(t.metadata.structureUnreadable, undefined);
+});

@@ -251,7 +251,8 @@ async function extractMindmapSVG(mindmapViewer) {
   };
 }
 
-// Rebuild parent/child links from nodes in DOM order, which is breadth-first:
+// Rebuild parent/child links from nodes in DOM order, which is breadth-first (d3 descendants() order:
+// level by level, each level grouped by parent in parent order; the code relies on that order):
 // each node's parent is the first earlier node that still has room for
 // children (its childCount, from the aria-label). Fills `children` in place.
 // When levels or counts do not add up it leaves the tree flat under the first
@@ -301,7 +302,7 @@ function extractMindmapTreeData(svg) {
     // Parse aria-label which is like "Family History, 5 children"
     const labelParts = ariaLabel.split(',');
     const name = labelParts[0]?.trim() || 'Unnamed';
-    const childrenMatch = ariaLabel.match(/(\d+)\s+children?/);
+    const childrenMatch = ariaLabel.match(/,\s*(\d+)\s+child(?:ren)?\s*$/);
     const childCount = childrenMatch ? parseInt(childrenMatch[1]) : 0;
 
     const nodeData = {

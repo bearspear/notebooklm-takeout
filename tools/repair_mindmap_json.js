@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Usage: node tools/repair_mindmap_json.js <export-or-takeout-folder | file.json> [--write]
-// Repairs the parent links in artifacts/mind-maps/*.json written by v1 before 1.9.17
+// Repairs the parent links in mind-maps/*.json (Studio: artifacts/mind-maps/, Notes tab: notes/mind-maps/
+// or mind-maps/) written by v1 before 1.9.17
 // (every deeper node sat under the last branch). Dry run unless --write is given.
 'use strict';
 const fs = require('node:fs');
@@ -26,8 +27,7 @@ function findFiles(dir, out) {
     if (e.name.startsWith('.')) continue;
     const p = path.join(dir, e.name);
     if (e.isDirectory()) findFiles(p, out);
-    else if (e.isFile() && e.name.endsWith('.json') &&
-      path.basename(dir) === 'mind-maps' && path.basename(path.dirname(dir)) === 'artifacts') out.push(p);
+    else if (e.isFile() && e.name.endsWith('.json') && path.basename(dir) === 'mind-maps') out.push(p);
   }
   return out;
 }
@@ -56,6 +56,7 @@ function process1(file) {
     const tmp = file + '.tmp-repair';
     try {
       fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+      fs.chmodSync(tmp, fs.statSync(file).mode);
       fs.renameSync(tmp, file);
     } catch (e) {
       try { fs.rmSync(tmp, { force: true }); } catch (_) { /* nothing to clean */ }
