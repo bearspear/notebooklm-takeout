@@ -396,6 +396,8 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
       (noteData.errors || []).forEach(err => ctx.warn(`[${note.title}] ${err}`));
 
       if (noteData.isMindmap) {
+        const unreadable = mindmapWarning(noteData.treeData);
+        if (unreadable) ctx.warn(`[${note.title}] ${unreadable}`);
         return {
           title: note.title,
           isMindmap: true,
@@ -562,6 +564,8 @@ async function exportSingleNote(note) {
   let filesWritten = 0;
 
   if (noteData.isMindmap) {
+    const unreadable = mindmapWarning(noteData.treeData, note.title);
+    if (unreadable) showToast(unreadable, 'warning');
     const files = await mindmapFiles(NLME.prefixedStem('mind-map', note.title, { obsidian }), noteData.svgContent, noteData.treeData, note.title);
     await saveFiles(files);
     return { success: true, filesWritten: files.length };

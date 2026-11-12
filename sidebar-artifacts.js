@@ -115,10 +115,10 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
       case 'mindmap_app_frame': {
         const frame = await chrome.runtime.sendMessage({ type: NLME.MSG.EXTRACT_MINDMAP_FRAME, tabId });
         if (!frame || !frame.success) throw new Error(frame?.error || 'Failed to extract mind map');
-        return { files: await mindmapFiles(stem, frame.svgContent, frame.treeData, title), savedOutside: false };
+        return { files: await mindmapFiles(stem, frame.svgContent, frame.treeData, title), savedOutside: false, warnings: [mindmapWarning(frame.treeData)].filter(Boolean) };
       }
       case 'mindmap_extraction':
-        return { files: await mindmapFiles(stem, response.svgContent, response.treeData, title), savedOutside: false };
+        return { files: await mindmapFiles(stem, response.svgContent, response.treeData, title), savedOutside: false, warnings: [mindmapWarning(response.treeData)].filter(Boolean) };
       case 'content_extraction':
         return {
           files: type === 'Data Table'
@@ -185,7 +185,7 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
  * @param {{ warn: Function }} ctx
  */
 async function fetchSlideFormats(item, formats, fetchOne, ctx) {
-  const fetched = { files: [], savedOutside: false };
+  const fetched = { files: [], savedOutside: false, warnings: [] };
   const failures = [];
   const skipped = [];
   for (const format of formats) {
@@ -193,6 +193,7 @@ async function fetchSlideFormats(item, formats, fetchOne, ctx) {
       const one = await fetchOne(format);
       fetched.files.push(...one.files);
       fetched.savedOutside = fetched.savedOutside || !!one.savedOutside;
+      fetched.warnings.push(...(one.warnings || []));
     } catch (error) {
       if (error && error.formatNotOffered) skipped.push(format);
       else failures.push({ format, error });
@@ -221,7 +222,8 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
   const stem = NLME.prefixedStem(getArtifactTypePrefix(artifactType), artifactName, { obsidian });
   const item = { index: artifactIndex, type: artifactType, label: artifactName };
   if (Number.isInteger(place.titleOrdinal) && Number.isInteger(place.titleCount)) NLME.setTitlePlace(item, place.titleOrdinal, place.titleCount);
-  const { files } = await fetchArtifactFiles(tabId, item, { stem, mode: 'single' });
+  const { files, warnings } = await fetchArtifactFiles(tabId, item, { stem, mode: 'single' });
+  (warnings || []).forEach(w => showToast(`${artifactName}: ${w}`, 'warning'));
   // Data Tables and mind maps are several files: one ZIP, as before 3a
   const pkg = NLME.singleArtifactPackage({ type: artifactType, title: artifactName, files, obsidian });
   if (pkg) await saveFiles(pkg.entries, { zipName: pkg.zipName });
@@ -888,6 +890,7 @@ async function runArtifactsJob(shell, items, { pathPrefix = '', zipKind = 'artif
         if (capture && one.savedName && !zipMode) reportSaved(capture, pathPrefix + NLMEViewer.outsidePath(typeFolder, one.savedName), null);
         return one;
       }, ctx));
+      (fetched.warnings || []).forEach(w => ctx.warn(`[${item.label}] ${w}`));
       if (fetched.savedOutside) {
         savedOutside++;
         // Folder mode: the background captured it into the folder's top level

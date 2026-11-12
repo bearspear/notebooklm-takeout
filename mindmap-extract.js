@@ -251,6 +251,35 @@ async function extractMindmapSVG(mindmapViewer) {
   };
 }
 
+// Rebuild parent/child links from nodes in DOM order, which is breadth-first (d3 descendants() order:
+// level by level, each level grouped by parent in parent order; the code relies on that order):
+// each node's parent is the first earlier node that still has room for
+// children (its childCount, from the aria-label). Fills `children` in place.
+// When levels or counts do not add up it leaves the tree flat under the first
+// node rather than writing a wrong one, and returns { ok: false }.
+function rebuildMindmapTree(list) {
+  list.forEach(node => { node.children.length = 0; });
+  if (list.length === 0) return { ok: false };
+  let ok = list[0].level === 1;
+  const queue = [list[0]];
+  let at = 0;
+  for (let i = 1; i < list.length; i++) {
+    const node = list[i];
+    while (at < queue.length && queue[at].children.length >= queue[at].childCount) at++;
+    const parent = queue[at];
+    if (!parent || parent.level !== node.level - 1) { ok = false; break; }
+    parent.children.push(node);
+    queue.push(node);
+  }
+  // Too few children rendered (a collapsed node, a changed page)
+  if (ok && list.some(node => node.children.length !== node.childCount)) ok = false;
+  if (!ok) {
+    list.forEach(node => { node.children.length = 0; });
+    list[0].children.push(...list.slice(1));
+  }
+  return { ok };
+}
+
 // Extract mindmap tree structure as JSON
 function extractMindmapTreeData(svg) {
   const nodes = svg.querySelectorAll('g.node[role="treeitem"]');
@@ -273,7 +302,7 @@ function extractMindmapTreeData(svg) {
     // Parse aria-label which is like "Family History, 5 children"
     const labelParts = ariaLabel.split(',');
     const name = labelParts[0]?.trim() || 'Unnamed';
-    const childrenMatch = ariaLabel.match(/(\d+)\s+children?/);
+    const childrenMatch = ariaLabel.match(/,\s*(\d+)\s+child(?:ren)?\s*$/);
     const childCount = childrenMatch ? parseInt(childrenMatch[1]) : 0;
 
     const nodeData = {
@@ -293,27 +322,9 @@ function extractMindmapTreeData(svg) {
     }
   });
 
-  // Build hierarchy by analyzing positions
-  // Nodes are ordered in the DOM in a depth-first manner
-  const nodeList = Array.from(nodes);
-  const stack = [];
-
-  nodeList.forEach(node => {
-    const nodeData = nodeMap.get(node);
-    const level = nodeData.level;
-
-    // Pop stack until we find the parent (one level up)
-    while (stack.length > 0 && stack[stack.length - 1].level >= level) {
-      stack.pop();
-    }
-
-    if (stack.length > 0) {
-      // Add as child to the last item in stack
-      stack[stack.length - 1].children.push(nodeData);
-    }
-
-    stack.push(nodeData);
-  });
+  // The page lists nodes breadth-first (level by level, grouped by parent)
+  const list = Array.from(nodes).map(node => nodeMap.get(node));
+  if (list.length > 0 && !rebuildMindmapTree(list).ok) tree.metadata.structureUnreadable = true;
 
   // Flatten structure for nodes array
   tree.nodes = Array.from(nodeMap.values());
@@ -321,5 +332,5 @@ function extractMindmapTreeData(svg) {
   return tree;
 }
 
-globalThis.__nlmeMindmap = { extractMindmapSVG, extractMindmapTreeData };
+globalThis.__nlmeMindmap = { extractMindmapSVG, extractMindmapTreeData, rebuildMindmapTree };
 })();
