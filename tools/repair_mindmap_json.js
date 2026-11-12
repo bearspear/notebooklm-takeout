@@ -19,7 +19,10 @@ const target = path.resolve(pos[0]);
 if (!fs.existsSync(target)) { console.error('Not found: ' + target); process.exit(2); }
 
 function findFiles(dir, out) {
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+  catch (e) { out.skippedDirs.push(dir); return out; }
+  for (const e of entries) {
     if (e.name.startsWith('.')) continue;
     const p = path.join(dir, e.name);
     if (e.isDirectory()) findFiles(p, out);
@@ -50,13 +53,23 @@ function process1(file) {
   if (write) {
     data.root = list[0];
     data.nodes = list;
-    fs.writeFileSync(file, JSON.stringify(data, null, 2));
+    const tmp = file + '.tmp-repair';
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+      fs.renameSync(tmp, file);
+    } catch (e) {
+      try { fs.rmSync(tmp, { force: true }); } catch (_) { /* nothing to clean */ }
+      return 'skipped ' + file + ': write failed (' + (e.code || e.message) + ')';
+    }
   }
   return 'fixed ' + file;
 }
 
-const files = fs.statSync(target).isDirectory() ? findFiles(target, []).sort() : [target];
+const found = Object.assign([], { skippedDirs: [] });
+const isDir = fs.statSync(target).isDirectory();
+const files = isDir ? findFiles(target, found).sort() : [target];
 let skipped = 0;
+for (const d of found.skippedDirs) { skipped++; console.log('skipped ' + d + ': cannot read folder'); }
 for (const f of files) {
   const line = process1(f);
   if (line.startsWith('skipped')) skipped++;

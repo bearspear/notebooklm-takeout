@@ -102,3 +102,20 @@ test('Full Takeout layout: finds part-N files, ignores others, leaves svg alone'
 test('no arguments: exit 2', () => {
   assert.equal(run().status, 2);
 });
+
+test('mixed run: fixes one, skips malformed, leaves ok file, no temp files', () => {
+  const dir = tmp();
+  const fixed = put(dir, 'artifacts/mind-maps/a.json', brokenFile());
+  const bad = put(dir, 'artifacts/mind-maps/b.json', '{nope');
+  const ok = put(dir, 'artifacts/mind-maps/c.json', goodFile());
+  const badBytes = fs.readFileSync(bad), okBytes = fs.readFileSync(ok);
+  const r = run(dir, '--write');
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /^fixed .*a\.json$/m);
+  assert.match(r.stdout, /^skipped .*b\.json: /m);
+  assert.match(r.stdout, /^ok .*c\.json$/m);
+  assert.deepEqual(fs.readFileSync(bad), badBytes);
+  assert.deepEqual(fs.readFileSync(ok), okBytes);
+  assert.deepEqual(JSON.parse(fs.readFileSync(fixed, 'utf8')).root.children.map(c => c.children.length), [2, 1]);
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'artifacts/mind-maps')).filter(f => f.includes('.tmp-repair')), []);
+});
