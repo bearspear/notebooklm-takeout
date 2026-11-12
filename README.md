@@ -546,18 +546,32 @@ takeout-viewer.js     Builds the offline viewer (data and page); viewer/ holds i
 turndown.min.js       HTML → Markdown (bundled)
 jszip.min.js          ZIP creation (bundled)
 tests/                node:test unit tests for takeout-shared.js, takeout-job.js, the message protocol and file structure
-tools/                validate_export.py: checks exports and compares them with a baseline (Python 3, standard library); build_viewer.js: builds viewer.html for an unzipped takeout
+tools/                validate_export.py: checks exports and compares them with a baseline (Python 3, standard library); build_viewer.js: builds viewer.html for an unzipped takeout; repair_mindmap_json.js: repairs mind-map trees in exports made before 1.9.17
 ```
 
 Check your changes:
 
 ```bash
-for f in sidebar-*.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js takeout-markdown.js takeout-viewer.js viewer/viewer-app.js tools/build_viewer.js; do node --check "$f"; done
+for f in sidebar-*.js takeout-job.js content.js background.js injected.js mindmap-extract.js takeout-shared.js takeout-markdown.js takeout-viewer.js viewer/viewer-app.js tools/build_viewer.js tools/repair_mindmap_json.js; do node --check "$f"; done
 node --test tests/
 python3 -I -m unittest discover -s tools
 ```
 
 DOM behaviour is verified in Chrome with the health check and real exports.
+
+### Repairing mind-map trees (exports before 1.9.17)
+
+Before 1.9.17, a mind map's `.json` put every node below the branches under the last branch (the
+`.svg`, `.html` and the viewer were always right). `tools/repair_mindmap_json.js` rebuilds the tree
+from the file's own node list. It only reports by default and changes files only with `--write`:
+
+```bash
+node tools/repair_mindmap_json.js ~/Downloads/"My notebook takeout 2026-11-11T18-30-39"          # report: fixed / ok / skipped
+node tools/repair_mindmap_json.js ~/Downloads/"My notebook takeout 2026-11-11T18-30-39" --write  # repair
+```
+
+It finds every `artifacts/mind-maps/*.json` below the folder, never touches the `.svg` or `.html`,
+and skips a file whose counts don't add up rather than writing a wrong tree.
 
 ### Checking an export
 
@@ -588,6 +602,8 @@ python3 -I tools/validate_export.py NEW.zip --baseline OLD.zip --allow '\$[^$\n]
 contract with Gemini Notebook, past drift and recipes.
 
 ## Version history
+
+**1.9.17 (Nov 2026)**: mind-map `.json` files now keep each branch's own children. Before, every node below the branches sat under the last branch; the `.svg`, `.html` and the viewer were always right. If a mind map's tree can't be read (for example a branch was still collapsed), its `.json` lists the nodes flat under the root and `errors.md` says "Mind map structure could not be read" instead of writing a wrong tree. `tools/repair_mindmap_json.js` repairs the `.json` files in older exports; it only reports unless given `--write`.
 
 **1.9.16 (Nov 2026)**: viewer: a Data Table now shows once in Studio, not twice (its references file joins the table as a fourth download link), and the table's references are listed under it. Exported files are unchanged.
 
