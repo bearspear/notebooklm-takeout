@@ -396,7 +396,7 @@ async function extractNoteItem(shell, note, ctx, state, variantSettings = settin
       (noteData.errors || []).forEach(err => ctx.warn(`[${note.title}] ${err}`));
 
       if (noteData.isMindmap) {
-        const unreadable = mindmapWarning(noteData.treeData, note.title);
+        const unreadable = mindmapWarning(noteData.treeData);
         if (unreadable) ctx.warn(`[${note.title}] ${unreadable}`);
         return {
           title: note.title,

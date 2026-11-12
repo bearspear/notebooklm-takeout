@@ -115,10 +115,10 @@ async function fetchArtifactFiles(tabId, item, { stem, mode, meta, folder = '', 
       case 'mindmap_app_frame': {
         const frame = await chrome.runtime.sendMessage({ type: NLME.MSG.EXTRACT_MINDMAP_FRAME, tabId });
         if (!frame || !frame.success) throw new Error(frame?.error || 'Failed to extract mind map');
-        return { files: await mindmapFiles(stem, frame.svgContent, frame.treeData, title), savedOutside: false, warnings: [mindmapWarning(frame.treeData, title)].filter(Boolean) };
+        return { files: await mindmapFiles(stem, frame.svgContent, frame.treeData, title), savedOutside: false, warnings: [mindmapWarning(frame.treeData)].filter(Boolean) };
       }
       case 'mindmap_extraction':
-        return { files: await mindmapFiles(stem, response.svgContent, response.treeData, title), savedOutside: false, warnings: [mindmapWarning(response.treeData, title)].filter(Boolean) };
+        return { files: await mindmapFiles(stem, response.svgContent, response.treeData, title), savedOutside: false, warnings: [mindmapWarning(response.treeData)].filter(Boolean) };
       case 'content_extraction':
         return {
           files: type === 'Data Table'
@@ -223,7 +223,7 @@ async function downloadArtifact(tabId, artifactIndex, artifactType, artifactName
   const item = { index: artifactIndex, type: artifactType, label: artifactName };
   if (Number.isInteger(place.titleOrdinal) && Number.isInteger(place.titleCount)) NLME.setTitlePlace(item, place.titleOrdinal, place.titleCount);
   const { files, warnings } = await fetchArtifactFiles(tabId, item, { stem, mode: 'single' });
-  (warnings || []).forEach(w => showToast(w, 'warning'));
+  (warnings || []).forEach(w => showToast(`${artifactName}: ${w}`, 'warning'));
   // Data Tables and mind maps are several files: one ZIP, as before 3a
   const pkg = NLME.singleArtifactPackage({ type: artifactType, title: artifactName, files, obsidian });
   if (pkg) await saveFiles(pkg.entries, { zipName: pkg.zipName });

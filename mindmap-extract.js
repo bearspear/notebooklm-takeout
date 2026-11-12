@@ -262,7 +262,7 @@ function rebuildMindmapTree(list) {
   let ok = list[0].level === 1;
   const queue = [list[0]];
   let at = 0;
-  for (let i = 1; ok && i < list.length; i++) {
+  for (let i = 1; i < list.length; i++) {
     const node = list[i];
     while (at < queue.length && queue[at].children.length >= queue[at].childCount) at++;
     const parent = queue[at];

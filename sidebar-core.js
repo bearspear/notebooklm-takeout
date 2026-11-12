@@ -1554,7 +1554,7 @@ async function retryDownload(downloadFn, maxRetries = 3, itemName = 'item') {
 // The errors.md line for a mind map whose tree could not be read (null when fine)
 function mindmapWarning(treeData, title) {
   if (!treeData || !treeData.metadata || !treeData.metadata.structureUnreadable) return null;
-  return `Mind map structure could not be read: ${title} (the .json lists its nodes flat; the .svg and .html are complete)`;
+  return `Mind map structure could not be read${title ? `: ${title}` : ''} (the .json lists its nodes flat; the .svg and .html are complete)`;
 }
 
 // A mind map as <stem>.svg, <stem>.json and the interactive <stem>.html

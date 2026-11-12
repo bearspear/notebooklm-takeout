@@ -106,6 +106,10 @@ test('errors.md warning text for an unreadable tree', () => {
     sandbox.mindmapWarning({ metadata: { structureUnreadable: true } }, 'Maths'),
     'Mind map structure could not be read: Maths (the .json lists its nodes flat; the .svg and .html are complete)'
   );
+  assert.equal(
+    sandbox.mindmapWarning({ metadata: { structureUnreadable: true } }),
+    'Mind map structure could not be read (the .json lists its nodes flat; the .svg and .html are complete)'
+  );
   assert.equal(sandbox.mindmapWarning({ metadata: {} }, 'Maths'), null);
   assert.equal(sandbox.mindmapWarning(null, 'Maths'), null);
   assert.doesNotMatch(sandbox.mindmapWarning({ metadata: { structureUnreadable: true } }, 'x'), /NotebookLM/);
@@ -113,7 +117,7 @@ test('errors.md warning text for an unreadable tree', () => {
 
 test('callers pass the warning to errors.md', () => {
   const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-  assert.match(read('sidebar-notes.js'), /mindmapWarning\(noteData\.treeData/);
-  assert.match(read('sidebar-artifacts.js'), /mindmapWarning\(/);
+  assert.match(read('sidebar-notes.js'), /mindmapWarning\(noteData\.treeData\)/);
+  assert.match(read('sidebar-artifacts.js'), /mindmapWarning\(response\.treeData\)/);
   assert.match(read('sidebar-artifacts.js'), /fetched\.warnings/);
 });
